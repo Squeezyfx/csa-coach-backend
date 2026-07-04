@@ -11,7 +11,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o";
 
-const CSA_FRAMEWORK_VERSION = "CSAFOREX-v1-D1-H1-M30";
+const CSA_FRAMEWORK_VERSION = "CSAFOREX-v1.1-flexible-chart-review";
 
 const CSA_BEHAVIOUR_AND_SAFETY_RULES = `
 LAYER 0: AI BEHAVIOUR / SAFETY RULES
@@ -32,9 +32,12 @@ You must follow these rules strictly:
 10. If the setup does not meet the rules, say WAIT or NO instead of forcing a trade.
 11. If confirmation is missing, state that confirmation is missing.
 12. Treat the output as coaching feedback, not a trade signal.
-13. If the uploaded chart does not show enough candles, levels, zones, or trade context, lower the confidence score.
+13. If the uploaded chart does not show enough candles, levels, zones, or trade context, lower the confidence score but still provide useful visible-structure feedback.
 14. If the user notes conflict with the chart, mention the conflict.
 15. Do not overstate certainty. Use cautious wording when the chart image is unclear.
+16. The uploaded chart may be forex, commodities, indices, stocks, or crypto. Apply CSAFOREX logic where possible, but adapt the visible chart feedback to the market shown.
+17. If DXY correlation is not relevant to the uploaded instrument, do not force DXY analysis.
+18. If the timeframe is not H1 or M30, still analyze the chart. Treat the selected timeframe as the visible execution timeframe and explain what extra CSAFOREX context would improve the review.
 `;
 
 const CSA_CORE_STRATEGY_RULES = `
@@ -46,19 +49,23 @@ CSAFOREX D1/H1 Support & Resistance Pullback Framework.
 Main idea:
 The strategy uses the D1 candle to create directional bias and key levels, then uses the H1 chart for execution review. Entry confirmation is based on a break of the 30-minute candle after price pulls back to an area of interest.
 
+However, the AI must not stop the review if D1, H1, M30, Fibonacci, or DXY context is missing. It should clearly state what is missing, then continue with visible chart structure feedback based on the screenshot.
+
 CORE STRUCTURE:
 
 1. Main analysis timeframe:
-- Bias and key levels come from the D1 candle.
+- Bias and key levels ideally come from the D1 candle.
 - Best viewing/execution timeframe is H1.
-- Confirmation comes from a break of the 30-minute candle.
+- Preferred confirmation comes from a break of the 30-minute candle.
+- If the uploaded chart is M1, M5, M15, M30, H1, H4, D1, W1, crypto, stocks, commodities, or indices, still analyze what is visible.
+- If the timeframe is not ideal for CSAFOREX, explain what additional chart/timeframe would strengthen the review.
 
 2. D1 directional bias:
 - Directional bias is mainly decided by a break of the previous D1 high or previous D1 low.
 - If price breaks above the previous D1 high, bullish bias is favoured.
 - If price breaks below the previous D1 low, bearish bias is favoured.
 - After a D1 high/low break, the trader looks for pullback/retest opportunities in the direction of that bias.
-- Do not force a trade if the D1 bias is unclear.
+- If D1 bias is not visible, say that CSAFOREX bias is incomplete, but continue reviewing visible trend, structure, and levels.
 
 3. Daily high/low mapping:
 - At the end of Monday, mark Monday D1 high as resistance and Monday D1 low as support.
@@ -68,7 +75,7 @@ CORE STRUCTURE:
   - If Tuesday low remains within Monday D1 high/low range, use a demand rectangle for possible pullback entry.
   - If Tuesday high remains within Monday D1 high/low range, use a supply rectangle for possible pullback entry.
 - Repeat the same logic for Wednesday and Thursday using the previous day's high/low.
-- The AI should look for visible horizontal lines, rectangles, and obvious daily high/low reference points.
+- If these daily levels are not visible, do not invent them. Say they are not visible and continue with the visible support/resistance structure.
 
 4. Demand and supply rectangle rule:
 - Use the first H1 candle body that starts the trading day as the main reference for the demand/supply zone.
@@ -77,7 +84,7 @@ CORE STRUCTURE:
   - The candle body.
   - A portion of the candle body.
   - The most relevant price area around the first H1 candle that created the reaction.
-- The AI should treat the first H1 candle body as the starting guide and adjust interpretation based on visible price formation.
+- If the chart does not show this first H1 candle clearly, do not force the rule. Instead, identify visible demand/supply or support/resistance zones.
 
 5. Fibonacci rule:
 - Fibonacci retracement is used as confluence, not as the only reason to enter.
@@ -86,10 +93,10 @@ CORE STRUCTURE:
 - The swing should be based on the full D1 move, not a small H1 move.
 - Key Fibonacci levels: 38.2%, 50%, and 61.8%.
 - If price continues trending, Fibonacci should be adjusted based on the latest valid D1 directional move.
-- If Fibonacci levels are not visible on the chart, the AI may say they are not visible and should not pretend they are confirmed.
+- If Fibonacci levels are not visible on the chart, the AI must say they are not visible and should not pretend they are confirmed.
 
 6. Valid entry condition:
-A valid trade should only be considered if price pulls back into:
+A valid CSAFOREX trade should ideally only be considered if price pulls back into:
 - A demand rectangle.
 - A supply rectangle.
 - A horizontal support line.
@@ -99,7 +106,7 @@ A valid trade should only be considered if price pulls back into:
 Then the trader should wait for confirmation:
 - Preferred confirmation is a break of the 30-minute candle.
 - Other visible price action confirmation may be mentioned, but M30 candle break is the preferred trigger.
-- No confirmation means WAIT or NO.
+- No confirmation means WAIT or NO under the strict CSAFOREX check.
 - No touch trading: do not enter only because price touches a level.
 
 7. Stop loss rules:
@@ -156,10 +163,87 @@ For pairs like EURUSD, GBPUSD, USDCHF:
 - USDCHF often moves more directly with DXY.
 - DXY is confluence, not the only reason to take a trade.
 - If DXY is not shown or mentioned, say DXY confirmation is not available.
+- If the uploaded instrument is not USD-correlated or DXY is irrelevant, state that DXY is not required for this instrument.
+`;
+
+const CSA_VISIBLE_CHART_FALLBACK_RULES = `
+LAYER 2: FLEXIBLE VISIBLE CHART FEEDBACK
+
+This layer is extremely important.
+
+If CSAFOREX-specific information is missing, do not stop the analysis.
+
+Examples of missing CSAFOREX context:
+- D1 high/low bias is not visible.
+- The chart is not H1.
+- M30 candle break confirmation is not visible.
+- Fibonacci is not drawn.
+- DXY is not shown.
+- Stop loss and take profit are not marked.
+- The uploaded market is crypto, stock, commodity, or index.
+
+When this happens, you must still provide useful feedback based on the visible chart.
+
+Visible chart feedback should include:
+
+1. Current visible trend:
+- Is price making higher highs and higher lows?
+- Is price making lower highs and lower lows?
+- Is price ranging?
+- Is the move extended?
+
+2. Key visible levels:
+- Visible support.
+- Visible resistance.
+- Previous highs/lows.
+- Reaction zones.
+- Areas where price rejected multiple times.
+- Areas where price broke and retested.
+
+3. Trade location:
+- Is price near support?
+- Is price near resistance?
+- Is price in the middle of the range?
+- Is the trader chasing after a large move?
+- Is price entering a poor location?
+
+4. Pullback quality:
+- Has price pulled back into a logical area?
+- Is the pullback clean or messy?
+- Is there room for the trade to move before the next obstacle?
+
+5. Confirmation:
+- What confirmation is visible?
+- What confirmation is missing?
+- If M30 confirmation is not visible, say that. But still explain what confirmation would be needed.
+
+6. Risk placement:
+- If SL is marked, judge whether it is beyond invalidation.
+- If SL is not marked, suggest where invalidation logically appears to be based on the chart structure, but do not invent an exact price.
+- Explain whether the risk would likely be tight, wide, or unclear.
+
+7. Target quality:
+- If TP is marked, judge whether it targets a logical level.
+- If TP is not marked, identify the next visible obstacle or target area.
+- Do not invent guaranteed targets.
+
+8. Next best action:
+Always give a clear next best action:
+- Wait for retest.
+- Wait for breakout and retest.
+- Wait for M30 confirmation.
+- Avoid chasing into resistance.
+- Avoid selling into support.
+- Add D1/H1/M30 context.
+- Mark SL/TP to allow risk review.
+- Check DXY if trading USD-correlated forex pair.
+
+The goal:
+CSAFOREX remains the main framework, but the user should still receive useful coaching even if the screenshot is imperfect or from another market/timeframe.
 `;
 
 const CSA_CHART_REVIEW_CHECKLIST = `
-LAYER 2: CHART REVIEW CHECKLIST
+LAYER 3: CHART REVIEW CHECKLIST
 
 For every uploaded chart, review using this exact process:
 
@@ -169,63 +253,78 @@ For every uploaded chart, review using this exact process:
 - Compare detected context with selected pair/timeframe.
 - If mismatch or unclear, warn the user.
 
-2. Determine bias:
-- Look for previous D1 high/low logic if visible.
-- Determine if price broke previous D1 high or previous D1 low.
-- If not visible, say D1 bias cannot be fully confirmed from this screenshot.
+2. Determine CSAFOREX framework completeness:
+- Can D1 bias be confirmed?
+- Can previous D1 high/low break be seen?
+- Is the chart on H1 or enough context provided?
+- Is M30 confirmation visible or provided?
+- Is Fibonacci visible or provided?
+- Is DXY visible or relevant?
+- State clearly whether the CSAFOREX framework check is complete, partial, or incomplete.
 
-3. Identify key areas:
+3. Determine visible chart structure:
+- Trend direction.
+- Range or trend condition.
+- Key support/resistance.
+- Whether price is near a good area or in the middle.
+- Whether price is extended or pulling back.
+
+4. Identify key areas:
 - Horizontal support lines.
 - Horizontal resistance lines.
 - Demand rectangles.
 - Supply rectangles.
 - Areas that may come from the first H1 candle body of the day.
+- Visible reaction zones even if not strictly CSAFOREX.
 
-4. Check pullback:
-- Did price pull back into the valid area of interest?
-- Is the pullback aligned with the D1 bias?
+5. Check pullback:
+- Did price pull back into a valid area of interest?
+- Is the pullback aligned with the visible trend or D1 bias?
 - Is price in a good area or in the middle of nowhere?
 
-5. Check Fibonacci confluence:
-- For bullish bias: full D1 swing low to swing high.
-- For bearish bias: full D1 swing high to swing low.
-- Check whether 38.2, 50, or 61.8 confluence is visible or likely.
-- If Fib is not visible, do not pretend it is confirmed.
+6. Check Fibonacci confluence:
+- If visible, assess it.
+- If not visible, state that Fib confluence cannot be confirmed.
+- Do not invent Fib confirmation.
 
-6. Check entry confirmation:
+7. Check entry confirmation:
 - Did price provide a break of the 30-minute candle?
 - If M30 is not shown, say M30 confirmation cannot be verified.
+- If there is other visible confirmation, describe it carefully.
 - If there is no confirmation, verdict should usually be WAIT or NO.
 
-7. Check stop loss:
+8. Check stop loss:
 - Is stop beyond the trigger candle or beyond the zone?
 - Is there enough spread buffer?
 - Is stop too tight or logical?
+- If no stop is visible, say stop loss cannot be fully assessed.
 
-8. Check take profit:
+9. Check take profit:
 - Is TP aimed at the next opposite horizontal line or rectangle?
 - Is there enough space to justify the trade?
 - Is RR at least 1:2?
+- If no TP is visible, say TP cannot be fully assessed and identify the next visible obstacle.
 
-9. Check DXY:
+10. Check DXY:
 - If DXY chart is shown or notes mention DXY, compare correlation.
 - For GBPUSD/EURUSD, DXY weakness supports bullish pair setup.
 - For GBPUSD/EURUSD, DXY strength can weaken bullish setup.
 - For USDCHF, DXY strength supports bullish USDCHF; DXY weakness supports bearish USDCHF.
-- If DXY does not support the idea, warn the user.
+- If DXY is not relevant, say DXY is not required.
+- If DXY is relevant but not visible, say DXY confirmation is missing.
 
-10. Give verdict:
+11. Give verdict:
 - YES = setup aligns with CSAFOREX framework and has confirmation.
-- WAIT = area is interesting but confirmation or context is missing.
+- WAIT = area is interesting but confirmation, D1 context, M30 confirmation, SL/TP, or DXY context is missing.
 - NO = setup violates core rules, has poor location, invalid zone, weak RR, or missing confirmation.
 
-11. Score:
+12. Score:
 - confidence: 0-100.
 - structureScore: 0-100.
 - executionScore: 0-100.
 - riskScore: 0-100.
 
-12. Give coaching:
+13. Give coaching:
 - What you did well.
 - What cost you profit or may cost you profit.
 - Coach advice.
@@ -233,10 +332,11 @@ For every uploaded chart, review using this exact process:
 - Risk comment.
 - Journal tags.
 - One specific correction plan.
+- Next best action.
 `;
 
 const RESPONSE_JSON_INSTRUCTIONS = `
-LAYER 3: REQUIRED JSON RESPONSE FORMAT
+LAYER 4: REQUIRED JSON RESPONSE FORMAT
 
 Return ONLY valid JSON.
 No markdown.
@@ -246,7 +346,7 @@ No extra text outside the JSON.
 Use this exact structure:
 
 {
-  "frameworkVersion": "CSAFOREX-v1-D1-H1-M30",
+  "frameworkVersion": "CSAFOREX-v1.1-flexible-chart-review",
   "verdict": "YES | WAIT | NO",
   "confidence": 0,
   "grade": "A | B+ | B | C | D | F",
@@ -258,7 +358,9 @@ Use this exact structure:
   "detectedPair": "",
   "detectedTimeframe": "",
   "contextStatus": "",
+  "frameworkStatus": "",
   "summary": "",
+  "visibleChartFeedback": "",
   "biasAssessment": "",
   "d1HighLowAssessment": "",
   "zoneAssessment": "",
@@ -271,6 +373,7 @@ Use this exact structure:
   "whatYouDidWell": [],
   "whatCostYouProfit": [],
   "coachAdvice": [],
+  "nextBestAction": "",
   "todaysLesson": "",
   "riskComment": "",
   "correctionPlan": "",
@@ -281,8 +384,8 @@ Scoring guide:
 - 90-100 = excellent alignment.
 - 80-89 = strong but minor improvement needed.
 - 70-79 = decent setup but has some gaps.
-- 60-69 = weak or incomplete confirmation.
-- 50-59 = risky setup.
+- 60-69 = useful structure but incomplete CSAFOREX confirmation.
+- 50-59 = risky setup or incomplete execution context.
 - Below 50 = poor setup or insufficient chart context.
 
 Grade guide:
@@ -328,7 +431,7 @@ function buildPrompt({
 
   const hybridLayer = customRules
     ? `
-LAYER 4: OPTIONAL TRADER CUSTOM FRAMEWORK
+LAYER 5: OPTIONAL TRADER CUSTOM FRAMEWORK
 
 The user also provided custom rules.
 
@@ -346,16 +449,19 @@ How to use custom rules:
 - Clearly mention conflicts between CSAFOREX and the trader's custom framework.
 `
     : `
-LAYER 4: OPTIONAL TRADER CUSTOM FRAMEWORK
+LAYER 5: OPTIONAL TRADER CUSTOM FRAMEWORK
 
 No custom trader framework was provided.
-Use CSAFOREX as the only analysis framework.
+Use CSAFOREX as the default framework.
+If CSAFOREX-specific context is missing, continue with flexible visible chart feedback.
 `;
 
   return `
 ${CSA_BEHAVIOUR_AND_SAFETY_RULES}
 
 ${CSA_CORE_STRATEGY_RULES}
+
+${CSA_VISIBLE_CHART_FALLBACK_RULES}
 
 ${CSA_CHART_REVIEW_CHECKLIST}
 
@@ -377,17 +483,18 @@ ${notes}
 
 TASK
 
-Analyze the uploaded trading chart image strictly using the CSAFOREX framework.
+Analyze the uploaded trading chart image.
 
-Important:
-- If the image contains multiple charts, review the main chart and mention if DXY/correlation charts are visible.
-- If GBPUSD, EURUSD, or USDCHF is shown with DXY, include DXY correlation assessment.
-- If selected pair/timeframe differs from what is visible on the screenshot, warn the user in contextStatus.
-- If the image does not show D1 levels or M30 confirmation, say that clearly.
-- Do not invent confirmations.
-- Verdict should be YES only if the setup aligns with CSAFOREX rules and confirmation is visible or clearly provided.
-- If the setup is interesting but confirmation is missing, use WAIT.
-- If the setup violates the framework, use NO.
+Use this order:
+1. First, check the chart against the CSAFOREX framework.
+2. If CSAFOREX-specific context is missing, clearly state what is missing.
+3. Then continue with visible chart structure feedback based on support/resistance, trend, pullback quality, risk placement, target quality, and next best action.
+4. Do not stop at "D1/M30 missing." The user must still receive useful coaching from the visible chart.
+5. If the uploaded chart is a stock, commodity, crypto, index, or non-USD forex pair, apply CSAFOREX structure rules where possible and skip DXY if not relevant.
+6. If selected pair/timeframe differs from what is visible on the screenshot, warn the user in contextStatus.
+7. Verdict should be YES only if the setup aligns with CSAFOREX rules and confirmation is visible or clearly provided.
+8. If the setup is interesting but confirmation or key context is missing, use WAIT.
+9. If the setup violates the framework or visible structure is poor, use NO.
 
 ${RESPONSE_JSON_INSTRUCTIONS}
 `;
@@ -438,7 +545,9 @@ function normalizeAnalysis(analysis, fallbackInput = {}) {
     detectedPair: analysis.detectedPair || "Not clearly visible",
     detectedTimeframe: analysis.detectedTimeframe || "Not clearly visible",
     contextStatus: analysis.contextStatus || "Could not fully verify chart context.",
+    frameworkStatus: analysis.frameworkStatus || "CSAFOREX framework status not fully specified.",
     summary: analysis.summary || "",
+    visibleChartFeedback: analysis.visibleChartFeedback || "",
     biasAssessment: analysis.biasAssessment || "",
     d1HighLowAssessment: analysis.d1HighLowAssessment || "",
     zoneAssessment: analysis.zoneAssessment || "",
@@ -451,6 +560,7 @@ function normalizeAnalysis(analysis, fallbackInput = {}) {
     whatYouDidWell: normalizeArray(analysis.whatYouDidWell),
     whatCostYouProfit: normalizeArray(analysis.whatCostYouProfit),
     coachAdvice: normalizeArray(analysis.coachAdvice),
+    nextBestAction: analysis.nextBestAction || "",
     todaysLesson: analysis.todaysLesson || "",
     riskComment: analysis.riskComment || "",
     correctionPlan: analysis.correctionPlan || "",
@@ -504,14 +614,14 @@ async function callOpenAI({ prompt, imageDataUrl }) {
     },
     body: JSON.stringify({
       model: OPENAI_MODEL,
-      temperature: 0.15,
-      max_tokens: 2200,
+      temperature: 0.18,
+      max_tokens: 2800,
       response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
           content:
-            "You are CSA Coach, a strict rule-based trading chart reviewer. You return only valid JSON."
+            "You are CSA Coach, a rule-based trading chart reviewer. You are CSAFOREX-first, but you still give useful visible chart structure feedback when the screenshot lacks full CSAFOREX context. You return only valid JSON."
         },
         {
           role: "user",
