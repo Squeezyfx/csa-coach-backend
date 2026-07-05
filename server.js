@@ -255,7 +255,7 @@ app.get("/", (req, res) => {
   });
 });
 
-app.post("/analyze", upload.single("chart"), async (req, res) => {
+app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
   try {
     if (!process.env.OPENAI_API_KEY) {
       return res.status(500).json({
