@@ -1,3 +1,24 @@
+import express from "express";
+import cors from "cors";
+import multer from "multer";
+import OpenAI from "openai";
+
+const app = express();
+
+app.use(cors());
+app.use(express.json({ limit: "25mb" }));
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 15 * 1024 * 1024,
+  },
+});
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
 const CSA_FRAMEWORK_RULES = `
 You are CSA Coach, an AI trading coach trained to review charts using the CSAFOREX support and resistance framework.
 
@@ -25,13 +46,15 @@ The CSAFOREX framework focuses on:
 TIMEFRAME RULE:
 If the selected timeframe is 1m, 5m, 15m, 30m, or 1H, use the CSA Daily High/Low Area of Interest Framework below to identify support, resistance, supply, and demand.
 
+If the selected timeframe is 4H, Daily, or Weekly and no specific CSA rule has been provided yet, use broader visible market structure, major swing highs/lows, clear support/resistance reactions, and visible supply/demand zones. Do not force the lower-timeframe rule onto 4H, Daily, or Weekly charts.
+
 CSA DAILY HIGH/LOW AREA OF INTEREST FRAMEWORK:
 
 1. MONDAY LEVELS
 - The high of Monday represents resistance.
-- Draw or identify a horizontal resistance level at Monday's high.
+- Identify a horizontal resistance level at Monday's high.
 - The low of Monday represents support.
-- Draw or identify a horizontal support level at Monday's low.
+- Identify a horizontal support level at Monday's low.
 
 2. TUESDAY LEVELS
 Compare Tuesday with Monday.
@@ -114,14 +137,19 @@ HOW TO INTERPRET THE LEVELS:
 - A horizontal support level is created when price makes a new low below the previous day's low.
 - A supply zone is created when price fails to break the previous day's high.
 - A demand zone is created when price fails to break the previous day's low.
-- Supply zones should be considered potential selling areas or areas where buyers failed to continue higher.
-- Demand zones should be considered potential buying areas or areas where sellers failed to continue lower.
+- Supply zones should be considered areas where buyers failed to continue higher.
+- Demand zones should be considered areas where sellers failed to continue lower.
 - Do not call every high resistance and every low support. Use the comparison rule.
 - Always explain whether the current chart is reacting from support, resistance, supply, or demand.
 
 IMPORTANT CORRECTION RULE:
 When comparing lows, always compare the current day's low to the previous day's low.
 Do not compare the current day's low to the previous day's high.
+
+IMPORTANT VISIBILITY RULE:
+If the uploaded chart does not show enough previous daily highs/lows to apply the CSA lower-timeframe rule properly, say this clearly.
+Do not pretend to know Monday, Tuesday, Wednesday, Thursday, or Friday levels if they are not visible on the chart.
+In that case, analyze only the visible chart structure and ask the user to upload a wider chart showing the full trading week or previous day levels.
 
 TRADE REVIEW LOGIC:
 When reviewing a trade, check:
@@ -219,3 +247,104 @@ STYLE RULES:
 - Instead say "based on the CSA framework, this setup is strong/weak/risky/unclear."
 - If the chart is unclear, say what information is missing.
 `;
+
+app.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "CSA Coach backend is running",
+  });
+});
+
+app.post("/analyze", upload.single("chart"), async (req, res) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({
+        error: "OPENAI_API_KEY is missing on the server.",
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        error: "No chart image uploaded.",
+      });
+    }
+
+    const {
+      timeframe = "Not provided",
+      instrument = "Not provided",
+      analysisType = "post-trade",
+      tradeDirection = "Not provided",
+      entry = "Not provided",
+      stopLoss = "Not provided",
+      takeProfit = "Not provided",
+      notes = "",
+    } = req.body;
+
+    const imageBase64 = req.file.buffer.toString("base64");
+    const mimeType = req.file.mimetype || "image/png";
+
+    const userContext = `
+User submitted a chart for CSA Coach review.
+
+Chart details:
+- Timeframe: ${timeframe}
+- Instrument: ${instrument}
+- Analysis type: ${analysisType}
+- Trade direction: ${tradeDirection}
+- Entry: ${entry}
+- Stop loss: ${stopLoss}
+- Take profit: ${takeProfit}
+- User notes: ${notes}
+
+Use the CSA framework rules.
+If timeframe is 1m, 5m, 15m, 30m, or 1H, apply the lower-timeframe daily high/low area-of-interest rule.
+If the chart does not show enough daily high/low context, say so clearly.
+`;
+
+    const response = await openai.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
+        {
+          role: "system",
+          content: CSA_FRAMEWORK_RULES,
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: userContext,
+            },
+            {
+              type: "input_image",
+              image_url: `data:${mimeType};base64,${imageBase64}`,
+            },
+          ],
+        },
+      ],
+      max_output_tokens: 1800,
+    });
+
+    const analysis =
+      response.output_text || "No analysis was returned. Please try again.";
+
+    res.json({
+      success: true,
+      analysis,
+    });
+  } catch (error) {
+    console.error("CSA Coach analyze error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Something went wrong while analyzing the chart.",
+      details: error.message,
+    });
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`CSA Coach backend running on port ${PORT}`);
+});
