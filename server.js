@@ -48,7 +48,7 @@ CSAFOREX CURRENT FRAMEWORK STAGE:
 The current framework stage is AREA IDENTIFICATION ONLY.
 
 This means:
-- Identify the Monday-to-Friday trading data for the selected chart date.
+- Identify the Monday-to-Friday trading data for the final visible chart date.
 - Use market-data OHLC values calculated by the backend as the source of truth for Monday-to-Friday highs/lows.
 - Use the uploaded chart image for visual context only.
 - Ignore Sunday candles.
@@ -71,6 +71,14 @@ The uploaded chart image is still useful for:
 If the chart image and backend market data appear slightly different, explain that small differences can happen because broker feeds, data providers, spreads, and server times may differ slightly.
 Do not accuse the user of being wrong. Use cautious wording.
 
+DATE SELECTION RULE:
+The user may select a trade date or entry date that is earlier than the latest date visible on the uploaded chart.
+If the backend says the chart-detected latest visible date is later than the user-selected date, explain that the system used the chart-detected latest visible date for the Monday-to-Friday CSA framework.
+This is correct because the CSA area identification should use the final visible chart date, not only the trade entry date.
+
+If the chart-detected date is unclear, the backend will use the user-selected date.
+Do not invent a chart date if the backend did not confirm one.
+
 TIMEFRAME RULE:
 If the selected timeframe is 1m, M1, 5m, M5, 15m, M15, 30m, M30, 1H, or H1:
 Use the CSA lower-timeframe Monday-to-Friday area identification framework.
@@ -85,9 +93,9 @@ If the broker shows partial Sunday candles, do not treat Sunday as Monday.
 Treat Monday as the first full Monday trading day after the weekend.
 
 MOST RECENT WEEK RULE:
-The CSA analysis must focus on the Monday-to-Friday week that contains the user-selected final visible chart date.
-If the selected date is Wednesday, use Monday, Tuesday, and Wednesday data available up to that date.
-If the selected date is Friday, use Monday through Friday data.
+The CSA analysis must focus on the Monday-to-Friday week that contains the final visible chart date used by the backend.
+If the final visible date is Wednesday, use Monday, Tuesday, and Wednesday data available up to that date.
+If the final visible date is Friday, use Monday through Friday data.
 Do not use older weeks as the main CSA analysis unless no current-week market data is available.
 
 CSA LOWER-TIMEFRAME AREA IDENTIFICATION FRAMEWORK:
@@ -144,6 +152,12 @@ Your answer should follow this format:
   Mention the data provider, symbol, timeframe interval, and timezone used.
   Mention that Twelve Data/reference feed levels may differ slightly from a broker screenshot.
 
+- Date Check:
+  State the user-selected date.
+  State the chart-detected latest visible date if provided.
+  State the actual final visible chart date used for the market-data fetch.
+  If the chart-detected date overrode the user-selected date, explain this clearly and briefly.
+
 - Week Used:
   State the Monday-to-Friday week/date range used.
   State that Sunday candles are ignored.
@@ -183,6 +197,37 @@ Do not include:
 - Trade signal
 - Prediction
 - Trade grade
+`;
+
+const CHART_DETECTION_PROMPT = `
+You are a chart screenshot pre-check assistant for CSA Coach.
+
+Your only job is to inspect the uploaded chart image and return a small JSON object.
+
+Detect:
+1. The trading instrument/pair visible on the chart, if readable.
+2. The timeframe visible on the chart, if readable.
+3. The latest/final visible calendar date shown on the chart, if readable.
+
+Important:
+- The chart may be from TradingView, MT4, MT5, or another platform.
+- The latest visible chart date means the last/rightmost date visible on the x-axis or candles.
+- If the user selected an earlier trade date but the chart clearly shows a later date, return the later latestVisibleDate from the chart.
+- If dates are visible as "3 Jul 2026", convert to "2026-07-03".
+- If dates are visible as "1 Jul", infer the year only if the chart clearly shows the year elsewhere.
+- If the date is not clear, use null.
+- Do not guess if unreadable.
+- Ignore Sunday candles.
+- Return JSON only. No markdown. No explanation.
+
+Return exactly this JSON shape:
+{
+  "detectedInstrument": "GBPUSD or null",
+  "detectedTimeframe": "H1 or M5 or null",
+  "latestVisibleDate": "YYYY-MM-DD or null",
+  "dateConfidence": "high or medium or low",
+  "notes": "brief note"
+}
 `;
 
 function normalizeSymbol(input = "") {
@@ -322,6 +367,142 @@ function safeNumber(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+function stripCodeFence(text = "") {
+  return String(text)
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+}
+
+function extractJsonObject(text = "") {
+  const cleaned = stripCodeFence(text);
+  try {
+    return JSON.parse(cleaned);
+  } catch (error) {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch (innerError) {
+      return null;
+    }
+  }
+}
+
+function isUsableChartDateDetection(detection) {
+  if (!detection || !detection.latestVisibleDate) return false;
+  if (!parseISODateOnly(detection.latestVisibleDate)) return false;
+
+  const confidence = String(detection.dateConfidence || "").toLowerCase();
+  return confidence === "high" || confidence === "medium";
+}
+
+function chooseFinalChartDate({ selectedDate, detection }) {
+  const detectedIsUsable = isUsableChartDateDetection(detection);
+  const detectedDate = detectedIsUsable
+    ? parseISODateOnly(detection.latestVisibleDate)
+    : null;
+
+  if (selectedDate && detectedDate && detectedDate > selectedDate) {
+    return {
+      finalDate: detectedDate,
+      finalDateText: formatDateOnly(detectedDate),
+      selectedDateText: formatDateOnly(selectedDate),
+      detectedDateText: formatDateOnly(detectedDate),
+      source: "chart-detected-later-date",
+      reason:
+        "The uploaded chart appears to show a later final visible date than the user-selected date, so the chart-detected date was used for the Monday-to-Friday CSA framework.",
+    };
+  }
+
+  if (selectedDate) {
+    return {
+      finalDate: selectedDate,
+      finalDateText: formatDateOnly(selectedDate),
+      selectedDateText: formatDateOnly(selectedDate),
+      detectedDateText: detectedDate ? formatDateOnly(detectedDate) : null,
+      source: "user-selected-date",
+      reason:
+        "The user-selected date was used because no later high-confidence chart date was detected.",
+    };
+  }
+
+  if (detectedDate) {
+    return {
+      finalDate: detectedDate,
+      finalDateText: formatDateOnly(detectedDate),
+      selectedDateText: null,
+      detectedDateText: formatDateOnly(detectedDate),
+      source: "chart-detected-date",
+      reason:
+        "No user-selected date was provided, so the chart-detected latest visible date was used.",
+    };
+  }
+
+  return {
+    finalDate: null,
+    finalDateText: "Not provided",
+    selectedDateText: selectedDate ? formatDateOnly(selectedDate) : null,
+    detectedDateText: null,
+    source: "missing-date",
+    reason:
+      "No usable user-selected date or chart-detected latest visible date was available.",
+  };
+}
+
+async function detectChartContextFromImage({ imageBase64, mimeType }) {
+  try {
+    const response = await openai.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
+        {
+          role: "system",
+          content: CHART_DETECTION_PROMPT,
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "Inspect this chart screenshot and return only the JSON object requested.",
+            },
+            {
+              type: "input_image",
+              image_url: `data:${mimeType};base64,${imageBase64}`,
+            },
+          ],
+        },
+      ],
+      max_output_tokens: 350,
+    });
+
+    const parsed = extractJsonObject(response.output_text || "");
+
+    return {
+      ok: !!parsed,
+      detectedInstrument: parsed?.detectedInstrument || null,
+      detectedTimeframe: parsed?.detectedTimeframe || null,
+      latestVisibleDate: parsed?.latestVisibleDate || null,
+      dateConfidence: parsed?.dateConfidence || "low",
+      notes: parsed?.notes || "",
+      raw: response.output_text || "",
+    };
+  } catch (error) {
+    console.error("Chart detection error:", error);
+    return {
+      ok: false,
+      detectedInstrument: null,
+      detectedTimeframe: null,
+      latestVisibleDate: null,
+      dateConfidence: "low",
+      notes: `Chart detection failed: ${error.message}`,
+      raw: "",
+    };
+  }
+}
+
 function buildDailyLevelsFromCandles(candles, weekRange) {
   const grouped = new Map();
 
@@ -337,7 +518,7 @@ function buildDailyLevelsFromCandles(candles, weekRange) {
     // Ignore Saturday and Sunday.
     if (dayNum < 1 || dayNum > 5) return;
 
-    // Only use selected Monday to selected date, capped at Friday.
+    // Only use selected Monday to final visible chart date, capped at Friday.
     if (dateOnly < weekRange.startDate || dateOnly > weekRange.endDate) return;
 
     const open = safeNumber(bar.open);
@@ -371,7 +552,9 @@ function buildDailyLevelsFromCandles(candles, weekRange) {
     day.lastCandleTime = bar.datetime;
   });
 
-  return Array.from(grouped.values()).sort((a, b) => a.date.localeCompare(b.date));
+  return Array.from(grouped.values()).sort((a, b) =>
+    a.date.localeCompare(b.date)
+  );
 }
 
 function buildCsaAreas(dailyLevels) {
@@ -557,9 +740,23 @@ async function fetchTwelveDataIntradayLevels({
   };
 }
 
-function buildMarketDataSummary(reference) {
+function buildMarketDataSummary(reference, dateDecision, chartDetection) {
+  const dateBlock = `
+Date decision:
+- User-selected date: ${dateDecision.selectedDateText || "Not provided"}
+- Chart-detected latest visible date: ${
+    dateDecision.detectedDateText || "Not detected"
+  }
+- Chart detection confidence: ${chartDetection?.dateConfidence || "low"}
+- Final visible chart date used for market data: ${dateDecision.finalDateText}
+- Date source: ${dateDecision.source}
+- Reason: ${dateDecision.reason}
+`;
+
   if (!reference || !reference.ok) {
-    return `Market-data reference status: unavailable. Reason: ${
+    return `${dateBlock}
+
+Market-data reference status: unavailable. Reason: ${
       reference?.error || "Unknown error"
     }`;
   }
@@ -573,7 +770,9 @@ function buildMarketDataSummary(reference) {
           day.low
         )}, close ${formatPrice(day.close)}. Candles used: ${
           day.candleCount
-        }. First candle: ${day.firstCandleTime}. Last candle: ${day.lastCandleTime}.`
+        }. First candle: ${day.firstCandleTime}. Last candle: ${
+          day.lastCandleTime
+        }.`
     )
     .join("\n");
 
@@ -587,12 +786,16 @@ function buildMarketDataSummary(reference) {
     .join("\n");
 
   return `
+${dateBlock}
+
 Market-data reference status: available.
 Provider: Twelve Data.
 Symbol used: ${reference.symbol}.
 Timeframe interval used to calculate daily highs/lows: ${reference.interval}.
 Timezone used: ${reference.timezone}.
-Week requested: ${reference.weekRange.startDate} to ${reference.weekRange.fridayDate}.
+Week requested: ${reference.weekRange.startDate} to ${
+    reference.weekRange.fridayDate
+  }.
 Data used up to: ${reference.weekRange.endDate}.
 Raw candles returned: ${reference.rawCandleCount}.
 Sunday candles: ignored.
@@ -690,36 +893,65 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
 
     const submittedNotes = notes || userNotes || "";
     const normalizedSymbol = normalizeSymbol(submittedInstrument);
+
+    const imageBase64 = req.file.buffer.toString("base64");
+    const mimeType = req.file.mimetype || "image/png";
+
     const selectedDate = parseISODateOnly(chartDate || tradeDate);
+
+    const chartDetection = await detectChartContextFromImage({
+      imageBase64,
+      mimeType,
+    });
+
+    const dateDecision = chooseFinalChartDate({
+      selectedDate,
+      detection: chartDetection,
+    });
 
     const marketReference = await fetchTwelveDataIntradayLevels({
       symbol: normalizedSymbol,
-      chartDate: selectedDate,
+      chartDate: dateDecision.finalDate,
       timeframe,
       timezone: timezone || "UTC",
     });
 
-    const imageBase64 = req.file.buffer.toString("base64");
-    const mimeType = req.file.mimetype || "image/png";
-    const marketDataSummary = buildMarketDataSummary(marketReference);
+    const marketDataSummary = buildMarketDataSummary(
+      marketReference,
+      dateDecision,
+      chartDetection
+    );
 
     const userContext = `
 User submitted a chart for CSA Coach area identification.
 
-Chart details:
+User-selected details:
 - Timeframe selected by user: ${timeframe}
 - Instrument selected by user: ${submittedInstrument}
 - Normalized market-data symbol: ${normalizedSymbol || "Not available"}
-- Final visible chart date / trade date: ${chartDate || tradeDate || "Not provided"}
+- User-selected chart/trade date: ${chartDate || tradeDate || "Not provided"}
 - Timezone: ${timezone || "UTC"}
 - Analysis type: ${analysisType}
 - User notes: ${submittedNotes}
+
+AI chart pre-check:
+- Detected instrument from chart: ${
+      chartDetection.detectedInstrument || "Not detected"
+    }
+- Detected timeframe from chart: ${
+      chartDetection.detectedTimeframe || "Not detected"
+    }
+- Detected latest visible chart date: ${
+      chartDetection.latestVisibleDate || "Not detected"
+    }
+- Date confidence: ${chartDetection.dateConfidence || "low"}
+- Detection notes: ${chartDetection.notes || ""}
 
 Current task:
 Identify CSAFOREX areas of interest only.
 
 Focus only on:
-- Market-data-backed Monday-to-Friday data for the selected week/date
+- Market-data-backed Monday-to-Friday data for the final visible chart date used by the backend
 - Support areas
 - Resistance areas
 - Supply zones
@@ -772,8 +1004,12 @@ ${marketDataSummary}
       selectedPair: submittedInstrument,
       selectedTimeframe: timeframe,
       selectedDate: chartDate || tradeDate || "Not provided",
-      detectedPair: normalizedSymbol || "Not available",
-      detectedTimeframe: timeframe,
+      detectedPair: chartDetection.detectedInstrument || normalizedSymbol || "Not available",
+      detectedTimeframe: chartDetection.detectedTimeframe || timeframe,
+      detectedLatestVisibleDate:
+        chartDetection.latestVisibleDate || "Not detected",
+      finalDateUsed: dateDecision.finalDateText,
+      dateDecision,
       contextStatus: marketReference.ok
         ? "Market-data-backed area identification completed"
         : `Area identification completed without market data: ${marketReference.error}`,
@@ -799,6 +1035,7 @@ ${marketDataSummary}
         "area identification only",
         marketReference.ok ? "market-data-backed" : "vision-only fallback",
       ],
+      chartDetection,
       marketReference: {
         ok: marketReference.ok,
         error: marketReference.error,
