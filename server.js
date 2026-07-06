@@ -48,8 +48,8 @@ CSAFOREX CURRENT FRAMEWORK STAGE:
 The current framework stage is AREA IDENTIFICATION ONLY.
 
 This means:
-- Identify the most recent Monday-to-Friday trading data for the selected chart date.
-- Use market-data OHLC values supplied by the backend as the source of truth for Monday-to-Friday highs/lows.
+- Identify the Monday-to-Friday trading data for the selected chart date.
+- Use market-data OHLC values calculated by the backend as the source of truth for Monday-to-Friday highs/lows.
 - Use the uploaded chart image for visual context only.
 - Ignore Sunday candles.
 - Do not analyze reaction type yet.
@@ -68,7 +68,7 @@ The uploaded chart image is still useful for:
 - Noting whether visible user-drawn lines/zones appear close to the backend-calculated CSA areas.
 - Explaining the areas in a trader-friendly way.
 
-If the chart image and backend market data appear slightly different, explain that small differences can happen because broker feeds and data providers may differ slightly.
+If the chart image and backend market data appear slightly different, explain that small differences can happen because broker feeds, data providers, spreads, and server times may differ slightly.
 Do not accuse the user of being wrong. Use cautious wording.
 
 TIMEFRAME RULE:
@@ -85,7 +85,7 @@ If the broker shows partial Sunday candles, do not treat Sunday as Monday.
 Treat Monday as the first full Monday trading day after the weekend.
 
 MOST RECENT WEEK RULE:
-The CSA analysis must focus on the Monday-to-Friday week that contains the user-selected chart/trade date.
+The CSA analysis must focus on the Monday-to-Friday week that contains the user-selected final visible chart date.
 If the selected date is Wednesday, use Monday, Tuesday, and Wednesday data available up to that date.
 If the selected date is Friday, use Monday through Friday data.
 Do not use older weeks as the main CSA analysis unless no current-week market data is available.
@@ -141,6 +141,7 @@ Your answer should follow this format:
 
 - Data Source Check:
   State whether backend OHLC market data was provided.
+  Mention the data provider, symbol, timeframe interval, and timezone used.
   Mention that Twelve Data/reference feed levels may differ slightly from a broker screenshot.
 
 - Week Used:
@@ -170,7 +171,7 @@ Your answer should follow this format:
   Do not rely on the screenshot for exact prices when backend OHLC data is available.
 
 - Missing Information:
-  State if chart date, instrument, or backend OHLC data was missing or incomplete.
+  State if chart date, instrument, timeframe, or backend OHLC data was missing or incomplete.
 
 Do not include:
 - Entry review
@@ -208,6 +209,45 @@ function normalizeSymbol(input = "") {
   if (raw.includes("/")) return raw;
   if (raw.length === 6) return `${raw.slice(0, 3)}/${raw.slice(3)}`;
   return raw || "";
+}
+
+function normalizeTimeframe(input = "") {
+  const raw = String(input).trim().toUpperCase().replace(/\s+/g, "");
+
+  const map = {
+    "1M": "1min",
+    M1: "1min",
+    "1MIN": "1min",
+
+    "5M": "5min",
+    M5: "5min",
+    "5MIN": "5min",
+
+    "15M": "15min",
+    M15: "15min",
+    "15MIN": "15min",
+
+    "30M": "30min",
+    M30: "30min",
+    "30MIN": "30min",
+
+    "1H": "1h",
+    H1: "1h",
+    "60M": "1h",
+
+    "4H": "4h",
+    H4: "4h",
+
+    D1: "1day",
+    DAILY: "1day",
+    "1D": "1day",
+
+    W1: "1week",
+    WEEKLY: "1week",
+    "1W": "1week",
+  };
+
+  return map[raw] || "1h";
 }
 
 function parseISODateOnly(value) {
@@ -251,105 +291,87 @@ function weekdayNameFromDate(dateString) {
   }).format(date);
 }
 
-async function fetchTwelveDataDailyLevels({ symbol, chartDate, timezone = "UTC" }) {
-  const apiKey = process.env.TWELVE_DATA_API_KEY;
-
-  if (!apiKey) {
-    return {
-      ok: false,
-      error: "TWELVE_DATA_API_KEY is missing on the server.",
-      dailyLevels: [],
-      csaAreas: [],
-      weekRange: chartDate ? getWeekRangeForDate(chartDate) : null,
-    };
-  }
-
-  if (!symbol) {
-    return {
-      ok: false,
-      error: "Instrument/pair is missing or unsupported.",
-      dailyLevels: [],
-      csaAreas: [],
-      weekRange: chartDate ? getWeekRangeForDate(chartDate) : null,
-    };
-  }
-
-  if (!chartDate) {
-    return {
-      ok: false,
-      error: "Chart / Trade Date is missing. Add a date so the backend can fetch the correct Monday-to-Friday data.",
-      dailyLevels: [],
-      csaAreas: [],
-      weekRange: null,
-    };
-  }
-
-  const weekRange = getWeekRangeForDate(chartDate);
-
-  const params = new URLSearchParams({
-    symbol,
-    interval: "1day",
-    start_date: `${weekRange.startDate} 00:00:00`,
-    end_date: `${weekRange.endDate} 23:59:59`,
-    timezone,
-    order: "ASC",
-    outputsize: "10",
-    apikey: apiKey,
-  });
-
-  const url = `${TWELVE_DATA_BASE_URL}?${params.toString()}`;
-  const response = await fetch(url);
-  const data = await response.json();
-
-  if (!response.ok || data.status === "error" || !Array.isArray(data.values)) {
-    return {
-      ok: false,
-      error: data.message || data.error || `Twelve Data request failed with status ${response.status}.`,
-      dailyLevels: [],
-      csaAreas: [],
-      weekRange,
-      symbol,
-      timezone,
-    };
-  }
-
-  const dailyLevels = data.values
-    .map((bar) => {
-      const dateOnly = String(bar.datetime || "").slice(0, 10);
-      const date = new Date(`${dateOnly}T00:00:00.000Z`);
-      const dayNum = date.getUTCDay();
-
-      return {
-        date: dateOnly,
-        weekday: weekdayNameFromDate(dateOnly),
-        dayNum,
-        open: Number(bar.open),
-        high: Number(bar.high),
-        low: Number(bar.low),
-        close: Number(bar.close),
-      };
-    })
-    .filter((bar) => bar.date && bar.dayNum >= 1 && bar.dayNum <= 5)
-    .filter((bar) => bar.date >= weekRange.startDate && bar.date <= weekRange.endDate)
-    .sort((a, b) => a.date.localeCompare(b.date));
-
-  return {
-    ok: dailyLevels.length > 0,
-    error: dailyLevels.length > 0 ? "" : "No Monday-to-Friday daily OHLC data was returned for the selected week.",
-    dailyLevels,
-    csaAreas: buildCsaAreas(dailyLevels),
-    weekRange,
-    symbol,
-    timezone,
-  };
-}
-
 function formatPrice(value) {
   if (!Number.isFinite(value)) return "N/A";
   if (Math.abs(value) >= 1000) return value.toFixed(2);
   if (Math.abs(value) >= 100) return value.toFixed(3);
   if (Math.abs(value) >= 10) return value.toFixed(4);
   return value.toFixed(5);
+}
+
+function getOutputSizeForInterval(interval) {
+  const map = {
+    "1min": "5000",
+    "5min": "5000",
+    "15min": "3000",
+    "30min": "2000",
+    "1h": "1000",
+    "4h": "500",
+    "1day": "50",
+  };
+
+  return map[interval] || "1000";
+}
+
+function candleDateOnly(datetimeValue = "") {
+  return String(datetimeValue).slice(0, 10);
+}
+
+function safeNumber(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function buildDailyLevelsFromCandles(candles, weekRange) {
+  const grouped = new Map();
+
+  candles.forEach((bar) => {
+    const dateOnly = candleDateOnly(bar.datetime);
+    if (!dateOnly) return;
+
+    const date = new Date(`${dateOnly}T00:00:00.000Z`);
+    if (Number.isNaN(date.getTime())) return;
+
+    const dayNum = date.getUTCDay();
+
+    // Ignore Saturday and Sunday.
+    if (dayNum < 1 || dayNum > 5) return;
+
+    // Only use selected Monday to selected date, capped at Friday.
+    if (dateOnly < weekRange.startDate || dateOnly > weekRange.endDate) return;
+
+    const open = safeNumber(bar.open);
+    const high = safeNumber(bar.high);
+    const low = safeNumber(bar.low);
+    const close = safeNumber(bar.close);
+
+    if (open === null || high === null || low === null || close === null) return;
+
+    if (!grouped.has(dateOnly)) {
+      grouped.set(dateOnly, {
+        date: dateOnly,
+        weekday: weekdayNameFromDate(dateOnly),
+        dayNum,
+        open,
+        high,
+        low,
+        close,
+        candleCount: 1,
+        firstCandleTime: bar.datetime,
+        lastCandleTime: bar.datetime,
+      });
+      return;
+    }
+
+    const day = grouped.get(dateOnly);
+    day.high = Math.max(day.high, high);
+    day.low = Math.min(day.low, low);
+    day.close = close;
+    day.candleCount += 1;
+    day.lastCandleTime = bar.datetime;
+  });
+
+  return Array.from(grouped.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
 function buildCsaAreas(dailyLevels) {
@@ -387,7 +409,7 @@ function buildCsaAreas(dailyLevels) {
         type: "reference high",
         price: day.high,
         priceText: formatPrice(day.high),
-        logic: `No previous visible weekday was available for comparison, so ${day.weekday} high is only a reference high.`,
+        logic: `No previous weekday was available for comparison, so ${day.weekday} high is only a reference high.`,
       });
 
       areas.push({
@@ -396,7 +418,7 @@ function buildCsaAreas(dailyLevels) {
         type: "reference low",
         price: day.low,
         priceText: formatPrice(day.low),
-        logic: `No previous visible weekday was available for comparison, so ${day.weekday} low is only a reference low.`,
+        logic: `No previous weekday was available for comparison, so ${day.weekday} low is only a reference low.`,
       });
 
       return;
@@ -433,22 +455,134 @@ function buildCsaAreas(dailyLevels) {
   return areas;
 }
 
+async function fetchTwelveDataIntradayLevels({
+  symbol,
+  chartDate,
+  timeframe = "H1",
+  timezone = "UTC",
+}) {
+  const apiKey = process.env.TWELVE_DATA_API_KEY;
+  const interval = normalizeTimeframe(timeframe);
+
+  if (!apiKey) {
+    return {
+      ok: false,
+      error: "TWELVE_DATA_API_KEY is missing on the server.",
+      dailyLevels: [],
+      csaAreas: [],
+      rawCandleCount: 0,
+      weekRange: chartDate ? getWeekRangeForDate(chartDate) : null,
+      interval,
+    };
+  }
+
+  if (!symbol) {
+    return {
+      ok: false,
+      error: "Instrument/pair is missing or unsupported.",
+      dailyLevels: [],
+      csaAreas: [],
+      rawCandleCount: 0,
+      weekRange: chartDate ? getWeekRangeForDate(chartDate) : null,
+      interval,
+    };
+  }
+
+  if (!chartDate) {
+    return {
+      ok: false,
+      error:
+        "Final Visible Chart Date is missing. Add the latest date visible on the chart so the backend can fetch the correct Monday-to-Friday data.",
+      dailyLevels: [],
+      csaAreas: [],
+      rawCandleCount: 0,
+      weekRange: null,
+      interval,
+    };
+  }
+
+  const weekRange = getWeekRangeForDate(chartDate);
+
+  const params = new URLSearchParams({
+    symbol,
+    interval,
+    start_date: `${weekRange.startDate} 00:00:00`,
+    end_date: `${weekRange.endDate} 23:59:59`,
+    timezone,
+    order: "ASC",
+    outputsize: getOutputSizeForInterval(interval),
+    apikey: apiKey,
+  });
+
+  const url = `${TWELVE_DATA_BASE_URL}?${params.toString()}`;
+  const response = await fetch(url);
+  const data = await response.json();
+
+  if (!response.ok || data.status === "error" || !Array.isArray(data.values)) {
+    return {
+      ok: false,
+      error:
+        data.message ||
+        data.error ||
+        `Twelve Data request failed with status ${response.status}.`,
+      dailyLevels: [],
+      csaAreas: [],
+      rawCandleCount: 0,
+      weekRange,
+      symbol,
+      timezone,
+      interval,
+      twelveDataStatus: data.status || "unknown",
+    };
+  }
+
+  const rawCandles = data.values || [];
+  const dailyLevels = buildDailyLevelsFromCandles(rawCandles, weekRange);
+  const csaAreas = buildCsaAreas(dailyLevels);
+
+  return {
+    ok: dailyLevels.length > 0,
+    error:
+      dailyLevels.length > 0
+        ? ""
+        : "No Monday-to-Friday intraday candles were returned for the selected week/date/timeframe.",
+    dailyLevels,
+    csaAreas,
+    rawCandleCount: rawCandles.length,
+    weekRange,
+    symbol,
+    timezone,
+    interval,
+    meta: data.meta || null,
+  };
+}
+
 function buildMarketDataSummary(reference) {
   if (!reference || !reference.ok) {
-    return `Market-data reference status: unavailable. Reason: ${reference?.error || "Unknown error"}`;
+    return `Market-data reference status: unavailable. Reason: ${
+      reference?.error || "Unknown error"
+    }`;
   }
 
   const dailyLines = reference.dailyLevels
     .map(
       (day) =>
-        `- ${day.weekday} ${day.date}: open ${formatPrice(day.open)}, high ${formatPrice(day.high)}, low ${formatPrice(day.low)}, close ${formatPrice(day.close)}`
+        `- ${day.weekday} ${day.date}: open ${formatPrice(
+          day.open
+        )}, high ${formatPrice(day.high)}, low ${formatPrice(
+          day.low
+        )}, close ${formatPrice(day.close)}. Candles used: ${
+          day.candleCount
+        }. First candle: ${day.firstCandleTime}. Last candle: ${day.lastCandleTime}.`
     )
     .join("\n");
 
   const areaLines = reference.csaAreas
     .map(
       (area) =>
-        `- ${area.day} ${area.date}: ${area.type.toUpperCase()} at ${area.priceText}. ${area.logic}`
+        `- ${area.day} ${area.date}: ${area.type.toUpperCase()} at ${
+          area.priceText
+        }. ${area.logic}`
     )
     .join("\n");
 
@@ -456,18 +590,20 @@ function buildMarketDataSummary(reference) {
 Market-data reference status: available.
 Provider: Twelve Data.
 Symbol used: ${reference.symbol}.
+Timeframe interval used to calculate daily highs/lows: ${reference.interval}.
 Timezone used: ${reference.timezone}.
 Week requested: ${reference.weekRange.startDate} to ${reference.weekRange.fridayDate}.
 Data used up to: ${reference.weekRange.endDate}.
+Raw candles returned: ${reference.rawCandleCount}.
 Sunday candles: ignored.
 
-Daily OHLC reference:
+Daily OHLC reference calculated from ${reference.interval} candles:
 ${dailyLines || "No weekday data returned."}
 
 CSA area calculations from backend:
 ${areaLines || "No CSA areas calculated."}
 
-Important: Use these backend OHLC values and CSA area calculations as the source of truth for exact Monday-to-Friday highs/lows. Use the uploaded chart image only for visual context and mismatch checks.
+Important: Use these backend-calculated OHLC values and CSA area calculations as the source of truth for exact Monday-to-Friday highs/lows. Use the uploaded chart image only for visual context and mismatch checks.
 `;
 }
 
@@ -476,6 +612,50 @@ app.get("/", (req, res) => {
     status: "ok",
     message: "CSA Coach backend is running",
   });
+});
+
+app.get("/test-twelve", async (req, res) => {
+  try {
+    const symbol = normalizeSymbol(req.query.symbol || "GBP/USD");
+    const timeframe = req.query.timeframe || "H1";
+    const date = req.query.date || "2026-07-03";
+    const timezone = req.query.timezone || "UTC";
+
+    const chartDate = parseISODateOnly(date);
+
+    if (!chartDate) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid date. Use YYYY-MM-DD format.",
+      });
+    }
+
+    const result = await fetchTwelveDataIntradayLevels({
+      symbol,
+      chartDate,
+      timeframe,
+      timezone,
+    });
+
+    res.json({
+      ok: result.ok,
+      symbol,
+      timeframe,
+      interval: result.interval,
+      date,
+      timezone,
+      error: result.error,
+      weekRange: result.weekRange,
+      rawCandleCount: result.rawCandleCount,
+      dailyLevels: result.dailyLevels,
+      csaAreas: result.csaAreas,
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message,
+    });
+  }
 });
 
 app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
@@ -505,14 +685,17 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       timezone = "UTC",
     } = req.body;
 
-    const submittedInstrument = instrument || pair || selectedPair || "Not provided";
+    const submittedInstrument =
+      instrument || pair || selectedPair || "Not provided";
+
     const submittedNotes = notes || userNotes || "";
     const normalizedSymbol = normalizeSymbol(submittedInstrument);
     const selectedDate = parseISODateOnly(chartDate || tradeDate);
 
-    const marketReference = await fetchTwelveDataDailyLevels({
+    const marketReference = await fetchTwelveDataIntradayLevels({
       symbol: normalizedSymbol,
       chartDate: selectedDate,
+      timeframe,
       timezone: timezone || "UTC",
     });
 
@@ -524,10 +707,10 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
 User submitted a chart for CSA Coach area identification.
 
 Chart details:
-- Timeframe: ${timeframe}
+- Timeframe selected by user: ${timeframe}
 - Instrument selected by user: ${submittedInstrument}
 - Normalized market-data symbol: ${normalizedSymbol || "Not available"}
-- Chart / trade date: ${chartDate || tradeDate || "Not provided"}
+- Final visible chart date / trade date: ${chartDate || tradeDate || "Not provided"}
 - Timezone: ${timezone || "UTC"}
 - Analysis type: ${analysisType}
 - User notes: ${submittedNotes}
@@ -579,7 +762,8 @@ ${marketDataSummary}
       max_output_tokens: 1800,
     });
 
-    const analysis = response.output_text || "No analysis was returned. Please try again.";
+    const analysis =
+      response.output_text || "No analysis was returned. Please try again.";
 
     res.json({
       success: true,
@@ -599,18 +783,29 @@ ${marketDataSummary}
       executionScore: 0,
       riskScore: 0,
       strengths: marketReference.ok
-        ? ["CSA areas calculated from Twelve Data OHLC for the selected Monday-to-Friday week."]
-        : ["CSA area identification completed using the uploaded chart, but market-data reference was unavailable."],
+        ? [
+            `CSA areas calculated from Twelve Data ${marketReference.interval} candles for the selected Monday-to-Friday week.`,
+          ]
+        : [
+            "CSA area identification completed using the uploaded chart, but market-data reference was unavailable.",
+          ],
       weaknesses: marketReference.ok
-        ? ["Broker chart prices may differ slightly from Twelve Data reference levels."]
+        ? [
+            "Broker chart prices may differ slightly from Twelve Data reference levels.",
+          ]
         : [marketReference.error || "Market-data reference unavailable."],
       coachAdvice: [analysis],
-      journalTags: ["area identification only", marketReference.ok ? "market-data-backed" : "vision-only fallback"],
+      journalTags: [
+        "area identification only",
+        marketReference.ok ? "market-data-backed" : "vision-only fallback",
+      ],
       marketReference: {
         ok: marketReference.ok,
         error: marketReference.error,
         symbol: marketReference.symbol,
         timezone: marketReference.timezone,
+        interval: marketReference.interval,
+        rawCandleCount: marketReference.rawCandleCount,
         weekRange: marketReference.weekRange,
         dailyLevels: marketReference.dailyLevels,
         csaAreas: marketReference.csaAreas,
