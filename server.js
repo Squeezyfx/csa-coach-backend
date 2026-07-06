@@ -24,7 +24,7 @@ const TWELVE_DATA_BASE_URL = "https://api.twelvedata.com/time_series";
 const CSA_FRAMEWORK_RULES = `
 You are CSA Coach, an AI chart-structure coach trained to identify CSAFOREX areas of interest.
 
-Your current role is ONLY to identify CSAFOREX areas of interest on the uploaded chart.
+Your current role is ONLY to identify CSAFOREX areas of interest on the uploaded chart and explain the CSA directional bias based on the progression of those areas.
 
 Do NOT provide trade signals.
 Do NOT give financial advice.
@@ -43,15 +43,17 @@ For now, your job is only to identify:
 - Resistance areas
 - Supply zones
 - Demand zones
+- CSA directional bias based on the progression of those areas
 
 CSAFOREX CURRENT FRAMEWORK STAGE:
-The current framework stage is AREA IDENTIFICATION ONLY.
+The current framework stage is AREA IDENTIFICATION + DIRECTIONAL BIAS ONLY.
 
 This means:
 - Identify the Monday-to-Friday trading data for the final visible chart date.
 - Use market-data OHLC values calculated by the backend as the source of truth for Monday-to-Friday highs/lows.
 - Use the uploaded chart image for visual context only.
 - Ignore Sunday candles.
+- Explain directional bias from CSA structure progression.
 - Do not analyze reaction type yet.
 - Do not analyze entry trigger yet.
 - Do not analyze stop loss yet.
@@ -59,9 +61,10 @@ This means:
 
 HYBRID DATA RULE:
 The backend may provide CSA reference data from Twelve Data.
-If CSA reference data is provided, treat those OHLC values and CSA area calculations as the source of truth.
+If CSA reference data is provided, treat those OHLC values, CSA area calculations, and directional bias calculations as the source of truth.
 Do not override backend OHLC values with approximate readings from the screenshot.
 Do not relabel a backend-provided Monday high as Tuesday high, or Tuesday high as Monday high.
+Do not change the backend-provided CSA directional bias unless the backend says the bias is unavailable.
 
 The uploaded chart image is still useful for:
 - Checking whether the selected instrument/timeframe visually matches the screenshot.
@@ -140,6 +143,33 @@ IMPORTANT COMPARISON RULES:
 - Do not call every low support.
 - Use the CSA comparison rule.
 
+CSA DIRECTIONAL BIAS RULE:
+Directional bias must be based on the progression of CSA support, resistance, supply, and demand areas.
+
+Bullish CSA bias usually means:
+- Highs are breaking above previous highs.
+- Lows are holding above previous lows.
+- Demand areas are holding.
+- Resistance levels are being pushed higher.
+- The CSA structure is progressing upward.
+
+Bearish CSA bias usually means:
+- Lows are breaking below previous lows.
+- Highs are failing to break previous highs.
+- Supply areas are holding.
+- Support levels are being pushed lower.
+- The CSA structure is progressing downward.
+
+Mixed or range-bound CSA bias usually means:
+- Price is breaking both sides inconsistently.
+- Highs and lows are not progressing cleanly in one direction.
+- Support, resistance, supply, and demand are conflicting.
+- Trend-following conditions are less clear.
+
+Directional bias is NOT a trade signal.
+Do not say "buy", "sell", "enter", or "take this trade".
+Instead, explain which CSA areas are more relevant for a trend-following trader and which areas may be counter-trend or higher caution.
+
 OUTPUT STYLE:
 Be clear and structured.
 Do not over-explain general trading theory.
@@ -176,6 +206,19 @@ Your answer should follow this format:
 
 - Friday Areas:
   Compare Friday to Thursday and identify Friday resistance/support/supply/demand if Friday data is available.
+
+- CSA Directional Bias:
+  State the bias as Bullish, Bearish, Mixed / Range-bound, or Insufficient data.
+  Explain the bias using the progression of CSA highs, lows, support, resistance, supply, and demand.
+
+- Trend Trading Focus:
+  Explain which CSA areas deserve more attention for trend-following traders.
+  Do not provide an entry signal.
+  Use wording like "watch", "focus on", "more important area", or "area of interest".
+
+- Counter-Trend Caution:
+  Explain which areas may attract counter-trend reactions but should be treated with more caution if they go against the CSA bias.
+  Do not provide a counter-trend signal.
 
 - Current Key Areas of Interest:
   List the most important current support, resistance, supply, and demand areas from the selected week only.
@@ -638,6 +681,170 @@ function buildCsaAreas(dailyLevels) {
   return areas;
 }
 
+function calculateCsaDirectionalBias(dailyLevels = [], csaAreas = []) {
+  if (!Array.isArray(dailyLevels) || dailyLevels.length < 2) {
+    return {
+      bias: "Insufficient data",
+      biasCode: "insufficient",
+      confidence: "low",
+      bullishScore: 0,
+      bearishScore: 0,
+      highBreakCount: 0,
+      lowBreakCount: 0,
+      demandHoldCount: 0,
+      supplyHoldCount: 0,
+      progression: [],
+      reason:
+        "At least two weekdays are needed to compare CSA progression and form a directional bias.",
+      trendTradingFocus:
+        "There is not enough CSA progression yet to define a clear trend-following focus.",
+      counterTrendCaution:
+        "Counter-trend interpretation is not reliable until more weekday structure is available.",
+    };
+  }
+
+  let bullishScore = 0;
+  let bearishScore = 0;
+  let highBreakCount = 0;
+  let lowBreakCount = 0;
+  let demandHoldCount = 0;
+  let supplyHoldCount = 0;
+  let higherCloseCount = 0;
+  let lowerCloseCount = 0;
+
+  const progression = [];
+
+  for (let i = 1; i < dailyLevels.length; i += 1) {
+    const current = dailyLevels[i];
+    const previous = dailyLevels[i - 1];
+
+    const highBreak = current.high > previous.high;
+    const lowBreak = current.low < previous.low;
+    const demandHeld = current.low >= previous.low;
+    const supplyHeld = current.high <= previous.high;
+    const closeHigher = current.close > previous.close;
+    const closeLower = current.close < previous.close;
+
+    if (highBreak) {
+      bullishScore += 2;
+      highBreakCount += 1;
+    } else if (supplyHeld) {
+      bearishScore += 1;
+      supplyHoldCount += 1;
+    }
+
+    if (demandHeld) {
+      bullishScore += 1.5;
+      demandHoldCount += 1;
+    } else if (lowBreak) {
+      bearishScore += 2;
+      lowBreakCount += 1;
+    }
+
+    if (closeHigher) {
+      bullishScore += 0.5;
+      higherCloseCount += 1;
+    } else if (closeLower) {
+      bearishScore += 0.5;
+      lowerCloseCount += 1;
+    }
+
+    let line = `${current.weekday} ${current.date}: `;
+
+    if (highBreak && demandHeld) {
+      line += `bullish progression because ${current.weekday} broke above ${previous.weekday}'s high and held above ${previous.weekday}'s low.`;
+    } else if (lowBreak && supplyHeld) {
+      line += `bearish progression because ${current.weekday} broke below ${previous.weekday}'s low and failed to break above ${previous.weekday}'s high.`;
+    } else if (highBreak && lowBreak) {
+      line += `expanded both sides because ${current.weekday} broke above the previous high and below the previous low, so the bias is less clean.`;
+    } else if (supplyHeld && demandHeld) {
+      line += `range compression because ${current.weekday} stayed inside the previous day's high and low.`;
+    } else if (highBreak) {
+      line += `partial bullish pressure because ${current.weekday} broke above the previous high.`;
+    } else if (lowBreak) {
+      line += `partial bearish pressure because ${current.weekday} broke below the previous low.`;
+    } else {
+      line += `no clear directional expansion compared with ${previous.weekday}.`;
+    }
+
+    progression.push(line);
+  }
+
+  const scoreDifference = bullishScore - bearishScore;
+  const totalComparisons = dailyLevels.length - 1;
+
+  let bias = "Mixed / Range-bound";
+  let biasCode = "mixed";
+  let confidence = "medium";
+
+  if (
+    scoreDifference >= 2 &&
+    highBreakCount >= 1 &&
+    demandHoldCount >= lowBreakCount
+  ) {
+    bias = "Bullish";
+    biasCode = "bullish";
+  } else if (
+    scoreDifference <= -2 &&
+    lowBreakCount >= 1 &&
+    supplyHoldCount >= highBreakCount
+  ) {
+    bias = "Bearish";
+    biasCode = "bearish";
+  }
+
+  if (totalComparisons <= 1) {
+    confidence = "low";
+  } else if (Math.abs(scoreDifference) >= 4) {
+    confidence = "high";
+  } else if (Math.abs(scoreDifference) < 2) {
+    confidence = "low";
+  }
+
+  let reason = "";
+  let trendTradingFocus = "";
+  let counterTrendCaution = "";
+
+  if (biasCode === "bullish") {
+    reason = `The CSA progression is bullish because the week shows ${highBreakCount} high break(s), ${demandHoldCount} demand hold(s), and ${higherCloseCount} higher close comparison(s). Resistance is being pushed higher while demand/support is holding above previous lows.`;
+    trendTradingFocus =
+      "For trend-following traders, the more important CSA areas are demand/support areas created during the bullish progression, especially areas that formed after price broke previous highs. These are areas to watch for later reaction/confirmation when that part of the CSA framework is added.";
+    counterTrendCaution =
+      "Supply/resistance areas can still create reactions, but counter-trend selling against bullish CSA progression should be treated with more caution because the structure is currently favoring upward progression.";
+  } else if (biasCode === "bearish") {
+    reason = `The CSA progression is bearish because the week shows ${lowBreakCount} low break(s), ${supplyHoldCount} supply hold(s), and ${lowerCloseCount} lower close comparison(s). Support is being pushed lower while supply/resistance is holding below previous highs.`;
+    trendTradingFocus =
+      "For trend-following traders, the more important CSA areas are supply/resistance areas created during the bearish progression, especially areas that formed after price broke previous lows. These are areas to watch for later reaction/confirmation when that part of the CSA framework is added.";
+    counterTrendCaution =
+      "Demand/support areas can still create reactions, but counter-trend buying against bearish CSA progression should be treated with more caution because the structure is currently favoring downward progression.";
+  } else {
+    reason = `The CSA progression is mixed/range-bound because bullish and bearish structure signals are conflicting. The week shows ${highBreakCount} high break(s), ${lowBreakCount} low break(s), ${demandHoldCount} demand hold(s), and ${supplyHoldCount} supply hold(s), so the structure is not cleanly one-sided.`;
+    trendTradingFocus =
+      "For trend-following traders, it may be better to wait for a cleaner CSA progression before placing more weight on trend-continuation areas. The most important areas are the extremes of the current week rather than the middle of the range.";
+    counterTrendCaution =
+      "Counter-trend reactions may appear inside mixed/ranging conditions, but the middle of the range is lower quality. Extreme support/demand or resistance/supply areas should be treated with more caution and require stronger confirmation later.";
+  }
+
+  return {
+    bias,
+    biasCode,
+    confidence,
+    bullishScore,
+    bearishScore,
+    scoreDifference,
+    highBreakCount,
+    lowBreakCount,
+    demandHoldCount,
+    supplyHoldCount,
+    higherCloseCount,
+    lowerCloseCount,
+    progression,
+    reason,
+    trendTradingFocus,
+    counterTrendCaution,
+  };
+}
+
 async function fetchTwelveDataIntradayLevels({
   symbol,
   chartDate,
@@ -653,6 +860,7 @@ async function fetchTwelveDataIntradayLevels({
       error: "TWELVE_DATA_API_KEY is missing on the server.",
       dailyLevels: [],
       csaAreas: [],
+      directionalBias: calculateCsaDirectionalBias([], []),
       rawCandleCount: 0,
       weekRange: chartDate ? getWeekRangeForDate(chartDate) : null,
       interval,
@@ -665,6 +873,7 @@ async function fetchTwelveDataIntradayLevels({
       error: "Instrument/pair is missing or unsupported.",
       dailyLevels: [],
       csaAreas: [],
+      directionalBias: calculateCsaDirectionalBias([], []),
       rawCandleCount: 0,
       weekRange: chartDate ? getWeekRangeForDate(chartDate) : null,
       interval,
@@ -678,6 +887,7 @@ async function fetchTwelveDataIntradayLevels({
         "Final Visible Chart Date is missing. Add the latest date visible on the chart so the backend can fetch the correct Monday-to-Friday data.",
       dailyLevels: [],
       csaAreas: [],
+      directionalBias: calculateCsaDirectionalBias([], []),
       rawCandleCount: 0,
       weekRange: null,
       interval,
@@ -710,6 +920,7 @@ async function fetchTwelveDataIntradayLevels({
         `Twelve Data request failed with status ${response.status}.`,
       dailyLevels: [],
       csaAreas: [],
+      directionalBias: calculateCsaDirectionalBias([], []),
       rawCandleCount: 0,
       weekRange,
       symbol,
@@ -722,6 +933,7 @@ async function fetchTwelveDataIntradayLevels({
   const rawCandles = data.values || [];
   const dailyLevels = buildDailyLevelsFromCandles(rawCandles, weekRange);
   const csaAreas = buildCsaAreas(dailyLevels);
+  const directionalBias = calculateCsaDirectionalBias(dailyLevels, csaAreas);
 
   return {
     ok: dailyLevels.length > 0,
@@ -731,6 +943,7 @@ async function fetchTwelveDataIntradayLevels({
         : "No Monday-to-Friday intraday candles were returned for the selected week/date/timeframe.",
     dailyLevels,
     csaAreas,
+    directionalBias,
     rawCandleCount: rawCandles.length,
     weekRange,
     symbol,
@@ -785,6 +998,12 @@ Market-data reference status: unavailable. Reason: ${
     )
     .join("\n");
 
+  const bias = reference.directionalBias || calculateCsaDirectionalBias([], []);
+
+  const progressionLines = Array.isArray(bias.progression)
+    ? bias.progression.map((line) => `- ${line}`).join("\n")
+    : "";
+
   return `
 ${dateBlock}
 
@@ -806,7 +1025,23 @@ ${dailyLines || "No weekday data returned."}
 CSA area calculations from backend:
 ${areaLines || "No CSA areas calculated."}
 
-Important: Use these backend-calculated OHLC values and CSA area calculations as the source of truth for exact Monday-to-Friday highs/lows. Use the uploaded chart image only for visual context and mismatch checks.
+CSA directional bias calculated by backend:
+- Bias: ${bias.bias}
+- Confidence: ${bias.confidence}
+- Bullish score: ${bias.bullishScore}
+- Bearish score: ${bias.bearishScore}
+- High breaks: ${bias.highBreakCount}
+- Low breaks: ${bias.lowBreakCount}
+- Demand holds: ${bias.demandHoldCount}
+- Supply holds: ${bias.supplyHoldCount}
+- Reason: ${bias.reason}
+- Trend trading focus: ${bias.trendTradingFocus}
+- Counter-trend caution: ${bias.counterTrendCaution}
+
+CSA progression notes:
+${progressionLines || "- Not enough progression data available."}
+
+Important: Use these backend-calculated OHLC values, CSA area calculations, and directional bias as the source of truth. Use the uploaded chart image only for visual context and mismatch checks.
 `;
 }
 
@@ -852,6 +1087,7 @@ app.get("/test-twelve", async (req, res) => {
       rawCandleCount: result.rawCandleCount,
       dailyLevels: result.dailyLevels,
       csaAreas: result.csaAreas,
+      directionalBias: result.directionalBias,
     });
   } catch (error) {
     res.status(500).json({
@@ -923,7 +1159,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     );
 
     const userContext = `
-User submitted a chart for CSA Coach area identification.
+User submitted a chart for CSA Coach area identification and CSA directional bias review.
 
 User-selected details:
 - Timeframe selected by user: ${timeframe}
@@ -948,7 +1184,7 @@ AI chart pre-check:
 - Detection notes: ${chartDetection.notes || ""}
 
 Current task:
-Identify CSAFOREX areas of interest only.
+Identify CSAFOREX areas of interest and CSA directional bias only.
 
 Focus only on:
 - Market-data-backed Monday-to-Friday data for the final visible chart date used by the backend
@@ -956,9 +1192,12 @@ Focus only on:
 - Resistance areas
 - Supply zones
 - Demand zones
+- Directional bias based on CSA level progression
+- Trend-trading focus based on CSA bias
+- Counter-trend caution based on CSA bias
 
 Do not analyze:
-- Entry
+- Entry trigger
 - Stop loss
 - Take profit
 - Risk-to-reward
@@ -991,11 +1230,14 @@ ${marketDataSummary}
           ],
         },
       ],
-      max_output_tokens: 1800,
+      max_output_tokens: 2200,
     });
 
     const analysis =
       response.output_text || "No analysis was returned. Please try again.";
+
+    const bias =
+      marketReference.directionalBias || calculateCsaDirectionalBias([], []);
 
     res.json({
       success: true,
@@ -1004,14 +1246,16 @@ ${marketDataSummary}
       selectedPair: submittedInstrument,
       selectedTimeframe: timeframe,
       selectedDate: chartDate || tradeDate || "Not provided",
-      detectedPair: chartDetection.detectedInstrument || normalizedSymbol || "Not available",
+      detectedPair:
+        chartDetection.detectedInstrument || normalizedSymbol || "Not available",
       detectedTimeframe: chartDetection.detectedTimeframe || timeframe,
       detectedLatestVisibleDate:
         chartDetection.latestVisibleDate || "Not detected",
       finalDateUsed: dateDecision.finalDateText,
       dateDecision,
+      csaDirectionalBias: bias,
       contextStatus: marketReference.ok
-        ? "Market-data-backed area identification completed"
+        ? "Market-data-backed area identification and directional bias completed"
         : `Area identification completed without market data: ${marketReference.error}`,
       grade: "--",
       confidence: 0,
@@ -1021,6 +1265,7 @@ ${marketDataSummary}
       strengths: marketReference.ok
         ? [
             `CSA areas calculated from Twelve Data ${marketReference.interval} candles for the selected Monday-to-Friday week.`,
+            `CSA directional bias calculated as ${bias.bias} with ${bias.confidence} confidence.`,
           ]
         : [
             "CSA area identification completed using the uploaded chart, but market-data reference was unavailable.",
@@ -1028,12 +1273,15 @@ ${marketDataSummary}
       weaknesses: marketReference.ok
         ? [
             "Broker chart prices may differ slightly from Twelve Data reference levels.",
+            "Directional bias is structural context only, not a buy/sell signal.",
           ]
         : [marketReference.error || "Market-data reference unavailable."],
       coachAdvice: [analysis],
       journalTags: [
         "area identification only",
+        "directional bias",
         marketReference.ok ? "market-data-backed" : "vision-only fallback",
+        bias.biasCode || "bias-unavailable",
       ],
       chartDetection,
       marketReference: {
@@ -1046,6 +1294,7 @@ ${marketDataSummary}
         weekRange: marketReference.weekRange,
         dailyLevels: marketReference.dailyLevels,
         csaAreas: marketReference.csaAreas,
+        directionalBias: marketReference.directionalBias,
       },
     });
   } catch (error) {
