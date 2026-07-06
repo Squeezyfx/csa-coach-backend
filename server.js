@@ -24,7 +24,7 @@ const TWELVE_DATA_BASE_URL = "https://api.twelvedata.com/time_series";
 const CSA_FRAMEWORK_RULES = `
 You are CSA Coach, an AI chart-structure coach trained to identify CSAFOREX areas of interest.
 
-Your current role is ONLY to identify CSAFOREX areas of interest on the uploaded chart and explain the CSA directional bias based on the progression of those areas.
+Your current role is ONLY to identify CSAFOREX areas of interest on the uploaded chart and explain CSA directional bias from the progression of those areas.
 
 Do NOT provide trade signals.
 Do NOT give financial advice.
@@ -43,7 +43,7 @@ For now, your job is only to identify:
 - Resistance areas
 - Supply zones
 - Demand zones
-- CSA directional bias based on the progression of those areas
+- CSA directional bias based on support/resistance and supply/demand progression
 
 CSAFOREX CURRENT FRAMEWORK STAGE:
 The current framework stage is AREA IDENTIFICATION + DIRECTIONAL BIAS ONLY.
@@ -61,10 +61,9 @@ This means:
 
 HYBRID DATA RULE:
 The backend may provide CSA reference data from Twelve Data.
-If CSA reference data is provided, treat those OHLC values, CSA area calculations, and directional bias calculations as the source of truth.
+If CSA reference data is provided, treat those OHLC values, CSA area calculations, and CSA directional bias calculations as the source of truth.
 Do not override backend OHLC values with approximate readings from the screenshot.
 Do not relabel a backend-provided Monday high as Tuesday high, or Tuesday high as Monday high.
-Do not change the backend-provided CSA directional bias unless the backend says the bias is unavailable.
 
 The uploaded chart image is still useful for:
 - Checking whether the selected instrument/timeframe visually matches the screenshot.
@@ -167,15 +166,22 @@ Mixed or range-bound CSA bias usually means:
 - Trend-following conditions are less clear.
 
 Directional bias is NOT a trade signal.
-Do not say "buy", "sell", "enter", or "take this trade".
+Do not say buy, sell, enter, or take this trade.
 Instead, explain which CSA areas are more relevant for a trend-following trader and which areas may be counter-trend or higher caution.
+
+SECTION SEPARATION RULE:
+Keep the output clean and separated into standalone sections.
+Monday-to-Friday CSA Area Breakdown must be one section by itself.
+CSA Directional Bias must be one section by itself.
+Current Key Areas of Interest must be one section by itself.
+Use spacing between Monday, Tuesday, Wednesday, Thursday, and Friday information so the user can scan it easily.
 
 OUTPUT STYLE:
 Be clear and structured.
 Do not over-explain general trading theory.
 Focus on the market-data-backed CSA areas for the selected week.
 
-Your answer should follow this format:
+Your answer should follow this format with clean standalone sections and clear spacing:
 
 - Data Source Check:
   State whether backend OHLC market data was provided.
@@ -192,36 +198,91 @@ Your answer should follow this format:
   State the Monday-to-Friday week/date range used.
   State that Sunday candles are ignored.
 
-- Monday Areas:
-  Identify Monday resistance and support using the provided OHLC values.
+- Monday-to-Friday CSA Area Breakdown:
+  This must be a separate, clearly visible section.
+  Start the section with exactly this heading: "Monday-to-Friday CSA Area Breakdown".
+  Use a blank line or spacing between each day.
+  For each available day, show the high, low, and CSA interpretation.
+  Do not mix directional bias into this section.
 
-- Tuesday Areas:
-  Compare Tuesday to Monday and identify Tuesday resistance/support/supply/demand if Tuesday data is available.
+  Use this structure:
 
-- Wednesday Areas:
-  Compare Wednesday to Tuesday and identify Wednesday resistance/support/supply/demand if Wednesday data is available.
+  Monday
+  - Resistance: Monday high at [price].
+  - Support: Monday low at [price].
 
-- Thursday Areas:
-  Compare Thursday to Wednesday and identify Thursday resistance/support/supply/demand if Thursday data is available.
+  Tuesday
+  - Compare Tuesday with Monday.
+  - High area: Resistance or Supply at [price] with reason.
+  - Low area: Support or Demand at [price] with reason.
 
-- Friday Areas:
-  Compare Friday to Thursday and identify Friday resistance/support/supply/demand if Friday data is available.
+  Wednesday
+  - Compare Wednesday with Tuesday.
+  - High area: Resistance or Supply at [price] with reason.
+  - Low area: Support or Demand at [price] with reason.
+
+  Thursday
+  - Compare Thursday with Wednesday.
+  - High area: Resistance or Supply at [price] with reason.
+  - Low area: Support or Demand at [price] with reason.
+
+  Friday
+  - Compare Friday with Thursday.
+  - High area: Resistance or Supply at [price] with reason.
+  - Low area: Support or Demand at [price] with reason.
 
 - CSA Directional Bias:
+  This must be a separate, clearly visible section.
+  Start the section with exactly this heading: "CSA Directional Bias".
   State the bias as Bullish, Bearish, Mixed / Range-bound, or Insufficient data.
+  State the confidence level if backend bias confidence is provided.
   Explain the bias using the progression of CSA highs, lows, support, resistance, supply, and demand.
+  Keep this section focused only on directional structure.
+  Do not mix this section with the daily area breakdown.
 
-- Trend Trading Focus:
+  Use this structure:
+
+  CSA Directional Bias
+  Bias: Bullish / Bearish / Mixed / Range-bound / Insufficient data
+  Confidence: High / Medium / Low
+
+  Bias Reason:
+  Explain why, based on CSA progression.
+
+  Trend Trading Focus:
   Explain which CSA areas deserve more attention for trend-following traders.
   Do not provide an entry signal.
-  Use wording like "watch", "focus on", "more important area", or "area of interest".
+  Use wording like watch, focus on, more important area, or area of interest.
 
-- Counter-Trend Caution:
+  Counter-Trend Caution:
   Explain which areas may attract counter-trend reactions but should be treated with more caution if they go against the CSA bias.
   Do not provide a counter-trend signal.
 
 - Current Key Areas of Interest:
+  This must be a separate, clearly visible section.
+  Start the section with exactly this heading: "Current Key Areas of Interest".
   List the most important current support, resistance, supply, and demand areas from the selected week only.
+  Do not mix this section with directional bias.
+  Do not include entry, stop loss, take profit, or trade signal.
+
+  Use this structure:
+
+  Current Key Areas of Interest
+
+  Key Resistance Areas:
+  - List resistance areas only.
+
+  Key Support Areas:
+  - List support areas only.
+
+  Key Supply Areas:
+  - List supply areas only.
+
+  Key Demand Areas:
+  - List demand areas only.
+
+  Trend-Following Priority:
+  - State which of the above areas are more relevant based on the CSA directional bias.
 
 - Chart/Image Notes:
   Briefly mention if the uploaded chart seems to match the selected pair/timeframe or if there is a visible mismatch.
@@ -693,6 +754,8 @@ function calculateCsaDirectionalBias(dailyLevels = [], csaAreas = []) {
       lowBreakCount: 0,
       demandHoldCount: 0,
       supplyHoldCount: 0,
+      higherCloseCount: 0,
+      lowerCloseCount: 0,
       progression: [],
       reason:
         "At least two weekdays are needed to compare CSA progression and form a directional bias.",
@@ -711,7 +774,6 @@ function calculateCsaDirectionalBias(dailyLevels = [], csaAreas = []) {
   let supplyHoldCount = 0;
   let higherCloseCount = 0;
   let lowerCloseCount = 0;
-
   const progression = [];
 
   for (let i = 1; i < dailyLevels.length; i += 1) {
@@ -974,35 +1036,66 @@ Market-data reference status: unavailable. Reason: ${
     }`;
   }
 
-  const dailyLines = reference.dailyLevels
-    .map(
-      (day) =>
-        `- ${day.weekday} ${day.date}: open ${formatPrice(
-          day.open
-        )}, high ${formatPrice(day.high)}, low ${formatPrice(
-          day.low
-        )}, close ${formatPrice(day.close)}. Candles used: ${
-          day.candleCount
-        }. First candle: ${day.firstCandleTime}. Last candle: ${
-          day.lastCandleTime
-        }.`
-    )
-    .join("\n");
+  const dayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 
-  const areaLines = reference.csaAreas
-    .map(
-      (area) =>
-        `- ${area.day} ${area.date}: ${area.type.toUpperCase()} at ${
-          area.priceText
-        }. ${area.logic}`
-    )
-    .join("\n");
+  const dayBlocks = dayNames
+    .map((dayName) => {
+      const day = reference.dailyLevels.find((item) => item.weekday === dayName);
+      if (!day) {
+        return `${dayName}\n- No ${dayName} data was returned for the selected week/date.`;
+      }
+
+      const areasForDay = reference.csaAreas.filter(
+        (area) => area.day === dayName
+      );
+
+      const areaLines = areasForDay
+        .map(
+          (area) =>
+            `- ${area.type.toUpperCase()} at ${area.priceText}. ${area.logic}`
+        )
+        .join("\n");
+
+      return `${dayName}
+- Date: ${day.date}
+- OHLC: open ${formatPrice(day.open)}, high ${formatPrice(
+        day.high
+      )}, low ${formatPrice(day.low)}, close ${formatPrice(day.close)}
+- Candles used: ${day.candleCount}
+- First candle: ${day.firstCandleTime}
+- Last candle: ${day.lastCandleTime}
+${areaLines || "- No CSA areas calculated for this day."}`;
+    })
+    .join("\n\n");
+
+  const resistanceAreas = reference.csaAreas.filter(
+    (area) => area.type === "resistance"
+  );
+  const supportAreas = reference.csaAreas.filter(
+    (area) => area.type === "support"
+  );
+  const supplyAreas = reference.csaAreas.filter(
+    (area) => area.type === "supply"
+  );
+  const demandAreas = reference.csaAreas.filter(
+    (area) => area.type === "demand"
+  );
+
+  const formatAreaList = (areas) =>
+    areas.length
+      ? areas
+          .map(
+            (area) =>
+              `- ${area.day} ${area.date}: ${area.priceText}. ${area.logic}`
+          )
+          .join("\n")
+      : "- None identified from the available selected-week data.";
 
   const bias = reference.directionalBias || calculateCsaDirectionalBias([], []);
 
   const progressionLines = Array.isArray(bias.progression)
     ? bias.progression.map((line) => `- ${line}`).join("\n")
-    : "";
+    : "- Not enough progression data available.";
 
   return `
 ${dateBlock}
@@ -1019,13 +1112,10 @@ Data used up to: ${reference.weekRange.endDate}.
 Raw candles returned: ${reference.rawCandleCount}.
 Sunday candles: ignored.
 
-Daily OHLC reference calculated from ${reference.interval} candles:
-${dailyLines || "No weekday data returned."}
+MONDAY-TO-FRIDAY CSA AREA BREAKDOWN FROM BACKEND:
+${dayBlocks}
 
-CSA area calculations from backend:
-${areaLines || "No CSA areas calculated."}
-
-CSA directional bias calculated by backend:
+CSA DIRECTIONAL BIAS FROM BACKEND:
 - Bias: ${bias.bias}
 - Confidence: ${bias.confidence}
 - Bullish score: ${bias.bullishScore}
@@ -1034,14 +1124,27 @@ CSA directional bias calculated by backend:
 - Low breaks: ${bias.lowBreakCount}
 - Demand holds: ${bias.demandHoldCount}
 - Supply holds: ${bias.supplyHoldCount}
-- Reason: ${bias.reason}
+- Bias reason: ${bias.reason}
 - Trend trading focus: ${bias.trendTradingFocus}
 - Counter-trend caution: ${bias.counterTrendCaution}
 
 CSA progression notes:
-${progressionLines || "- Not enough progression data available."}
+${progressionLines}
 
-Important: Use these backend-calculated OHLC values, CSA area calculations, and directional bias as the source of truth. Use the uploaded chart image only for visual context and mismatch checks.
+CURRENT KEY AREAS OF INTEREST FROM BACKEND:
+Key Resistance Areas:
+${formatAreaList(resistanceAreas)}
+
+Key Support Areas:
+${formatAreaList(supportAreas)}
+
+Key Supply Areas:
+${formatAreaList(supplyAreas)}
+
+Key Demand Areas:
+${formatAreaList(demandAreas)}
+
+Important: Use these backend-calculated OHLC values, CSA area calculations, CSA directional bias, and current key areas as the source of truth. Use the uploaded chart image only for visual context and mismatch checks.
 `;
 }
 
@@ -1197,7 +1300,7 @@ Focus only on:
 - Counter-trend caution based on CSA bias
 
 Do not analyze:
-- Entry trigger
+- Entry
 - Stop loss
 - Take profit
 - Risk-to-reward
@@ -1230,7 +1333,7 @@ ${marketDataSummary}
           ],
         },
       ],
-      max_output_tokens: 2200,
+      max_output_tokens: 2400,
     });
 
     const analysis =
@@ -1273,7 +1376,7 @@ ${marketDataSummary}
       weaknesses: marketReference.ok
         ? [
             "Broker chart prices may differ slightly from Twelve Data reference levels.",
-            "Directional bias is structural context only, not a buy/sell signal.",
+            "CSA directional bias is structural context only, not a buy/sell signal.",
           ]
         : [marketReference.error || "Market-data reference unavailable."],
       coachAdvice: [analysis],
