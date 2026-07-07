@@ -256,11 +256,36 @@ Your answer should follow this format with clean standalone sections and clear s
   Then show confidence separately.
 
 - Current Key Areas of Interest:
-  This must be a separate, clearly visible section.
+  This must be short, clean, and easy to scan.
   Start the section with exactly this heading: "Current Key Areas of Interest:"
-  List the most important current support, resistance, supply, and demand areas from the selected week only.
-  Do not mix this section with directional bias.
-  Do not include entry, stop loss, take profit, or trade signal.
+  Do not write long explanations in this section.
+  Do not include every level if too many exist.
+  Only list the most important current areas from the selected week.
+
+  Use exactly this format:
+
+  Current Key Areas of Interest:
+
+  Resistance:
+  - [Day] resistance: [price]
+
+  Support:
+  - [Day] support: [price]
+
+  Supply:
+  - [Day] supply: [price]
+
+  Demand:
+  - [Day] demand: [price]
+
+  Trend-Following Priority:
+  - Because CSA bias is [bullish/bearish/mixed], [state which areas deserve more attention].
+
+  Rules:
+  - Keep this section short.
+  - Do not include long reasoning.
+  - Do not include entry, stop loss, take profit, prediction, or trade signal.
+  - If an area type is not available, write "- None identified."
 
 - Chart/Image Notes:
   Briefly mention if the uploaded chart seems to match the selected pair/timeframe or if there is a visible mismatch.
@@ -414,7 +439,11 @@ function comparableInstrument(input = "") {
 
   for (const symbol of knownSymbols) {
     if (raw.includes(symbol)) {
-      return symbol === "GOLD" ? "XAUUSD" : symbol === "BTCUSDT" ? "BTCUSD" : symbol;
+      return symbol === "GOLD"
+        ? "XAUUSD"
+        : symbol === "BTCUSDT"
+        ? "BTCUSD"
+        : symbol;
     }
   }
 
@@ -610,7 +639,10 @@ function isSameTradingWeek(dateA, dateB) {
   if (!dateA || !dateB) return false;
   const weekA = getWeekRangeForDate(dateA, true);
   const weekB = getWeekRangeForDate(dateB, true);
-  return weekA.startDate === weekB.startDate && weekA.fridayDate === weekB.fridayDate;
+  return (
+    weekA.startDate === weekB.startDate &&
+    weekA.fridayDate === weekB.fridayDate
+  );
 }
 
 function weekdayNameFromDate(dateString) {
@@ -719,13 +751,18 @@ function chooseFinalChartDate({
   }
 
   if (mode === "post-trade" && selectedDate) {
-    if (detectedDate && detectedDate > selectedDate && !isSameTradingWeek(selectedDate, detectedDate)) {
+    if (
+      detectedDate &&
+      detectedDate > selectedDate &&
+      !isSameTradingWeek(selectedDate, detectedDate)
+    ) {
       return {
         finalDate: selectedDate,
         finalDateText: formatDateOnly(selectedDate),
         selectedDateText: formatDateOnly(selectedDate),
         detectedDateText: formatDateOnly(detectedDate),
-        source: "post-trade-user-selected-date-detected-date-outside-week-ignored",
+        source:
+          "post-trade-user-selected-date-detected-date-outside-week-ignored",
         reason:
           "Post-trade mode was selected, but the chart-detected date appeared to fall outside the selected trade week. The user-selected date was used to prevent the analysis from jumping into the wrong week.",
       };
@@ -1228,6 +1265,45 @@ async function fetchTwelveDataIntradayLevels({
   };
 }
 
+function formatShortAreaList(areas, areaType) {
+  if (!Array.isArray(areas) || !areas.length) {
+    return "- None identified.";
+  }
+
+  const sortedAreas = [...areas].sort((a, b) => {
+    const dateCompare = String(b.date || "").localeCompare(String(a.date || ""));
+    if (dateCompare !== 0) return dateCompare;
+    return Number(b.price || 0) - Number(a.price || 0);
+  });
+
+  return sortedAreas
+    .slice(0, 3)
+    .map((area) => {
+      const day = area.day || "Selected week";
+      const price = area.priceText || formatPrice(area.price);
+      return `- ${day} ${areaType}: ${price}`;
+    })
+    .join("\n");
+}
+
+function buildTrendFollowingPriorityText(bias = {}) {
+  const biasValue = String(bias.bias || "").toLowerCase();
+
+  if (biasValue.includes("bullish")) {
+    return "Because CSA bias is bullish, demand/support areas are more important than counter-trend supply reactions.";
+  }
+
+  if (biasValue.includes("bearish")) {
+    return "Because CSA bias is bearish, supply/resistance areas are more important than counter-trend demand reactions.";
+  }
+
+  if (biasValue.includes("mixed") || biasValue.includes("range")) {
+    return "Because CSA bias is mixed/range-bound, the outer support/demand and resistance/supply areas are more important than the middle of the range.";
+  }
+
+  return "CSA bias is not strong enough yet, so focus on the clearest support, resistance, supply, and demand areas from the selected week.";
+}
+
 function buildMarketDataSummary(
   reference,
   dateDecision,
@@ -1304,16 +1380,6 @@ ${areaLines || "- No CSA areas calculated for this day."}`;
   const supplyAreas = reference.csaAreas.filter((area) => area.type === "supply");
   const demandAreas = reference.csaAreas.filter((area) => area.type === "demand");
 
-  const formatAreaList = (areas) =>
-    areas.length
-      ? areas
-          .map(
-            (area) =>
-              `- ${area.day} ${area.date}: ${area.priceText}. ${area.logic}`
-          )
-          .join("\n")
-      : "- None identified from the available selected-week data.";
-
   const bias = reference.directionalBias || calculateCsaDirectionalBias([]);
 
   const progressionLines = Array.isArray(bias.progression)
@@ -1355,19 +1421,30 @@ CSA progression notes:
 ${progressionLines}
 
 CURRENT KEY AREAS OF INTEREST FROM BACKEND:
-Key Resistance Areas:
-${formatAreaList(resistanceAreas)}
+Use this exact short format in the final user-facing response:
 
-Key Support Areas:
-${formatAreaList(supportAreas)}
+Current Key Areas of Interest:
 
-Key Supply Areas:
-${formatAreaList(supplyAreas)}
+Resistance:
+${formatShortAreaList(resistanceAreas, "resistance")}
 
-Key Demand Areas:
-${formatAreaList(demandAreas)}
+Support:
+${formatShortAreaList(supportAreas, "support")}
 
-Important: Use these backend-calculated OHLC values, CSA area calculations, CSA directional bias, and current key areas as the source of truth. Use the uploaded chart image only for visual context and mismatch checks.
+Supply:
+${formatShortAreaList(supplyAreas, "supply")}
+
+Demand:
+${formatShortAreaList(demandAreas, "demand")}
+
+Trend-Following Priority:
+- ${buildTrendFollowingPriorityText(bias)}
+
+Important:
+- Keep Current Key Areas of Interest short.
+- Do not include long explanations in that section.
+- Use backend-calculated CSA areas as the source of truth.
+- Use the uploaded chart image only for visual context and mismatch checks.
 `;
 }
 
