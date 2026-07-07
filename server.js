@@ -71,9 +71,15 @@ If the backend reports an instrument mismatch, do not continue with CSA feedback
 A mismatch means the selected instrument and the uploaded chart instrument are clearly different.
 Instrument mismatch should stop analysis because the market-data levels would not match the uploaded chart.
 
-If the selected timeframe and chart timeframe differ but the instrument matches, continue with caution and mention the mismatch.
-Timeframe mismatch is a warning.
+If the backend reports a timeframe mismatch, do not continue with CSA feedback.
+A timeframe mismatch means the selected timeframe and the uploaded chart timeframe are clearly different.
+Timeframe mismatch should stop analysis because the market-data candles would be calculated from one timeframe while the screenshot shows another timeframe.
+
+If the chart instrument is not readable, continue using the selected instrument but mention that the chart instrument could not be confirmed.
+If the chart timeframe is not readable, continue using the selected timeframe but mention that the chart timeframe could not be confirmed.
+
 Instrument mismatch is a blocker.
+Timeframe mismatch is a blocker.
 
 DATE SELECTION RULE:
 The user may select a trade date or entry date that is earlier than the latest date visible on the uploaded chart.
@@ -280,7 +286,7 @@ Your only job is to inspect the uploaded chart image and return a small JSON obj
 
 Detect:
 1. The trading instrument/pair visible on the chart, if readable.
-2. The timeframe visible on the chart, if readable.
+2. The timeframe visible on the chart, if readable. Return common compact values like M1, M5, M15, M30, H1, H4, D1, or W1.
 3. The latest/final visible calendar date shown on the chart, if readable.
 
 Important:
@@ -462,6 +468,105 @@ The selected instrument does not match the uploaded chart. CSA Coach cannot prov
 How To Fix:
 - Change the selected pair to match the uploaded chart, or
 - Upload the correct chart for the selected pair.
+
+No CSA area breakdown, directional bias, or key levels were generated for this request.`;
+}
+
+function comparableTimeframe(input = "") {
+  const raw = String(input).trim().toUpperCase().replace(/\s+/g, "");
+
+  if (!raw || raw === "NOTPROVIDED" || raw === "NOTDETECTED" || raw === "NULL") {
+    return "";
+  }
+
+  const map = {
+    "1": "M1",
+    "1M": "M1",
+    M1: "M1",
+    "1MIN": "M1",
+    "1MINUTE": "M1",
+    "5": "M5",
+    "5M": "M5",
+    M5: "M5",
+    "5MIN": "M5",
+    "5MINUTE": "M5",
+    "15": "M15",
+    "15M": "M15",
+    M15: "M15",
+    "15MIN": "M15",
+    "15MINUTE": "M15",
+    "30": "M30",
+    "30M": "M30",
+    M30: "M30",
+    "30MIN": "M30",
+    "30MINUTE": "M30",
+    "60": "H1",
+    "60M": "H1",
+    "1H": "H1",
+    H1: "H1",
+    "1HR": "H1",
+    "1HOUR": "H1",
+    "240": "H4",
+    "240M": "H4",
+    "4H": "H4",
+    H4: "H4",
+    "4HR": "H4",
+    "4HOUR": "H4",
+    D: "D1",
+    "1D": "D1",
+    D1: "D1",
+    DAILY: "D1",
+    DAY: "D1",
+    W: "W1",
+    "1W": "W1",
+    W1: "W1",
+    WEEKLY: "W1",
+    WEEK: "W1",
+  };
+
+  if (map[raw]) return map[raw];
+
+  const cleaned = raw.replace(/[^A-Z0-9]/g, "");
+  return map[cleaned] || cleaned;
+}
+
+function hasStrongTimeframeMismatch({ selectedTimeframe, detectedTimeframe }) {
+  const selected = comparableTimeframe(selectedTimeframe);
+  const detected = comparableTimeframe(detectedTimeframe);
+
+  if (!selected || !detected) {
+    return false;
+  }
+
+  return selected !== detected;
+}
+
+function buildTimeframeMismatchAnalysis({
+  selectedInstrument,
+  detectedInstrument,
+  selectedTimeframe,
+  detectedTimeframe,
+}) {
+  return `Chart Timeframe Mismatch:
+
+Selected Instrument:
+${selectedInstrument || "Not provided"}
+
+Detected Chart Instrument:
+${detectedInstrument || "Not detected"}
+
+Selected Timeframe:
+${selectedTimeframe || "Not provided"}
+
+Detected Chart Timeframe:
+${detectedTimeframe || "Not detected"}
+
+Why Analysis Was Stopped:
+The selected timeframe does not match the uploaded chart timeframe. CSA Coach cannot provide reliable market-data-backed feedback because the backend would calculate CSA levels using the selected timeframe while the screenshot shows a different timeframe.
+
+How To Fix:
+- Change the selected timeframe to match the uploaded chart, or
+- Upload a chart that matches the selected timeframe.
 
 No CSA area breakdown, directional bias, or key levels were generated for this request.`;
 }
@@ -1404,6 +1509,61 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         marketReference: {
           ok: false,
           error: "Instrument mismatch. Market data was not fetched.",
+          symbol: normalizedSymbol,
+          timezone,
+          interval: normalizeTimeframe(timeframe),
+          rawCandleCount: 0,
+          weekRange: null,
+          dailyLevels: [],
+          csaAreas: [],
+          directionalBias: calculateCsaDirectionalBias([]),
+          useFullWeek,
+        },
+      });
+    }
+
+    const timeframeMismatch = hasStrongTimeframeMismatch({
+      selectedTimeframe: timeframe,
+      detectedTimeframe: chartDetection.detectedTimeframe,
+    });
+
+    if (timeframeMismatch) {
+      const mismatchAnalysis = buildTimeframeMismatchAnalysis({
+        selectedInstrument: submittedInstrument,
+        detectedInstrument: chartDetection.detectedInstrument,
+        selectedTimeframe: timeframe,
+        detectedTimeframe: chartDetection.detectedTimeframe,
+      });
+
+      return res.status(200).json({
+        success: false,
+        errorType: "timeframe_mismatch",
+        error: "Selected timeframe does not match uploaded chart timeframe.",
+        analysis: mismatchAnalysis,
+        summary: mismatchAnalysis,
+        selectedPair: submittedInstrument,
+        selectedTimeframe: timeframe,
+        detectedPair: chartDetection.detectedInstrument || "Not detected",
+        detectedTimeframe: chartDetection.detectedTimeframe || "Not detected",
+        detectedLatestVisibleDate:
+          chartDetection.latestVisibleDate || "Not detected",
+        contextStatus:
+          "Analysis stopped because selected timeframe does not match uploaded chart timeframe.",
+        grade: "--",
+        confidence: 0,
+        structureScore: 0,
+        executionScore: 0,
+        riskScore: 0,
+        strengths: [],
+        weaknesses: [
+          "Timeframe mismatch detected. Market-data-backed CSA feedback was not generated.",
+        ],
+        coachAdvice: [mismatchAnalysis],
+        journalTags: ["timeframe-mismatch", "analysis-stopped"],
+        chartDetection,
+        marketReference: {
+          ok: false,
+          error: "Timeframe mismatch. Market data was not fetched.",
           symbol: normalizedSymbol,
           timezone,
           interval: normalizeTimeframe(timeframe),
