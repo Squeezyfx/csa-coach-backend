@@ -204,8 +204,8 @@ Never call a potential area an entry signal.
 Use language like:
 - "potential buyer area"
 - "potential seller area"
-- "could become support if price breaks to the other side and holds"
-- "could become resistance if price breaks to the other side and holds"
+- "was broken later in the week, so that area can now be treated as a potential support/buyer area if price returns/retraces and holds"
+- "was broken later in the week, so that area can now be treated as a potential resistance/seller area if price returns/retraces and holds"
 - "price pulled back/returned/retraced into demand"
 - "watch for reaction/confirmation"
 
@@ -270,8 +270,8 @@ Potential Seller Areas:
 
 Trend Trading Note:
 - This is trend trading because the focus is on using CSA areas in the direction of the CSA bias.
-- Broken resistance can only become potential support after price breaks to the other side and holds.
-- Broken support can only become potential resistance after price breaks to the other side and holds.
+- A resistance area becomes relevant as potential support only after later price breaks above it. After it is broken, the area can be watched as potential support if price returns, retraces, or pulls back and holds above it.
+- A support area becomes relevant as potential resistance only after later price breaks below it. After it is broken, the area can be watched as potential resistance if price returns, retraces, or pulls back and holds below it.
 - Demand can be a potential buyer area when price pulls back/returns/retraces into it while the bullish structure is still valid.
 - Supply can be a potential seller area when price pulls back/returns/retraces into it while the bearish structure is still valid.
 - These are potential areas only, not buy/sell signals.
@@ -1304,11 +1304,121 @@ function formatAreaPrice(area) {
   return area?.priceText || formatPrice(area?.price);
 }
 
+function priceTolerance(price) {
+  const value = Number(price);
+  if (!Number.isFinite(value)) return 0;
+
+  return Math.max(Math.abs(value) * 0.0005, 0.00005);
+}
+
+function laterDaysAfterArea(area, dailyLevels = []) {
+  if (!area?.date || !Array.isArray(dailyLevels)) return [];
+
+  return dailyLevels
+    .filter((day) => String(day.date || "") > String(area.date || ""))
+    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+}
+
+function resistanceWasBrokenLater(area, dailyLevels = []) {
+  const laterDays = laterDaysAfterArea(area, dailyLevels);
+  const level = Number(area?.price);
+
+  if (!Number.isFinite(level)) return false;
+
+  return laterDays.some((day) => Number(day.high) > level);
+}
+
+function supportWasBrokenLater(area, dailyLevels = []) {
+  const laterDays = laterDaysAfterArea(area, dailyLevels);
+  const level = Number(area?.price);
+
+  if (!Number.isFinite(level)) return false;
+
+  return laterDays.some((day) => Number(day.low) < level);
+}
+
+function demandWasReturnedToLater(area, dailyLevels = []) {
+  const laterDays = laterDaysAfterArea(area, dailyLevels);
+  const level = Number(area?.price);
+
+  if (!Number.isFinite(level)) return false;
+
+  const tolerance = priceTolerance(level);
+
+  return laterDays.some((day) => {
+    const low = Number(day.low);
+    const close = Number(day.close);
+
+    if (!Number.isFinite(low) || !Number.isFinite(close)) return false;
+
+    return low <= level + tolerance && close >= level;
+  });
+}
+
+function supplyWasReturnedToLater(area, dailyLevels = []) {
+  const laterDays = laterDaysAfterArea(area, dailyLevels);
+  const level = Number(area?.price);
+
+  if (!Number.isFinite(level)) return false;
+
+  const tolerance = priceTolerance(level);
+
+  return laterDays.some((day) => {
+    const high = Number(day.high);
+    const close = Number(day.close);
+
+    if (!Number.isFinite(high) || !Number.isFinite(close)) return false;
+
+    return high >= level - tolerance && close <= level;
+  });
+}
+
+function buildResistanceBuyerStory(area, dailyLevels = []) {
+  const level = formatAreaPrice(area);
+
+  if (resistanceWasBrokenLater(area, dailyLevels)) {
+    return `- ${area.day}: ${area.day} resistance at ${level} was broken later in the week, so that area can now be treated as a potential support/buyer area if price returns, retraces, or pulls back and holds above it.`;
+  }
+
+  return `- ${area.day}: ${area.day} resistance at ${level} has not been confirmed broken by later selected-week data, so it remains resistance until price breaks to the other side and holds above it.`;
+}
+
+function buildSupportSellerStory(area, dailyLevels = []) {
+  const level = formatAreaPrice(area);
+
+  if (supportWasBrokenLater(area, dailyLevels)) {
+    return `- ${area.day}: ${area.day} support at ${level} was broken later in the week, so that area can now be treated as a potential resistance/seller area if price returns, retraces, or pulls back and holds below it.`;
+  }
+
+  return `- ${area.day}: ${area.day} support at ${level} has not been confirmed broken by later selected-week data, so it remains support until price breaks to the other side and holds below it.`;
+}
+
+function buildDemandBuyerStory(area, dailyLevels = []) {
+  const level = formatAreaPrice(area);
+
+  if (demandWasReturnedToLater(area, dailyLevels)) {
+    return `- ${area.day}: ${area.day} demand at ${level} was returned/retraced into later in the week and held by the daily close, so it was a valid potential buyer area within the bullish CSA story.`;
+  }
+
+  return `- ${area.day}: ${area.day} demand at ${level} remains a potential buyer area if price later pulls back, returns, or retraces into it and holds while the bullish structure remains valid.`;
+}
+
+function buildSupplySellerStory(area, dailyLevels = []) {
+  const level = formatAreaPrice(area);
+
+  if (supplyWasReturnedToLater(area, dailyLevels)) {
+    return `- ${area.day}: ${area.day} supply at ${level} was returned/retraced into later in the week and rejected by the daily close, so it was a valid potential seller area within the bearish CSA story.`;
+  }
+
+  return `- ${area.day}: ${area.day} supply at ${level} remains a potential seller area if price later pulls back, returns, or retraces into it and rejects while the bearish structure remains valid.`;
+}
+
 function buildPotentialTrendEntryAreas({
   resistanceAreas,
   supportAreas,
   supplyAreas,
   demandAreas,
+  dailyLevels,
   bias,
 }) {
   const biasValue = String(bias?.bias || "").toLowerCase();
@@ -1323,9 +1433,7 @@ function buildPotentialTrendEntryAreas({
 
   if (biasValue.includes("bullish")) {
     orderedDemand.forEach((area) => {
-      buyerLines.push(
-        `- ${area.day}: ${area.day} demand at ${formatAreaPrice(area)} was a potential buyer area if price later pulled back, returned, or retraced into it and held while the bullish structure remained valid.`
-      );
+      buyerLines.push(buildDemandBuyerStory(area, dailyLevels));
     });
 
     orderedSupport.forEach((area) => {
@@ -1335,21 +1443,17 @@ function buildPotentialTrendEntryAreas({
     });
 
     orderedResistance.forEach((area) => {
-      buyerLines.push(
-        `- ${area.day}: ${area.day} resistance at ${formatAreaPrice(area)} could become support only if price breaks to the other side and holds above it.`
-      );
+      buyerLines.push(buildResistanceBuyerStory(area, dailyLevels));
     });
 
     orderedSupply.forEach((area) => {
       sellerLines.push(
-        `- ${area.day}: ${area.day} supply at ${formatAreaPrice(area)} may create a reaction, but it is counter-trend while CSA bias remains bullish.`
+        `- ${area.day}: ${area.day} supply at ${formatAreaPrice(area)} may still create a reaction, but it is counter-trend while CSA bias remains bullish.`
       );
     });
   } else if (biasValue.includes("bearish")) {
     orderedSupply.forEach((area) => {
-      sellerLines.push(
-        `- ${area.day}: ${area.day} supply at ${formatAreaPrice(area)} was a potential seller area if price later pulled back, returned, or retraced into it and rejected while the bearish structure remained valid.`
-      );
+      sellerLines.push(buildSupplySellerStory(area, dailyLevels));
     });
 
     orderedResistance.forEach((area) => {
@@ -1359,14 +1463,12 @@ function buildPotentialTrendEntryAreas({
     });
 
     orderedSupport.forEach((area) => {
-      sellerLines.push(
-        `- ${area.day}: ${area.day} support at ${formatAreaPrice(area)} could become resistance only if price breaks to the other side and holds below it.`
-      );
+      sellerLines.push(buildSupportSellerStory(area, dailyLevels));
     });
 
     orderedDemand.forEach((area) => {
       buyerLines.push(
-        `- ${area.day}: ${area.day} demand at ${formatAreaPrice(area)} may create a reaction, but it is counter-trend while CSA bias remains bearish.`
+        `- ${area.day}: ${area.day} demand at ${formatAreaPrice(area)} may still create a reaction, but it is counter-trend while CSA bias remains bearish.`
       );
     });
   } else {
@@ -1396,11 +1498,11 @@ function buildPotentialTrendEntryAreas({
   }
 
   const buyerText = buyerLines.length
-    ? buyerLines.slice(0, 6).join("\n")
+    ? buyerLines.slice(0, 8).join("\n")
     : "- None identified from the selected-week CSA structure.";
 
   const sellerText = sellerLines.length
-    ? sellerLines.slice(0, 6).join("\n")
+    ? sellerLines.slice(0, 8).join("\n")
     : "- None identified from the selected-week CSA structure.";
 
   return `Potential Entry Areas Based on CSA Trend Trading:
@@ -1413,8 +1515,10 @@ ${sellerText}
 
 Trend Trading Note:
 - This is trend trading because the focus is on using CSA areas in the direction of the CSA bias.
-- Broken resistance can become potential support for buyers only after price breaks to the other side and holds above it.
-- Broken support can become potential resistance for sellers only after price breaks to the other side and holds below it.
+- A resistance area becomes relevant as potential support only after later price breaks above it.
+- After resistance is broken, the area can be watched as potential support if price returns, retraces, or pulls back and holds above it.
+- A support area becomes relevant as potential resistance only after later price breaks below it.
+- After support is broken, the area can be watched as potential resistance if price returns, retraces, or pulls back and holds below it.
 - Demand can act as a potential buyer area when price pulls back, returns, or retraces into it while the bullish structure remains valid.
 - Supply can act as a potential seller area when price pulls back, returns, or retraces into it while the bearish structure remains valid.
 - These are potential areas only, not buy/sell signals.
@@ -1509,6 +1613,7 @@ ${areaLines || "- No CSA areas calculated for this day."}`;
     supportAreas,
     supplyAreas,
     demandAreas,
+    dailyLevels: reference.dailyLevels,
     bias,
   });
 
@@ -1576,8 +1681,10 @@ Important:
 - Keep Potential Entry Areas Based on CSA Trend Trading clear, chronological, and conditional.
 - Start the potential-entry story from Tuesday, then Wednesday, then Thursday, then Friday.
 - Do not say a resistance becomes support just because price retests it.
-- Resistance can only become potential support after price breaks to the other side and holds above it.
-- Support can only become potential resistance after price breaks to the other side and holds below it.
+- A resistance area becomes relevant as potential support only after later price breaks above it.
+- After resistance is broken, the area can be watched as potential support if price returns, retraces, or pulls back and holds above it.
+- A support area becomes relevant as potential resistance only after later price breaks below it.
+- After support is broken, the area can be watched as potential resistance if price returns, retraces, or pulls back and holds below it.
 - These are potential trend-trading areas only, not buy/sell signals.
 - Do not say buy.
 - Do not say sell.
