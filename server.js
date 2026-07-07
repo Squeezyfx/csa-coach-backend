@@ -49,7 +49,7 @@ CSAFOREX CURRENT FRAMEWORK STAGE:
 The current framework stage is AREA IDENTIFICATION + DIRECTIONAL BIAS ONLY.
 
 This means:
-- Identify the Monday-to-Friday trading data for the final visible chart date.
+- Identify the Monday-to-Friday trading data for the selected trade week.
 - Use market-data OHLC values calculated by the backend as the source of truth for Monday-to-Friday highs/lows.
 - Use the uploaded chart image for visual context only.
 - Ignore Sunday candles.
@@ -82,7 +82,7 @@ Instrument mismatch is a blocker.
 Timeframe mismatch is a blocker.
 
 DATE SELECTION RULE:
-The user may select a trade date or entry date that is earlier than the latest date visible on the uploaded chart.
+The user may select a trade date or entry date.
 
 For pre-trade analysis:
 - Treat the user-selected date as the decision date.
@@ -91,12 +91,13 @@ For pre-trade analysis:
 - If the user-selected date is missing, use the chart-detected latest visible date only as a fallback.
 
 For post-trade review:
-- The user-selected date can be treated as the entry/trade date.
-- If the chart clearly shows a later visible date, the backend may use that later chart-detected date as context.
-- The backend may also use the full Monday-to-Friday week that contains the selected/chart-detected date.
-- This is correct because post-trade review can consider what happened after the entry/trade date.
+- Treat the user-selected date as the trade/entry date and use it to identify the correct Monday-to-Friday trade week.
+- If the user-selected date is provided, do not let a chart-detected later date move the analysis into another week.
+- This prevents the AI from mistakenly jumping from the selected trade week into a later week.
+- The backend may use the full Monday-to-Friday week that contains the selected trade date.
+- If no user-selected date is provided, then the backend may use the chart-detected date as a fallback.
 
-If the chart-detected date is unclear, the backend will use the user-selected date.
+If the chart-detected date is unclear or conflicts with the selected trade week, the backend will use the user-selected date.
 Do not invent a chart date if the backend did not confirm one.
 
 TIMEFRAME RULE:
@@ -121,10 +122,11 @@ For pre-trade analysis:
 - State clearly that later candles were ignored to avoid hindsight bias.
 
 For post-trade review:
-- Use the full Monday-to-Friday week when available.
-- This allows the review to include what happened after the trade/entry date.
+- Use the full Monday-to-Friday week that contains the selected trade date when available.
+- Do not allow an AI-detected chart date to move the analysis to a different week when the user selected a date.
+- This allows the review to include what happened after the trade/entry date, but only within the selected trade week.
 
-Do not use older weeks as the main CSA analysis unless no current-week market data is available.
+Do not use older or later weeks as the main CSA analysis unless no selected date is provided.
 
 CSA LOWER-TIMEFRAME AREA IDENTIFICATION FRAMEWORK:
 
@@ -230,10 +232,10 @@ Your answer should follow this format with clean standalone sections and clear s
 - Date Check:
   State the user-selected date.
   State the chart-detected latest visible date if provided.
-  State the actual date used for the market-data fetch.
+  State the actual date used to identify the trade week.
   State whether the analysis used pre-trade date-capped mode or post-trade full-week mode.
   If pre-trade mode was selected, explain that later candles after the selected date were ignored to avoid hindsight bias.
-  If post-trade mode was selected, explain that the full Monday-to-Friday week may be used for review context.
+  If post-trade mode was selected, explain that the selected date was used to identify the correct Monday-to-Friday trade week.
 
 - Week Used:
   State the Monday-to-Friday week/date range used.
@@ -292,7 +294,6 @@ Detect:
 Important:
 - The chart may be from TradingView, MT4, MT5, or another platform.
 - The latest visible chart date means the last/rightmost date visible on the x-axis or candles.
-- If the user selected an earlier trade date but the chart clearly shows a later date, return the later latestVisibleDate from the chart.
 - If dates are visible as "3 Jul 2026", convert to "2026-07-03".
 - If dates are visible as "1 Jul", infer the year only if the chart clearly shows the year elsewhere.
 - If the date is not clear, use null.
@@ -605,6 +606,13 @@ function getWeekRangeForDate(chartDate, useFullWeek = false) {
   };
 }
 
+function isSameTradingWeek(dateA, dateB) {
+  if (!dateA || !dateB) return false;
+  const weekA = getWeekRangeForDate(dateA, true);
+  const weekB = getWeekRangeForDate(dateB, true);
+  return weekA.startDate === weekB.startDate && weekA.fridayDate === weekB.fridayDate;
+}
+
 function weekdayNameFromDate(dateString) {
   const date = new Date(`${dateString}T00:00:00.000Z`);
   return new Intl.DateTimeFormat("en-US", {
@@ -710,27 +718,27 @@ function chooseFinalChartDate({
     };
   }
 
-  if (selectedDate && detectedDate && detectedDate > selectedDate) {
-    return {
-      finalDate: detectedDate,
-      finalDateText: formatDateOnly(detectedDate),
-      selectedDateText: formatDateOnly(selectedDate),
-      detectedDateText: formatDateOnly(detectedDate),
-      source: "post-trade-chart-detected-later-date",
-      reason:
-        "Post-trade mode was selected and the uploaded chart appears to show a later final visible date than the user-selected trade date, so the later chart-detected date was used for review context.",
-    };
-  }
+  if (mode === "post-trade" && selectedDate) {
+    if (detectedDate && detectedDate > selectedDate && !isSameTradingWeek(selectedDate, detectedDate)) {
+      return {
+        finalDate: selectedDate,
+        finalDateText: formatDateOnly(selectedDate),
+        selectedDateText: formatDateOnly(selectedDate),
+        detectedDateText: formatDateOnly(detectedDate),
+        source: "post-trade-user-selected-date-detected-date-outside-week-ignored",
+        reason:
+          "Post-trade mode was selected, but the chart-detected date appeared to fall outside the selected trade week. The user-selected date was used to prevent the analysis from jumping into the wrong week.",
+      };
+    }
 
-  if (selectedDate) {
     return {
       finalDate: selectedDate,
       finalDateText: formatDateOnly(selectedDate),
       selectedDateText: formatDateOnly(selectedDate),
       detectedDateText: detectedDate ? formatDateOnly(detectedDate) : null,
-      source: "user-selected-date",
+      source: "post-trade-user-selected-date",
       reason:
-        "The user-selected date was used because no later usable chart-detected date needed to override it for the selected mode.",
+        "Post-trade mode was selected, so the user-selected date was used to identify the correct Monday-to-Friday trade week.",
     };
   }
 
@@ -740,9 +748,9 @@ function chooseFinalChartDate({
       finalDateText: formatDateOnly(detectedDate),
       selectedDateText: null,
       detectedDateText: formatDateOnly(detectedDate),
-      source: "chart-detected-date",
+      source: "chart-detected-date-fallback",
       reason:
-        "No user-selected date was provided, so the chart-detected latest visible date was used.",
+        "No user-selected date was provided, so the chart-detected latest visible date was used as a fallback.",
     };
   }
 
@@ -1234,11 +1242,11 @@ Date decision:
     dateDecision.detectedDateText || "Not detected"
   }
 - Chart detection confidence: ${chartDetection?.dateConfidence || "low"}
-- Final chart context date: ${dateDecision.finalDateText}
+- Final date used to identify trade week: ${dateDecision.finalDateText}
 - Analysis mode: ${mode}
 - Week handling: ${
     reference?.useFullWeek
-      ? "Post-trade full-week mode: Monday-to-Friday data was requested."
+      ? "Post-trade full-week mode: Monday-to-Friday data from the selected trade week was requested."
       : "Pre-trade/date-capped mode: data after the selected/final date was ignored."
   }
 - Date source: ${dateDecision.source}
@@ -1374,7 +1382,7 @@ app.get("/test-twelve", async (req, res) => {
   try {
     const symbol = normalizeSymbol(req.query.symbol || "GBP/USD");
     const timeframe = req.query.timeframe || "H1";
-    const date = req.query.date || "2026-07-03";
+    const date = req.query.date || "2026-06-30";
     const timezone = req.query.timezone || "UTC";
     const mode = normalizeAnalysisType(req.query.analysisType || "post-trade");
     const useFullWeek =
@@ -1610,7 +1618,7 @@ User-selected details:
 - Analysis type: ${mode}
 - Week handling: ${
       useFullWeek
-        ? "Post-trade review: use the full Monday-to-Friday week."
+        ? "Post-trade review: use the full Monday-to-Friday week containing the selected trade date."
         : "Pre-trade analysis: use only up to the selected/final decision date."
     }
 - User notes: ${submittedNotes}
@@ -1715,7 +1723,7 @@ ${marketDataSummary}
         ? [
             `CSA areas calculated from Twelve Data ${marketReference.interval} candles for the selected Monday-to-Friday week.`,
             useFullWeek
-              ? "Post-trade review used the full Monday-to-Friday week, even if the selected trade date was earlier in the week."
+              ? "Post-trade review used the full Monday-to-Friday week containing the selected trade date."
               : "Pre-trade analysis used only the selected/final decision date range to avoid hindsight bias.",
             `CSA directional bias calculated as ${bias.bias} with ${bias.confidence} confidence.`,
           ]
