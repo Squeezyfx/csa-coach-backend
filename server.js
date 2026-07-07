@@ -24,7 +24,7 @@ const TWELVE_DATA_BASE_URL = "https://api.twelvedata.com/time_series";
 const CSA_FRAMEWORK_RULES = `
 You are CSA Coach, an AI chart-structure coach trained to identify CSAFOREX areas of interest.
 
-Your current role is ONLY to identify CSAFOREX areas of interest on the uploaded chart and explain CSA directional bias from the progression of those areas.
+Your current role is ONLY to identify CSAFOREX areas of interest on the uploaded chart and explain the CSA directional bias based on the progression of those areas.
 
 Do NOT provide trade signals.
 Do NOT give financial advice.
@@ -43,7 +43,7 @@ For now, your job is only to identify:
 - Resistance areas
 - Supply zones
 - Demand zones
-- CSA directional bias based on support/resistance and supply/demand progression
+- CSA directional bias based on the progression of those areas
 
 CSAFOREX CURRENT FRAMEWORK STAGE:
 The current framework stage is AREA IDENTIFICATION + DIRECTIONAL BIAS ONLY.
@@ -61,9 +61,10 @@ This means:
 
 HYBRID DATA RULE:
 The backend may provide CSA reference data from Twelve Data.
-If CSA reference data is provided, treat those OHLC values, CSA area calculations, and CSA directional bias calculations as the source of truth.
+If CSA reference data is provided, treat those OHLC values, CSA area calculations, and directional bias calculations as the source of truth.
 Do not override backend OHLC values with approximate readings from the screenshot.
 Do not relabel a backend-provided Monday high as Tuesday high, or Tuesday high as Monday high.
+Do not change the backend-provided CSA directional bias unless the backend says the bias is unavailable.
 
 The uploaded chart image is still useful for:
 - Checking whether the selected instrument/timeframe visually matches the screenshot.
@@ -76,13 +77,17 @@ Do not accuse the user of being wrong. Use cautious wording.
 DATE SELECTION RULE:
 The user may select a trade date or entry date that is earlier than the latest date visible on the uploaded chart.
 
-For post-trade review:
-- The backend may use the full Monday-to-Friday week containing the selected trade date.
-- This is correct because post-trade review should consider the full visible weekly context when the uploaded chart shows later candles after the trade date.
-
 For pre-trade analysis:
-- The backend should only use data up to the selected/final visible chart date.
-- Do not use future data after the selected pre-trade date.
+- Treat the user-selected date as the decision date.
+- Do not override the user-selected date with a later chart-detected date.
+- Ignore any candles after the selected pre-trade date to avoid hindsight bias.
+- If the user-selected date is missing, use the chart-detected latest visible date only as a fallback.
+
+For post-trade review:
+- The user-selected date can be treated as the entry/trade date.
+- If the chart clearly shows a later visible date, the backend may use that later chart-detected date as context.
+- The backend may also use the full Monday-to-Friday week that contains the selected/chart-detected date.
+- This is correct because post-trade review can consider what happened after the entry/trade date.
 
 If the chart-detected date is unclear, the backend will use the user-selected date.
 Do not invent a chart date if the backend did not confirm one.
@@ -101,9 +106,17 @@ If the broker shows partial Sunday candles, do not treat Sunday as Monday.
 Treat Monday as the first full Monday trading day after the weekend.
 
 MOST RECENT WEEK RULE:
-The CSA analysis must focus on the Monday-to-Friday week that contains the final visible chart date used by the backend.
-If the mode is post-trade review, the backend may use Monday through Friday for that selected week.
-If the mode is pre-trade analysis, use only the data available up to the selected/final visible chart date.
+The CSA analysis must focus on the Monday-to-Friday week that contains the date used by the backend.
+
+For pre-trade analysis:
+- Use Monday through the selected pre-trade decision date only.
+- Do not include later visible candles after the selected date.
+- State clearly that later candles were ignored to avoid hindsight bias.
+
+For post-trade review:
+- Use the full Monday-to-Friday week when available.
+- This allows the review to include what happened after the trade/entry date.
+
 Do not use older weeks as the main CSA analysis unless no current-week market data is available.
 
 CSA LOWER-TIMEFRAME AREA IDENTIFICATION FRAMEWORK:
@@ -172,14 +185,27 @@ Mixed or range-bound CSA bias usually means:
 - Trend-following conditions are less clear.
 
 Directional bias is NOT a trade signal.
-Do not say buy, sell, enter, or take this trade.
+Do not say "buy", "sell", "enter", or "take this trade".
 Instead, explain which CSA areas are more relevant for a trend-following trader and which areas may be counter-trend or higher caution.
 
 SECTION SEPARATION RULE:
 Keep the output clean and separated into standalone sections.
+
 Monday-to-Friday CSA Area Breakdown must be one section by itself.
-CSA Directional Bias must be one section by itself.
+CSA Directional Bias must be one section/card by itself.
 Current Key Areas of Interest must be one section by itself.
+
+Do NOT output "CSA Directional Bias" as a standalone heading above another "Bias" card.
+Instead, write it exactly like this:
+CSA Directional Bias:
+Bullish / Bearish / Mixed / Range-bound / Insufficient data
+
+Do NOT write:
+CSA Directional Bias
+
+Bias:
+Bullish
+
 Use spacing between Monday, Tuesday, Wednesday, Thursday, and Friday information so the user can scan it easily.
 
 OUTPUT STYLE:
@@ -197,8 +223,10 @@ Your answer should follow this format with clean standalone sections and clear s
 - Date Check:
   State the user-selected date.
   State the chart-detected latest visible date if provided.
-  State the actual final visible chart date used for the market-data fetch.
-  State whether the analysis used full post-trade week mode or pre-trade date-capped mode.
+  State the actual date used for the market-data fetch.
+  State whether the analysis used pre-trade date-capped mode or post-trade full-week mode.
+  If pre-trade mode was selected, explain that later candles after the selected date were ignored to avoid hindsight bias.
+  If post-trade mode was selected, explain that the full Monday-to-Friday week may be used for review context.
 
 - Week Used:
   State the Monday-to-Friday week/date range used.
@@ -206,14 +234,46 @@ Your answer should follow this format with clean standalone sections and clear s
 
 - Monday-to-Friday CSA Area Breakdown:
   This must be a separate, clearly visible section.
-  Start the section with exactly this heading: "Monday-to-Friday CSA Area Breakdown".
+  Start the section with exactly this heading: "Monday-to-Friday CSA Area Breakdown:"
   Use a blank line or spacing between each day.
   For each available day, show the high, low, and CSA interpretation.
   Do not mix directional bias into this section.
 
+  Use this structure:
+
+  Monday
+  - Resistance: Monday high at [price].
+  - Support: Monday low at [price].
+
+  Tuesday
+  - Compare Tuesday with Monday.
+  - High area: Resistance or Supply at [price] with reason.
+  - Low area: Support or Demand at [price] with reason.
+
+  Wednesday
+  - Compare Wednesday with Tuesday.
+  - High area: Resistance or Supply at [price] with reason.
+  - Low area: Support or Demand at [price] with reason.
+
+  Thursday
+  - Compare Thursday with Wednesday.
+  - High area: Resistance or Supply at [price] with reason.
+  - Low area: Support or Demand at [price] with reason.
+
+  Friday
+  - Compare Friday with Thursday.
+  - High area: Resistance or Supply at [price] with reason.
+  - Low area: Support or Demand at [price] with reason.
+
 - CSA Directional Bias:
-  This must be a separate, clearly visible section.
-  Start directly with:
+  This must be a separate, clearly visible section/card.
+  Do not use "CSA Directional Bias" as a standalone heading above another "Bias" card.
+  Start directly with exactly this label: "CSA Directional Bias:"
+  On the next line, state only the bias value: Bullish, Bearish, Mixed / Range-bound, or Insufficient data.
+  Then show confidence separately.
+
+  Use this structure:
+
   CSA Directional Bias:
   Bullish / Bearish / Mixed / Range-bound / Insufficient data
 
@@ -226,7 +286,7 @@ Your answer should follow this format with clean standalone sections and clear s
   Trend Trading Focus:
   Explain which CSA areas deserve more attention for trend-following traders.
   Do not provide an entry signal.
-  Use wording like watch, focus on, more important area, or area of interest.
+  Use wording like "watch", "focus on", "more important area", or "area of interest".
 
   Counter-Trend Caution:
   Explain which areas may attract counter-trend reactions but should be treated with more caution if they go against the CSA bias.
@@ -234,10 +294,29 @@ Your answer should follow this format with clean standalone sections and clear s
 
 - Current Key Areas of Interest:
   This must be a separate, clearly visible section.
-  Start the section with exactly this heading: "Current Key Areas of Interest".
+  Start the section with exactly this heading: "Current Key Areas of Interest:"
   List the most important current support, resistance, supply, and demand areas from the selected week only.
   Do not mix this section with directional bias.
   Do not include entry, stop loss, take profit, or trade signal.
+
+  Use this structure:
+
+  Current Key Areas of Interest:
+
+  Key Resistance Areas:
+  - List resistance areas only.
+
+  Key Support Areas:
+  - List support areas only.
+
+  Key Supply Areas:
+  - List supply areas only.
+
+  Key Demand Areas:
+  - List demand areas only.
+
+  Trend-Following Priority:
+  - State which of the above areas are more relevant based on the CSA directional bias.
 
 - Chart/Image Notes:
   Briefly mention if the uploaded chart seems to match the selected pair/timeframe or if there is a visible mismatch.
@@ -398,7 +477,6 @@ function getWeekRangeForDate(chartDate, useFullWeek = false) {
   const mondayOffset = day === 0 ? -6 : 1 - day;
   const monday = addDays(chartDate, mondayOffset);
   const friday = addDays(monday, 4);
-
   const end = useFullWeek ? friday : chartDate < friday ? chartDate : friday;
 
   return {
@@ -482,21 +560,55 @@ function isUsableChartDateDetection(detection) {
   return confidence === "high" || confidence === "medium";
 }
 
-function chooseFinalChartDate({ selectedDate, detection }) {
+function chooseFinalChartDate({
+  selectedDate,
+  detection,
+  analysisType = "post-trade",
+}) {
+  const mode = normalizeAnalysisType(analysisType);
   const detectedIsUsable = isUsableChartDateDetection(detection);
   const detectedDate = detectedIsUsable
     ? parseISODateOnly(detection.latestVisibleDate)
     : null;
 
+  // IMPORTANT:
+  // Pre-trade mode must not use future candles after the user's selected decision date.
+  // So if the user selected a date, that date wins even if the chart image shows later candles.
+  if (mode === "pre-trade" && selectedDate) {
+    return {
+      finalDate: selectedDate,
+      finalDateText: formatDateOnly(selectedDate),
+      selectedDateText: formatDateOnly(selectedDate),
+      detectedDateText: detectedDate ? formatDateOnly(detectedDate) : null,
+      source: "pre-trade-user-selected-date",
+      reason:
+        "Pre-trade mode was selected, so the user-selected date was treated as the decision date. Later candles visible on the chart were ignored to avoid hindsight bias.",
+    };
+  }
+
+  // If pre-trade mode has no selected date, fallback to chart detection.
+  if (mode === "pre-trade" && !selectedDate && detectedDate) {
+    return {
+      finalDate: detectedDate,
+      finalDateText: formatDateOnly(detectedDate),
+      selectedDateText: null,
+      detectedDateText: formatDateOnly(detectedDate),
+      source: "pre-trade-chart-detected-date-fallback",
+      reason:
+        "Pre-trade mode was selected but no user-selected date was provided, so the chart-detected latest visible date was used as a fallback.",
+    };
+  }
+
+  // Post-trade mode can use a later detected chart date because review can include what happened after entry.
   if (selectedDate && detectedDate && detectedDate > selectedDate) {
     return {
       finalDate: detectedDate,
       finalDateText: formatDateOnly(detectedDate),
       selectedDateText: formatDateOnly(selectedDate),
       detectedDateText: formatDateOnly(detectedDate),
-      source: "chart-detected-later-date",
+      source: "post-trade-chart-detected-later-date",
       reason:
-        "The uploaded chart appears to show a later final visible date than the user-selected date, so the chart-detected date was used as the chart context date.",
+        "Post-trade mode was selected and the uploaded chart appears to show a later final visible date than the user-selected trade date, so the later chart-detected date was used for review context.",
     };
   }
 
@@ -508,7 +620,7 @@ function chooseFinalChartDate({ selectedDate, detection }) {
       detectedDateText: detectedDate ? formatDateOnly(detectedDate) : null,
       source: "user-selected-date",
       reason:
-        "The user-selected date was used because no later high-confidence chart date was detected.",
+        "The user-selected date was used because no later usable chart-detected date needed to override it for the selected mode.",
     };
   }
 
@@ -599,8 +711,10 @@ function buildDailyLevelsFromCandles(candles, weekRange) {
 
     const dayNum = date.getUTCDay();
 
+    // Ignore Saturday and Sunday.
     if (dayNum < 1 || dayNum > 5) return;
 
+    // Only use selected Monday to final visible chart date, capped at Friday.
     if (dateOnly < weekRange.startDate || dateOnly > weekRange.endDate) return;
 
     const open = safeNumber(bar.open);
@@ -752,6 +866,7 @@ function calculateCsaDirectionalBias(dailyLevels = [], csaAreas = []) {
   let supplyHoldCount = 0;
   let higherCloseCount = 0;
   let lowerCloseCount = 0;
+
   const progression = [];
 
   for (let i = 1; i < dailyLevels.length; i += 1) {
@@ -1017,8 +1132,8 @@ Date decision:
 - Analysis mode: ${mode}
 - Week handling: ${
     reference?.useFullWeek
-      ? "Full Monday-to-Friday week used because this is post-trade review."
-      : "Date-capped week used because this is pre-trade analysis or full-week mode is off."
+      ? "Post-trade full-week mode: Monday-to-Friday data was requested."
+      : "Pre-trade/date-capped mode: data after the selected/final date was ignored."
   }
 - Date source: ${dateDecision.source}
 - Reason: ${dateDecision.reason}
@@ -1037,6 +1152,7 @@ Market-data reference status: unavailable. Reason: ${
   const dayBlocks = dayNames
     .map((dayName) => {
       const day = reference.dailyLevels.find((item) => item.weekday === dayName);
+
       if (!day) {
         return `${dayName}
 - No ${dayName} data was returned for the selected week/date.`;
@@ -1071,12 +1187,8 @@ ${areaLines || "- No CSA areas calculated for this day."}`;
   const supportAreas = reference.csaAreas.filter(
     (area) => area.type === "support"
   );
-  const supplyAreas = reference.csaAreas.filter(
-    (area) => area.type === "supply"
-  );
-  const demandAreas = reference.csaAreas.filter(
-    (area) => area.type === "demand"
-  );
+  const supplyAreas = reference.csaAreas.filter((area) => area.type === "supply");
+  const demandAreas = reference.csaAreas.filter((area) => area.type === "demand");
 
   const formatAreaList = (areas) =>
     areas.length
@@ -1113,7 +1225,7 @@ MONDAY-TO-FRIDAY CSA AREA BREAKDOWN FROM BACKEND:
 ${dayBlocks}
 
 CSA DIRECTIONAL BIAS FROM BACKEND:
-- Bias: ${bias.bias}
+- CSA Directional Bias: ${bias.bias}
 - Confidence: ${bias.confidence}
 - Bullish score: ${bias.bullishScore}
 - Bearish score: ${bias.bearishScore}
@@ -1237,7 +1349,6 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const submittedNotes = notes || userNotes || "";
     const normalizedSymbol = normalizeSymbol(submittedInstrument);
     const mode = normalizeAnalysisType(analysisType);
-
     const useFullWeek = mode === "post-trade";
 
     const imageBase64 = req.file.buffer.toString("base64");
@@ -1253,6 +1364,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const dateDecision = chooseFinalChartDate({
       selectedDate,
       detection: chartDetection,
+      analysisType: mode,
     });
 
     const marketReference = await fetchTwelveDataIntradayLevels({
@@ -1283,7 +1395,7 @@ User-selected details:
 - Week handling: ${
       useFullWeek
         ? "Post-trade review: use the full Monday-to-Friday week."
-        : "Pre-trade analysis: use only up to the selected/final visible date."
+        : "Pre-trade analysis: use only up to the selected/final decision date."
     }
 - User notes: ${submittedNotes}
 
@@ -1388,7 +1500,7 @@ ${marketDataSummary}
             `CSA areas calculated from Twelve Data ${marketReference.interval} candles for the selected Monday-to-Friday week.`,
             useFullWeek
               ? "Post-trade review used the full Monday-to-Friday week, even if the selected trade date was earlier in the week."
-              : "Pre-trade analysis used only the selected/final visible date range to avoid future data.",
+              : "Pre-trade analysis used only the selected/final decision date range to avoid hindsight bias.",
             `CSA directional bias calculated as ${bias.bias} with ${bias.confidence} confidence.`,
           ]
         : [
