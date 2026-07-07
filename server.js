@@ -39,7 +39,7 @@ Do NOT give guaranteed predictions.
 
 You may identify potential entry areas only as educational chart-structure areas.
 A potential entry area is NOT a trade signal.
-A potential entry area must always be conditional on price retesting, holding, rejecting, or confirming at the area.
+A potential entry area must always be conditional on price breaking, holding, retesting, rejecting, reacting, or confirming at the area.
 
 For now, your job is to identify:
 - Support areas
@@ -59,9 +59,8 @@ This means:
 - Ignore Sunday candles.
 - Explain directional bias from CSA structure progression.
 - Explain potential trend-trading areas based on role-change, demand, and supply.
-- Do not analyze reaction type yet.
-- Do not analyze entry trigger yet.
 - Do not analyze stop loss yet.
+- Do not analyze take profit yet.
 - Do not analyze trade management yet.
 
 HYBRID DATA RULE:
@@ -73,37 +72,24 @@ Do not change the backend-provided CSA directional bias unless the backend says 
 
 CHART CONTEXT MATCH RULE:
 If the backend reports an instrument mismatch, do not continue with CSA feedback.
-A mismatch means the selected instrument and the uploaded chart instrument are clearly different.
-Instrument mismatch should stop analysis because the market-data levels would not match the uploaded chart.
-
 If the backend reports a timeframe mismatch, do not continue with CSA feedback.
-A timeframe mismatch means the selected timeframe and the uploaded chart timeframe are clearly different.
-Timeframe mismatch should stop analysis because the market-data candles would be calculated from one timeframe while the screenshot shows another timeframe.
-
-If the chart instrument is not readable, continue using the selected instrument but mention that the chart instrument could not be confirmed.
-If the chart timeframe is not readable, continue using the selected timeframe but mention that the chart timeframe could not be confirmed.
 
 Instrument mismatch is a blocker.
 Timeframe mismatch is a blocker.
 
-DATE SELECTION RULE:
-The user may select a trade date or entry date.
+If the chart instrument is not readable, continue using the selected instrument but mention that the chart instrument could not be confirmed.
+If the chart timeframe is not readable, continue using the selected timeframe but mention that the chart timeframe could not be confirmed.
 
+DATE SELECTION RULE:
 For pre-trade analysis:
 - Treat the user-selected date as the decision date.
 - Do not override the user-selected date with a later chart-detected date.
 - Ignore any candles after the selected pre-trade date to avoid hindsight bias.
-- If the user-selected date is missing, use the chart-detected latest visible date only as a fallback.
 
 For post-trade review:
 - Treat the user-selected date as the trade/entry date and use it to identify the correct Monday-to-Friday trade week.
 - If the user-selected date is provided, do not let a chart-detected later date move the analysis into another week.
-- This prevents the AI from mistakenly jumping from the selected trade week into a later week.
-- The backend may use the full Monday-to-Friday week that contains the selected trade date.
-- If no user-selected date is provided, then the backend may use the chart-detected date as a fallback.
-
-If the chart-detected date is unclear or conflicts with the selected trade week, the backend will use the user-selected date.
-Do not invent a chart date if the backend did not confirm one.
+- Use the full Monday-to-Friday week that contains the selected trade date.
 
 TIMEFRAME RULE:
 If the selected timeframe is 1m, M1, 5m, M5, 15m, M15, 30m, M30, 1H, or H1:
@@ -111,27 +97,11 @@ Use the CSA lower-timeframe Monday-to-Friday area identification framework.
 
 If the selected timeframe is 4H, H4, Daily, D1, Weekly, or W1:
 Do not force this lower-timeframe rule unless the user explicitly wants it.
-For now, say the current CSA lower-timeframe rule is designed mainly for 1m to 1H charts and only identify obvious visible support/resistance areas if possible.
+For now, say the current CSA lower-timeframe rule is designed mainly for 1m to 1H charts.
 
 SUNDAY CANDLE RULE:
 Ignore Sunday candles for CSA Monday-to-Friday area identification.
-If the broker shows partial Sunday candles, do not treat Sunday as Monday.
 Treat Monday as the first full Monday trading day after the weekend.
-
-MOST RECENT WEEK RULE:
-The CSA analysis must focus on the Monday-to-Friday week that contains the date used by the backend.
-
-For pre-trade analysis:
-- Use Monday through the selected pre-trade decision date only.
-- Do not include later visible candles after the selected date.
-- State clearly that later candles were ignored to avoid hindsight bias.
-
-For post-trade review:
-- Use the full Monday-to-Friday week that contains the selected trade date when available.
-- Do not allow an AI-detected chart date to move the analysis to a different week when the user selected a date.
-- This allows the review to include what happened after the trade/entry date, but only within the selected trade week.
-
-Do not use older or later weeks as the main CSA analysis unless no selected date is provided.
 
 CSA LOWER-TIMEFRAME AREA IDENTIFICATION FRAMEWORK:
 
@@ -200,21 +170,29 @@ Mixed or range-bound CSA bias usually means:
 
 Directional bias is NOT a trade signal.
 Do not say "buy", "sell", "enter", or "take this trade".
-Instead, explain which CSA areas are more relevant for a trend-following trader and which areas may be counter-trend or higher caution.
 
 CSA TREND-TRADING ROLE-CHANGE RULE:
 CSA trend trading means trading with the CSA directional bias using role-change areas, demand areas, and supply areas.
 
+Important sequencing rule:
+- Explain potential trend-trading areas as a story from Tuesday to Wednesday to Thursday to Friday.
+- Do not only list the latest areas.
+- Start from Tuesday potentials, then continue with Wednesday, Thursday, and Friday.
+- Explain how price could use earlier demand/support/resistance/supply areas later in the week.
+- Example: Tuesday demand can become a potential buyer area when price pulls back, returns, or retraces into that area on Wednesday and holds.
+
 Bullish trend-trading context:
-- When price breaks above a resistance area, the broken resistance can become new support if price later retests the other side and holds.
-- This broken resistance becoming support is a potential buyer area.
-- Demand areas are also potential buyer areas when price is pushing higher or when CSA bias is bullish.
+- When price breaks above a resistance area, the broken resistance can become new support only if price breaks to the other side and holds above that area.
+- Do not say a resistance becomes support just because price retests it.
+- A broken resistance that holds from the other side is a potential buyer area.
+- Demand areas are potential buyer areas when price is pushing higher, when price pulls back/returns/retraces into demand, or when CSA bias is bullish.
 - These are not automatic entries. The user still needs price reaction or confirmation.
 
 Bearish trend-trading context:
-- When price breaks below a support area, the broken support can become new resistance if price later retests from below and rejects.
-- This broken support becoming resistance is a potential seller area.
-- Supply areas are also potential seller areas when price is pushing lower or when CSA bias is bearish.
+- When price breaks below a support area, the broken support can become new resistance only if price breaks to the other side and holds below that area.
+- Do not say a support becomes resistance just because price retests it.
+- A broken support that holds from the other side is a potential seller area.
+- Supply areas are potential seller areas when price is pushing lower, when price pulls back/returns/retraces into supply, or when CSA bias is bearish.
 - These are not automatic entries. The user still needs price reaction or confirmation.
 
 Mixed or range-bound context:
@@ -226,8 +204,9 @@ Never call a potential area an entry signal.
 Use language like:
 - "potential buyer area"
 - "potential seller area"
-- "could become support if price retests and holds"
-- "could become resistance if price retests and rejects"
+- "could become support if price breaks to the other side and holds"
+- "could become resistance if price breaks to the other side and holds"
+- "price pulled back/returned/retraced into demand"
 - "watch for reaction/confirmation"
 
 Do not use language like:
@@ -237,128 +216,66 @@ Do not use language like:
 - "take this trade"
 - "this is a guaranteed entry"
 
-SECTION SEPARATION RULE:
-Keep the output clean and separated into standalone sections.
-
-Monday-to-Friday CSA Area Breakdown must be one section by itself.
-CSA Directional Bias must be one section/card by itself.
-Current Key Areas of Interest must be one section by itself.
-Potential Entry Areas Based on CSA Trend Trading must be one section by itself.
-
-Do NOT output "CSA Directional Bias" as a standalone heading above another "Bias" card.
-Instead, write it exactly like this:
-CSA Directional Bias:
-Bullish / Bearish / Mixed / Range-bound / Insufficient data
-
-Do NOT write:
-CSA Directional Bias
-
-Bias:
-Bullish
-
-Use spacing between Monday, Tuesday, Wednesday, Thursday, and Friday information so the user can scan it easily.
-
-OUTPUT STYLE:
-Be clear and structured.
-Do not over-explain general trading theory.
-Focus on the market-data-backed CSA areas for the selected week.
-
-Your answer should follow this format with clean standalone sections and clear spacing:
+OUTPUT FORMAT:
+Your answer should follow this format:
 
 - Data Source Check:
-  State whether backend OHLC market data was provided.
-  Mention the data provider, symbol, timeframe interval, and timezone used.
-  Mention that Twelve Data/reference feed levels may differ slightly from a broker screenshot.
-
 - Date Check:
-  State the user-selected date.
-  State the chart-detected latest visible date if provided.
-  State the actual date used to identify the trade week.
-  State whether the analysis used pre-trade date-capped mode or post-trade full-week mode.
-  If pre-trade mode was selected, explain that later candles after the selected date were ignored to avoid hindsight bias.
-  If post-trade mode was selected, explain that the selected date was used to identify the correct Monday-to-Friday trade week.
-
 - Week Used:
-  State the Monday-to-Friday week/date range used.
-  State that Sunday candles are ignored.
-
 - Monday-to-Friday CSA Area Breakdown:
-  This must be a separate, clearly visible section.
-  Start the section with exactly this heading: "Monday-to-Friday CSA Area Breakdown:"
-  Use a blank line or spacing between each day.
-  For each available day, show the high, low, and CSA interpretation.
-  Do not mix directional bias into this section.
-
 - CSA Directional Bias:
-  This must be a separate, clearly visible section/card.
-  Do not use "CSA Directional Bias" as a standalone heading above another "Bias" card.
-  Start directly with exactly this label: "CSA Directional Bias:"
-  On the next line, state only the bias value: Bullish, Bearish, Mixed / Range-bound, or Insufficient data.
-  Then show confidence separately.
-
+- Confidence:
+- Reason:
 - Current Key Areas of Interest:
-  This must be short, clean, and easy to scan.
-  Start the section with exactly this heading: "Current Key Areas of Interest:"
-  Do not write long explanations in this section.
-  Do not include every level if too many exist.
-  Only list the most important current areas from the selected week.
-
-  Use exactly this format:
-
-  Current Key Areas of Interest:
-
-  Resistance:
-  - [Day] resistance: [price]
-
-  Support:
-  - [Day] support: [price]
-
-  Supply:
-  - [Day] supply: [price]
-
-  Demand:
-  - [Day] demand: [price]
-
-  Trend-Following Priority:
-  - Because CSA bias is [bullish/bearish/mixed], [state which areas deserve more attention].
-
-  Rules:
-  - Keep this section short.
-  - Do not include long reasoning.
-  - Do not include stop loss, take profit, prediction, or trade signal.
-  - If an area type is not available, write "- None identified."
-
 - Potential Entry Areas Based on CSA Trend Trading:
-  This section must explain potential trend-trading areas only.
-  Start the section with exactly this heading: "Potential Entry Areas Based on CSA Trend Trading:"
-  Use this format:
-
-  Potential Buyer Areas:
-  - [Area] could become support if price retests and holds.
-  - [Demand area] remains a potential buyer area if price continues pushing higher.
-
-  Potential Seller Areas:
-  - [Area] could become resistance if price retests and rejects.
-  - [Supply area] remains a potential seller area if price continues pushing lower.
-
-  Trend Trading Note:
-  - This is trend trading because the focus is on using CSA areas in the direction of the CSA bias.
-  - These are potential areas only, not buy/sell signals.
-  - Wait for price reaction or confirmation before treating any area as valid.
-
-  Rules:
-  - Do not say buy.
-  - Do not say sell.
-  - Do not say enter now.
-  - Do not give a direct trade signal.
-  - Do not mention stop loss or take profit yet.
-
 - Chart/Image Notes:
-  Briefly mention if the uploaded chart seems to match the selected pair/timeframe or if there is a visible mismatch.
-  Do not rely on the screenshot for exact prices when backend OHLC data is available.
-
 - Missing Information:
-  State if chart date, instrument, timeframe, or backend OHLC data was missing or incomplete.
+
+CURRENT KEY AREAS FORMAT:
+Use exactly this style:
+
+Current Key Areas of Interest:
+
+Resistance:
+- [Day] resistance: [price]
+
+Support:
+- [Day] support: [price]
+
+Supply:
+- [Day] supply: [price]
+
+Demand:
+- [Day] demand: [price]
+
+Trend-Following Priority:
+- Because CSA bias is [bullish/bearish/mixed], [state which areas deserve more attention].
+
+POTENTIAL ENTRY AREAS FORMAT:
+Use exactly this style:
+
+Potential Entry Areas Based on CSA Trend Trading:
+
+Potential Buyer Areas:
+- Tuesday: [explain Tuesday buyer potential if applicable]
+- Wednesday: [continue the story from Tuesday into Wednesday]
+- Thursday: [continue the story from Wednesday into Thursday]
+- Friday: [continue the story from Thursday into Friday]
+
+Potential Seller Areas:
+- Tuesday: [explain Tuesday seller potential if applicable]
+- Wednesday: [continue the story from Tuesday into Wednesday]
+- Thursday: [continue the story from Wednesday into Thursday]
+- Friday: [continue the story from Thursday into Friday]
+
+Trend Trading Note:
+- This is trend trading because the focus is on using CSA areas in the direction of the CSA bias.
+- Broken resistance can only become potential support after price breaks to the other side and holds.
+- Broken support can only become potential resistance after price breaks to the other side and holds.
+- Demand can be a potential buyer area when price pulls back/returns/retraces into it while the bullish structure is still valid.
+- Supply can be a potential seller area when price pulls back/returns/retraces into it while the bearish structure is still valid.
+- These are potential areas only, not buy/sell signals.
+- Wait for price reaction or confirmation before treating any area as valid.
 
 Do not include:
 - Stop loss review
@@ -526,45 +443,10 @@ function hasStrongInstrumentMismatch({ selectedInstrument, detectedInstrument })
   const selected = comparableInstrument(selectedInstrument);
   const detected = comparableInstrument(detectedInstrument);
 
-  if (!selected || !detected) {
-    return false;
-  }
-
-  if (selected.length < 6 || detected.length < 6) {
-    return false;
-  }
+  if (!selected || !detected) return false;
+  if (selected.length < 6 || detected.length < 6) return false;
 
   return selected !== detected;
-}
-
-function buildInstrumentMismatchAnalysis({
-  selectedInstrument,
-  detectedInstrument,
-  selectedTimeframe,
-  detectedTimeframe,
-}) {
-  return `Chart Context Mismatch:
-
-Selected Instrument:
-${selectedInstrument || "Not provided"}
-
-Detected Chart Instrument:
-${detectedInstrument || "Not detected"}
-
-Selected Timeframe:
-${selectedTimeframe || "Not provided"}
-
-Detected Chart Timeframe:
-${detectedTimeframe || "Not detected"}
-
-Why Analysis Was Stopped:
-The selected instrument does not match the uploaded chart. CSA Coach cannot provide reliable market-data-backed feedback because the market data would be calculated for one instrument while the screenshot shows another instrument.
-
-How To Fix:
-- Change the selected pair to match the uploaded chart, or
-- Upload the correct chart for the selected pair.
-
-No CSA area breakdown, directional bias, potential trend-trading area, or key level was generated for this request.`;
 }
 
 function comparableTimeframe(input = "") {
@@ -629,11 +511,39 @@ function hasStrongTimeframeMismatch({ selectedTimeframe, detectedTimeframe }) {
   const selected = comparableTimeframe(selectedTimeframe);
   const detected = comparableTimeframe(detectedTimeframe);
 
-  if (!selected || !detected) {
-    return false;
-  }
+  if (!selected || !detected) return false;
 
   return selected !== detected;
+}
+
+function buildInstrumentMismatchAnalysis({
+  selectedInstrument,
+  detectedInstrument,
+  selectedTimeframe,
+  detectedTimeframe,
+}) {
+  return `Chart Context Mismatch:
+
+Selected Instrument:
+${selectedInstrument || "Not provided"}
+
+Detected Chart Instrument:
+${detectedInstrument || "Not detected"}
+
+Selected Timeframe:
+${selectedTimeframe || "Not provided"}
+
+Detected Chart Timeframe:
+${detectedTimeframe || "Not detected"}
+
+Why Analysis Was Stopped:
+The selected instrument does not match the uploaded chart. CSA Coach cannot provide reliable market-data-backed feedback because the market data would be calculated for one instrument while the screenshot shows another instrument.
+
+How To Fix:
+- Change the selected pair to match the uploaded chart, or
+- Upload the correct chart for the selected pair.
+
+No CSA area breakdown, directional bias, potential trend-trading area, or key level was generated for this request.`;
 }
 
 function buildTimeframeMismatchAnalysis({
@@ -704,6 +614,7 @@ function isSameTradingWeek(dateA, dateB) {
   if (!dateA || !dateB) return false;
   const weekA = getWeekRangeForDate(dateA, true);
   const weekB = getWeekRangeForDate(dateB, true);
+
   return (
     weekA.startDate === weekB.startDate &&
     weekA.fridayDate === weekB.fridayDate
@@ -759,11 +670,13 @@ function stripCodeFence(text = "") {
 
 function extractJsonObject(text = "") {
   const cleaned = stripCodeFence(text);
+
   try {
     return JSON.parse(cleaned);
   } catch (error) {
     const match = cleaned.match(/\{[\s\S]*\}/);
     if (!match) return null;
+
     try {
       return JSON.parse(match[0]);
     } catch (innerError) {
@@ -907,6 +820,7 @@ async function detectChartContextFromImage({ imageBase64, mimeType }) {
     };
   } catch (error) {
     console.error("Chart detection error:", error);
+
     return {
       ok: false,
       detectedInstrument: null,
@@ -1179,13 +1093,13 @@ function calculateCsaDirectionalBias(dailyLevels = []) {
   if (biasCode === "bullish") {
     reason = `The CSA progression is bullish because the week shows ${highBreakCount} high break(s), ${demandHoldCount} demand hold(s), and ${higherCloseCount} higher close comparison(s). Resistance is being pushed higher while demand/support is holding above previous lows.`;
     trendTradingFocus =
-      "For CSA trend trading, demand/support areas and broken resistance areas that may become support are the main potential buyer areas.";
+      "For CSA trend trading, demand/support areas and broken resistance areas that may become support after breaking to the other side and holding are the main potential buyer areas.";
     counterTrendCaution =
       "Supply/resistance areas can still create reactions, but counter-trend selling against bullish CSA progression should be treated with more caution.";
   } else if (biasCode === "bearish") {
     reason = `The CSA progression is bearish because the week shows ${lowBreakCount} low break(s), ${supplyHoldCount} supply hold(s), and ${lowerCloseCount} lower close comparison(s). Support is being pushed lower while supply/resistance is holding below previous highs.`;
     trendTradingFocus =
-      "For CSA trend trading, supply/resistance areas and broken support areas that may become resistance are the main potential seller areas.";
+      "For CSA trend trading, supply/resistance areas and broken support areas that may become resistance after breaking to the other side and holding are the main potential seller areas.";
     counterTrendCaution =
       "Demand/support areas can still create reactions, but counter-trend buying against bearish CSA progression should be treated with more caution.";
   } else {
@@ -1355,11 +1269,11 @@ function buildTrendFollowingPriorityText(bias = {}) {
   const biasValue = String(bias.bias || "").toLowerCase();
 
   if (biasValue.includes("bullish")) {
-    return "Because CSA bias is bullish, demand/support areas and broken resistance areas that may become support are more important for trend-following buyers.";
+    return "Because CSA bias is bullish, demand/support areas and broken resistance areas that may become support after breaking to the other side and holding are more important for trend-following buyers.";
   }
 
   if (biasValue.includes("bearish")) {
-    return "Because CSA bias is bearish, supply/resistance areas and broken support areas that may become resistance are more important for trend-following sellers.";
+    return "Because CSA bias is bearish, supply/resistance areas and broken support areas that may become resistance after breaking to the other side and holding are more important for trend-following sellers.";
   }
 
   if (biasValue.includes("mixed") || biasValue.includes("range")) {
@@ -1369,16 +1283,25 @@ function buildTrendFollowingPriorityText(bias = {}) {
   return "CSA bias is not strong enough yet, so focus on the clearest support, resistance, supply, and demand areas from the selected week.";
 }
 
-function latestAreas(areas, limit = 2) {
+function orderedAreas(areas, options = {}) {
+  const { includeMonday = false } = options;
+
   if (!Array.isArray(areas) || !areas.length) return [];
 
   return [...areas]
-    .sort((a, b) => {
-      const dateCompare = String(b.date || "").localeCompare(String(a.date || ""));
-      if (dateCompare !== 0) return dateCompare;
-      return Number(b.price || 0) - Number(a.price || 0);
+    .filter((area) => {
+      if (includeMonday) return true;
+      return String(area.day || "").toLowerCase() !== "monday";
     })
-    .slice(0, limit);
+    .sort((a, b) => {
+      const dateCompare = String(a.date || "").localeCompare(String(b.date || ""));
+      if (dateCompare !== 0) return dateCompare;
+      return Number(a.price || 0) - Number(b.price || 0);
+    });
+}
+
+function formatAreaPrice(area) {
+  return area?.priceText || formatPrice(area?.price);
 }
 
 function buildPotentialTrendEntryAreas({
@@ -1390,82 +1313,94 @@ function buildPotentialTrendEntryAreas({
 }) {
   const biasValue = String(bias?.bias || "").toLowerCase();
 
-  const latestResistance = latestAreas(resistanceAreas, 2);
-  const latestSupport = latestAreas(supportAreas, 2);
-  const latestSupply = latestAreas(supplyAreas, 2);
-  const latestDemand = latestAreas(demandAreas, 2);
+  const orderedResistance = orderedAreas(resistanceAreas);
+  const orderedSupport = orderedAreas(supportAreas);
+  const orderedSupply = orderedAreas(supplyAreas);
+  const orderedDemand = orderedAreas(demandAreas);
 
   const buyerLines = [];
   const sellerLines = [];
 
   if (biasValue.includes("bullish")) {
-    latestResistance.forEach((area) => {
+    orderedDemand.forEach((area) => {
       buyerLines.push(
-        `- ${area.day} resistance at ${area.priceText} could become support if price retests the other side and holds.`
+        `- ${area.day}: ${area.day} demand at ${formatAreaPrice(area)} was a potential buyer area if price later pulled back, returned, or retraced into it and held while the bullish structure remained valid.`
       );
     });
 
-    latestDemand.forEach((area) => {
+    orderedSupport.forEach((area) => {
       buyerLines.push(
-        `- ${area.day} demand at ${area.priceText} remains a potential buyer area if price continues pushing higher.`
+        `- ${area.day}: ${area.day} support at ${formatAreaPrice(area)} was a potential buyer area if price returned to it and held while price continued pushing higher.`
       );
     });
 
-    latestSupply.forEach((area) => {
+    orderedResistance.forEach((area) => {
+      buyerLines.push(
+        `- ${area.day}: ${area.day} resistance at ${formatAreaPrice(area)} could become support only if price breaks to the other side and holds above it.`
+      );
+    });
+
+    orderedSupply.forEach((area) => {
       sellerLines.push(
-        `- ${area.day} supply at ${area.priceText} may still create a reaction, but it is counter-trend while CSA bias remains bullish.`
+        `- ${area.day}: ${area.day} supply at ${formatAreaPrice(area)} may create a reaction, but it is counter-trend while CSA bias remains bullish.`
       );
     });
   } else if (biasValue.includes("bearish")) {
-    latestSupport.forEach((area) => {
+    orderedSupply.forEach((area) => {
       sellerLines.push(
-        `- ${area.day} support at ${area.priceText} could become resistance if price retests from below and rejects.`
+        `- ${area.day}: ${area.day} supply at ${formatAreaPrice(area)} was a potential seller area if price later pulled back, returned, or retraced into it and rejected while the bearish structure remained valid.`
       );
     });
 
-    latestSupply.forEach((area) => {
+    orderedResistance.forEach((area) => {
       sellerLines.push(
-        `- ${area.day} supply at ${area.priceText} remains a potential seller area if price continues pushing lower.`
+        `- ${area.day}: ${area.day} resistance at ${formatAreaPrice(area)} was a potential seller area if price returned to it and rejected while price continued pushing lower.`
       );
     });
 
-    latestDemand.forEach((area) => {
+    orderedSupport.forEach((area) => {
+      sellerLines.push(
+        `- ${area.day}: ${area.day} support at ${formatAreaPrice(area)} could become resistance only if price breaks to the other side and holds below it.`
+      );
+    });
+
+    orderedDemand.forEach((area) => {
       buyerLines.push(
-        `- ${area.day} demand at ${area.priceText} may still create a reaction, but it is counter-trend while CSA bias remains bearish.`
+        `- ${area.day}: ${area.day} demand at ${formatAreaPrice(area)} may create a reaction, but it is counter-trend while CSA bias remains bearish.`
       );
     });
   } else {
-    latestResistance.forEach((area) => {
-      sellerLines.push(
-        `- ${area.day} resistance at ${area.priceText} is an outer area to watch, but trend direction is not clean yet.`
-      );
-    });
-
-    latestSupply.forEach((area) => {
-      sellerLines.push(
-        `- ${area.day} supply at ${area.priceText} can act as a potential seller area, but only with clear rejection.`
-      );
-    });
-
-    latestSupport.forEach((area) => {
+    orderedDemand.forEach((area) => {
       buyerLines.push(
-        `- ${area.day} support at ${area.priceText} is an outer area to watch, but trend direction is not clean yet.`
+        `- ${area.day}: ${area.day} demand at ${formatAreaPrice(area)} can be watched as a potential buyer area only if price reacts clearly, because CSA bias is not clean yet.`
       );
     });
 
-    latestDemand.forEach((area) => {
+    orderedSupport.forEach((area) => {
       buyerLines.push(
-        `- ${area.day} demand at ${area.priceText} can act as a potential buyer area, but only with clear reaction.`
+        `- ${area.day}: ${area.day} support at ${formatAreaPrice(area)} can be watched as an outer buyer area, but trend direction is not clean yet.`
+      );
+    });
+
+    orderedSupply.forEach((area) => {
+      sellerLines.push(
+        `- ${area.day}: ${area.day} supply at ${formatAreaPrice(area)} can be watched as a potential seller area only if price rejects clearly, because CSA bias is not clean yet.`
+      );
+    });
+
+    orderedResistance.forEach((area) => {
+      sellerLines.push(
+        `- ${area.day}: ${area.day} resistance at ${formatAreaPrice(area)} can be watched as an outer seller area, but trend direction is not clean yet.`
       );
     });
   }
 
   const buyerText = buyerLines.length
-    ? buyerLines.slice(0, 4).join("\n")
+    ? buyerLines.slice(0, 6).join("\n")
     : "- None identified from the selected-week CSA structure.";
 
   const sellerText = sellerLines.length
-    ? sellerLines.slice(0, 4).join("\n")
+    ? sellerLines.slice(0, 6).join("\n")
     : "- None identified from the selected-week CSA structure.";
 
   return `Potential Entry Areas Based on CSA Trend Trading:
@@ -1478,10 +1413,10 @@ ${sellerText}
 
 Trend Trading Note:
 - This is trend trading because the focus is on using CSA areas in the direction of the CSA bias.
-- Broken resistance can become potential support for buyers after a retest and hold.
-- Broken support can become potential resistance for sellers after a retest and rejection.
-- Demand can act as a potential buyer area when price is pushing higher.
-- Supply can act as a potential seller area when price is pushing lower.
+- Broken resistance can become potential support for buyers only after price breaks to the other side and holds above it.
+- Broken support can become potential resistance for sellers only after price breaks to the other side and holds below it.
+- Demand can act as a potential buyer area when price pulls back, returns, or retraces into it while the bullish structure remains valid.
+- Supply can act as a potential seller area when price pulls back, returns, or retraces into it while the bearish structure remains valid.
 - These are potential areas only, not buy/sell signals.
 - Wait for price reaction or confirmation before treating any area as valid.`;
 }
@@ -1493,6 +1428,7 @@ function buildMarketDataSummary(
   analysisType = "post-trade"
 ) {
   const mode = normalizeAnalysisType(analysisType);
+
   const dateBlock = `
 Date decision:
 - User-selected date: ${dateDecision.selectedDateText || "Not provided"}
@@ -1637,7 +1573,11 @@ ${potentialTrendEntryAreas}
 
 Important:
 - Keep Current Key Areas of Interest short.
-- Keep Potential Entry Areas Based on CSA Trend Trading clear and conditional.
+- Keep Potential Entry Areas Based on CSA Trend Trading clear, chronological, and conditional.
+- Start the potential-entry story from Tuesday, then Wednesday, then Thursday, then Friday.
+- Do not say a resistance becomes support just because price retests it.
+- Resistance can only become potential support after price breaks to the other side and holds above it.
+- Support can only become potential resistance after price breaks to the other side and holds below it.
 - These are potential trend-trading areas only, not buy/sell signals.
 - Do not say buy.
 - Do not say sell.
@@ -1924,8 +1864,10 @@ Focus only on:
 - Demand zones
 - Directional bias based on CSA level progression
 - Trend-trading focus based on CSA bias
-- Potential buyer areas based on broken resistance becoming support and demand
-- Potential seller areas based on broken support becoming resistance and supply
+- Potential buyer areas based on broken resistance becoming support only after price breaks to the other side and holds
+- Potential buyer areas based on demand/support when price pulls back, returns, or retraces into them and holds
+- Potential seller areas based on broken support becoming resistance only after price breaks to the other side and holds
+- Potential seller areas based on supply/resistance when price pulls back, returns, or retraces into them and rejects
 - Counter-trend caution based on CSA bias
 
 Do not analyze:
