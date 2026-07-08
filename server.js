@@ -508,13 +508,15 @@ async function detectChartContextFromImage({ imageBase64, mimeType }) {
 }
 
 /*
-  IMPORTANT FIX:
-  This tolerance prevents errors like:
-  - Tuesday low = 1.14005
-  - Wednesday low = 1.14000
+  Clean-break tolerance:
+  This prevents tiny differences from being wrongly called a clean break.
 
-  Technically Wednesday is slightly lower, but this is not a clean break.
-  It should be treated as equal low / retest / hold around 1.1400 unless price breaks by more than tolerance.
+  Example:
+  Tuesday low = 1.14005
+  Wednesday low = 1.14000
+
+  That is very close and should be treated as a retest / equal-low area,
+  not a clean downside break.
 */
 function getCleanBreakTolerance(symbol = "") {
   const compact = comparableInstrument(symbol);
@@ -680,7 +682,7 @@ function buildCsaAreas(dailyLevels = [], symbol = "") {
         type: "resistance",
         price: day.high,
         priceText: formatPrice(day.high),
-        logic: "Monday high represents Monday resistance.",
+        logic: "Monday high represents Monday resistance. This is the first resistance anchor for the selected week.",
       });
 
       areas.push({
@@ -689,7 +691,7 @@ function buildCsaAreas(dailyLevels = [], symbol = "") {
         type: "support",
         price: day.low,
         priceText: formatPrice(day.low),
-        logic: "Monday low represents Monday support.",
+        logic: "Monday low represents Monday support. This is the first support anchor for the selected week.",
       });
 
       return;
@@ -1048,17 +1050,31 @@ function formatShortAreaList(areas, areaType) {
     return "- None identified.";
   }
 
-  const sortedAreas = [...areas].sort((a, b) => {
+  const mondayAreas = areas.filter(
+    (area) => String(area.day || "").toLowerCase() === "monday"
+  );
+
+  const nonMondayAreas = areas.filter(
+    (area) => String(area.day || "").toLowerCase() !== "monday"
+  );
+
+  const sortedNonMondayAreas = [...nonMondayAreas].sort((a, b) => {
     const dateCompare = String(b.date || "").localeCompare(String(a.date || ""));
     if (dateCompare !== 0) return dateCompare;
     return Number(b.price || 0) - Number(a.price || 0);
   });
 
-  return sortedAreas
-    .slice(0, 3)
+  const finalAreas = [...mondayAreas, ...sortedNonMondayAreas].slice(0, 4);
+
+  return finalAreas
     .map((area) => {
       const day = area.day || "Selected week";
       const price = area.priceText || formatPrice(area.price);
+
+      if (String(day).toLowerCase() === "monday") {
+        return `- Monday ${areaType}: ${price}  ← weekly anchor`;
+      }
+
       return `- ${day} ${areaType}: ${price}`;
     })
     .join("\n");
@@ -1318,42 +1334,114 @@ Trend Trading Note:
 - Wait for price reaction or confirmation before treating any area as valid.`;
 }
 
+function buildMondayAnchorSection(dailyLevels = [], areas = []) {
+  const monday =
+    dailyLevels.find(
+      (day) => String(day.weekday || "").toLowerCase() === "monday"
+    ) || dailyLevels[0];
+
+  if (!monday) {
+    return `Monday Anchor:
+- Monday data was not available from the backend.
+- CSA Coach cannot create the weekly anchor without Monday high and Monday low.`;
+  }
+
+  const mondayResistance =
+    areas.find(
+      (area) =>
+        String(area.day || "").toLowerCase() === "monday" &&
+        area.type === "resistance"
+    ) || null;
+
+  const mondaySupport =
+    areas.find(
+      (area) =>
+        String(area.day || "").toLowerCase() === "monday" &&
+        area.type === "support"
+    ) || null;
+
+  return `Monday Anchor:
+- Monday date: ${monday.date}
+- Monday resistance: ${
+    mondayResistance?.priceText || formatPrice(monday.high)
+  }
+- Monday support: ${mondaySupport?.priceText || formatPrice(monday.low)}
+- Rule: Monday high is the first resistance reference for the week.
+- Rule: Monday low is the first support reference for the week.
+- Tuesday must be compared against Monday high and Monday low.
+- All later CSA areas are built from this Monday anchor and the day-to-day comparisons that follow.`;
+}
+
 function buildDataTable(dailyLevels = [], symbol = "") {
   if (!dailyLevels.length) return "- No weekday data available.";
 
   return dailyLevels
     .map((day, index) => {
-      if (index === 0) {
-        return `- ${day.weekday} ${day.date}: High ${formatPrice(
-          day.high
-        )}, Low ${formatPrice(day.low)}. Monday high is resistance; Monday low is support.`;
+      if (index === 0 || String(day.weekday || "").toLowerCase() === "monday") {
+        return `Monday:
+- Date: ${day.date}
+- Monday high: ${formatPrice(day.high)} = Monday resistance
+- Monday low: ${formatPrice(day.low)} = Monday support
+- CSA rule: Monday is the weekly anchor. Tuesday must be compared against Monday high and Monday low.`;
       }
 
       const previous = dailyLevels[index - 1];
+
       const highComparison = compareHighWithTolerance(
         day.high,
         previous.high,
         symbol
       );
-      const lowComparison = compareLowWithTolerance(day.low, previous.low, symbol);
+
+      const lowComparison = compareLowWithTolerance(
+        day.low,
+        previous.low,
+        symbol
+      );
 
       const highText = highComparison.cleanBreak
-        ? `cleanly broke above ${previous.weekday}'s high`
+        ? `${day.weekday} high ${formatPrice(
+            day.high
+          )} cleanly broke above ${previous.weekday}'s high ${formatPrice(
+            previous.high
+          )}.`
         : highComparison.equalOrInsideTolerance
-        ? `retested / stayed around ${previous.weekday}'s high within tolerance`
-        : `failed to break above ${previous.weekday}'s high`;
+        ? `${day.weekday} high ${formatPrice(
+            day.high
+          )} only retested / stayed around ${previous.weekday}'s high ${formatPrice(
+            previous.high
+          )} within clean-break tolerance.`
+        : `${day.weekday} high ${formatPrice(
+            day.high
+          )} failed to break above ${previous.weekday}'s high ${formatPrice(
+            previous.high
+          )}.`;
 
       const lowText = lowComparison.cleanBreak
-        ? `cleanly broke below ${previous.weekday}'s low`
+        ? `${day.weekday} low ${formatPrice(
+            day.low
+          )} cleanly broke below ${previous.weekday}'s low ${formatPrice(
+            previous.low
+          )}.`
         : lowComparison.equalOrInsideTolerance
-        ? `retested / stayed around ${previous.weekday}'s low within tolerance`
-        : `held above ${previous.weekday}'s low`;
+        ? `${day.weekday} low ${formatPrice(
+            day.low
+          )} only retested / stayed around ${previous.weekday}'s low ${formatPrice(
+            previous.low
+          )} within clean-break tolerance.`
+        : `${day.weekday} low ${formatPrice(
+            day.low
+          )} held above ${previous.weekday}'s low ${formatPrice(previous.low)}.`;
 
-      return `- ${day.weekday} ${day.date}: High ${formatPrice(
-        day.high
-      )}, Low ${formatPrice(day.low)}. High ${highText}. Low ${lowText}.`;
+      return `${day.weekday}:
+- Date: ${day.date}
+- High: ${formatPrice(day.high)}
+- Low: ${formatPrice(day.low)}
+- Compared with: ${previous.weekday} ${previous.date}
+- High comparison: ${highText}
+- Low comparison: ${lowText}`;
     })
-    .join("\n");
+    .join("\n\n");
 }
 
 function buildDeterministicCsaAnalysis({
@@ -1383,6 +1471,9 @@ Date Check:
 - Reason: ${dateDecision.reason}
 
 Week Used:
+- Not available because market data was unavailable.
+
+Monday Anchor:
 - Not available because market data was unavailable.
 
 Monday-to-Friday CSA Area Breakdown:
@@ -1438,13 +1529,17 @@ Missing Information:
 
   const areaBreakdown = areas.length
     ? areas
-        .map((area) => `- ${area.day}: ${area.type.toUpperCase()} at ${area.priceText}. ${area.logic}`)
+        .map(
+          (area) =>
+            `- ${area.day}: ${area.type.toUpperCase()} at ${area.priceText}. ${area.logic}`
+        )
         .join("\n")
     : "- No CSA areas calculated.";
 
-  const progressionNotes = Array.isArray(bias.progression) && bias.progression.length
-    ? bias.progression.map((line) => `- ${line}`).join("\n")
-    : "- Not enough progression data available.";
+  const progressionNotes =
+    Array.isArray(bias.progression) && bias.progression.length
+      ? bias.progression.map((line) => `- ${line}`).join("\n")
+      : "- Not enough progression data available.";
 
   const potentialTrendEntryAreas = buildPotentialTrendEntryAreas({
     resistanceAreas,
@@ -1482,6 +1577,8 @@ Week Used:
 - Data used up to: ${marketReference.weekRange.endDate}
 - Raw candles returned: ${marketReference.rawCandleCount}
 - Sunday candles: ignored.
+
+${buildMondayAnchorSection(dailyLevels, areas)}
 
 Monday-to-Friday CSA Area Breakdown:
 ${buildDataTable(dailyLevels, normalizedSymbol)}
