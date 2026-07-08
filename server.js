@@ -1046,6 +1046,207 @@ async function fetchTwelveDataIntradayLevels({
   };
 }
 
+function latestArea(areaList = []) {
+  if (!Array.isArray(areaList) || !areaList.length) return null;
+
+  return [...areaList].sort((a, b) => {
+    const dateCompare = String(b.date || "").localeCompare(String(a.date || ""));
+    if (dateCompare !== 0) return dateCompare;
+    return Number(b.price || 0) - Number(a.price || 0);
+  })[0];
+}
+
+function listAreas(areaList = [], label = "area", max = 3) {
+  if (!Array.isArray(areaList) || !areaList.length) return "- None identified.";
+
+  return [...areaList]
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
+    .slice(0, max)
+    .map((area) => `- ${area.day} ${label}: ${area.priceText}`)
+    .join("\n");
+}
+
+function buildSimpleDayBreakdown(dailyLevels = [], normalizedSymbol = "") {
+  if (!dailyLevels.length) return "- No weekday data available.";
+
+  return dailyLevels
+    .map((day, index) => {
+      if (index === 0 || String(day.weekday || "").toLowerCase() === "monday") {
+        return `${day.weekday}:
+- High ${formatPrice(day.high)} = Monday resistance.
+- Low ${formatPrice(day.low)} = Monday support.`;
+      }
+
+      const previous = dailyLevels[index - 1];
+
+      const highComparison = compareHighWithTolerance(
+        day.high,
+        previous.high,
+        normalizedSymbol
+      );
+
+      const lowComparison = compareLowWithTolerance(
+        day.low,
+        previous.low,
+        normalizedSymbol
+      );
+
+      const highResult = highComparison.cleanBreak
+        ? `High broke above ${previous.weekday}'s high, so ${day.weekday} high became resistance.`
+        : `High failed to cleanly break ${previous.weekday}'s high, so ${day.weekday} high became supply.`;
+
+      const lowResult = lowComparison.cleanBreak
+        ? `Low broke below ${previous.weekday}'s low, so ${day.weekday} low became support.`
+        : `Low held/retested ${previous.weekday}'s low, so ${day.weekday} low became demand.`;
+
+      return `${day.weekday}:
+- ${highResult}
+- ${lowResult}`;
+    })
+    .join("\n\n");
+}
+
+function buildTradeCoachingSummary({
+  resistanceAreas,
+  supportAreas,
+  supplyAreas,
+  demandAreas,
+  bias,
+}) {
+  const biasValue = String(bias?.bias || "").toLowerCase();
+
+  const latestResistance = latestArea(resistanceAreas);
+  const latestSupport = latestArea(supportAreas);
+  const latestSupply = latestArea(supplyAreas);
+  const latestDemand = latestArea(demandAreas);
+
+  let direction = "Mixed / Wait";
+  let bestEntryArea = "No clean entry area yet. Wait for price to reach a clear CSA area.";
+  let entryTrigger =
+    "Wait for a clear reaction: rejection candle, break-and-hold, retest, or lower/high higher-low confirmation.";
+  let stopLoss =
+    "Place stop beyond the invalidation point, not inside the same CSA area.";
+  let takeProfit =
+    "First target should be the nearest opposite CSA area. Second target only applies if price breaks and holds beyond the first target.";
+  let riskReward =
+    "Only consider the setup if at least 1:2 risk-to-reward is available before the next major CSA area.";
+  let tradeManagement =
+    "Do not manage the trade from the middle of the range. React only at trouble areas or after a clear structure shift.";
+  let verdict =
+    "Setup is not clean enough to chase. Wait for price to return to a CSA area and confirm.";
+  let score = 5;
+
+  if (biasValue.includes("bullish")) {
+    direction = "Bullish";
+
+    const entryRef = latestDemand || latestSupport;
+    const troubleRef = latestResistance || latestSupply;
+
+    bestEntryArea = entryRef
+      ? `${entryRef.day} ${entryRef.type} around ${entryRef.priceText}. This is only valid if price returns/retraces and holds.`
+      : "No strong buyer area confirmed. Wait for demand/support to form or hold.";
+
+    entryTrigger =
+      "Look for a hold above demand/support, bullish rejection, higher low, or break-and-hold above resistance before considering the setup valid.";
+
+    stopLoss = entryRef
+      ? `Below the ${entryRef.day} ${entryRef.type} area, or below the reaction swing low that confirms the setup.`
+      : "Below the most recent confirmed swing low or below the demand/support area that creates the reaction.";
+
+    takeProfit = troubleRef
+      ? `First target near ${troubleRef.day} ${troubleRef.type} at ${troubleRef.priceText}. Further target only if price breaks and holds above that area.`
+      : "First target should be the next visible resistance/supply area.";
+
+    riskReward =
+      "The setup is only worth considering if the distance from entry to first target is at least twice the stop size.";
+
+    tradeManagement =
+      "After price reaches the first trouble area, reduce risk or protect the position. If price rejects hard from resistance/supply, do not force a hold.";
+
+    verdict =
+      "Bullish idea is only valid from demand/support or after a confirmed resistance break-and-hold. Do not chase price in the middle.";
+
+    score = bias.confidence === "high" ? 8 : bias.confidence === "medium" ? 7 : 6;
+  } else if (biasValue.includes("bearish")) {
+    direction = "Bearish";
+
+    const entryRef = latestSupply || latestResistance;
+    const troubleRef = latestSupport || latestDemand;
+
+    bestEntryArea = entryRef
+      ? `${entryRef.day} ${entryRef.type} around ${entryRef.priceText}. This is only valid if price returns/retraces and rejects.`
+      : "No strong seller area confirmed. Wait for supply/resistance to form or reject.";
+
+    entryTrigger =
+      "Look for rejection from supply/resistance, lower high, bearish candle confirmation, or break-and-hold below support before considering the setup valid.";
+
+    stopLoss = entryRef
+      ? `Above the ${entryRef.day} ${entryRef.type} area, or above the reaction swing high that confirms the setup.`
+      : "Above the most recent confirmed swing high or above the supply/resistance area that creates the rejection.";
+
+    takeProfit = troubleRef
+      ? `First target near ${troubleRef.day} ${troubleRef.type} at ${troubleRef.priceText}. Further target only if price breaks and holds below that area.`
+      : "First target should be the next visible support/demand area.";
+
+    riskReward =
+      "The setup is only worth considering if the distance from entry to first target is at least twice the stop size.";
+
+    tradeManagement =
+      "After price reaches the first trouble area, reduce risk or protect the position. If price reacts strongly from support/demand, do not force continuation.";
+
+    verdict =
+      "Bearish idea is only valid from supply/resistance or after a confirmed support break-and-hold. Do not chase price in the middle.";
+
+    score = bias.confidence === "high" ? 8 : bias.confidence === "medium" ? 7 : 6;
+  } else {
+    direction = "Mixed / Range-bound";
+
+    const buyerRef = latestDemand || latestSupport;
+    const sellerRef = latestSupply || latestResistance;
+
+    bestEntryArea =
+      buyerRef || sellerRef
+        ? `Range condition. Buyer area: ${
+            buyerRef ? `${buyerRef.day} ${buyerRef.type} ${buyerRef.priceText}` : "none"
+          }. Seller area: ${
+            sellerRef ? `${sellerRef.day} ${sellerRef.type} ${sellerRef.priceText}` : "none"
+          }. Avoid the middle.`
+        : "No clean CSA area confirmed. Wait.";
+
+    entryTrigger =
+      "Because bias is mixed, only take a reaction from the outer area of the range. Do not act from the middle.";
+
+    stopLoss =
+      "Stop should go beyond the outer range area that created the reaction, not inside the range.";
+
+    takeProfit =
+      "Target the opposite side of the range first. Do not expect trend continuation until price breaks and holds beyond the range.";
+
+    riskReward =
+      "Only consider the setup if the range gives at least 1:2 risk-to-reward. Skip if price is already close to the opposite side.";
+
+    tradeManagement =
+      "Take partials or protect risk near the middle/opposite side of the range. Mixed bias requires faster management.";
+
+    verdict =
+      "Mixed setup. Best action is patience. Wait for price to reach an outer CSA area or wait for a clean breakout and hold.";
+
+    score = bias.confidence === "high" ? 6 : bias.confidence === "medium" ? 5 : 4;
+  }
+
+  return {
+    direction,
+    bestEntryArea,
+    entryTrigger,
+    stopLoss,
+    takeProfit,
+    riskReward,
+    tradeManagement,
+    verdict,
+    score,
+  };
+}
+
 function buildDeterministicCsaAnalysis({
   marketReference,
   dateDecision,
@@ -1057,42 +1258,39 @@ function buildDeterministicCsaAnalysis({
   timezone,
 }) {
   if (!marketReference || !marketReference.ok) {
-    return `CSA Coach Feedback
+    return `CSA COACH VERDICT
 
-Quick Verdict:
-- CSA Bias: Insufficient data
-- Main issue: Backend OHLC market data was not available.
-- What this means: The coach cannot safely confirm whether a day broke or did not break the previous day's high/low from the screenshot alone.
-- Next step: Confirm that the selected pair, timeframe, date, and Twelve Data API key are correct.
+Overall Setup Score:
+- 0/10
 
-Key CSA Areas:
-Resistance:
-- None identified.
+Directional Bias:
+- Insufficient data
 
-Support:
-- None identified.
+Best Entry Area:
+- Not available. Backend OHLC market data was not available.
 
-Supply:
-- None identified.
+Entry Trigger:
+- Not available. The coach cannot confirm valid triggers without reliable market data.
 
-Demand:
-- None identified.
+Stop Loss Placement:
+- Not available.
 
-Monday-to-Friday Breakdown:
-- Not available because backend market data was unavailable.
+Take Profit Placement:
+- Not available.
 
-Potential Areas:
-Buyer Areas:
-- None confirmed.
+Risk-to-Reward:
+- Not available.
 
-Seller Areas:
-- None confirmed.
+Trade Management:
+- Not available.
 
-Coach Note:
-- Do not treat screenshot-based level readings as final when the chart scale is unclear.
-- Backend OHLC data is required for reliable CSA break/retest confirmation.
+Coach Verdict:
+- The chart cannot be reliably reviewed because backend OHLC data was unavailable.
+- Do not rely on screenshot-only level readings when the chart scale is unclear.
 
-Technical Note:
+READ_MORE_DETAILS:
+
+Data Issue:
 - Reason: ${marketReference?.error || "Unknown error"}
 - Selected date: ${dateDecision?.selectedDateText || "Not provided"}
 - Final date used: ${dateDecision?.finalDateText || "Not provided"}
@@ -1113,155 +1311,13 @@ Technical Note:
   const supplyAreas = areas.filter((area) => area.type === "supply");
   const demandAreas = areas.filter((area) => area.type === "demand");
 
-  function latestAreaText(areaList, label) {
-    if (!Array.isArray(areaList) || !areaList.length) {
-      return "- None identified.";
-    }
-
-    return [...areaList]
-      .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
-      .slice(0, 3)
-      .map((area) => `- ${area.day} ${label}: ${area.priceText}`)
-      .join("\n");
-  }
-
-  function getMainFocusText() {
-    const biasValue = String(bias.bias || "").toLowerCase();
-
-    if (biasValue.includes("bullish")) {
-      return "Focus more on demand/support areas and broken resistance areas that may act as support after a confirmed break and hold.";
-    }
-
-    if (biasValue.includes("bearish")) {
-      return "Focus more on supply/resistance areas and broken support areas that may act as resistance after a confirmed break and hold.";
-    }
-
-    return "Bias is mixed, so focus more on outer support/demand and outer resistance/supply. Avoid the middle of the range.";
-  }
-
-  function getAvoidText() {
-    const biasValue = String(bias.bias || "").toLowerCase();
-
-    if (biasValue.includes("bullish")) {
-      return "Avoid forcing seller ideas against bullish CSA progression unless price clearly rejects from supply/resistance.";
-    }
-
-    if (biasValue.includes("bearish")) {
-      return "Avoid forcing buyer ideas against bearish CSA progression unless price clearly reacts from support/demand.";
-    }
-
-    return "Avoid forcing trades from the middle of the range without a clear reaction at a CSA area.";
-  }
-
-  function buildSimpleDayBreakdown() {
-    if (!dailyLevels.length) {
-      return "- No weekday data available.";
-    }
-
-    return dailyLevels
-      .map((day, index) => {
-        if (index === 0 || String(day.weekday || "").toLowerCase() === "monday") {
-          return `${day.weekday}:
-- High ${formatPrice(day.high)} = Monday resistance.
-- Low ${formatPrice(day.low)} = Monday support.
-- Monday is the weekly anchor. Tuesday must be compared against Monday high and low.`;
-        }
-
-        const previous = dailyLevels[index - 1];
-
-        const highComparison = compareHighWithTolerance(
-          day.high,
-          previous.high,
-          normalizedSymbol
-        );
-
-        const lowComparison = compareLowWithTolerance(
-          day.low,
-          previous.low,
-          normalizedSymbol
-        );
-
-        const highResult = highComparison.cleanBreak
-          ? `High ${formatPrice(day.high)} cleanly broke ${previous.weekday}'s high ${formatPrice(previous.high)}, so ${day.weekday} high becomes resistance.`
-          : highComparison.equalOrInsideTolerance
-          ? `High ${formatPrice(day.high)} only retested/stayed around ${previous.weekday}'s high ${formatPrice(previous.high)}, so ${day.weekday} high is supply.`
-          : `High ${formatPrice(day.high)} failed to break ${previous.weekday}'s high ${formatPrice(previous.high)}, so ${day.weekday} high is supply.`;
-
-        const lowResult = lowComparison.cleanBreak
-          ? `Low ${formatPrice(day.low)} cleanly broke ${previous.weekday}'s low ${formatPrice(previous.low)}, so ${day.weekday} low becomes support.`
-          : lowComparison.equalOrInsideTolerance
-          ? `Low ${formatPrice(day.low)} only retested/stayed around ${previous.weekday}'s low ${formatPrice(previous.low)}, so ${day.weekday} low is demand.`
-          : `Low ${formatPrice(day.low)} held above ${previous.weekday}'s low ${formatPrice(previous.low)}, so ${day.weekday} low is demand.`;
-
-        return `${day.weekday}:
-- ${highResult}
-- ${lowResult}`;
-      })
-      .join("\n\n");
-  }
-
-  function buildShortPotentialAreas() {
-    const biasValue = String(bias.bias || "").toLowerCase();
-
-    const latestResistance = [...resistanceAreas].sort((a, b) =>
-      String(b.date || "").localeCompare(String(a.date || ""))
-    )[0];
-
-    const latestSupport = [...supportAreas].sort((a, b) =>
-      String(b.date || "").localeCompare(String(a.date || ""))
-    )[0];
-
-    const latestSupply = [...supplyAreas].sort((a, b) =>
-      String(b.date || "").localeCompare(String(a.date || ""))
-    )[0];
-
-    const latestDemand = [...demandAreas].sort((a, b) =>
-      String(b.date || "").localeCompare(String(a.date || ""))
-    )[0];
-
-    let buyerArea =
-      "- No strong buyer area confirmed from the selected-week CSA structure.";
-    let sellerArea =
-      "- No strong seller area confirmed from the selected-week CSA structure.";
-
-    if (biasValue.includes("bullish")) {
-      if (latestDemand) {
-        buyerArea = `- ${latestDemand.day} demand at ${latestDemand.priceText} can be watched as a potential buyer area only if price returns/retraces and holds.`;
-      } else if (latestSupport) {
-        buyerArea = `- ${latestSupport.day} support at ${latestSupport.priceText} can be watched as a potential buyer area only if price reacts and holds.`;
-      }
-
-      if (latestSupply) {
-        sellerArea = `- ${latestSupply.day} supply at ${latestSupply.priceText} may react, but it is counter-trend while CSA bias remains bullish.`;
-      }
-    } else if (biasValue.includes("bearish")) {
-      if (latestSupply) {
-        sellerArea = `- ${latestSupply.day} supply at ${latestSupply.priceText} can be watched as a potential seller area only if price returns/retraces and rejects.`;
-      } else if (latestResistance) {
-        sellerArea = `- ${latestResistance.day} resistance at ${latestResistance.priceText} can be watched as a potential seller area only if price rejects.`;
-      }
-
-      if (latestDemand) {
-        buyerArea = `- ${latestDemand.day} demand at ${latestDemand.priceText} may react, but it is counter-trend while CSA bias remains bearish.`;
-      }
-    } else {
-      if (latestDemand || latestSupport) {
-        const buyerRef = latestDemand || latestSupport;
-        buyerArea = `- ${buyerRef.day} ${buyerRef.type} at ${buyerRef.priceText} can be watched only if price gives a clear reaction.`;
-      }
-
-      if (latestSupply || latestResistance) {
-        const sellerRef = latestSupply || latestResistance;
-        sellerArea = `- ${sellerRef.day} ${sellerRef.type} at ${sellerRef.priceText} can be watched only if price gives a clear rejection.`;
-      }
-    }
-
-    return `Buyer Areas:
-${buyerArea}
-
-Seller Areas:
-${sellerArea}`;
-  }
+  const tradeCoach = buildTradeCoachingSummary({
+    resistanceAreas,
+    supportAreas,
+    supplyAreas,
+    demandAreas,
+    bias,
+  });
 
   const quickReason =
     Array.isArray(bias.progression) && bias.progression.length
@@ -1269,46 +1325,73 @@ ${sellerArea}`;
       : bias.reason ||
         "CSA bias was calculated from the selected week's high/low progression.";
 
-  return `CSA Coach Feedback
+  return `CSA COACH VERDICT
 
-Quick Verdict:
-- CSA Bias: ${bias.bias}
-- Main reason: ${quickReason}
-- Best focus: ${getMainFocusText()}
-- Avoid: ${getAvoidText()}
+Overall Setup Score:
+- ${tradeCoach.score}/10
+
+Directional Bias:
+- ${tradeCoach.direction}
+- Reason: ${quickReason}
+
+Best Entry Area:
+- ${tradeCoach.bestEntryArea}
+
+Entry Trigger:
+- ${tradeCoach.entryTrigger}
+
+Stop Loss Placement:
+- ${tradeCoach.stopLoss}
+
+Take Profit Placement:
+- ${tradeCoach.takeProfit}
+
+Risk-to-Reward:
+- ${tradeCoach.riskReward}
+
+Trade Management:
+- ${tradeCoach.tradeManagement}
+
+Coach Verdict:
+- ${tradeCoach.verdict}
+- These are coaching guidelines only, not buy/sell signals.
+
+READ_MORE_DETAILS:
 
 Key CSA Areas:
 Resistance:
-${latestAreaText(resistanceAreas, "resistance")}
+${listAreas(resistanceAreas, "resistance")}
 
 Support:
-${latestAreaText(supportAreas, "support")}
+${listAreas(supportAreas, "support")}
 
 Supply:
-${latestAreaText(supplyAreas, "supply")}
+${listAreas(supplyAreas, "supply")}
 
 Demand:
-${latestAreaText(demandAreas, "demand")}
+${listAreas(demandAreas, "demand")}
 
-Monday-to-Friday Breakdown:
-${buildSimpleDayBreakdown()}
+Monday-to-Friday CSA Breakdown:
+${buildSimpleDayBreakdown(dailyLevels, normalizedSymbol)}
 
-Potential Areas:
-${buildShortPotentialAreas()}
+CSA Bias Details:
+- Bias: ${bias.bias}
+- Confidence: ${bias.confidence}
+- High breaks: ${bias.highBreakCount}
+- Low breaks: ${bias.lowBreakCount}
+- Demand holds: ${bias.demandHoldCount}
+- Supply holds: ${bias.supplyHoldCount}
 
-Coach Note:
-- These are potential areas only, not buy/sell signals.
-- Wait for price reaction, rejection, break-and-hold, or retest confirmation.
-- A resistance becomes possible support only after price breaks above it and holds.
-- A support becomes possible resistance only after price breaks below it and holds.
-
-Technical Note:
+Technical Notes:
 - Data source: Twelve Data
 - Symbol used: ${marketReference.symbol}
+- Selected instrument: ${submittedInstrument}
 - Timeframe used: ${marketReference.interval}
 - Week used: ${marketReference.weekRange.startDate} to ${marketReference.weekRange.fridayDate}
+- Data used up to: ${marketReference.weekRange.endDate}
 - Clean-break tolerance: ${formatPrice(tolerance)}
-- Chart image was used only for visual context and mismatch checks.`;
+- Chart image was used only for visual context and mismatch checks.
+- Stop loss, target, and risk-to-reward are structural coaching comments only. They are not financial advice.`;
 }
 
 function buildInstrumentMismatchAnalysis({
@@ -1623,6 +1706,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       marketReference.directionalBias ||
       calculateCsaDirectionalBias([], normalizedSymbol);
 
+    const setupScoreMatch = String(analysis).match(/Overall Setup Score:\s*\n- (\d+)\/10/i);
+    const setupScore = setupScoreMatch ? Number(setupScoreMatch[1]) : 0;
+
     res.json({
       success: true,
       analysis,
@@ -1642,36 +1728,39 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       csaDirectionalBias: bias,
       contextStatus: marketReference.ok
         ? useFullWeek
-          ? "Market-data-backed post-trade full-week area identification completed"
-          : "Market-data-backed pre-trade date-capped area identification completed"
-        : `Area identification completed without market data: ${marketReference.error}`,
-      grade: "--",
-      confidence: 0,
-      structureScore: 0,
+          ? "Market-data-backed post-trade full-week setup review completed"
+          : "Market-data-backed pre-trade date-capped setup review completed"
+        : `Setup review completed without market data: ${marketReference.error}`,
+      grade: setupScore >= 8 ? "A" : setupScore >= 7 ? "B" : setupScore >= 6 ? "C" : setupScore >= 4 ? "D" : "F",
+      confidence: setupScore * 10,
+      structureScore: setupScore * 10,
       executionScore: 0,
       riskScore: 0,
       strengths: marketReference.ok
         ? [
             `CSA areas calculated from Twelve Data ${marketReference.interval} candles for the selected Monday-to-Friday week.`,
-            useFullWeek
-              ? "Post-trade review used the full Monday-to-Friday week containing the selected trade date."
-              : "Pre-trade analysis used only the selected/final decision date range to avoid hindsight bias.",
             `CSA directional bias calculated as ${bias.bias} with ${bias.confidence} confidence.`,
-            "Clean-break tolerance was applied to avoid false break/retest statements.",
+            "Main feedback now focuses on bias, entry area, trigger, stop placement, target placement, risk-to-reward, and trade management.",
           ]
         : [
-            "CSA area identification could not be fully market-data-backed.",
+            "CSA setup review could not be fully market-data-backed.",
           ],
       weaknesses: marketReference.ok
         ? [
             "Broker chart prices may differ slightly from Twelve Data reference levels.",
-            "CSA areas are structural context only, not buy/sell signals.",
+            "Setup comments are structural coaching only, not buy/sell signals.",
           ]
         : [marketReference.error || "Market-data reference unavailable."],
       coachAdvice: [analysis],
       journalTags: [
-        "area identification only",
+        "setup review",
         "directional bias",
+        "entry area",
+        "entry trigger",
+        "stop placement",
+        "take profit placement",
+        "risk reward",
+        "trade management",
         useFullWeek ? "post-trade-full-week" : "pre-trade-date-capped",
         marketReference.ok ? "market-data-backed" : "vision-only fallback",
         bias.biasCode || "bias-unavailable",
