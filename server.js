@@ -759,42 +759,72 @@ function buildCsaAreas(dailyLevels = [], symbol = "") {
   return areas;
 }
 
+function countClosesDirection(dailyLevels = []) {
+  let risingCloses = 0;
+  let fallingCloses = 0;
+
+  for (let i = 1; i < dailyLevels.length; i += 1) {
+    if (dailyLevels[i].close > dailyLevels[i - 1].close) risingCloses += 1;
+    if (dailyLevels[i].close < dailyLevels[i - 1].close) fallingCloses += 1;
+  }
+
+  return { risingCloses, fallingCloses };
+}
+
 function calculateCsaDirectionalBias(dailyLevels = [], symbol = "") {
   if (!Array.isArray(dailyLevels) || dailyLevels.length < 2) {
     return {
       bias: "Insufficient data",
       biasCode: "insufficient",
       confidence: "low",
-      bullishScore: 0,
-      bearishScore: 0,
+      periodStartPrice: null,
+      presentPrice: null,
+      priceMove: null,
+      resistanceCount: 0,
+      supportCount: 0,
+      supplyCount: 0,
+      demandCount: 0,
+      risingCloses: 0,
+      fallingCloses: 0,
       highBreakCount: 0,
       lowBreakCount: 0,
       demandHoldCount: 0,
       supplyHoldCount: 0,
-      higherCloseCount: 0,
-      lowerCloseCount: 0,
-      progression: [],
       reason:
-        "At least two weekdays are needed to compare CSA progression and form a directional bias.",
-      trendTradingFocus:
-        "There is not enough CSA progression yet to define a clear trend-following focus.",
-      counterTrendCaution:
-        "Counter-trend interpretation is not reliable until more weekday structure is available.",
+        "At least two weekdays are needed to compare OHLC progression and form a directional bias.",
+      progression: [],
     };
   }
 
-  let bullishScore = 0;
-  let bearishScore = 0;
+  const tolerance = getCleanBreakTolerance(symbol);
+  const firstDay = dailyLevels[0];
+  const lastDay = dailyLevels[dailyLevels.length - 1];
+
+  const periodStartPrice = firstDay.open;
+  const presentPrice = lastDay.close;
+  const priceMove = presentPrice - periodStartPrice;
+
+  let resistanceCount = 0;
+  let supportCount = 0;
+  let supplyCount = 0;
+  let demandCount = 0;
   let highBreakCount = 0;
   let lowBreakCount = 0;
   let demandHoldCount = 0;
   let supplyHoldCount = 0;
-  let higherCloseCount = 0;
-  let lowerCloseCount = 0;
+
   const progression = [];
 
-  for (let i = 1; i < dailyLevels.length; i += 1) {
+  for (let i = 0; i < dailyLevels.length; i += 1) {
     const current = dailyLevels[i];
+
+    if (i === 0) {
+      progression.push(
+        `${current.weekday} ${current.date}: Monday high is weekly resistance and Monday low is weekly support.`
+      );
+      continue;
+    }
+
     const previous = dailyLevels[i - 1];
 
     const highComparison = compareHighWithTolerance(
@@ -809,113 +839,97 @@ function calculateCsaDirectionalBias(dailyLevels = [], symbol = "") {
       symbol
     );
 
-    const highBreak = highComparison.cleanBreak;
-    const lowBreak = lowComparison.cleanBreak;
-    const demandHeld = !lowBreak;
-    const supplyHeld = !highBreak;
-    const closeHigher = current.close > previous.close;
-    const closeLower = current.close < previous.close;
-
-    if (highBreak) {
-      bullishScore += 2;
+    if (highComparison.cleanBreak) {
+      resistanceCount += 1;
       highBreakCount += 1;
-    } else if (supplyHeld) {
-      bearishScore += 1;
+    } else {
+      supplyCount += 1;
       supplyHoldCount += 1;
     }
 
-    if (demandHeld) {
-      bullishScore += 1.5;
-      demandHoldCount += 1;
-    } else if (lowBreak) {
-      bearishScore += 2;
+    if (lowComparison.cleanBreak) {
+      supportCount += 1;
       lowBreakCount += 1;
-    }
-
-    if (closeHigher) {
-      bullishScore += 0.5;
-      higherCloseCount += 1;
-    } else if (closeLower) {
-      bearishScore += 0.5;
-      lowerCloseCount += 1;
-    }
-
-    let line = `${current.weekday} ${current.date}: `;
-
-    if (highBreak && demandHeld) {
-      line += `bullish progression because ${current.weekday} made a clean break above ${previous.weekday}'s high and did not cleanly break below ${previous.weekday}'s low.`;
-    } else if (lowBreak && supplyHeld) {
-      line += `bearish progression because ${current.weekday} made a clean break below ${previous.weekday}'s low and did not cleanly break above ${previous.weekday}'s high.`;
-    } else if (highBreak && lowBreak) {
-      line += `expanded both sides because ${current.weekday} made a clean break above the previous high and below the previous low, so the bias is less clean.`;
-    } else if (supplyHeld && demandHeld) {
-      line += `range compression / retest condition because ${current.weekday} did not cleanly break the previous day's high or low.`;
     } else {
-      line += `no clean directional expansion compared with ${previous.weekday}.`;
+      demandCount += 1;
+      demandHoldCount += 1;
     }
 
-    progression.push(line);
+    if (highComparison.cleanBreak && !lowComparison.cleanBreak) {
+      progression.push(
+        `${current.weekday} ${current.date}: bullish expansion because price created a clean higher high and did not create a clean lower low.`
+      );
+    } else if (lowComparison.cleanBreak && !highComparison.cleanBreak) {
+      progression.push(
+        `${current.weekday} ${current.date}: bearish expansion because price created a clean lower low and did not create a clean higher high.`
+      );
+    } else if (highComparison.cleanBreak && lowComparison.cleanBreak) {
+      progression.push(
+        `${current.weekday} ${current.date}: both sides expanded, so the direction is less clean.`
+      );
+    } else {
+      progression.push(
+        `${current.weekday} ${current.date}: range/retest condition because price did not cleanly break the previous day's high or low.`
+      );
+    }
   }
 
-  const scoreDifference = bullishScore - bearishScore;
-  const totalComparisons = dailyLevels.length - 1;
+  const { risingCloses, fallingCloses } = countClosesDirection(dailyLevels);
+
+  let bullishScore = 0;
+  let bearishScore = 0;
+
+  if (priceMove > tolerance) bullishScore += 2;
+  if (priceMove < -tolerance) bearishScore += 2;
+
+  if (resistanceCount > supportCount) bullishScore += 2;
+  if (supportCount > resistanceCount) bearishScore += 2;
+
+  if (risingCloses > fallingCloses) bullishScore += 1.5;
+  if (fallingCloses > risingCloses) bearishScore += 1.5;
+
+  if (highBreakCount > lowBreakCount) bullishScore += 1;
+  if (lowBreakCount > highBreakCount) bearishScore += 1;
 
   let bias = "Mixed / Range-bound";
   let biasCode = "mixed";
-  let confidence = "medium";
 
-  if (
-    scoreDifference >= 2 &&
-    highBreakCount >= 1 &&
-    demandHoldCount >= lowBreakCount
-  ) {
+  if (bullishScore > bearishScore + 1) {
     bias = "Bullish";
     biasCode = "bullish";
-  } else if (
-    scoreDifference <= -2 &&
-    lowBreakCount >= 1 &&
-    supplyHoldCount >= highBreakCount
-  ) {
+  } else if (bearishScore > bullishScore + 1) {
     bias = "Bearish";
     biasCode = "bearish";
   }
 
-  if (totalComparisons <= 1) {
-    confidence = "low";
-  } else if (Math.abs(scoreDifference) >= 4) {
-    confidence = "high";
-  } else if (Math.abs(scoreDifference) < 2) {
-    confidence = "low";
-  }
+  let confidence = "low";
+  const scoreDifference = Math.abs(bullishScore - bearishScore);
 
-  let reason = "";
-  let trendTradingFocus = "";
-  let counterTrendCaution = "";
+  if (scoreDifference >= 4) confidence = "high";
+  else if (scoreDifference >= 2) confidence = "medium";
 
-  if (biasCode === "bullish") {
-    reason = `The CSA progression is bullish because the week shows ${highBreakCount} clean high break(s), ${demandHoldCount} demand hold/retest condition(s), and ${higherCloseCount} higher close comparison(s). Resistance is being pushed higher while demand/support is mostly holding.`;
-    trendTradingFocus =
-      "For CSA trend trading, demand/support areas and broken resistance areas that may become support after breaking to the other side and holding are the main potential buyer areas.";
-    counterTrendCaution =
-      "Supply/resistance areas can still create reactions, but counter-trend selling against bullish CSA progression should be treated with more caution.";
-  } else if (biasCode === "bearish") {
-    reason = `The CSA progression is bearish because the week shows ${lowBreakCount} clean low break(s), ${supplyHoldCount} supply hold/retest condition(s), and ${lowerCloseCount} lower close comparison(s). Support is being pushed lower while supply/resistance is mostly holding.`;
-    trendTradingFocus =
-      "For CSA trend trading, supply/resistance areas and broken support areas that may become resistance after breaking to the other side and holding are the main potential seller areas.";
-    counterTrendCaution =
-      "Demand/support areas can still create reactions, but counter-trend buying against bearish CSA progression should be treated with more caution.";
-  } else {
-    reason = `The CSA progression is mixed/range-bound because bullish and bearish structure signals are conflicting. The week shows ${highBreakCount} clean high break(s), ${lowBreakCount} clean low break(s), ${demandHoldCount} demand hold/retest condition(s), and ${supplyHoldCount} supply hold/retest condition(s).`;
-    trendTradingFocus =
-      "For CSA trend trading, it may be better to wait for cleaner CSA progression before placing more weight on trend-following areas.";
-    counterTrendCaution =
-      "Counter-trend reactions may appear inside mixed/ranging conditions, but the middle of the range is lower quality.";
-  }
+  const priceMoveText =
+    priceMove > tolerance
+      ? `price moved up from ${formatPrice(periodStartPrice)} to ${formatPrice(presentPrice)}`
+      : priceMove < -tolerance
+      ? `price moved down from ${formatPrice(periodStartPrice)} to ${formatPrice(presentPrice)}`
+      : `price is almost flat from ${formatPrice(periodStartPrice)} to ${formatPrice(presentPrice)}`;
+
+  const reason = `${priceMoveText}. New resistance count from higher-high expansion: ${resistanceCount}. New support count from lower-low expansion: ${supportCount}. Rising closes: ${risingCloses}. Falling closes: ${fallingCloses}. In CSA logic, more new resistance areas from higher highs supports bullish pressure, while more new support areas from lower lows supports bearish pressure.`;
 
   return {
     bias,
     biasCode,
     confidence,
+    periodStartPrice,
+    presentPrice,
+    priceMove,
+    resistanceCount,
+    supportCount,
+    supplyCount,
+    demandCount,
+    risingCloses,
+    fallingCloses,
     bullishScore,
     bearishScore,
     scoreDifference,
@@ -923,12 +937,8 @@ function calculateCsaDirectionalBias(dailyLevels = [], symbol = "") {
     lowBreakCount,
     demandHoldCount,
     supplyHoldCount,
-    higherCloseCount,
-    lowerCloseCount,
-    progression,
     reason,
-    trendTradingFocus,
-    counterTrendCaution,
+    progression,
   };
 }
 
@@ -1066,6 +1076,37 @@ function listAreas(areaList = [], label = "area", max = 3) {
     .join("\n");
 }
 
+function areaBrokenByCloseLater(area, dailyLevels = [], symbol = "") {
+  if (!area || !Array.isArray(dailyLevels)) return false;
+
+  const level = Number(area.price);
+  const tolerance = getCleanBreakTolerance(symbol);
+
+  if (!Number.isFinite(level)) return false;
+
+  const laterDays = dailyLevels.filter(
+    (day) => String(day.date || "") > String(area.date || "")
+  );
+
+  if (area.type === "supply" || area.type === "resistance") {
+    return laterDays.some((day) => Number(day.close) > level + tolerance);
+  }
+
+  if (area.type === "demand" || area.type === "support") {
+    return laterDays.some((day) => Number(day.close) < level - tolerance);
+  }
+
+  return false;
+}
+
+function filterValidAreas(areaList = [], dailyLevels = [], symbol = "") {
+  return areaList.filter((area) => !areaBrokenByCloseLater(area, dailyLevels, symbol));
+}
+
+function filterBrokenAreas(areaList = [], dailyLevels = [], symbol = "") {
+  return areaList.filter((area) => areaBrokenByCloseLater(area, dailyLevels, symbol));
+}
+
 function buildSimpleDayBreakdown(dailyLevels = [], normalizedSymbol = "") {
   if (!dailyLevels.length) return "- No weekday data available.";
 
@@ -1106,136 +1147,172 @@ function buildSimpleDayBreakdown(dailyLevels = [], normalizedSymbol = "") {
     .join("\n\n");
 }
 
+function buildTargetsText(targetAreas = [], direction = "") {
+  if (!targetAreas.length) {
+    return "Use the closest opposite support/resistance or supply/demand area. If no clear target exists, skip the setup.";
+  }
+
+  const first = targetAreas[0];
+  const second = targetAreas[1];
+  const third = targetAreas[2];
+
+  const lines = [];
+
+  if (first) lines.push(`First TP: ${first.day} ${first.type} around ${first.priceText}.`);
+  if (second) lines.push(`Second TP: ${second.day} ${second.type} around ${second.priceText}.`);
+  if (third) lines.push(`Third TP: ${third.day} ${third.type} around ${third.priceText}.`);
+
+  lines.push(
+    "Higher-timeframe areas of interest should override smaller intraday targets when visible."
+  );
+
+  return lines.join(" ");
+}
+
 function buildTradeCoachingSummary({
   resistanceAreas,
   supportAreas,
   supplyAreas,
   demandAreas,
+  dailyLevels,
   bias,
+  symbol,
 }) {
   const biasValue = String(bias?.bias || "").toLowerCase();
 
+  const validSupplyAreas = filterValidAreas(supplyAreas, dailyLevels, symbol);
+  const validDemandAreas = filterValidAreas(demandAreas, dailyLevels, symbol);
+
+  const brokenSupportAreas = filterBrokenAreas(supportAreas, dailyLevels, symbol);
+  const brokenResistanceAreas = filterBrokenAreas(resistanceAreas, dailyLevels, symbol);
+
+  const latestValidSupply = latestArea(validSupplyAreas);
+  const latestValidDemand = latestArea(validDemandAreas);
+  const latestBrokenSupport = latestArea(brokenSupportAreas);
+  const latestBrokenResistance = latestArea(brokenResistanceAreas);
   const latestResistance = latestArea(resistanceAreas);
   const latestSupport = latestArea(supportAreas);
-  const latestSupply = latestArea(supplyAreas);
-  const latestDemand = latestArea(demandAreas);
 
   let direction = "Mixed / Wait";
-  let bestEntryArea = "No clean entry area yet. Wait for price to reach a clear CSA area.";
+  let directionReason =
+    bias.reason || "Bias is mixed because CSA evidence is not clean enough.";
+  let bestEntryArea =
+    "No clean entry area yet. Wait for price to reach a valid support/resistance or supply/demand area.";
   let entryTrigger =
-    "Wait for a clear reaction: rejection candle, break-and-hold, retest, or lower/high higher-low confirmation.";
+    "Use price action confirmation such as engulfing candle, pin bar, hammer, doji rejection, inside bar break, or a valid chart pattern such as triangle, flag, channel, head and shoulders, or Quasimodo. A trader may look for these triggers on a lower timeframe.";
   let stopLoss =
-    "Place stop beyond the invalidation point, not inside the same CSA area.";
+    "Place stop loss on the other side of the candlestick or chart pattern trigger, or on the other side of the support/resistance or supply/demand area.";
   let takeProfit =
-    "First target should be the nearest opposite CSA area. Second target only applies if price breaks and holds beyond the first target.";
+    "Use the closest support/resistance or supply/demand area as TP1, the next area as TP2, and the next higher-timeframe area as TP3 if available.";
   let riskReward =
-    "Only consider the setup if at least 1:2 risk-to-reward is available before the next major CSA area.";
+    "Minimum risk-to-reward should be 1:2. Skip the setup if price is too close to the first target.";
   let tradeManagement =
-    "Do not manage the trade from the middle of the range. React only at trouble areas or after a clear structure shift.";
+    "Use trailing stop, partial close, and breakeven after price moves in your favour or reaches the first trouble area.";
   let verdict =
-    "Setup is not clean enough to chase. Wait for price to return to a CSA area and confirm.";
+    "Setup is not clean enough to chase. Wait for price to return to a valid CSA area and confirm with a trigger.";
   let score = 5;
 
   if (biasValue.includes("bullish")) {
     direction = "Bullish";
 
-    const entryRef = latestDemand || latestSupport;
-    const troubleRef = latestResistance || latestSupply;
+    const entryRef = latestBrokenResistance || latestValidDemand || latestSupport;
+    const targetAreas = [
+      ...filterValidAreas(resistanceAreas, dailyLevels, symbol),
+      ...filterValidAreas(supplyAreas, dailyLevels, symbol),
+    ];
 
     bestEntryArea = entryRef
-      ? `${entryRef.day} ${entryRef.type} around ${entryRef.priceText}. This is only valid if price returns/retraces and holds.`
-      : "No strong buyer area confirmed. Wait for demand/support to form or hold.";
+      ? `${entryRef.day} ${entryRef.type} around ${entryRef.priceText}. For bullish bias, a broken resistance that becomes support, or a valid demand/support area, is the preferred entry area.`
+      : "No clean bullish entry area confirmed yet. Wait for price to retest a broken resistance as support, or return to valid demand/support.";
 
     entryTrigger =
-      "Look for a hold above demand/support, bullish rejection, higher low, or break-and-hold above resistance before considering the setup valid.";
+      "Look for bullish price action at the entry area: bullish engulfing, pin bar/hammer rejection, inside bar break, higher low, channel/flag breakout, or break-and-hold above resistance. These triggers can be refined on a lower timeframe.";
 
-    stopLoss = entryRef
-      ? `Below the ${entryRef.day} ${entryRef.type} area, or below the reaction swing low that confirms the setup.`
-      : "Below the most recent confirmed swing low or below the demand/support area that creates the reaction.";
+    stopLoss =
+      "Place stop loss below the bullish trigger candle/pattern, or below the support/demand area. Do not place the stop inside the same area being used for entry.";
 
-    takeProfit = troubleRef
-      ? `First target near ${troubleRef.day} ${troubleRef.type} at ${troubleRef.priceText}. Further target only if price breaks and holds above that area.`
-      : "First target should be the next visible resistance/supply area.";
+    takeProfit = buildTargetsText(targetAreas, "bullish");
 
     riskReward =
-      "The setup is only worth considering if the distance from entry to first target is at least twice the stop size.";
+      "Only consider the bullish setup if the distance from entry to TP1 gives at least 1:2 risk-to-reward.";
 
     tradeManagement =
-      "After price reaches the first trouble area, reduce risk or protect the position. If price rejects hard from resistance/supply, do not force a hold.";
+      "Move to breakeven only after price reacts strongly in your favour or reaches the first trouble area. Consider partial close at TP1 and trail stop behind higher lows if price continues.";
 
     verdict =
-      "Bullish idea is only valid from demand/support or after a confirmed resistance break-and-hold. Do not chase price in the middle.";
+      "Bullish setup is valid only if price pulls back to support/demand or broken resistance and confirms with a clean trigger. Do not buy in the middle without confirmation.";
 
     score = bias.confidence === "high" ? 8 : bias.confidence === "medium" ? 7 : 6;
   } else if (biasValue.includes("bearish")) {
     direction = "Bearish";
 
-    const entryRef = latestSupply || latestResistance;
-    const troubleRef = latestSupport || latestDemand;
+    const entryRef = latestBrokenSupport || latestValidSupply || latestResistance;
+    const targetAreas = [
+      ...filterValidAreas(supportAreas, dailyLevels, symbol),
+      ...filterValidAreas(demandAreas, dailyLevels, symbol),
+    ];
 
     bestEntryArea = entryRef
-      ? `${entryRef.day} ${entryRef.type} around ${entryRef.priceText}. This is only valid if price returns/retraces and rejects.`
-      : "No strong seller area confirmed. Wait for supply/resistance to form or reject.";
+      ? `${entryRef.day} ${entryRef.type} around ${entryRef.priceText}. For bearish bias, a broken support that becomes resistance, or a valid supply/resistance area, is the preferred entry area.`
+      : "No clean bearish entry area confirmed yet. Wait for price to retest a broken support as resistance, or return to valid supply/resistance.";
 
     entryTrigger =
-      "Look for rejection from supply/resistance, lower high, bearish candle confirmation, or break-and-hold below support before considering the setup valid.";
+      "Look for bearish price action at the entry area: bearish engulfing, pin bar rejection, doji rejection, inside bar break, lower high, channel/flag breakdown, head and shoulders, or Quasimodo. These triggers can be refined on a lower timeframe.";
 
-    stopLoss = entryRef
-      ? `Above the ${entryRef.day} ${entryRef.type} area, or above the reaction swing high that confirms the setup.`
-      : "Above the most recent confirmed swing high or above the supply/resistance area that creates the rejection.";
+    stopLoss =
+      "Place stop loss above the bearish trigger candle/pattern, or above the resistance/supply area. Do not place the stop inside the same area being used for entry.";
 
-    takeProfit = troubleRef
-      ? `First target near ${troubleRef.day} ${troubleRef.type} at ${troubleRef.priceText}. Further target only if price breaks and holds below that area.`
-      : "First target should be the next visible support/demand area.";
+    takeProfit = buildTargetsText(targetAreas, "bearish");
 
     riskReward =
-      "The setup is only worth considering if the distance from entry to first target is at least twice the stop size.";
+      "Only consider the bearish setup if the distance from entry to TP1 gives at least 1:2 risk-to-reward.";
 
     tradeManagement =
-      "After price reaches the first trouble area, reduce risk or protect the position. If price reacts strongly from support/demand, do not force continuation.";
+      "Move to breakeven only after price reacts strongly in your favour or reaches the first trouble area. Consider partial close at TP1 and trail stop behind lower highs if price continues.";
 
     verdict =
-      "Bearish idea is only valid from supply/resistance or after a confirmed support break-and-hold. Do not chase price in the middle.";
+      "Bearish setup is valid only if price pulls back to resistance/supply or broken support and confirms with a clean trigger. Do not sell in the middle without confirmation.";
 
     score = bias.confidence === "high" ? 8 : bias.confidence === "medium" ? 7 : 6;
   } else {
-    direction = "Mixed / Range-bound";
+    direction = "Mixed / Wait";
 
-    const buyerRef = latestDemand || latestSupport;
-    const sellerRef = latestSupply || latestResistance;
+    const buyerRef = latestValidDemand || latestSupport;
+    const sellerRef = latestValidSupply || latestResistance;
 
     bestEntryArea =
       buyerRef || sellerRef
-        ? `Range condition. Buyer area: ${
-            buyerRef ? `${buyerRef.day} ${buyerRef.type} ${buyerRef.priceText}` : "none"
+        ? `Mixed condition. Buyer area: ${
+            buyerRef ? `${buyerRef.day} ${buyerRef.type} around ${buyerRef.priceText}` : "none"
           }. Seller area: ${
-            sellerRef ? `${sellerRef.day} ${sellerRef.type} ${sellerRef.priceText}` : "none"
-          }. Avoid the middle.`
-        : "No clean CSA area confirmed. Wait.";
+            sellerRef ? `${sellerRef.day} ${sellerRef.type} around ${sellerRef.priceText}` : "none"
+          }. Avoid entries in the middle.`
+        : "No clean CSA entry area confirmed. Wait.";
 
     entryTrigger =
-      "Because bias is mixed, only take a reaction from the outer area of the range. Do not act from the middle.";
+      "Because bias is mixed, only act from the outer support/demand or resistance/supply area with a strong candlestick or chart-pattern trigger.";
 
     stopLoss =
-      "Stop should go beyond the outer range area that created the reaction, not inside the range.";
+      "Place stop beyond the outer area that created the reaction, not inside the range.";
 
     takeProfit =
-      "Target the opposite side of the range first. Do not expect trend continuation until price breaks and holds beyond the range.";
+      "Target the opposite side of the range first. TP2 and TP3 only apply if price breaks and holds beyond that opposite area.";
 
     riskReward =
-      "Only consider the setup if the range gives at least 1:2 risk-to-reward. Skip if price is already close to the opposite side.";
+      "Minimum 1:2 risk-to-reward is still required. Skip if the opposite side of the range is too close.";
 
     tradeManagement =
-      "Take partials or protect risk near the middle/opposite side of the range. Mixed bias requires faster management.";
+      "Manage faster in mixed conditions. Use partial close at the range midpoint or opposite side, move to breakeven only after strong reaction, and trail only if price breaks out cleanly.";
 
     verdict =
-      "Mixed setup. Best action is patience. Wait for price to reach an outer CSA area or wait for a clean breakout and hold.";
+      "Mixed setup. The best trade is often no trade until price reaches an outer CSA area or breaks and holds beyond the range.";
 
     score = bias.confidence === "high" ? 6 : bias.confidence === "medium" ? 5 : 4;
   }
 
   return {
     direction,
+    directionReason,
     bestEntryArea,
     entryTrigger,
     stopLoss,
@@ -1260,17 +1337,15 @@ function buildDeterministicCsaAnalysis({
   if (!marketReference || !marketReference.ok) {
     return `CSA COACH VERDICT
 
-Overall Setup Score:
-- 0/10
-
 Directional Bias:
 - Insufficient data
+- Reason: Backend OHLC market data was not available, so CSA Coach cannot reliably compare period start price to present price, resistance/support count, or price progression.
 
 Best Entry Area:
-- Not available. Backend OHLC market data was not available.
+- Not available. Wait until backend OHLC data confirms valid support/resistance or supply/demand areas.
 
 Entry Trigger:
-- Not available. The coach cannot confirm valid triggers without reliable market data.
+- Not available. Trigger confirmation should only be reviewed after valid areas are confirmed.
 
 Stop Loss Placement:
 - Not available.
@@ -1279,7 +1354,7 @@ Take Profit Placement:
 - Not available.
 
 Risk-to-Reward:
-- Not available.
+- Minimum 1:2, but setup cannot be measured without valid areas.
 
 Trade Management:
 - Not available.
@@ -1287,6 +1362,9 @@ Trade Management:
 Coach Verdict:
 - The chart cannot be reliably reviewed because backend OHLC data was unavailable.
 - Do not rely on screenshot-only level readings when the chart scale is unclear.
+
+Overall Setup Score:
+- 0/10
 
 READ_MORE_DETAILS:
 
@@ -1311,28 +1389,26 @@ Data Issue:
   const supplyAreas = areas.filter((area) => area.type === "supply");
   const demandAreas = areas.filter((area) => area.type === "demand");
 
+  const validSupplyAreas = filterValidAreas(supplyAreas, dailyLevels, normalizedSymbol);
+  const validDemandAreas = filterValidAreas(demandAreas, dailyLevels, normalizedSymbol);
+  const brokenSupplyAreas = filterBrokenAreas(supplyAreas, dailyLevels, normalizedSymbol);
+  const brokenDemandAreas = filterBrokenAreas(demandAreas, dailyLevels, normalizedSymbol);
+
   const tradeCoach = buildTradeCoachingSummary({
     resistanceAreas,
     supportAreas,
     supplyAreas,
     demandAreas,
+    dailyLevels,
     bias,
+    symbol: normalizedSymbol,
   });
-
-  const quickReason =
-    Array.isArray(bias.progression) && bias.progression.length
-      ? bias.progression[bias.progression.length - 1]
-      : bias.reason ||
-        "CSA bias was calculated from the selected week's high/low progression.";
 
   return `CSA COACH VERDICT
 
-Overall Setup Score:
-- ${tradeCoach.score}/10
-
 Directional Bias:
 - ${tradeCoach.direction}
-- Reason: ${quickReason}
+- Reason: ${tradeCoach.directionReason}
 
 Best Entry Area:
 - ${tradeCoach.bestEntryArea}
@@ -1356,7 +1432,20 @@ Coach Verdict:
 - ${tradeCoach.verdict}
 - These are coaching guidelines only, not buy/sell signals.
 
+Overall Setup Score:
+- ${tradeCoach.score}/10
+
 READ_MORE_DETAILS:
+
+CSA Bias Calculation:
+- Period start price: ${formatPrice(bias.periodStartPrice)}
+- Present price: ${formatPrice(bias.presentPrice)}
+- Price movement: ${formatPrice(bias.priceMove)}
+- New resistance count from higher-high expansion: ${bias.resistanceCount}
+- New support count from lower-low expansion: ${bias.supportCount}
+- Rising closes: ${bias.risingCloses}
+- Falling closes: ${bias.fallingCloses}
+- Bias confidence: ${bias.confidence}
 
 Key CSA Areas:
 Resistance:
@@ -1365,22 +1454,21 @@ ${listAreas(resistanceAreas, "resistance")}
 Support:
 ${listAreas(supportAreas, "support")}
 
-Supply:
-${listAreas(supplyAreas, "supply")}
+Valid Supply:
+${listAreas(validSupplyAreas, "supply")}
 
-Demand:
-${listAreas(demandAreas, "demand")}
+Valid Demand:
+${listAreas(validDemandAreas, "demand")}
+
+Ignored / Broken Supply-Demand:
+Broken Supply:
+${listAreas(brokenSupplyAreas, "supply")}
+
+Broken Demand:
+${listAreas(brokenDemandAreas, "demand")}
 
 Monday-to-Friday CSA Breakdown:
 ${buildSimpleDayBreakdown(dailyLevels, normalizedSymbol)}
-
-CSA Bias Details:
-- Bias: ${bias.bias}
-- Confidence: ${bias.confidence}
-- High breaks: ${bias.highBreakCount}
-- Low breaks: ${bias.lowBreakCount}
-- Demand holds: ${bias.demandHoldCount}
-- Supply holds: ${bias.supplyHoldCount}
 
 Technical Notes:
 - Data source: Twelve Data
@@ -1390,6 +1478,7 @@ Technical Notes:
 - Week used: ${marketReference.weekRange.startDate} to ${marketReference.weekRange.fridayDate}
 - Data used up to: ${marketReference.weekRange.endDate}
 - Clean-break tolerance: ${formatPrice(tolerance)}
+- Supply/demand is ignored once price breaks and closes past the area.
 - Chart image was used only for visual context and mismatch checks.
 - Stop loss, target, and risk-to-reward are structural coaching comments only. They are not financial advice.`;
 }
@@ -1740,7 +1829,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         ? [
             `CSA areas calculated from Twelve Data ${marketReference.interval} candles for the selected Monday-to-Friday week.`,
             `CSA directional bias calculated as ${bias.bias} with ${bias.confidence} confidence.`,
-            "Main feedback now focuses on bias, entry area, trigger, stop placement, target placement, risk-to-reward, and trade management.",
+            "Main feedback follows the requested format: bias, entry area, trigger, stop, target, risk/reward, management, verdict.",
           ]
         : [
             "CSA setup review could not be fully market-data-backed.",
