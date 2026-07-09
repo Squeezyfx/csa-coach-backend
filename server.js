@@ -18,13 +18,36 @@ const TWELVE_DATA_BASE_URL = "https://api.twelvedata.com/time_series";
 const CHART_DETECTION_PROMPT = `
 You are a chart screenshot pre-check assistant for CSA Coach.
 
-Inspect the uploaded chart and return only JSON.
+Inspect the uploaded image and return only JSON.
+
+Your FIRST job is to decide if the image is a real financial trading chart screenshot.
+
+A valid trading chart screenshot normally contains:
+- visible candlesticks, bars, or line chart price movement
+- a price scale on the right or left
+- a time/date scale at the bottom
+- a market/instrument label, platform label, or chart-like trading interface
+- examples: TradingView, MT4, MT5, cTrader, broker chart screenshots
+
+Invalid images include:
+- photos of objects, people, hourglass, animals, rooms, documents, logos, random screenshots
+- marketing images
+- screenshots that do not show a financial price chart
+- any image where no price chart structure is visible
 
 Detect:
-1. trading instrument/pair visible on the chart, if readable.
-2. timeframe visible on the chart, if readable. Use M1, M5, M15, M30, H1, H4, D1, W1.
-3. latest/final visible calendar date on the chart, if readable, as YYYY-MM-DD.
-4. any visible price-action or chart-pattern ENTRY TRIGGER near the latest price/right side of the chart.
+1. Whether the uploaded image is a valid trading chart.
+2. The trading instrument/pair visible on the chart, if readable.
+3. The timeframe visible on the chart, if readable. Use M1, M5, M15, M30, H1, H4, D1, W1.
+4. The latest/final visible calendar date on the chart, if readable, as YYYY-MM-DD.
+5. Any visible price-action or chart-pattern ENTRY TRIGGER near the latest price/right side of the chart.
+
+Very important:
+- If the image is not a valid trading chart, return isTradingChart as false and do not guess anything else.
+- If the image is not a valid trading chart, set chartValidityReason to a clear reason like "The uploaded image appears to be an hourglass/photo, not a financial trading chart."
+- Do not analyze non-chart images.
+- Do not guess instrument, timeframe, or date if unreadable.
+- Ignore Sunday candles.
 
 Very important entry-trigger rules:
 - A confirmed entry trigger must be a clear candlestick or chart-pattern confirmation.
@@ -32,11 +55,11 @@ Very important entry-trigger rules:
 - A bounce, pullback, retracement, consolidation, reaction, ranging movement, or price simply moving away from a level is NOT a confirmed entry trigger by itself.
 - If you only see a bounce/pullback/consolidation/reaction, return visibleTrigger as null and explain that it is context in notes.
 - Only mention a visible trigger if it is reasonably clear. Otherwise return null.
-- Do not guess.
-- Ignore Sunday candles.
 
 Return exactly this JSON shape:
 {
+  "isTradingChart": true,
+  "chartValidityReason": "brief reason",
   "detectedInstrument": "GBPUSD or null",
   "detectedTimeframe": "H1 or M5 or null",
   "latestVisibleDate": "YYYY-MM-DD or null",
@@ -420,6 +443,8 @@ async function detectChartContextFromImage({ imageBase64, mimeType }) {
   if (!process.env.OPENAI_API_KEY) {
     return {
       ok: false,
+      isTradingChart: false,
+      chartValidityReason: "OPENAI_API_KEY is missing.",
       detectedInstrument: null,
       detectedTimeframe: null,
       latestVisibleDate: null,
@@ -442,7 +467,8 @@ async function detectChartContextFromImage({ imageBase64, mimeType }) {
           content: [
             {
               type: "input_text",
-              text: "Inspect this chart screenshot and return only the JSON object requested.",
+              text:
+                "Inspect this uploaded image. First confirm whether it is a valid financial trading chart. Return only the requested JSON.",
             },
             {
               type: "input_image",
@@ -451,24 +477,32 @@ async function detectChartContextFromImage({ imageBase64, mimeType }) {
           ],
         },
       ],
-      max_output_tokens: 450,
+      max_output_tokens: 550,
     });
 
     const parsed = extractJsonObject(response.output_text || "");
+    const isTradingChart = parsed?.isTradingChart === true;
+
     const rawTrigger = parsed?.visibleTrigger || null;
     const triggerConfidence = parsed?.triggerConfidence || "low";
     const cleanTrigger = sanitizeVisibleTrigger(rawTrigger, triggerConfidence);
 
     return {
       ok: !!parsed,
-      detectedInstrument: parsed?.detectedInstrument || null,
-      detectedTimeframe: parsed?.detectedTimeframe || null,
-      latestVisibleDate: parsed?.latestVisibleDate || null,
-      dateConfidence: parsed?.dateConfidence || "low",
-      visibleTrigger: cleanTrigger,
-      rejectedTriggerContext: rawTrigger && !cleanTrigger ? rawTrigger : null,
-      triggerDirection: cleanTrigger ? parsed?.triggerDirection || null : null,
-      triggerConfidence: cleanTrigger ? triggerConfidence : "low",
+      isTradingChart,
+      chartValidityReason:
+        parsed?.chartValidityReason ||
+        (isTradingChart
+          ? "The uploaded image appears to be a valid trading chart."
+          : "The uploaded image does not appear to be a valid financial trading chart."),
+      detectedInstrument: isTradingChart ? parsed?.detectedInstrument || null : null,
+      detectedTimeframe: isTradingChart ? parsed?.detectedTimeframe || null : null,
+      latestVisibleDate: isTradingChart ? parsed?.latestVisibleDate || null : null,
+      dateConfidence: isTradingChart ? parsed?.dateConfidence || "low" : "low",
+      visibleTrigger: isTradingChart ? cleanTrigger : null,
+      rejectedTriggerContext: isTradingChart && rawTrigger && !cleanTrigger ? rawTrigger : null,
+      triggerDirection: isTradingChart && cleanTrigger ? parsed?.triggerDirection || null : null,
+      triggerConfidence: isTradingChart && cleanTrigger ? triggerConfidence : "low",
       notes: parsed?.notes || "",
       raw: response.output_text || "",
     };
@@ -477,6 +511,8 @@ async function detectChartContextFromImage({ imageBase64, mimeType }) {
 
     return {
       ok: false,
+      isTradingChart: false,
+      chartValidityReason: `Chart validation failed: ${error.message}`,
       detectedInstrument: null,
       detectedTimeframe: null,
       latestVisibleDate: null,
@@ -489,6 +525,30 @@ async function detectChartContextFromImage({ imageBase64, mimeType }) {
       raw: "",
     };
   }
+}
+
+function buildInvalidChartAnalysis({ submittedInstrument, timeframe, chartDetection }) {
+  return `Invalid Chart Upload
+
+What happened:
+- The uploaded image does not appear to be a financial trading chart.
+
+Why analysis was stopped:
+- CSA Coach can only review trading chart screenshots with visible price movement, price scale, and date/time structure.
+- The uploaded image appears out of sync with the selected market inputs, so producing trade feedback would be misleading.
+
+Selected:
+- Instrument: ${submittedInstrument || "Not provided"}
+- Timeframe: ${timeframe || "Not provided"}
+
+AI image check:
+- Status: Not a valid trading chart
+- Reason: ${chartDetection?.chartValidityReason || "The uploaded image could not be verified as a trading chart."}
+
+How to fix:
+- Upload a real TradingView / MT4 / MT5 / broker chart screenshot.
+- Make sure candles or price movement are visible.
+- Make sure the selected pair and timeframe match the uploaded chart.`;
 }
 
 function getCleanBreakTolerance(symbol = "") {
@@ -1635,6 +1695,53 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       imageBase64,
       mimeType,
     });
+
+    if (!chartDetection.isTradingChart) {
+      const invalidChartAnalysis = buildInvalidChartAnalysis({
+        submittedInstrument,
+        timeframe,
+        chartDetection,
+      });
+
+      return res.status(200).json({
+        success: false,
+        errorType: "invalid_chart_image",
+        error: "Uploaded image is not a valid trading chart.",
+        analysis: invalidChartAnalysis,
+        summary: invalidChartAnalysis,
+        selectedPair: submittedInstrument,
+        selectedTimeframe: timeframe,
+        detectedPair: "Not detected",
+        detectedTimeframe: "Not detected",
+        detectedLatestVisibleDate: "Not detected",
+        contextStatus: "Analysis stopped because the uploaded image is not a valid trading chart.",
+        grade: "--",
+        confidence: 0,
+        structureScore: 0,
+        executionScore: 0,
+        riskScore: 0,
+        strengths: [],
+        weaknesses: [
+          "The uploaded image is not a valid financial trading chart, so no trade feedback was generated.",
+        ],
+        coachAdvice: [invalidChartAnalysis],
+        journalTags: ["invalid-chart-image", "analysis-stopped"],
+        chartDetection,
+        marketReference: {
+          ok: false,
+          error: "Invalid chart image. Market data was not fetched.",
+          symbol: normalizedSymbol,
+          timezone,
+          interval: normalizeTimeframe(timeframe),
+          rawCandleCount: 0,
+          weekRange: null,
+          dailyLevels: [],
+          csaAreas: [],
+          directionalBias: calculateCsaDirectionalBias([], normalizedSymbol),
+          useFullWeek,
+        },
+      });
+    }
 
     const instrumentMismatch = hasStrongInstrumentMismatch({
       selectedInstrument: normalizedSymbol || submittedInstrument,
