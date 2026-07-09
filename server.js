@@ -90,23 +90,30 @@ function normalizeTimeframe(input = "") {
     "1M": "1min",
     M1: "1min",
     "1MIN": "1min",
+
     "5M": "5min",
     M5: "5min",
     "5MIN": "5min",
+
     "15M": "15min",
     M15: "15min",
     "15MIN": "15min",
+
     "30M": "30min",
     M30: "30min",
     "30MIN": "30min",
+
     "1H": "1h",
     H1: "1h",
     "60M": "1h",
+
     "4H": "4h",
     H4: "4h",
+
     D1: "1day",
     DAILY: "1day",
     "1D": "1day",
+
     W1: "1week",
     WEEKLY: "1week",
     "1W": "1week",
@@ -188,30 +195,37 @@ function comparableTimeframe(input = "") {
     "1M": "M1",
     M1: "M1",
     "1MIN": "M1",
+
     "5": "M5",
     "5M": "M5",
     M5: "M5",
     "5MIN": "M5",
+
     "15": "M15",
     "15M": "M15",
     M15: "M15",
     "15MIN": "M15",
+
     "30": "M30",
     "30M": "M30",
     M30: "M30",
     "30MIN": "M30",
+
     "60": "H1",
     "60M": "H1",
     "1H": "H1",
     H1: "H1",
+
     "240": "H4",
     "240M": "H4",
     "4H": "H4",
     H4: "H4",
+
     D: "D1",
     "1D": "D1",
     D1: "D1",
     DAILY: "D1",
+
     W: "W1",
     "1W": "W1",
     W1: "W1",
@@ -913,14 +927,12 @@ function calculateCsaDirectionalBias(dailyLevels = [], symbol = "") {
   if (scoreDifference >= 4) confidence = "high";
   else if (scoreDifference >= 2) confidence = "medium";
 
-  const priceMoveText =
-    priceMove > tolerance
-      ? `price moved up from Monday open ${formatPrice(periodStartPrice)} to current/latest close ${formatPrice(presentPrice)}`
-      : priceMove < -tolerance
-      ? `price moved down from Monday open ${formatPrice(periodStartPrice)} to current/latest close ${formatPrice(presentPrice)}`
-      : `price is almost flat from Monday open ${formatPrice(periodStartPrice)} to current/latest close ${formatPrice(presentPrice)}`;
-
-  const reason = `${priceMoveText}. Highest price from Monday to now is ${formatPrice(periodHigh)}. Lowest price from Monday to now is ${formatPrice(periodLow)}. New resistance count from higher-high expansion: ${resistanceCount}. New support count from lower-low expansion: ${supportCount}. Rising closes: ${risingCloses}. Falling closes: ${fallingCloses}. In CSA logic, more new resistance areas from higher highs supports bullish pressure, while more new support areas from lower lows supports bearish pressure.`;
+  const reason =
+    biasCode === "bearish"
+      ? `Price moved down from Monday open ${formatPrice(periodStartPrice)} to the latest close ${formatPrice(presentPrice)}. The highest price from Monday to now is ${formatPrice(periodHigh)}, and price is currently trading below that high. The week shows more downside pressure because price created ${supportCount} new support level(s) from lower lows, meaning support was pushed lower as sellers stayed in control.`
+      : biasCode === "bullish"
+      ? `Price moved up from Monday open ${formatPrice(periodStartPrice)} to the latest close ${formatPrice(presentPrice)}. The lowest price from Monday to now is ${formatPrice(periodLow)}, and price is currently trading above that low. The week shows more upside pressure because price created ${resistanceCount} new resistance level(s) from higher highs, meaning resistance was pushed higher as buyers stayed in control.`
+      : `Price has not shown a clean one-sided move from Monday open ${formatPrice(periodStartPrice)} to the latest close ${formatPrice(presentPrice)}. The structure is mixed because price has not clearly continued in one direction.`;
 
   return {
     bias,
@@ -1114,6 +1126,17 @@ function filterBrokenAreas(areaList = [], dailyLevels = [], symbol = "") {
   return areaList.filter((area) => areaBrokenByCloseLater(area, dailyLevels, symbol));
 }
 
+function getCurrentDayDate(dailyLevels = []) {
+  if (!Array.isArray(dailyLevels) || !dailyLevels.length) return null;
+  return dailyLevels[dailyLevels.length - 1]?.date || null;
+}
+
+function filterPreviousDayAreas(areaList = [], dailyLevels = []) {
+  const currentDate = getCurrentDayDate(dailyLevels);
+  if (!currentDate) return areaList;
+  return areaList.filter((area) => String(area.date || "") < String(currentDate));
+}
+
 function buildSimpleDayBreakdown(dailyLevels = [], normalizedSymbol = "") {
   if (!dailyLevels.length) return "- No weekday data available.";
 
@@ -1154,10 +1177,12 @@ function buildSimpleDayBreakdown(dailyLevels = [], normalizedSymbol = "") {
     .join("\n\n");
 }
 
-function sortTargetAreas(targetAreas = [], direction = "", entryPrice = null) {
+function sortTargetAreas(targetAreas = [], direction = "", entryPrice = null, dailyLevels = []) {
   const entry = Number(entryPrice);
 
   let filtered = targetAreas.filter((area) => Number.isFinite(Number(area.price)));
+
+  filtered = filterPreviousDayAreas(filtered, dailyLevels);
 
   if (Number.isFinite(entry)) {
     if (direction === "bearish") {
@@ -1180,19 +1205,19 @@ function sortTargetAreas(targetAreas = [], direction = "", entryPrice = null) {
   return filtered.sort((a, b) => Number(a.price) - Number(b.price));
 }
 
-function buildTargetsText(targetAreas = [], direction = "", entryPrice = null) {
-  const sortedTargets = sortTargetAreas(targetAreas, direction, entryPrice);
+function buildTargetsText(targetAreas = [], direction = "", entryPrice = null, dailyLevels = []) {
+  const sortedTargets = sortTargetAreas(targetAreas, direction, entryPrice, dailyLevels);
 
   if (!sortedTargets.length) {
     if (direction === "bearish") {
-      return "Use the closest valid support/demand area below the entry as TP1. TP2 must be lower than TP1. If no lower target exists, skip the sell setup.";
+      return "No valid previous-day support/demand target is available below the entry area. Skip the sell setup unless a lower higher-timeframe target is clearly visible.";
     }
 
     if (direction === "bullish") {
-      return "Use the closest valid resistance/supply area above the entry as TP1. TP2 must be higher than TP1. If no higher target exists, skip the buy setup.";
+      return "No valid previous-day resistance/supply target is available above the entry area. Skip the buy setup unless a higher higher-timeframe target is clearly visible.";
     }
 
-    return "Use the closest opposite support/resistance or supply/demand area. If no clear target exists, skip the setup.";
+    return "Use the closest previous-day support/resistance or supply/demand area. If no clear target exists, skip the setup.";
   }
 
   const first = sortedTargets[0];
@@ -1206,11 +1231,11 @@ function buildTargetsText(targetAreas = [], direction = "", entryPrice = null) {
   if (third) lines.push(`Third TP: ${third.day} ${third.type} around ${third.priceText}.`);
 
   if (direction === "bearish") {
-    lines.push("For bearish setups, TP2 and TP3 must be below TP1, not above it.");
+    lines.push("For bearish setups, TP1 starts from the closest previous-day level below entry; TP2 must be lower than TP1.");
   }
 
   if (direction === "bullish") {
-    lines.push("For bullish setups, TP2 and TP3 must be above TP1, not below it.");
+    lines.push("For bullish setups, TP1 starts from the closest previous-day level above entry; TP2 must be higher than TP1.");
   }
 
   lines.push(
@@ -1244,14 +1269,22 @@ function buildEntryTriggerText({ direction = "", chartDetection = null }) {
   return "Use price action confirmation such as engulfing candle, pin bar, hammer, doji rejection, inside bar break, or a valid chart pattern such as triangle, flag, channel, head and shoulders, or Quasimodo. A trader may look for these triggers on a lower timeframe.";
 }
 
+function buildBrokenSupportText(area) {
+  return `${area.day} support now turned resistance around ${area.priceText} due to a close below that support.`;
+}
+
+function buildBrokenResistanceText(area) {
+  return `${area.day} resistance now turned support around ${area.priceText} due to a close above that resistance.`;
+}
+
 function buildDirectionalProgressionText({ bias, brokenSupportAreas, brokenResistanceAreas }) {
   const biasValue = String(bias?.bias || "").toLowerCase();
 
   if (biasValue.includes("bearish")) {
     const brokenSupportText = brokenSupportAreas.length
-      ? `${brokenSupportAreas.length} support area(s) have been broken and can now act as resistance: ${brokenSupportAreas
-          .map((area) => `${area.day} support ${area.priceText}`)
-          .join(", ")}.`
+      ? `Also, ${brokenSupportAreas.length} previous support area(s) have been broken and can now be treated as possible resistance: ${brokenSupportAreas
+          .map(buildBrokenSupportText)
+          .join(" ")}`
       : "No previous support area has clearly closed broken yet, so bearish entry quality depends more on valid supply/resistance.";
 
     return `${bias.reason} ${brokenSupportText}`;
@@ -1259,9 +1292,9 @@ function buildDirectionalProgressionText({ bias, brokenSupportAreas, brokenResis
 
   if (biasValue.includes("bullish")) {
     const brokenResistanceText = brokenResistanceAreas.length
-      ? `${brokenResistanceAreas.length} resistance area(s) have been broken and can now act as support: ${brokenResistanceAreas
-          .map((area) => `${area.day} resistance ${area.priceText}`)
-          .join(", ")}.`
+      ? `Also, ${brokenResistanceAreas.length} previous resistance area(s) have been broken and can now be treated as possible support: ${brokenResistanceAreas
+          .map(buildBrokenResistanceText)
+          .join(" ")}`
       : "No previous resistance area has clearly closed broken yet, so bullish entry quality depends more on valid demand/support.";
 
     return `${bias.reason} ${brokenResistanceText}`;
@@ -1307,7 +1340,7 @@ function buildTradeCoachingSummary({
   let stopLoss =
     "Place stop loss on the other side of the candlestick or chart pattern trigger, or on the other side of the support/resistance or supply/demand area.";
   let takeProfit =
-    "Use the closest support/resistance or supply/demand area as TP1, the next area as TP2, and the next higher-timeframe area as TP3 if available.";
+    "Use the closest previous-day support/resistance or supply/demand area as TP1, the next valid area as TP2, and a higher-timeframe area as TP3 if available.";
   let riskReward =
     "Minimum risk-to-reward should be 1:2. Skip the setup if price is too close to the first target.";
   let tradeManagement =
@@ -1328,7 +1361,9 @@ function buildTradeCoachingSummary({
     const entryPrice = entryRef ? Number(entryRef.price) : null;
 
     bestEntryArea = entryRef
-      ? `${entryRef.day} ${entryRef.type} around ${entryRef.priceText}. For bullish bias, a broken resistance that becomes support, or a valid demand/support area, is the preferred entry area.`
+      ? latestBrokenResistance
+        ? `${buildBrokenResistanceText(latestBrokenResistance)} This is the preferred bullish entry area if price returns/retests and holds.`
+        : `${entryRef.day} ${entryRef.type} around ${entryRef.priceText}. For bullish bias, a broken resistance that becomes support, or a valid demand/support area, is the preferred entry area.`
       : "No clean bullish entry area confirmed yet. Wait for price to retest a broken resistance as support, or return to valid demand/support.";
 
     entryTrigger = buildEntryTriggerText({ direction: "bullish", chartDetection });
@@ -1336,7 +1371,7 @@ function buildTradeCoachingSummary({
     stopLoss =
       "Place stop loss below the bullish trigger candle/pattern, or below the support/demand area. Do not place the stop inside the same area being used for entry.";
 
-    takeProfit = buildTargetsText(targetAreas, "bullish", entryPrice);
+    takeProfit = buildTargetsText(targetAreas, "bullish", entryPrice, dailyLevels);
 
     riskReward =
       "Only consider the bullish setup if the distance from entry to TP1 gives at least 1:2 risk-to-reward.";
@@ -1360,7 +1395,9 @@ function buildTradeCoachingSummary({
     const entryPrice = entryRef ? Number(entryRef.price) : null;
 
     bestEntryArea = entryRef
-      ? `${entryRef.day} ${entryRef.type} around ${entryRef.priceText}. For bearish bias, a broken support that becomes resistance, or a valid supply/resistance area, is the preferred entry area.`
+      ? latestBrokenSupport
+        ? `${buildBrokenSupportText(latestBrokenSupport)} This is the preferred bearish entry area if price returns/retests and rejects.`
+        : `${entryRef.day} ${entryRef.type} around ${entryRef.priceText}. For bearish bias, a broken support that becomes resistance, or a valid supply/resistance area, is the preferred entry area.`
       : "No clean bearish entry area confirmed yet. Wait for price to retest a broken support as resistance, or return to valid supply/resistance.";
 
     entryTrigger = buildEntryTriggerText({ direction: "bearish", chartDetection });
@@ -1368,7 +1405,7 @@ function buildTradeCoachingSummary({
     stopLoss =
       "Place stop loss above the bearish trigger candle/pattern, or above the resistance/supply area. Do not place the stop inside the same area being used for entry.";
 
-    takeProfit = buildTargetsText(targetAreas, "bearish", entryPrice);
+    takeProfit = buildTargetsText(targetAreas, "bearish", entryPrice, dailyLevels);
 
     riskReward =
       "Only consider the bearish setup if the distance from entry to TP1 gives at least 1:2 risk-to-reward.";
@@ -1401,7 +1438,7 @@ function buildTradeCoachingSummary({
       "Place stop beyond the outer area that created the reaction, not inside the range.";
 
     takeProfit =
-      "Target the opposite side of the range first. TP2 and TP3 only apply if price breaks and holds beyond that opposite area.";
+      "Target the opposite side of the range first using previous-day levels. TP2 and TP3 only apply if price breaks and holds beyond that opposite area.";
 
     riskReward =
       "Minimum 1:2 risk-to-reward is still required. Skip if the opposite side of the range is too close.";
@@ -1556,12 +1593,10 @@ CSA Bias Calculation:
 - Highest price from Monday to now: ${formatPrice(bias.periodHigh)}
 - Lowest price from Monday to now: ${formatPrice(bias.periodLow)}
 - Price movement: ${formatPrice(bias.priceMove)}
-- New resistance count from higher-high expansion: ${bias.resistanceCount}
-- New support count from lower-low expansion: ${bias.supportCount}
+- New resistance levels created from higher highs: ${bias.resistanceCount}
+- New support levels created from lower lows: ${bias.supportCount}
 - Broken support now resistance count: ${brokenSupportAreas.length}
 - Broken resistance now support count: ${brokenResistanceAreas.length}
-- Rising closes: ${bias.risingCloses}
-- Falling closes: ${bias.fallingCloses}
 - Bias confidence: ${bias.confidence}
 
 Key CSA Areas:
@@ -1607,8 +1642,9 @@ Technical Notes:
 - Data used up to: ${marketReference.weekRange.endDate}
 - Clean-break tolerance: ${formatPrice(tolerance)}
 - Supply/demand is ignored once price breaks and closes past the area.
-- For bearish setups, TP levels are sorted lower than the entry area.
-- For bullish setups, TP levels are sorted higher than the entry area.
+- Take-profit levels start from previous-day areas, not the present day.
+- For bearish setups, TP levels are sorted below the entry area.
+- For bullish setups, TP levels are sorted above the entry area.
 - Chart image was used for context, mismatch checks, and visible trigger scan.
 - Stop loss, target, and risk-to-reward are structural coaching comments only. They are not financial advice.`;
 }
@@ -1960,7 +1996,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             `CSA areas calculated from Twelve Data ${marketReference.interval} candles for the selected Monday-to-Friday week.`,
             `CSA directional bias calculated as ${bias.bias} with ${bias.confidence} confidence.`,
             "Main feedback follows the requested format: bias, entry area, trigger, stop, target, risk/reward, management, verdict.",
-            "Take-profit ordering now respects direction: bearish targets below entry, bullish targets above entry.",
+            "Take-profit levels now start from previous-day areas and respect trade direction.",
           ]
         : [
             "CSA setup review could not be fully market-data-backed.",
