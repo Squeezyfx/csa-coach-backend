@@ -4,7 +4,6 @@ import multer from "multer";
 import OpenAI from "openai";
 
 const app = express();
-
 app.use(cors());
 app.use(express.json({ limit: "25mb" }));
 
@@ -13,57 +12,57 @@ const upload = multer({
   limits: { fileSize: 15 * 1024 * 1024 },
 });
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const TWELVE_DATA_BASE_URL = "https://api.twelvedata.com/time_series";
 
 const CHART_DETECTION_PROMPT = `
 You are a chart screenshot pre-check assistant for CSA Coach.
 
-Inspect the uploaded image and return only JSON.
+Inspect the uploaded image and return ONLY valid JSON. Do not use markdown.
 
-Your FIRST job is to decide if the image is a real financial trading chart screenshot.
+Your first job is to decide if the uploaded image is a real financial trading chart screenshot.
 
 A valid trading chart screenshot normally contains:
-- visible candlesticks, bars, or line chart price movement
-- a price scale on the right or left
-- a time/date scale at the bottom
-- a market/instrument label, platform label, or chart-like trading interface
-- examples: TradingView, MT4, MT5, cTrader, broker chart screenshots
+- visible candles, bars, or line-chart price movement
+- visible price scale
+- visible time/date scale
+- chart/platform interface such as TradingView, MT4, MT5, cTrader, or broker chart
 
 Invalid images include:
-- photos of objects, people, hourglass, animals, rooms, documents, logos, random screenshots
-- marketing images
-- screenshots that do not show a financial price chart
-- any image where no price chart structure is visible
+- photos, random images, logos, documents, rooms, screenshots with no financial chart
+- blank charts, loading charts, cropped charts where candles are not visible
 
 Detect:
-1. Whether the uploaded image is a valid trading chart.
-2. The trading instrument/pair visible on the chart, if readable.
-3. The timeframe visible on the chart, if readable. Use M1, M5, M15, M30, H1, H4, D1, W1, MN.
-4. The latest/final visible calendar date on the chart, if readable, as YYYY-MM-DD.
-5. Any visible price-action or chart-pattern ENTRY TRIGGER near the latest price/right side of the chart.
+1. Whether this is a valid financial trading chart.
+2. Whether there is enough visible price data to review the setup.
+3. Whether the selected chart/trade date is visible or reasonably covered by the image.
+4. Instrument/pair if readable.
+5. Timeframe if readable. Use M1, M5, M15, M30, H1, H4, D1, W1, MN.
+6. Latest/final visible date if readable, YYYY-MM-DD.
+7. Any confirmed entry trigger near the latest/right side of the chart.
 
-Very important:
-- If the image is not a valid trading chart, return isTradingChart as false and do not guess anything else.
-- If the image is not a valid trading chart, set chartValidityReason to a clear reason like "The uploaded image is not a financial trading chart."
-- Do not analyze non-chart images.
-- Do not guess instrument, timeframe, or date if unreadable.
-- Ignore Sunday candles.
+Usable chart data rules:
+- A platform screenshot is NOT enough. The chart itself must show usable price movement.
+- hasUsablePriceData must be false if chart area is blank, mostly empty, loading/frozen, too blurry, cropped, or has fewer than about 20 visible candles/bars/price points.
+- hasUsablePriceData must be false if the selected chart/trade date is clearly not visible or not reasonably covered by the chart image.
+- chartDataQuality must be one of: usable, limited, insufficient, blank, unclear.
+- If chartDataQuality is insufficient, blank, or unclear, explain in insufficientDataReason.
+- Twelve Data must not replace a blank, empty, loading, cropped, or unclear uploaded chart.
 
-Entry-trigger rules:
-- A confirmed entry trigger must be a clear candlestick or chart-pattern confirmation.
-- Valid trigger examples: bullish engulfing, bearish engulfing, pin bar rejection, hammer rejection, doji rejection, inside bar break, lower high, higher low, triangle breakout/breakdown, flag breakout/breakdown, channel breakout/breakdown, head and shoulders, Quasimodo, clean rejection candle, or break-and-hold.
-- A bounce, pullback, retracement, consolidation, reaction, ranging movement, or price simply moving away from a level is NOT a confirmed entry trigger by itself.
-- If you only see a bounce/pullback/consolidation/reaction, return visibleTrigger as null and explain that it is context in notes.
-- Only mention a visible trigger if it is reasonably clear. Otherwise return null.
+Entry trigger rules:
+- Valid triggers include engulfing, pin bar rejection, hammer rejection, doji rejection, inside bar break, lower high/higher low, breakout/breakdown, flag/channel/triangle break, head and shoulders, Quasimodo, or clean break-and-hold.
+- Bounce, pullback, retracement, consolidation, ranging, reaction, or price moving away is not a confirmed trigger by itself.
+- If there is no confirmed trigger, return visibleTrigger as null.
 
 Return exactly this JSON shape:
 {
   "isTradingChart": true,
   "chartValidityReason": "brief reason",
+  "hasUsablePriceData": true,
+  "visibleCandleCount": 80,
+  "chartDataQuality": "usable",
+  "selectedDateVisible": true,
+  "insufficientDataReason": null,
   "detectedInstrument": "GBPUSD or null",
   "detectedTimeframe": "H1 or M5 or H4 or D1 or W1 or MN or null",
   "latestVisibleDate": "YYYY-MM-DD or null",
@@ -487,12 +486,24 @@ function sanitizeVisibleTrigger(trigger, confidence = "low") {
   return text;
 }
 
-async function detectChartContextFromImage({ imageBase64, mimeType }) {
+async function detectChartContextFromImage({
+  imageBase64,
+  mimeType,
+  submittedInstrument = "",
+  selectedTimeframe = "",
+  selectedDateText = "",
+  analysisType = "post-trade",
+}) {
   if (!process.env.OPENAI_API_KEY) {
     return {
       ok: false,
       isTradingChart: false,
       chartValidityReason: "OPENAI_API_KEY is missing.",
+      hasUsablePriceData: false,
+      visibleCandleCount: 0,
+      chartDataQuality: "unclear",
+      selectedDateVisible: false,
+      insufficientDataReason: "OPENAI_API_KEY is missing.",
       detectedInstrument: null,
       detectedTimeframe: null,
       latestVisibleDate: null,
@@ -510,16 +521,19 @@ async function detectChartContextFromImage({ imageBase64, mimeType }) {
     const response = await openai.responses.create({
       model: "gpt-4.1-mini",
       input: [
-        {
-          role: "system",
-          content: CHART_DETECTION_PROMPT,
-        },
+        { role: "system", content: CHART_DETECTION_PROMPT },
         {
           role: "user",
           content: [
             {
               type: "input_text",
-              text: "Inspect this uploaded image. First confirm whether it is a valid financial trading chart. Return only the requested JSON.",
+              text: `Inspect this uploaded chart image.
+Selected instrument: ${submittedInstrument || "not provided"}
+Selected timeframe: ${selectedTimeframe || "not provided"}
+Selected chart/trade date: ${selectedDateText || "not provided"}
+Analysis type: ${analysisType || "post-trade"}
+
+First confirm if it is a valid trading chart. Then confirm if it has enough visible price data/candles and whether the selected date is visible or reasonably covered. Return only JSON.`,
             },
             {
               type: "input_image",
@@ -528,12 +542,11 @@ async function detectChartContextFromImage({ imageBase64, mimeType }) {
           ],
         },
       ],
-      max_output_tokens: 550,
+      max_output_tokens: 700,
     });
 
     const parsed = extractJsonObject(response.output_text || "");
     const isTradingChart = parsed?.isTradingChart === true;
-
     const rawTrigger = parsed?.visibleTrigger || null;
     const triggerConfidence = parsed?.triggerConfidence || "low";
     const cleanTrigger = sanitizeVisibleTrigger(rawTrigger, triggerConfidence);
@@ -546,6 +559,19 @@ async function detectChartContextFromImage({ imageBase64, mimeType }) {
         (isTradingChart
           ? "The uploaded image appears to be a valid trading chart."
           : "The uploaded image does not appear to be a valid financial trading chart."),
+      hasUsablePriceData: isTradingChart ? parsed?.hasUsablePriceData === true : false,
+      visibleCandleCount: Number.isFinite(Number(parsed?.visibleCandleCount))
+        ? Number(parsed.visibleCandleCount)
+        : 0,
+      chartDataQuality: isTradingChart ? parsed?.chartDataQuality || "unclear" : "unclear",
+      selectedDateVisible: isTradingChart ? parsed?.selectedDateVisible === true : false,
+      insufficientDataReason:
+        parsed?.insufficientDataReason ||
+        (!isTradingChart
+          ? "The uploaded image is not a financial trading chart."
+          : parsed?.hasUsablePriceData === true
+          ? null
+          : "The uploaded chart does not show enough usable visible price data."),
       detectedInstrument: isTradingChart ? parsed?.detectedInstrument || null : null,
       detectedTimeframe: isTradingChart ? parsed?.detectedTimeframe || null : null,
       latestVisibleDate: isTradingChart ? parsed?.latestVisibleDate || null : null,
@@ -559,11 +585,15 @@ async function detectChartContextFromImage({ imageBase64, mimeType }) {
     };
   } catch (error) {
     console.error("Chart detection error:", error);
-
     return {
       ok: false,
       isTradingChart: false,
       chartValidityReason: `Chart validation failed: ${error.message}`,
+      hasUsablePriceData: false,
+      visibleCandleCount: 0,
+      chartDataQuality: "unclear",
+      selectedDateVisible: false,
+      insufficientDataReason: `Chart validation failed: ${error.message}`,
       detectedInstrument: null,
       detectedTimeframe: null,
       latestVisibleDate: null,
@@ -578,10 +608,24 @@ async function detectChartContextFromImage({ imageBase64, mimeType }) {
   }
 }
 
+function isUploadedChartDataUsable(chartDetection, selectedDateText = "") {
+  if (!chartDetection?.isTradingChart) return false;
+  if (chartDetection.hasUsablePriceData !== true) return false;
+
+  const quality = String(chartDetection.chartDataQuality || "").toLowerCase();
+  if (["blank", "insufficient", "unclear"].includes(quality)) return false;
+
+  const candles = Number(chartDetection.visibleCandleCount || 0);
+  if (Number.isFinite(candles) && candles > 0 && candles < 20) return false;
+
+  if (selectedDateText && chartDetection.selectedDateVisible === false) return false;
+
+  return true;
+}
+
 function isUsableChartDateDetection(detection) {
   if (!detection || !detection.latestVisibleDate) return false;
   if (!parseISODateOnly(detection.latestVisibleDate)) return false;
-
   const confidence = String(detection.dateConfidence || "").toLowerCase();
   return confidence === "high" || confidence === "medium";
 }
@@ -658,18 +702,15 @@ function chooseFinalChartDate({ selectedDate, detection, analysisType = "post-tr
     selectedDateText: selectedDate ? formatDateOnly(selectedDate) : null,
     detectedDateText: null,
     source: "missing-date",
-    reason:
-      "No usable user-selected date or chart-detected latest visible date was available.",
+    reason: "No usable user-selected date or chart-detected latest visible date was available.",
   };
 }
 
 function getCleanBreakTolerance(symbol = "") {
   const compact = comparableInstrument(symbol);
-
   if (compact.includes("JPY")) return 0.02;
   if (compact.includes("XAU")) return 0.2;
   if (compact.includes("BTC")) return 20;
-
   return 0.0002;
 }
 
@@ -677,89 +718,30 @@ function compareHighWithTolerance(currentHigh, previousHigh, symbol = "") {
   const current = Number(currentHigh);
   const previous = Number(previousHigh);
   const tolerance = getCleanBreakTolerance(symbol);
-
   if (!Number.isFinite(current) || !Number.isFinite(previous)) {
-    return {
-      cleanBreak: false,
-      difference: null,
-      tolerance,
-      label: "unavailable",
-    };
+    return { cleanBreak: false, difference: null, tolerance, label: "unavailable" };
   }
-
   const difference = current - previous;
-
-  if (difference > tolerance) {
-    return {
-      cleanBreak: true,
-      difference,
-      tolerance,
-      label: "clean higher high",
-    };
-  }
-
-  if (Math.abs(difference) <= tolerance) {
-    return {
-      cleanBreak: false,
-      difference,
-      tolerance,
-      label: "equal high / retest of previous high",
-    };
-  }
-
-  return {
-    cleanBreak: false,
-    difference,
-    tolerance,
-    label: "failed to break previous high",
-  };
+  if (difference > tolerance) return { cleanBreak: true, difference, tolerance, label: "clean higher high" };
+  if (Math.abs(difference) <= tolerance) return { cleanBreak: false, difference, tolerance, label: "equal high / retest of previous high" };
+  return { cleanBreak: false, difference, tolerance, label: "failed to break previous high" };
 }
 
 function compareLowWithTolerance(currentLow, previousLow, symbol = "") {
   const current = Number(currentLow);
   const previous = Number(previousLow);
   const tolerance = getCleanBreakTolerance(symbol);
-
   if (!Number.isFinite(current) || !Number.isFinite(previous)) {
-    return {
-      cleanBreak: false,
-      difference: null,
-      tolerance,
-      label: "unavailable",
-    };
+    return { cleanBreak: false, difference: null, tolerance, label: "unavailable" };
   }
-
   const difference = previous - current;
-
-  if (difference > tolerance) {
-    return {
-      cleanBreak: true,
-      difference,
-      tolerance,
-      label: "clean lower low",
-    };
-  }
-
-  if (Math.abs(previous - current) <= tolerance) {
-    return {
-      cleanBreak: false,
-      difference,
-      tolerance,
-      label: "equal low / retest of previous low",
-    };
-  }
-
-  return {
-    cleanBreak: false,
-    difference,
-    tolerance,
-    label: "held above previous low",
-  };
+  if (difference > tolerance) return { cleanBreak: true, difference, tolerance, label: "clean lower low" };
+  if (Math.abs(previous - current) <= tolerance) return { cleanBreak: false, difference, tolerance, label: "equal low / retest of previous low" };
+  return { cleanBreak: false, difference, tolerance, label: "held above previous low" };
 }
 
 function getSupportedCsaTimeframeProfile(timeframe = "H1") {
   const tf = comparableTimeframe(timeframe) || "H1";
-
   if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) {
     return {
       selectedTimeframe: tf,
@@ -845,13 +827,11 @@ function getSupportedCsaTimeframeProfile(timeframe = "H1") {
 
 function getStructureRangeForProfile(chartDate, profile, analysisType = "post-trade") {
   const useFull = normalizeAnalysisType(analysisType) === "post-trade";
-
   if (profile.structureMode === "daily-in-week") return getWeekRangeForDate(chartDate, useFull);
   if (profile.structureMode === "weekly-in-month") return getMonthRangeForDate(chartDate, useFull);
   if (profile.structureMode === "monthly-in-year") return getYearRangeForDate(chartDate, useFull);
   if (profile.structureMode === "quarterly-in-year") return getYearRangeForDate(chartDate, useFull);
   if (profile.structureMode === "yearly-in-multi-year") return getMultiYearRangeForDate(chartDate, 4, useFull);
-
   return getWeekRangeForDate(chartDate, useFull);
 }
 
@@ -861,19 +841,13 @@ function getPeriodKeyAndLabel(date, profile) {
 
   if (profile.structureMode === "daily-in-week") {
     const dateOnly = formatDateOnly(date);
-
-    return {
-      key: dateOnly,
-      label: weekdayNameFromDate(dateOnly),
-      date: dateOnly,
-    };
+    return { key: dateOnly, label: weekdayNameFromDate(dateOnly), date: dateOnly };
   }
 
   if (profile.structureMode === "weekly-in-month") {
     const monthStart = new Date(Date.UTC(year, month, 1));
     const weekNumber = Math.ceil((date.getUTCDate() + monthStart.getUTCDay()) / 7);
     const dateOnly = formatDateOnly(date);
-
     return {
       key: `${year}-${String(month + 1).padStart(2, "0")}-W${weekNumber}`,
       label: `Week ${weekNumber}`,
@@ -891,29 +865,15 @@ function getPeriodKeyAndLabel(date, profile) {
 
   if (profile.structureMode === "quarterly-in-year") {
     const quarter = getQuarterLabel(month);
-
-    return {
-      key: `${year}-${quarter}`,
-      label: quarter,
-      date: `${year}-${quarter}`,
-    };
+    return { key: `${year}-${quarter}`, label: quarter, date: `${year}-${quarter}` };
   }
 
   if (profile.structureMode === "yearly-in-multi-year") {
-    return {
-      key: String(year),
-      label: String(year),
-      date: `${year}-01-01`,
-    };
+    return { key: String(year), label: String(year), date: `${year}-01-01` };
   }
 
   const dateOnly = formatDateOnly(date);
-
-  return {
-    key: dateOnly,
-    label: dateOnly,
-    date: dateOnly,
-  };
+  return { key: dateOnly, label: dateOnly, date: dateOnly };
 }
 
 function buildStructureLevelsFromCandles(candles, structureRange, profile) {
@@ -925,7 +885,6 @@ function buildStructureLevelsFromCandles(candles, structureRange, profile) {
 
     const date = new Date(`${dateOnly}T00:00:00.000Z`);
     if (Number.isNaN(date.getTime())) return;
-
     if (dateOnly < structureRange.startDate || dateOnly > structureRange.endDate) return;
 
     if (profile.structureMode === "daily-in-week") {
@@ -937,11 +896,9 @@ function buildStructureLevelsFromCandles(candles, structureRange, profile) {
     const high = safeNumber(bar.high);
     const low = safeNumber(bar.low);
     const close = safeNumber(bar.close);
-
     if (open === null || high === null || low === null || close === null) return;
 
     const period = getPeriodKeyAndLabel(date, profile);
-
     if (!grouped.has(period.key)) {
       grouped.set(period.key, {
         key: period.key,
@@ -956,7 +913,6 @@ function buildStructureLevelsFromCandles(candles, structureRange, profile) {
         firstCandleTime: bar.datetime,
         lastCandleTime: bar.datetime,
       });
-
       return;
     }
 
@@ -987,7 +943,6 @@ function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimefr
         priceText: formatPrice(period.high),
         logic: `${label} high represents the first resistance for this ${profile.rangeKind}.`,
       });
-
       areas.push({
         day: label,
         period: label,
@@ -997,7 +952,6 @@ function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimefr
         priceText: formatPrice(period.low),
         logic: `${label} low represents the first support for this ${profile.rangeKind}.`,
       });
-
       return;
     }
 
@@ -1041,16 +995,11 @@ function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimefr
 function countClosesDirection(levels = []) {
   let risingCloses = 0;
   let fallingCloses = 0;
-
   for (let i = 1; i < levels.length; i += 1) {
     if (levels[i].close > levels[i - 1].close) risingCloses += 1;
     if (levels[i].close < levels[i - 1].close) fallingCloses += 1;
   }
-
-  return {
-    risingCloses,
-    fallingCloses,
-  };
+  return { risingCloses, fallingCloses };
 }
 
 function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
@@ -1080,7 +1029,6 @@ function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupp
   const tolerance = getCleanBreakTolerance(symbol);
   const firstPeriod = levels[0];
   const lastPeriod = levels[levels.length - 1];
-
   const periodStartPrice = firstPeriod.open;
   const presentPrice = lastPeriod.close;
   const priceMove = presentPrice - periodStartPrice;
@@ -1093,13 +1041,11 @@ function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupp
   let demandCount = 0;
   let highBreakCount = 0;
   let lowBreakCount = 0;
-
   const progression = [];
 
   for (let i = 0; i < levels.length; i += 1) {
     const current = levels[i];
     const currentLabel = current.periodLabel || current.weekday || current.key;
-
     if (i === 0) {
       progression.push(`${currentLabel}: ${profile.firstPeriodText}`);
       continue;
@@ -1136,7 +1082,6 @@ function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupp
   }
 
   const { risingCloses, fallingCloses } = countClosesDirection(levels);
-
   let bullishScore = 0;
   let bearishScore = 0;
 
@@ -1151,7 +1096,6 @@ function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupp
 
   let bias = "Mixed / Range-bound";
   let biasCode = "mixed";
-
   if (bullishScore > bearishScore + 1) {
     bias = "Bullish";
     biasCode = "bullish";
@@ -1162,12 +1106,11 @@ function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupp
 
   const scoreDifference = Math.abs(bullishScore - bearishScore);
   const confidence = scoreDifference >= 4 ? "high" : scoreDifference >= 2 ? "medium" : "low";
-
   const reason =
     biasCode === "bearish"
-      ? `Price moved down from ${profile.startPriceLabel} ${formatPrice(periodStartPrice)} to the ${profile.currentPriceLabel} ${formatPrice(presentPrice)}. The highest price in the selected ${profile.rangeKind} is ${formatPrice(periodHigh)}, and price is trading below that high. The structure shows downside pressure because price created ${supportCount} new support level(s) from lower lows, meaning support was pushed lower as sellers stayed in control.`
+      ? `Price moved down from ${profile.startPriceLabel} ${formatPrice(periodStartPrice)} to the ${profile.currentPriceLabel} ${formatPrice(presentPrice)}. The highest price in the selected ${profile.rangeKind} is ${formatPrice(periodHigh)}, and price is trading below that high. The structure shows downside pressure because price created ${supportCount} new support level(s) from lower lows.`
       : biasCode === "bullish"
-      ? `Price moved up from ${profile.startPriceLabel} ${formatPrice(periodStartPrice)} to the ${profile.currentPriceLabel} ${formatPrice(presentPrice)}. The lowest price in the selected ${profile.rangeKind} is ${formatPrice(periodLow)}, and price is trading above that low. The structure shows upside pressure because price created ${resistanceCount} new resistance level(s) from higher highs, meaning resistance was pushed higher as buyers stayed in control.`
+      ? `Price moved up from ${profile.startPriceLabel} ${formatPrice(periodStartPrice)} to the ${profile.currentPriceLabel} ${formatPrice(presentPrice)}. The lowest price in the selected ${profile.rangeKind} is ${formatPrice(periodLow)}, and price is trading above that low. The structure shows upside pressure because price created ${resistanceCount} new resistance level(s) from higher highs.`
       : `Price has not shown a clean one-sided move from ${profile.startPriceLabel} ${formatPrice(periodStartPrice)} to the ${profile.currentPriceLabel} ${formatPrice(presentPrice)}. The structure is mixed because price has not clearly continued in one direction.`;
 
   return {
@@ -1223,14 +1166,9 @@ async function fetchTwelveDataStructureLevels({
 
   if (!apiKey) return empty("TWELVE_DATA_API_KEY is missing on the server.");
   if (!symbol) return empty("Instrument/pair is missing or unsupported.");
-  if (!chartDate) {
-    return empty(
-      "Final visible chart date is missing. Add the latest date visible on the chart so the backend can fetch the correct CSA structure data."
-    );
-  }
+  if (!chartDate) return empty("Final visible chart date is missing. Add the latest date visible on the chart.");
 
   const structureRange = getStructureRangeForProfile(chartDate, profile, analysisType);
-
   const params = new URLSearchParams({
     symbol,
     interval,
@@ -1244,15 +1182,9 @@ async function fetchTwelveDataStructureLevels({
 
   const response = await fetch(`${TWELVE_DATA_BASE_URL}?${params.toString()}`);
   const data = await response.json();
-
   if (!response.ok || data.status === "error" || !Array.isArray(data.values)) {
     return {
-      ...empty(
-        data.message ||
-          data.error ||
-          `Twelve Data request failed with status ${response.status}.`,
-        structureRange
-      ),
+      ...empty(data.message || data.error || `Twelve Data request failed with status ${response.status}.`, structureRange),
       twelveDataStatus: data.status || "unknown",
     };
   }
@@ -1284,7 +1216,6 @@ async function fetchTwelveDataStructureLevels({
 
 function latestArea(areaList = []) {
   if (!Array.isArray(areaList) || !areaList.length) return null;
-
   return [...areaList].sort((a, b) => {
     const dateCompare = String(b.date || "").localeCompare(String(a.date || ""));
     if (dateCompare !== 0) return dateCompare;
@@ -1294,22 +1225,17 @@ function latestArea(areaList = []) {
 
 function areaBrokenByCloseLater(area, levels = [], symbol = "") {
   if (!area || !Array.isArray(levels)) return false;
-
   const level = Number(area.price);
   const tolerance = getCleanBreakTolerance(symbol);
-
   if (!Number.isFinite(level)) return false;
-
   const laterPeriods = levels.filter((item) => String(item.date || "") > String(area.date || ""));
 
   if (area.type === "supply" || area.type === "resistance") {
     return laterPeriods.some((item) => Number(item.close) > level + tolerance);
   }
-
   if (area.type === "demand" || area.type === "support") {
     return laterPeriods.some((item) => Number(item.close) < level - tolerance);
   }
-
   return false;
 }
 
@@ -1332,41 +1258,27 @@ function splitAreas(areas = []) {
 
 function areaLabel(area) {
   const period = area?.day || area?.period || area?.date || "Unknown period";
-  return `${period} ${area?.type || "area"} around ${
-    area?.priceText || formatPrice(Number(area?.price))
-  }`;
+  return `${period} ${area?.type || "area"} around ${area?.priceText || formatPrice(Number(area?.price))}`;
 }
 
 function describeFailedArea(area) {
   const label = areaLabel(area);
-
   if (area.type === "support") {
     return `${label} failed because price later closed below it. It should no longer be treated as a valid buy/support entry area. If price retests it from below, it can act as resistance.`;
   }
-
   if (area.type === "demand") {
     return `${label} failed because price later closed below the demand area. It should no longer be treated as a valid buy area until price reclaims it.`;
   }
-
   if (area.type === "resistance") {
     return `${label} failed because price later closed above it. It should no longer be treated as a valid sell/resistance entry area. If price retests it from above, it can act as support.`;
   }
-
   if (area.type === "supply") {
     return `${label} failed because price later closed above the supply area. It should no longer be treated as a valid sell area until price loses it again.`;
   }
-
   return `${label} failed because price closed through it instead of respecting it.`;
 }
 
-function buildFailedAreas({
-  supportAreas = [],
-  resistanceAreas = [],
-  supplyAreas = [],
-  demandAreas = [],
-  levels = [],
-  symbol = "",
-}) {
+function buildFailedAreas({ supportAreas = [], resistanceAreas = [], supplyAreas = [], demandAreas = [], levels = [], symbol = "" }) {
   const mapArea = (area, failedType, mistakeLabel, expectedRole, newRole) => ({
     ...area,
     failedType,
@@ -1378,51 +1290,22 @@ function buildFailedAreas({
 
   return [
     ...filterBrokenAreas(supportAreas, levels, symbol).map((area) =>
-      mapArea(
-        area,
-        "failed_support",
-        "Failed support area",
-        "Expected to hold as support / buy area",
-        "Can become resistance if retested from below"
-      )
+      mapArea(area, "failed_support", "Failed support area", "Expected to hold as support / buy area", "Can become resistance if retested from below")
     ),
     ...filterBrokenAreas(demandAreas, levels, symbol).map((area) =>
-      mapArea(
-        area,
-        "failed_demand",
-        "Failed demand area",
-        "Expected to hold as demand / buy area",
-        "Invalid as demand until reclaimed"
-      )
+      mapArea(area, "failed_demand", "Failed demand area", "Expected to hold as demand / buy area", "Invalid as demand until reclaimed")
     ),
     ...filterBrokenAreas(resistanceAreas, levels, symbol).map((area) =>
-      mapArea(
-        area,
-        "failed_resistance",
-        "Failed resistance area",
-        "Expected to reject as resistance / sell area",
-        "Can become support if retested from above"
-      )
+      mapArea(area, "failed_resistance", "Failed resistance area", "Expected to reject as resistance / sell area", "Can become support if retested from above")
     ),
     ...filterBrokenAreas(supplyAreas, levels, symbol).map((area) =>
-      mapArea(
-        area,
-        "failed_supply",
-        "Failed supply area",
-        "Expected to reject as supply / sell area",
-        "Invalid as supply until price loses it again"
-      )
+      mapArea(area, "failed_supply", "Failed supply area", "Expected to reject as supply / sell area", "Invalid as supply until price loses it again")
     ),
-  ].sort(
-    (a, b) =>
-      String(b.date || "").localeCompare(String(a.date || "")) ||
-      String(a.failedType || "").localeCompare(String(b.failedType || ""))
-  );
+  ].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || String(a.failedType || "").localeCompare(String(b.failedType || "")));
 }
 
 function listAreas(areaList = [], label = "area", max = 3) {
   if (!Array.isArray(areaList) || !areaList.length) return "- None identified.";
-
   return [...areaList]
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
     .slice(0, max)
@@ -1431,10 +1314,7 @@ function listAreas(areaList = [], label = "area", max = 3) {
 }
 
 function listFailedAreas(failedAreas = [], max = 6) {
-  if (!Array.isArray(failedAreas) || !failedAreas.length) {
-    return "- None detected. No CSA support/resistance or supply/demand area failed within the data reviewed.";
-  }
-
+  if (!Array.isArray(failedAreas) || !failedAreas.length) return "- None detected. No CSA support/resistance or supply/demand area failed within the data reviewed.";
   return failedAreas
     .slice(0, max)
     .map((area) => `- ${area.mistakeLabel}: ${area.explanation}`)
@@ -1462,64 +1342,37 @@ function getCurrentPeriodDate(levels = []) {
 function filterPreviousPeriodAreas(areaList = [], levels = []) {
   const currentDate = getCurrentPeriodDate(levels);
   if (!currentDate) return areaList;
-
   return areaList.filter((area) => String(area.date || "") < String(currentDate));
 }
 
 function sortTargetAreas(targetAreas = [], direction = "", entryPrice = null, levels = []) {
   const entry = Number(entryPrice);
-
   let filtered = targetAreas.filter((area) => Number.isFinite(Number(area.price)));
   filtered = filterPreviousPeriodAreas(filtered, levels);
-
   if (Number.isFinite(entry)) {
     if (direction === "bearish") filtered = filtered.filter((area) => Number(area.price) < entry);
     if (direction === "bullish") filtered = filtered.filter((area) => Number(area.price) > entry);
   }
-
   if (direction === "bearish") return filtered.sort((a, b) => Number(b.price) - Number(a.price));
   if (direction === "bullish") return filtered.sort((a, b) => Number(a.price) - Number(b.price));
-
   return filtered.sort((a, b) => Number(a.price) - Number(b.price));
 }
 
-function buildTargetsText(
-  targetAreas = [],
-  direction = "",
-  entryPrice = null,
-  levels = [],
-  profile = getSupportedCsaTimeframeProfile("H1")
-) {
+function buildTargetsText(targetAreas = [], direction = "", entryPrice = null, levels = [], profile = getSupportedCsaTimeframeProfile("H1")) {
   const sortedTargets = sortTargetAreas(targetAreas, direction, entryPrice, levels);
-
   if (!sortedTargets.length) {
-    if (direction === "bearish") {
-      return `No valid previous-${profile.sourceUnitSingular} support/demand target is available below the entry area. Skip the sell setup unless a lower higher-timeframe target is clearly visible.`;
-    }
-
-    if (direction === "bullish") {
-      return `No valid previous-${profile.sourceUnitSingular} resistance/supply target is available above the entry area. Skip the buy setup unless a higher higher-timeframe target is clearly visible.`;
-    }
-
+    if (direction === "bearish") return `No valid previous-${profile.sourceUnitSingular} support/demand target is available below the entry area. Skip the sell setup unless a lower higher-timeframe target is clearly visible.`;
+    if (direction === "bullish") return `No valid previous-${profile.sourceUnitSingular} resistance/supply target is available above the entry area. Skip the buy setup unless a higher higher-timeframe target is clearly visible.`;
     return `Use the closest previous-${profile.sourceUnitSingular} support/resistance or supply/demand area. If no clear target exists, skip the setup.`;
   }
 
   const lines = [];
-
   if (sortedTargets[0]) lines.push(`First TP: ${sortedTargets[0].day} ${sortedTargets[0].type} around ${sortedTargets[0].priceText}.`);
   if (sortedTargets[1]) lines.push(`Second TP: ${sortedTargets[1].day} ${sortedTargets[1].type} around ${sortedTargets[1].priceText}.`);
   if (sortedTargets[2]) lines.push(`Third TP: ${sortedTargets[2].day} ${sortedTargets[2].type} around ${sortedTargets[2].priceText}.`);
-
-  if (direction === "bearish") {
-    lines.push("For bearish setups, TP1 starts from the closest previous structural level below entry; TP2 must be lower than TP1.");
-  }
-
-  if (direction === "bullish") {
-    lines.push("For bullish setups, TP1 starts from the closest previous structural level above entry; TP2 must be higher than TP1.");
-  }
-
+  if (direction === "bearish") lines.push("For bearish setups, TP1 starts from the closest previous structural level below entry; TP2 must be lower than TP1.");
+  if (direction === "bullish") lines.push("For bullish setups, TP1 starts from the closest previous structural level above entry; TP2 must be higher than TP1.");
   lines.push("Higher-timeframe areas of interest should override smaller structure targets when visible.");
-
   return lines.join(" ");
 }
 
@@ -1557,61 +1410,31 @@ function buildBrokenResistanceText(area) {
 
 function buildDirectionalProgressionText({ bias, brokenSupportAreas, brokenResistanceAreas }) {
   const biasValue = String(bias?.bias || "").toLowerCase();
-
   if (biasValue.includes("bearish")) {
     const brokenSupportText = brokenSupportAreas.length
       ? `Also, ${brokenSupportAreas.length} previous support area(s) have been broken and can now be treated as possible resistance: ${brokenSupportAreas.map(buildBrokenSupportText).join(" ")}`
       : "No previous support area has clearly closed broken yet, so bearish entry quality depends more on valid supply/resistance.";
-
     return `${bias.reason} ${brokenSupportText}`;
   }
-
   if (biasValue.includes("bullish")) {
     const brokenResistanceText = brokenResistanceAreas.length
       ? `Also, ${brokenResistanceAreas.length} previous resistance area(s) have been broken and can now be treated as possible support: ${brokenResistanceAreas.map(buildBrokenResistanceText).join(" ")}`
       : "No previous resistance area has clearly closed broken yet, so bullish entry quality depends more on valid demand/support.";
-
     return `${bias.reason} ${brokenResistanceText}`;
   }
-
   return bias.reason || "Bias is mixed because CSA evidence is not clean enough.";
 }
 
-function buildTradeCoachingSummary({
-  resistanceAreas,
-  supportAreas,
-  supplyAreas,
-  demandAreas,
-  levels,
-  bias,
-  symbol,
-  chartDetection,
-  profile,
-}) {
+function buildTradeCoachingSummary({ resistanceAreas, supportAreas, supplyAreas, demandAreas, levels, bias, symbol, chartDetection, profile }) {
   const biasValue = String(bias?.bias || "").toLowerCase();
-
   const validSupplyAreas = filterValidAreas(supplyAreas, levels, symbol);
   const validDemandAreas = filterValidAreas(demandAreas, levels, symbol);
-
   const brokenSupportAreas = filterBrokenAreas(supportAreas, levels, symbol);
   const brokenResistanceAreas = filterBrokenAreas(resistanceAreas, levels, symbol);
-
-  const failedAreas = buildFailedAreas({
-    supportAreas,
-    resistanceAreas,
-    supplyAreas,
-    demandAreas,
-    levels,
-    symbol,
-  });
+  const failedAreas = buildFailedAreas({ supportAreas, resistanceAreas, supplyAreas, demandAreas, levels, symbol });
 
   let direction = "Mixed / Wait";
-  let directionReason = buildDirectionalProgressionText({
-    bias,
-    brokenSupportAreas,
-    brokenResistanceAreas,
-  });
-
+  let directionReason = buildDirectionalProgressionText({ bias, brokenSupportAreas, brokenResistanceAreas });
   let bestEntryArea = "No clean entry area yet. Wait for price to reach a valid support/resistance or supply/demand area.";
   let entryTrigger = buildEntryTriggerText({ direction: "mixed", chartDetection });
   let stopLoss = "Place stop loss on the other side of the candlestick or chart pattern trigger, or on the other side of the support/resistance or supply/demand area.";
@@ -1625,15 +1448,9 @@ function buildTradeCoachingSummary({
 
   if (biasValue.includes("bullish")) {
     direction = "Bullish";
-
     const latestBrokenResistance = latestArea(brokenResistanceAreas);
     const entryRef = latestBrokenResistance || latestArea(validDemandAreas) || latestArea(supportAreas);
-
-    const targetAreas = [
-      ...filterValidAreas(resistanceAreas, levels, symbol),
-      ...filterValidAreas(supplyAreas, levels, symbol),
-    ];
-
+    const targetAreas = [...filterValidAreas(resistanceAreas, levels, symbol), ...filterValidAreas(supplyAreas, levels, symbol)];
     const entryPrice = entryRef ? Number(entryRef.price) : null;
 
     bestEntryArea = entryRef
@@ -1642,11 +1459,7 @@ function buildTradeCoachingSummary({
         : `${entryRef.day} ${entryRef.type} around ${entryRef.priceText}. For bullish bias, a broken resistance that becomes support, or a valid demand/support area, is the preferred entry area.`
       : "No clean bullish entry area confirmed yet. Wait for price to retest a broken resistance as support, or return to valid demand/support.";
 
-    entryTrigger = buildEntryTriggerText({
-      direction: "bullish",
-      chartDetection,
-    });
-
+    entryTrigger = buildEntryTriggerText({ direction: "bullish", chartDetection });
     stopLoss = "Place stop loss below the bullish trigger candle/pattern, or below the support/demand area. Do not place the stop inside the same area being used for entry.";
     takeProfit = buildTargetsText(targetAreas, "bullish", entryPrice, levels, profile);
     riskReward = "Only consider the bullish setup if the distance from entry to TP1 gives at least 1:2 risk-to-reward.";
@@ -1654,20 +1467,13 @@ function buildTradeCoachingSummary({
     verdict = failedAreas.length
       ? "Bullish structure exists, but failed CSA areas reduce setup quality. Do not buy a failed demand/support area unless price reclaims it and confirms again."
       : "Bullish setup is valid only if price pulls back to support/demand or broken resistance and confirms with a clean trigger. Do not buy in the middle without confirmation.";
-
     score = bias.confidence === "high" ? 8 : bias.confidence === "medium" ? 7 : 6;
     if (failedAreas.length) score = Math.max(4, score - 2);
   } else if (biasValue.includes("bearish")) {
     direction = "Bearish";
-
     const latestBrokenSupport = latestArea(brokenSupportAreas);
     const entryRef = latestBrokenSupport || latestArea(validSupplyAreas) || latestArea(resistanceAreas);
-
-    const targetAreas = [
-      ...filterValidAreas(supportAreas, levels, symbol),
-      ...filterValidAreas(demandAreas, levels, symbol),
-    ];
-
+    const targetAreas = [...filterValidAreas(supportAreas, levels, symbol), ...filterValidAreas(demandAreas, levels, symbol)];
     const entryPrice = entryRef ? Number(entryRef.price) : null;
 
     bestEntryArea = entryRef
@@ -1676,11 +1482,7 @@ function buildTradeCoachingSummary({
         : `${entryRef.day} ${entryRef.type} around ${entryRef.priceText}. For bearish bias, a broken support that becomes resistance, or a valid supply/resistance area, is the preferred entry area.`
       : "No clean bearish entry area confirmed yet. Wait for price to retest a broken support as resistance, or return to valid supply/resistance.";
 
-    entryTrigger = buildEntryTriggerText({
-      direction: "bearish",
-      chartDetection,
-    });
-
+    entryTrigger = buildEntryTriggerText({ direction: "bearish", chartDetection });
     stopLoss = "Place stop loss above the bearish trigger candle/pattern, or above the resistance/supply area. Do not place the stop inside the same area being used for entry.";
     takeProfit = buildTargetsText(targetAreas, "bearish", entryPrice, levels, profile);
     riskReward = "Only consider the bearish setup if the distance from entry to TP1 gives at least 1:2 risk-to-reward.";
@@ -1688,103 +1490,48 @@ function buildTradeCoachingSummary({
     verdict = failedAreas.length
       ? "Bearish structure exists, but failed CSA areas must be reclassified. Do not sell a failed supply/resistance area unless price loses it again and confirms."
       : "Bearish setup is valid only if price pulls back to resistance/supply or broken support and confirms with a clean trigger. Do not sell in the middle without confirmation.";
-
     score = bias.confidence === "high" ? 8 : bias.confidence === "medium" ? 7 : 6;
     if (failedAreas.length) score = Math.max(4, score - 2);
   }
 
-  return {
-    direction,
-    directionReason,
-    bestEntryArea,
-    entryTrigger,
-    stopLoss,
-    takeProfit,
-    riskReward,
-    tradeManagement,
-    verdict,
-    score,
-    brokenSupportAreas,
-    brokenResistanceAreas,
-    validSupplyAreas,
-    validDemandAreas,
-    failedAreas,
-  };
+  return { direction, directionReason, bestEntryArea, entryTrigger, stopLoss, takeProfit, riskReward, tradeManagement, verdict, score, brokenSupportAreas, brokenResistanceAreas, validSupplyAreas, validDemandAreas, failedAreas };
 }
 
-function buildSimpleStructureBreakdown(
-  levels = [],
-  normalizedSymbol = "",
-  profile = getSupportedCsaTimeframeProfile("H1")
-) {
+function buildSimpleStructureBreakdown(levels = [], normalizedSymbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
   if (!levels.length) return "- No structure data available.";
-
   return levels
     .map((period, index) => {
       const label = period.periodLabel || period.weekday || period.key;
-
       if (index === 0) {
-        return `${label}:
-- High ${formatPrice(period.high)} = first resistance for this ${profile.rangeKind}.
-- Low ${formatPrice(period.low)} = first support for this ${profile.rangeKind}.`;
+        return `${label}:\n- High ${formatPrice(period.high)} = first resistance for this ${profile.rangeKind}.\n- Low ${formatPrice(period.low)} = first support for this ${profile.rangeKind}.`;
       }
-
       const previous = levels[index - 1];
       const previousLabel = previous.periodLabel || previous.weekday || previous.key;
-
       const highComparison = compareHighWithTolerance(period.high, previous.high, normalizedSymbol);
       const lowComparison = compareLowWithTolerance(period.low, previous.low, normalizedSymbol);
-
       const highResult = highComparison.cleanBreak
         ? `High broke above ${previousLabel}'s high, so ${label} high became resistance.`
         : `High failed to cleanly break ${previousLabel}'s high, so ${label} high became supply.`;
-
       const lowResult = lowComparison.cleanBreak
         ? `Low broke below ${previousLabel}'s low, so ${label} low became support.`
         : `Low held/retested ${previousLabel}'s low, so ${label} low became demand.`;
-
-      return `${label}:
-- ${highResult}
-- ${lowResult}`;
+      return `${label}:\n- ${highResult}\n- ${lowResult}`;
     })
     .join("\n\n");
 }
 
-function buildDashboardFeedback({
-  marketReference,
-  chartDetection,
-  submittedInstrument,
-  timeframe,
-  selectedDateText,
-  detectedDateText,
-  setupScore = 0,
-}) {
+function buildDashboardFeedback({ marketReference, chartDetection, submittedInstrument, timeframe, selectedDateText, detectedDateText, setupScore = 0 }) {
   const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
   const levels = marketReference?.dailyLevels || [];
   const areas = marketReference?.csaAreas || [];
-  const bias =
-    marketReference?.directionalBias ||
-    calculateCsaDirectionalBias([], marketReference?.symbol || submittedInstrument, profile);
+  const bias = marketReference?.directionalBias || calculateCsaDirectionalBias([], marketReference?.symbol || submittedInstrument, profile);
   const symbol = marketReference?.symbol || submittedInstrument;
-
   const { resistanceAreas, supportAreas, supplyAreas, demandAreas } = splitAreas(areas);
-
-  const failedAreas = buildFailedAreas({
-    supportAreas,
-    resistanceAreas,
-    supplyAreas,
-    demandAreas,
-    levels,
-    symbol,
-  });
-
+  const failedAreas = buildFailedAreas({ supportAreas, resistanceAreas, supplyAreas, demandAreas, levels, symbol });
   const hasConfirmedTrigger = Boolean(chartDetection?.visibleTrigger);
   const rejectedContext = chartDetection?.rejectedTriggerContext || null;
-  const mixedBias =
-    String(bias?.biasCode || "").toLowerCase() === "mixed" ||
-    String(bias?.bias || "").toLowerCase().includes("mixed");
+  const mixedBias = String(bias?.biasCode || "").toLowerCase() === "mixed" || String(bias?.bias || "").toLowerCase().includes("mixed");
   const marketOk = Boolean(marketReference?.ok);
-
   const strengths = [];
   const weaknesses = [];
   const mistakes = [];
@@ -1795,27 +1542,17 @@ function buildDashboardFeedback({
     strengths.push(`Directional bias was calculated as ${bias.bias} with ${bias.confidence} confidence.`);
   } else {
     weaknesses.push(marketReference?.error || "Market-data reference was unavailable, so the review is less reliable.");
-    mistakes.push({
-      title: "Market data unavailable",
-      severity: "high",
-      detail: marketReference?.error || "CSA structure could not be verified with OHLC data.",
-      correction: "Confirm symbol, timeframe, selected date, and Twelve Data API key.",
-    });
+    mistakes.push({ title: "Market data unavailable", severity: "high", detail: marketReference?.error || "CSA structure could not be verified with OHLC data.", correction: "Confirm symbol, timeframe, selected date, and Twelve Data API key." });
   }
 
-  if (chartDetection?.isTradingChart) {
-    strengths.push("Uploaded image passed the trading-chart validation check.");
-  } else {
-    weaknesses.push("Uploaded image did not pass trading-chart validation.");
-  }
+  if (chartDetection?.isTradingChart) strengths.push("Uploaded image passed the trading-chart validation check.");
+  else weaknesses.push("Uploaded image did not pass trading-chart validation.");
 
-  if (chartDetection?.detectedInstrument || chartDetection?.detectedTimeframe) {
-    strengths.push("Chart context check was completed using the uploaded screenshot.");
-  }
+  if (chartDetection?.hasUsablePriceData) strengths.push("Uploaded chart contains usable visible price data.");
+  else weaknesses.push(chartDetection?.insufficientDataReason || "Uploaded chart does not contain usable visible price data.");
 
-  if (areas.length) {
-    strengths.push("CSA support/resistance and supply/demand areas were identified.");
-  }
+  if (chartDetection?.detectedInstrument || chartDetection?.detectedTimeframe) strengths.push("Chart context check was completed using the uploaded screenshot.");
+  if (areas.length) strengths.push("CSA support/resistance and supply/demand areas were identified.");
 
   if (hasConfirmedTrigger) {
     strengths.push(`A visible trigger was detected: ${chartDetection.visibleTrigger}.`);
@@ -1824,24 +1561,15 @@ function buildDashboardFeedback({
     mistakes.push({
       title: "No confirmed entry trigger",
       severity: "medium",
-      detail: rejectedContext
-        ? `The chart showed context such as ${rejectedContext}, but that is not confirmation by itself.`
-        : "No clear candlestick or chart-pattern confirmation was visible near the reviewed area.",
-      correction:
-        "Wait for a clear trigger such as engulfing, pin bar rejection, inside bar break, lower high/higher low, breakout/breakdown, or clean break-and-hold.",
+      detail: rejectedContext ? `The chart showed context such as ${rejectedContext}, but that is not confirmation by itself.` : "No clear candlestick or chart-pattern confirmation was visible near the reviewed area.",
+      correction: "Wait for a clear trigger such as engulfing, pin bar rejection, inside bar break, lower high/higher low, breakout/breakdown, or clean break-and-hold.",
     });
   }
 
   if (failedAreas.length) {
     weaknesses.push(`${failedAreas.length} failed CSA area(s) detected. These areas did not hold as expected.`);
-
     failedAreas.slice(0, 5).forEach((area) => {
-      mistakes.push({
-        title: area.mistakeLabel,
-        severity: "high",
-        detail: area.explanation,
-        correction: `Do not keep using ${areaLabel(area)} as the original entry area after it fails. Reclassify it: ${area.newRole}.`,
-      });
+      mistakes.push({ title: area.mistakeLabel, severity: "high", detail: area.explanation, correction: `Do not keep using ${areaLabel(area)} as the original entry area after it fails. Reclassify it: ${area.newRole}.` });
     });
   } else if (marketOk) {
     strengths.push("No failed CSA support/resistance or supply/demand area was detected in the reviewed structure period.");
@@ -1849,30 +1577,14 @@ function buildDashboardFeedback({
 
   if (mixedBias) {
     weaknesses.push("Directional bias is mixed, so setup quality is weaker until price reaches an outer CSA area or breaks structure cleanly.");
-    mistakes.push({
-      title: "Mixed structure",
-      severity: "medium",
-      detail: "CSA evidence does not show a clean one-sided move.",
-      correction:
-        "Avoid middle-of-range entries. Wait for price to reach a clear outer CSA area or break and hold beyond the range.",
-    });
+    mistakes.push({ title: "Mixed structure", severity: "medium", detail: "CSA evidence does not show a clean one-sided move.", correction: "Avoid middle-of-range entries. Wait for price to reach a clear outer CSA area or break and hold beyond the range." });
   }
 
-  if (rejectedContext && !hasConfirmedTrigger) {
-    weaknesses.push(`Context-only movement detected: ${rejectedContext}. This should not be treated as confirmation.`);
-  }
+  if (rejectedContext && !hasConfirmedTrigger) weaknesses.push(`Context-only movement detected: ${rejectedContext}. This should not be treated as confirmation.`);
 
-  const setupQualityScore = clampScore(
-    (setupScore || 0) * 10 - failedAreas.length * 8 - (mixedBias ? 12 : 0) + (marketOk ? 5 : -20)
-  );
-
-  const entryAccuracyScore = clampScore(
-    65 + (hasConfirmedTrigger ? 15 : -18) - failedAreas.length * 10 - (mixedBias ? 8 : 0)
-  );
-
-  const riskManagementScore = clampScore(
-    70 - failedAreas.length * 8 - (!hasConfirmedTrigger ? 8 : 0) - (mixedBias ? 5 : 0)
-  );
+  const setupQualityScore = clampScore((setupScore || 0) * 10 - failedAreas.length * 8 - (mixedBias ? 12 : 0) + (marketOk ? 5 : -20));
+  const entryAccuracyScore = clampScore(65 + (hasConfirmedTrigger ? 15 : -18) - failedAreas.length * 10 - (mixedBias ? 8 : 0));
+  const riskManagementScore = clampScore(70 - failedAreas.length * 8 - (!hasConfirmedTrigger ? 8 : 0) - (mixedBias ? 5 : 0));
 
   const contextCheck = {
     selectedInstrument: submittedInstrument || "Not provided",
@@ -1883,62 +1595,37 @@ function buildDashboardFeedback({
     detectedLatestVisibleDate: detectedDateText || chartDetection?.latestVisibleDate || "Not detected",
     status: marketOk ? "Matched and reviewed" : "Review limited",
     structureUsed: profile.structureLabel,
-    rangeUsed: marketReference?.weekRange
-      ? `${marketReference.weekRange.startDate} to ${marketReference.weekRange.endDate}`
-      : "Not available",
+    rangeUsed: marketReference?.weekRange ? `${marketReference.weekRange.startDate} to ${marketReference.weekRange.endDate}` : "Not available",
     chartValidation: chartDetection?.isTradingChart ? "Valid trading chart" : "Invalid or unverified chart",
+    chartDataQuality: chartDetection?.chartDataQuality || "unclear",
+    visibleCandleCount: chartDetection?.visibleCandleCount || 0,
   };
 
   const setupQuality = {
     score: setupQualityScore,
     label: scoreLabel(setupQualityScore),
-    summary: failedAreas.length
-      ? "Setup quality is reduced because one or more CSA areas failed instead of holding as expected."
-      : mixedBias
-      ? "Setup quality is limited because the structure is mixed/range-bound."
-      : "Setup quality is based on CSA structure, bias clarity, valid areas, and failed-area checks.",
+    summary: failedAreas.length ? "Setup quality is reduced because one or more CSA areas failed instead of holding as expected." : mixedBias ? "Setup quality is limited because the structure is mixed/range-bound." : "Setup quality is based on CSA structure, bias clarity, valid areas, and failed-area checks.",
   };
 
   const entryAccuracy = {
     score: entryAccuracyScore,
     label: scoreLabel(entryAccuracyScore),
-    summary: hasConfirmedTrigger
-      ? "Entry accuracy improves because a visible trigger was detected, but it must still align with the CSA area."
-      : "Entry accuracy is reduced because no confirmed trigger was visible at the reviewed area.",
+    summary: hasConfirmedTrigger ? "Entry accuracy improves because a visible trigger was detected, but it must still align with the CSA area." : "Entry accuracy is reduced because no confirmed trigger was visible at the reviewed area.",
   };
 
   const riskManagement = {
     score: riskManagementScore,
     label: scoreLabel(riskManagementScore),
-    summary: failedAreas.length
-      ? "Risk management must account for failed areas. Stops should not be placed inside failed zones, and trades should not be forced after invalidation."
-      : "Risk management should still confirm stop placement beyond the structure area and minimum 1:2 risk-to-reward.",
+    summary: failedAreas.length ? "Risk management must account for failed areas. Stops should not be placed inside failed zones, and trades should not be forced after invalidation." : "Risk management should still confirm stop placement beyond the structure area and minimum 1:2 risk-to-reward.",
   };
 
   const aiMistakeDetectionHub = mistakes.length
     ? mistakes
-    : [
-        {
-          title: "No major mistake detected",
-          severity: "low",
-          detail:
-            "No failed CSA area, mismatch, or obvious confirmation problem was detected from the available data.",
-          correction:
-            "Still confirm entry trigger, stop placement, and risk-to-reward before considering any setup.",
-        },
-      ];
-
-  const finalStrengths = strengths.length
-    ? strengths.slice(0, 7)
-    : ["CSA Coach completed the review, but no specific strength was available from the returned data."];
-
-  const finalWeaknesses = weaknesses.length
-    ? weaknesses.slice(0, 7)
-    : ["No major weakness detected from the available CSA structure data."];
+    : [{ title: "No major mistake detected", severity: "low", detail: "No failed CSA area, mismatch, or obvious confirmation problem was detected from the available data.", correction: "Still confirm entry trigger, stop placement, and risk-to-reward before considering any setup." }];
 
   return {
-    strengths: finalStrengths,
-    weaknesses: finalWeaknesses,
+    strengths: strengths.length ? strengths.slice(0, 7) : ["CSA Coach completed the review, but no specific strength was available from the returned data."],
+    weaknesses: weaknesses.length ? weaknesses.slice(0, 7) : ["No major weakness detected from the available CSA structure data."],
     mistakes: aiMistakeDetectionHub,
     aiMistakeDetectionHub,
     failedAreas,
@@ -1947,140 +1634,61 @@ function buildDashboardFeedback({
     setupQuality,
     entryAccuracy,
     riskManagement,
-    scores: {
-      setupQuality: setupQualityScore,
-      entryAccuracy: entryAccuracyScore,
-      riskManagement: riskManagementScore,
-    },
+    scores: { setupQuality: setupQualityScore, entryAccuracy: entryAccuracyScore, riskManagement: riskManagementScore },
   };
 }
 
 function buildDashboardAliases(dashboardFeedback = {}) {
   const contextCheck = dashboardFeedback.contextCheck || dashboardFeedback.chartContextCheck || {};
-  const setupQuality = dashboardFeedback.setupQuality || {
-    score: 0,
-    label: "Unavailable",
-    summary: "Setup quality was not calculated.",
-  };
-  const entryAccuracy = dashboardFeedback.entryAccuracy || {
-    score: 0,
-    label: "Unavailable",
-    summary: "Entry accuracy was not calculated.",
-  };
-  const riskManagement = dashboardFeedback.riskManagement || {
-    score: 0,
-    label: "Unavailable",
-    summary: "Risk management was not calculated.",
-  };
-
-  const strengths =
-    Array.isArray(dashboardFeedback.strengths) && dashboardFeedback.strengths.length
-      ? dashboardFeedback.strengths
-      : ["CSA Coach completed the review, but no strength item was returned."];
-
-  const weaknesses =
-    Array.isArray(dashboardFeedback.weaknesses) && dashboardFeedback.weaknesses.length
-      ? dashboardFeedback.weaknesses
-      : ["No major weakness detected from the available CSA structure data."];
-
-  const aiMistakeDetectionHub =
-    Array.isArray(dashboardFeedback.aiMistakeDetectionHub) &&
-    dashboardFeedback.aiMistakeDetectionHub.length
-      ? dashboardFeedback.aiMistakeDetectionHub
-      : [
-          {
-            title: "No major mistake detected",
-            severity: "low",
-            detail: "No failed CSA area, mismatch, or obvious confirmation problem was detected.",
-            correction: "Still confirm trigger, stop placement, and risk-to-reward.",
-          },
-        ];
-
-  const failedAreas = Array.isArray(dashboardFeedback.failedAreas)
-    ? dashboardFeedback.failedAreas
-    : [];
+  const setupQuality = dashboardFeedback.setupQuality || { score: 0, label: "Unavailable", summary: "Setup quality was not calculated." };
+  const entryAccuracy = dashboardFeedback.entryAccuracy || { score: 0, label: "Unavailable", summary: "Entry accuracy was not calculated." };
+  const riskManagement = dashboardFeedback.riskManagement || { score: 0, label: "Unavailable", summary: "Risk management was not calculated." };
+  const strengths = Array.isArray(dashboardFeedback.strengths) && dashboardFeedback.strengths.length ? dashboardFeedback.strengths : ["CSA Coach completed the review, but no strength item was returned."];
+  const weaknesses = Array.isArray(dashboardFeedback.weaknesses) && dashboardFeedback.weaknesses.length ? dashboardFeedback.weaknesses : ["No major weakness detected from the available CSA structure data."];
+  const aiMistakeDetectionHub = Array.isArray(dashboardFeedback.aiMistakeDetectionHub) && dashboardFeedback.aiMistakeDetectionHub.length ? dashboardFeedback.aiMistakeDetectionHub : [{ title: "No major mistake detected", severity: "low", detail: "No failed CSA area, mismatch, or obvious confirmation problem was detected.", correction: "Still confirm trigger, stop placement, and risk-to-reward." }];
+  const failedAreas = Array.isArray(dashboardFeedback.failedAreas) ? dashboardFeedback.failedAreas : [];
 
   return {
     strengths,
     weaknesses,
-
     chartContextCheck: contextCheck,
     contextCheck,
     chartContext: contextCheck,
     chartContextStatus: contextCheck.status || "Not available",
-
     selectedContext: {
       instrument: contextCheck.selectedInstrument || "Not provided",
       timeframe: contextCheck.selectedTimeframe || "Not provided",
       date: contextCheck.selectedDate || "Not provided",
     },
-
     detectedContext: {
       instrument: contextCheck.detectedInstrument || "Not detected",
       timeframe: contextCheck.detectedTimeframe || "Not detected",
       latestVisibleDate: contextCheck.detectedLatestVisibleDate || "Not detected",
     },
-
     setupQuality,
     setupQualityScore: setupQuality.score,
     setupQualityLabel: setupQuality.label,
     setupQualitySummary: setupQuality.summary,
-
     entryAccuracy,
     entryAccuracyScore: entryAccuracy.score,
     entryAccuracyLabel: entryAccuracy.label,
     entryAccuracySummary: entryAccuracy.summary,
-
     riskManagement,
     riskManagementScore: riskManagement.score,
     riskManagementLabel: riskManagement.label,
     riskManagementSummary: riskManagement.summary,
-
     aiMistakeDetectionHub,
     mistakeDetectionHub: aiMistakeDetectionHub,
     mistakeHub: aiMistakeDetectionHub,
     mistakes: aiMistakeDetectionHub,
-
     failedAreas,
-
-    dashboard: {
-      strengths,
-      weaknesses,
-      chartContextCheck: contextCheck,
-      contextCheck,
-      setupQuality,
-      entryAccuracy,
-      riskManagement,
-      aiMistakeDetectionHub,
-      mistakes: aiMistakeDetectionHub,
-      failedAreas,
-    },
-
-    dashboardCards: {
-      strengths,
-      weaknesses,
-      chartContextCheck: contextCheck,
-      setupQuality,
-      entryAccuracy,
-      riskManagement,
-      aiMistakeDetectionHub,
-      failedAreas,
-    },
+    dashboard: { strengths, weaknesses, chartContextCheck: contextCheck, contextCheck, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub, failedAreas },
+    dashboardCards: { strengths, weaknesses, chartContextCheck: contextCheck, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, failedAreas },
   };
 }
 
-function buildDeterministicCsaAnalysis({
-  marketReference,
-  dateDecision,
-  chartDetection,
-  submittedInstrument,
-  normalizedSymbol,
-  timeframe,
-}) {
-  const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
-
-  if (!marketReference || !marketReference.ok) {
-    return `CSA COACH VERDICT
+function buildSimpleTextAnalysisForNoMarketData({ marketReference, dateDecision, chartDetection, profile }) {
+  return `CSA COACH VERDICT
 
 Directional Bias:
 - Insufficient data
@@ -2119,42 +1727,25 @@ Data Issue:
 - CSA structure expected: ${profile.structureLabel}
 - Detected instrument: ${chartDetection?.detectedInstrument || "Not detected"}
 - Detected timeframe: ${chartDetection?.detectedTimeframe || "Not detected"}`;
-  }
+}
+
+function buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, submittedInstrument, normalizedSymbol, timeframe }) {
+  const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
+  if (!marketReference || !marketReference.ok) return buildSimpleTextAnalysisForNoMarketData({ marketReference, dateDecision, chartDetection, profile });
 
   const levels = marketReference.dailyLevels || [];
   const areas = marketReference.csaAreas || [];
   const bias = marketReference.directionalBias || calculateCsaDirectionalBias(levels, normalizedSymbol, profile);
   const tolerance = getCleanBreakTolerance(normalizedSymbol);
-
   const { resistanceAreas, supportAreas, supplyAreas, demandAreas } = splitAreas(areas);
-
   const validSupplyAreas = filterValidAreas(supplyAreas, levels, normalizedSymbol);
   const validDemandAreas = filterValidAreas(demandAreas, levels, normalizedSymbol);
   const brokenSupplyAreas = filterBrokenAreas(supplyAreas, levels, normalizedSymbol);
   const brokenDemandAreas = filterBrokenAreas(demandAreas, levels, normalizedSymbol);
   const brokenSupportAreas = filterBrokenAreas(supportAreas, levels, normalizedSymbol);
   const brokenResistanceAreas = filterBrokenAreas(resistanceAreas, levels, normalizedSymbol);
-
-  const failedAreas = buildFailedAreas({
-    supportAreas,
-    resistanceAreas,
-    supplyAreas,
-    demandAreas,
-    levels,
-    symbol: normalizedSymbol,
-  });
-
-  const tradeCoach = buildTradeCoachingSummary({
-    resistanceAreas,
-    supportAreas,
-    supplyAreas,
-    demandAreas,
-    levels,
-    bias,
-    symbol: normalizedSymbol,
-    chartDetection,
-    profile,
-  });
+  const failedAreas = buildFailedAreas({ supportAreas, resistanceAreas, supplyAreas, demandAreas, levels, symbol: normalizedSymbol });
+  const tradeCoach = buildTradeCoachingSummary({ resistanceAreas, supportAreas, supplyAreas, demandAreas, levels, bias, symbol: normalizedSymbol, chartDetection, profile });
 
   return `CSA COACH VERDICT
 
@@ -2243,6 +1834,8 @@ Chart Trigger Scan:
 - Rejected context-only movement: ${chartDetection?.rejectedTriggerContext || "None"}
 - Trigger direction: ${chartDetection?.triggerDirection || "Not detected"}
 - Trigger confidence: ${chartDetection?.triggerConfidence || "low"}
+- Chart data quality: ${chartDetection?.chartDataQuality || "unclear"}
+- Visible candle count: ${chartDetection?.visibleCandleCount || 0}
 
 Technical Notes:
 - Data source: Twelve Data
@@ -2255,9 +1848,7 @@ Technical Notes:
 - Data used up to: ${marketReference.weekRange.endDate}
 - Clean-break tolerance: ${formatPrice(tolerance)}
 - A failed area is an area that was expected to hold as an entry/reaction zone but price closed through it.
-- Supply/demand is ignored once price breaks and closes past the area.
-- Take-profit levels start from previous structure areas, not the present area.
-- Bounce, pullback, retracement, consolidation, or reaction is treated as context only, not a confirmed entry trigger.
+- Twelve Data supports/validates levels only; it must not replace an uploaded chart with no usable visible price data.
 - Stop loss, target, and risk-to-reward are structural coaching comments only. They are not financial advice.`;
 }
 
@@ -2284,12 +1875,37 @@ How to fix:
 - Make sure the selected pair and timeframe match the uploaded chart.`;
 }
 
-function buildInstrumentMismatchAnalysis({
-  selectedInstrument,
-  detectedInstrument,
-  selectedTimeframe,
-  detectedTimeframe,
-}) {
+function buildInsufficientChartDataAnalysis({ submittedInstrument, timeframe, selectedDateText, chartDetection }) {
+  return `Insufficient Chart Data
+
+What happened:
+- The uploaded image appears to be a trading chart, but it does not show enough usable visible price data for CSA Coach to review the setup.
+
+Why analysis was stopped:
+- CSA Coach must verify the uploaded chart itself before using market-data reference levels.
+- The chart must show enough visible candles/price movement around the selected chart/trade date.
+- Twelve Data cannot replace a blank, empty, loading, cropped, or unclear uploaded chart.
+
+Selected:
+- Instrument: ${submittedInstrument || "Not provided"}
+- Timeframe: ${timeframe || "Not provided"}
+- Selected chart/trade date: ${selectedDateText || "Not provided"}
+
+AI image check:
+- Chart data quality: ${chartDetection?.chartDataQuality || "unclear"}
+- Visible candle count: ${chartDetection?.visibleCandleCount ?? "Not detected"}
+- Selected date visible/covered: ${chartDetection?.selectedDateVisible === true ? "Yes" : "No / not confirmed"}
+- Reason: ${chartDetection?.insufficientDataReason || "The chart does not show enough usable price movement."}
+
+How to fix:
+- Upload a clearer chart screenshot.
+- Make sure candles are visible.
+- Make sure the selected date is visible or reasonably covered on the chart.
+- Make sure there is enough left-side and right-side price structure.
+- Do not upload a blank, loading, or heavily cropped chart.`;
+}
+
+function buildInstrumentMismatchAnalysis({ selectedInstrument, detectedInstrument, selectedTimeframe, detectedTimeframe }) {
   return `Chart Context Mismatch
 
 Selected Instrument:
@@ -2312,12 +1928,7 @@ How To Fix:
 - Upload the correct chart for the selected pair.`;
 }
 
-function buildTimeframeMismatchAnalysis({
-  selectedInstrument,
-  detectedInstrument,
-  selectedTimeframe,
-  detectedTimeframe,
-}) {
+function buildTimeframeMismatchAnalysis({ selectedInstrument, detectedInstrument, selectedTimeframe, detectedTimeframe }) {
   return `Chart Timeframe Mismatch
 
 Selected Instrument:
@@ -2340,20 +1951,13 @@ How To Fix:
 - Upload a chart that matches the selected timeframe.`;
 }
 
-function buildStoppedDashboard({
-  errorType,
-  error,
-  submittedInstrument,
-  timeframe,
-  chartDetection,
-  selectedTimeframeProfile,
-}) {
+function buildStoppedDashboard({ errorType, error, submittedInstrument, timeframe, chartDetection, selectedTimeframeProfile }) {
   return buildDashboardAliases({
     strengths: [
       "Chart context validation was completed before the review was stopped.",
       `CSA structure expected: ${selectedTimeframeProfile?.structureLabel || "Not available"}.`,
     ],
-    weaknesses: [error],
+    weaknesses: [error, chartDetection?.insufficientDataReason || chartDetection?.chartValidityReason || "Analysis stopped."],
     contextCheck: {
       selectedInstrument: submittedInstrument || "Not provided",
       selectedTimeframe: timeframe || "Not provided",
@@ -2365,43 +1969,19 @@ function buildStoppedDashboard({
       structureUsed: selectedTimeframeProfile?.structureLabel || "Not available",
       rangeUsed: "Not available",
       chartValidation: chartDetection?.isTradingChart ? "Valid trading chart" : "Invalid or unverified chart",
+      chartDataQuality: chartDetection?.chartDataQuality || "unclear",
+      visibleCandleCount: chartDetection?.visibleCandleCount || 0,
     },
     setupQuality: { score: 0, label: "Stopped", summary: error },
     entryAccuracy: { score: 0, label: "Stopped", summary: error },
     riskManagement: { score: 0, label: "Stopped", summary: error },
-    aiMistakeDetectionHub: [
-      {
-        title: errorType,
-        severity: "high",
-        detail: error,
-        correction: "Correct the upload or selected context and run the analysis again.",
-      },
-    ],
+    aiMistakeDetectionHub: [{ title: errorType, severity: "high", detail: error, correction: "Correct the upload or selected context and run the analysis again." }],
     failedAreas: [],
   });
 }
 
-function stoppedResponse({
-  res,
-  errorType,
-  error,
-  analysis,
-  submittedInstrument,
-  timeframe,
-  chartDetection,
-  normalizedSymbol,
-  timezone,
-  selectedTimeframeProfile,
-}) {
-  const stoppedDashboard = buildStoppedDashboard({
-    errorType,
-    error,
-    submittedInstrument,
-    timeframe,
-    chartDetection,
-    selectedTimeframeProfile,
-  });
-
+function stoppedResponse({ res, errorType, error, analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile }) {
+  const stoppedDashboard = buildStoppedDashboard({ errorType, error, submittedInstrument, timeframe, chartDetection, selectedTimeframeProfile });
   return res.status(200).json({
     success: false,
     errorType,
@@ -2440,18 +2020,11 @@ function stoppedResponse({
 }
 
 app.get("/", (req, res) => {
-  res.json({
-    status: "ok",
-    message: "CSA Coach backend is running",
-  });
+  res.json({ status: "ok", message: "CSA Coach backend is running" });
 });
 
 app.get("/health", (req, res) => {
-  res.json({
-    ok: true,
-    service: "csa-coach-backend",
-    time: new Date().toISOString(),
-  });
+  res.json({ ok: true, service: "csa-coach-backend", time: new Date().toISOString() });
 });
 
 app.get("/test-twelve", async (req, res) => {
@@ -2464,20 +2037,10 @@ app.get("/test-twelve", async (req, res) => {
     const chartDate = parseISODateOnly(date);
 
     if (!chartDate) {
-      return res.status(400).json({
-        ok: false,
-        error: "Invalid date. Use YYYY-MM-DD format.",
-      });
+      return res.status(400).json({ ok: false, error: "Invalid date. Use YYYY-MM-DD format." });
     }
 
-    const result = await fetchTwelveDataStructureLevels({
-      symbol,
-      chartDate,
-      timeframe,
-      timezone,
-      analysisType,
-    });
-
+    const result = await fetchTwelveDataStructureLevels({ symbol, chartDate, timeframe, timezone, analysisType });
     res.json({
       ok: result.ok,
       symbol,
@@ -2498,28 +2061,18 @@ app.get("/test-twelve", async (req, res) => {
     });
   } catch (error) {
     console.error("test-twelve error:", error);
-
-    res.status(500).json({
-      ok: false,
-      error: error.message,
-    });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
 app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
   try {
     if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({
-        success: false,
-        error: "OPENAI_API_KEY is missing on the server.",
-      });
+      return res.status(500).json({ success: false, error: "OPENAI_API_KEY is missing on the server." });
     }
 
     if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        error: "No chart image uploaded.",
-      });
+      return res.status(400).json({ success: false, error: "No chart image uploaded." });
     }
 
     const {
@@ -2540,7 +2093,6 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const normalizedSymbol = normalizeSymbol(submittedInstrument);
     const mode = normalizeAnalysisType(analysisType);
     const selectedTimeframeProfile = getSupportedCsaTimeframeProfile(timeframe);
-
     const imageBase64 = req.file.buffer.toString("base64");
     const mimeType = req.file.mimetype || "image/png";
     const selectedDate = parseISODateOnly(chartDate || tradeDate);
@@ -2548,134 +2100,47 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const chartDetection = await detectChartContextFromImage({
       imageBase64,
       mimeType,
+      submittedInstrument,
+      selectedTimeframe: timeframe,
+      selectedDateText: chartDate || tradeDate || "",
+      analysisType: mode,
     });
 
     if (!chartDetection.isTradingChart) {
-      const analysis = buildInvalidChartAnalysis({
-        submittedInstrument,
-        timeframe,
-        chartDetection,
-      });
-
-      return stoppedResponse({
-        res,
-        errorType: "invalid_chart_image",
-        error: "Uploaded image is not a valid trading chart.",
-        analysis,
-        submittedInstrument,
-        timeframe,
-        chartDetection,
-        normalizedSymbol,
-        timezone,
-        selectedTimeframeProfile,
-      });
+      const analysis = buildInvalidChartAnalysis({ submittedInstrument, timeframe, chartDetection });
+      return stoppedResponse({ res, errorType: "invalid_chart_image", error: "Uploaded image is not a valid trading chart.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
 
-    const instrumentMismatch = hasStrongInstrumentMismatch({
-      selectedInstrument: normalizedSymbol || submittedInstrument,
-      detectedInstrument: chartDetection.detectedInstrument,
-    });
+    if (!isUploadedChartDataUsable(chartDetection, chartDate || tradeDate || "")) {
+      const analysis = buildInsufficientChartDataAnalysis({ submittedInstrument, timeframe, selectedDateText: chartDate || tradeDate || "", chartDetection });
+      return stoppedResponse({ res, errorType: "insufficient_chart_data", error: "Uploaded chart does not have enough visible price data for review.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
+    }
 
+    const instrumentMismatch = hasStrongInstrumentMismatch({ selectedInstrument: normalizedSymbol || submittedInstrument, detectedInstrument: chartDetection.detectedInstrument });
     if (instrumentMismatch) {
-      const analysis = buildInstrumentMismatchAnalysis({
-        selectedInstrument: submittedInstrument,
-        detectedInstrument: chartDetection.detectedInstrument,
-        selectedTimeframe: timeframe,
-        detectedTimeframe: chartDetection.detectedTimeframe,
-      });
-
-      return stoppedResponse({
-        res,
-        errorType: "instrument_mismatch",
-        error: "Selected instrument does not match uploaded chart.",
-        analysis,
-        submittedInstrument,
-        timeframe,
-        chartDetection,
-        normalizedSymbol,
-        timezone,
-        selectedTimeframeProfile,
-      });
+      const analysis = buildInstrumentMismatchAnalysis({ selectedInstrument: submittedInstrument, detectedInstrument: chartDetection.detectedInstrument, selectedTimeframe: timeframe, detectedTimeframe: chartDetection.detectedTimeframe });
+      return stoppedResponse({ res, errorType: "instrument_mismatch", error: "Selected instrument does not match uploaded chart.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
 
-    const timeframeMismatch = hasStrongTimeframeMismatch({
-      selectedTimeframe: timeframe,
-      detectedTimeframe: chartDetection.detectedTimeframe,
-    });
-
+    const timeframeMismatch = hasStrongTimeframeMismatch({ selectedTimeframe: timeframe, detectedTimeframe: chartDetection.detectedTimeframe });
     if (timeframeMismatch) {
-      const analysis = buildTimeframeMismatchAnalysis({
-        selectedInstrument: submittedInstrument,
-        detectedInstrument: chartDetection.detectedInstrument,
-        selectedTimeframe: timeframe,
-        detectedTimeframe: chartDetection.detectedTimeframe,
-      });
-
-      return stoppedResponse({
-        res,
-        errorType: "timeframe_mismatch",
-        error: "Selected timeframe does not match uploaded chart timeframe.",
-        analysis,
-        submittedInstrument,
-        timeframe,
-        chartDetection,
-        normalizedSymbol,
-        timezone,
-        selectedTimeframeProfile,
-      });
+      const analysis = buildTimeframeMismatchAnalysis({ selectedInstrument: submittedInstrument, detectedInstrument: chartDetection.detectedInstrument, selectedTimeframe: timeframe, detectedTimeframe: chartDetection.detectedTimeframe });
+      return stoppedResponse({ res, errorType: "timeframe_mismatch", error: "Selected timeframe does not match uploaded chart timeframe.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
 
-    const dateDecision = chooseFinalChartDate({
-      selectedDate,
-      detection: chartDetection,
-      analysisType: mode,
-    });
+    const dateDecision = chooseFinalChartDate({ selectedDate, detection: chartDetection, analysisType: mode });
+    const marketReference = await fetchTwelveDataStructureLevels({ symbol: normalizedSymbol, chartDate: dateDecision.finalDate, timeframe, timezone: timezone || "UTC", analysisType: mode });
 
-    const marketReference = await fetchTwelveDataStructureLevels({
-      symbol: normalizedSymbol,
-      chartDate: dateDecision.finalDate,
-      timeframe,
-      timezone: timezone || "UTC",
-      analysisType: mode,
-    });
-
-    const analysis = buildDeterministicCsaAnalysis({
-      marketReference,
-      dateDecision,
-      chartDetection,
-      analysisType: mode,
-      submittedInstrument,
-      normalizedSymbol,
-      timeframe,
-      timezone: timezone || "UTC",
-      submittedNotes,
-    });
-
-    const bias =
-      marketReference.directionalBias ||
-      calculateCsaDirectionalBias([], normalizedSymbol, selectedTimeframeProfile);
-
+    const analysis = buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, analysisType: mode, submittedInstrument, normalizedSymbol, timeframe, timezone: timezone || "UTC", submittedNotes });
+    const bias = marketReference.directionalBias || calculateCsaDirectionalBias([], normalizedSymbol, selectedTimeframeProfile);
     const setupScoreMatch = String(analysis).match(/Overall Setup Score:\s*\n- (\d+)\/10/i);
     const setupScore = setupScoreMatch ? Number(setupScoreMatch[1]) : 0;
 
-    const dashboardFeedback = buildDashboardFeedback({
-      marketReference,
-      chartDetection,
-      submittedInstrument,
-      timeframe,
-      selectedDateText: chartDate || tradeDate || "Not provided",
-      detectedDateText: chartDetection.latestVisibleDate || "Not detected",
-      setupScore,
-    });
-
+    const dashboardFeedback = buildDashboardFeedback({ marketReference, chartDetection, submittedInstrument, timeframe, selectedDateText: chartDate || tradeDate || "Not provided", detectedDateText: chartDetection.latestVisibleDate || "Not detected", setupScore });
     const dashboardAliases = buildDashboardAliases(dashboardFeedback);
+    const structureLabel = marketReference.profile?.structureLabel || selectedTimeframeProfile.structureLabel || "CSA structure levels";
 
-    const structureLabel =
-      marketReference.profile?.structureLabel ||
-      selectedTimeframeProfile.structureLabel ||
-      "CSA structure levels";
-
-    res.json({
+    return res.json({
       success: true,
       analysis,
       summary: analysis,
@@ -2692,24 +2157,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       contextStatus: marketReference.ok
         ? `Market-data-backed CSA setup review completed using ${structureLabel}.`
         : `Setup review completed without market data: ${marketReference.error}`,
-      grade:
-        setupScore >= 8
-          ? "A"
-          : setupScore >= 7
-          ? "B"
-          : setupScore >= 6
-          ? "C"
-          : setupScore >= 4
-          ? "D"
-          : "F",
+      grade: setupScore >= 8 ? "A" : setupScore >= 7 ? "B" : setupScore >= 6 ? "C" : setupScore >= 4 ? "D" : "F",
       confidence: setupScore * 10,
       structureScore: dashboardFeedback.scores.setupQuality,
       executionScore: dashboardFeedback.scores.entryAccuracy,
       riskScore: dashboardFeedback.scores.riskManagement,
-
-      // Important: returned in many aliases so frontend cards can find them.
       ...dashboardAliases,
-
       coachAdvice: [analysis],
       journalTags: [
         "setup review",
@@ -2745,12 +2198,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     });
   } catch (error) {
     console.error("CSA Coach analyze error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: "Something went wrong while analyzing the chart.",
-      details: error.message,
-    });
+    return res.status(500).json({ success: false, error: "Something went wrong while analyzing the chart.", details: error.message });
   }
 });
 
@@ -2763,7 +2211,6 @@ process.on("unhandledRejection", (reason) => {
 });
 
 const PORT = process.env.PORT || 10000;
-
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`CSA Coach backend running on port ${PORT}`);
 });
