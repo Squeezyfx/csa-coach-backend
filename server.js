@@ -4,6 +4,7 @@ import multer from "multer";
 import OpenAI from "openai";
 
 const app = express();
+
 app.use(cors());
 app.use(express.json({ limit: "25mb" }));
 
@@ -12,7 +13,10 @@ const upload = multer({
   limits: { fileSize: 15 * 1024 * 1024 },
 });
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
 const TWELVE_DATA_BASE_URL = "https://api.twelvedata.com/time_series";
 
 const CHART_DETECTION_PROMPT = `
@@ -38,18 +42,18 @@ Invalid images include:
 Detect:
 1. Whether the uploaded image is a valid trading chart.
 2. The trading instrument/pair visible on the chart, if readable.
-3. The timeframe visible on the chart, if readable. Use M1, M5, M15, M30, H1, H4, D1, W1.
+3. The timeframe visible on the chart, if readable. Use M1, M5, M15, M30, H1, H4, D1, W1, MN.
 4. The latest/final visible calendar date on the chart, if readable, as YYYY-MM-DD.
 5. Any visible price-action or chart-pattern ENTRY TRIGGER near the latest price/right side of the chart.
 
 Very important:
 - If the image is not a valid trading chart, return isTradingChart as false and do not guess anything else.
-- If the image is not a valid trading chart, set chartValidityReason to a clear reason like "The uploaded image appears to be an hourglass/photo, not a financial trading chart."
+- If the image is not a valid trading chart, set chartValidityReason to a clear reason like "The uploaded image is not a financial trading chart."
 - Do not analyze non-chart images.
 - Do not guess instrument, timeframe, or date if unreadable.
 - Ignore Sunday candles.
 
-Very important entry-trigger rules:
+Entry-trigger rules:
 - A confirmed entry trigger must be a clear candlestick or chart-pattern confirmation.
 - Valid trigger examples: bullish engulfing, bearish engulfing, pin bar rejection, hammer rejection, doji rejection, inside bar break, lower high, higher low, triangle breakout/breakdown, flag breakout/breakdown, channel breakout/breakdown, head and shoulders, Quasimodo, clean rejection candle, or break-and-hold.
 - A bounce, pullback, retracement, consolidation, reaction, ranging movement, or price simply moving away from a level is NOT a confirmed entry trigger by itself.
@@ -61,7 +65,7 @@ Return exactly this JSON shape:
   "isTradingChart": true,
   "chartValidityReason": "brief reason",
   "detectedInstrument": "GBPUSD or null",
-  "detectedTimeframe": "H1 or M5 or null",
+  "detectedTimeframe": "H1 or M5 or H4 or D1 or W1 or MN or null",
   "latestVisibleDate": "YYYY-MM-DD or null",
   "dateConfidence": "high or medium or low",
   "visibleTrigger": "brief trigger description or null",
@@ -94,41 +98,28 @@ function normalizeSymbol(input = "") {
   if (map[raw]) return map[raw];
   if (raw.includes("/")) return raw;
   if (raw.length === 6) return `${raw.slice(0, 3)}/${raw.slice(3)}`;
+
   return raw || "";
-}
-
-function normalizeTimeframe(input = "") {
-  const raw = String(input).trim().toUpperCase().replace(/\s+/g, "");
-
-  const map = {
-    "1M": "1min", M1: "1min", "1MIN": "1min",
-    "5M": "5min", M5: "5min", "5MIN": "5min",
-    "15M": "15min", M15: "15min", "15MIN": "15min",
-    "30M": "30min", M30: "30min", "30MIN": "30min",
-    "1H": "1h", H1: "1h", "60M": "1h",
-    "4H": "4h", H4: "4h", "240M": "4h",
-    D1: "1day", DAILY: "1day", "1D": "1day",
-    W1: "1week", WEEKLY: "1week", "1W": "1week",
-  };
-
-  return map[raw] || "1h";
-}
-
-function normalizeAnalysisType(input = "") {
-  const raw = String(input).trim().toLowerCase();
-
-  if (raw.includes("post") || raw.includes("review") || raw.includes("after")) return "post-trade";
-  if (raw.includes("pre") || raw.includes("before")) return "pre-trade";
-
-  return raw || "post-trade";
 }
 
 function comparableInstrument(input = "") {
   const raw = String(input).toUpperCase().replace(/\s+/g, "");
 
   const known = [
-    "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
-    "EURCHF", "EURGBP", "GBPJPY", "XAUUSD", "GOLD", "BTCUSD", "BTCUSDT",
+    "EURUSD",
+    "GBPUSD",
+    "USDJPY",
+    "USDCHF",
+    "USDCAD",
+    "AUDUSD",
+    "NZDUSD",
+    "EURCHF",
+    "EURGBP",
+    "GBPJPY",
+    "XAUUSD",
+    "GOLD",
+    "BTCUSD",
+    "BTCUSDT",
   ];
 
   for (const symbol of known) {
@@ -140,6 +131,7 @@ function comparableInstrument(input = "") {
   }
 
   const compact = normalizeSymbol(raw).toUpperCase().replace(/[^A-Z0-9]/g, "");
+
   if (compact === "GOLD") return "XAUUSD";
   if (compact === "BTCUSDT") return "BTCUSD";
 
@@ -149,21 +141,95 @@ function comparableInstrument(input = "") {
 function comparableTimeframe(input = "") {
   const raw = String(input).trim().toUpperCase().replace(/\s+/g, "");
 
-  if (!raw || raw === "NOTPROVIDED" || raw === "NOTDETECTED" || raw === "NULL") return "";
-
-  const map = {
-    "1": "M1", "1M": "M1", M1: "M1", "1MIN": "M1",
-    "5": "M5", "5M": "M5", M5: "M5", "5MIN": "M5",
-    "15": "M15", "15M": "M15", M15: "M15", "15MIN": "M15",
-    "30": "M30", "30M": "M30", M30: "M30", "30MIN": "M30",
-    "60": "H1", "60M": "H1", "1H": "H1", H1: "H1",
-    "240": "H4", "240M": "H4", "4H": "H4", H4: "H4",
-    D: "D1", "1D": "D1", D1: "D1", DAILY: "D1",
-    W: "W1", "1W": "W1", W1: "W1", WEEKLY: "W1",
-  };
+  if (!raw || raw === "NOTPROVIDED" || raw === "NOTDETECTED" || raw === "NULL") {
+    return "";
+  }
 
   const cleaned = raw.replace(/[^A-Z0-9]/g, "");
+
+  const map = {
+    "1": "M1",
+    "1M": "M1",
+    M1: "M1",
+    "1MIN": "M1",
+
+    "5": "M5",
+    "5M": "M5",
+    M5: "M5",
+    "5MIN": "M5",
+
+    "15": "M15",
+    "15M": "M15",
+    M15: "M15",
+    "15MIN": "M15",
+
+    "30": "M30",
+    "30M": "M30",
+    M30: "M30",
+    "30MIN": "M30",
+
+    "60": "H1",
+    "60M": "H1",
+    "1H": "H1",
+    H1: "H1",
+
+    "240": "H4",
+    "240M": "H4",
+    "4H": "H4",
+    H4: "H4",
+
+    D: "D1",
+    "1D": "D1",
+    D1: "D1",
+    DAILY: "D1",
+
+    W: "W1",
+    "1W": "W1",
+    W1: "W1",
+    WEEKLY: "W1",
+
+    MN: "MN",
+    MTH: "MN",
+    MONTH: "MN",
+    MONTHLY: "MN",
+    "1MO": "MN",
+    "1MON": "MN",
+    "1MONTH": "MN",
+  };
+
   return map[raw] || map[cleaned] || cleaned;
+}
+
+function normalizeTimeframe(input = "") {
+  const tf = comparableTimeframe(input);
+
+  const map = {
+    M1: "1min",
+    M5: "5min",
+    M15: "15min",
+    M30: "30min",
+    H1: "1h",
+    H4: "4h",
+    D1: "1day",
+    W1: "1week",
+    MN: "1month",
+  };
+
+  return map[tf] || "1h";
+}
+
+function normalizeAnalysisType(input = "") {
+  const raw = String(input).trim().toLowerCase();
+
+  if (raw.includes("post") || raw.includes("review") || raw.includes("after")) {
+    return "post-trade";
+  }
+
+  if (raw.includes("pre") || raw.includes("before")) {
+    return "pre-trade";
+  }
+
+  return raw || "post-trade";
 }
 
 function hasStrongInstrumentMismatch({ selectedInstrument, detectedInstrument }) {
@@ -202,46 +268,6 @@ function addDays(date, days) {
   return next;
 }
 
-function getWeekRangeForDate(chartDate, useFullWeek = false) {
-  const day = chartDate.getUTCDay();
-  const mondayOffset = day === 0 ? -6 : 1 - day;
-  const monday = addDays(chartDate, mondayOffset);
-  const friday = addDays(monday, 4);
-  const end = useFullWeek ? friday : chartDate < friday ? chartDate : friday;
-
-  return {
-    monday,
-    friday,
-    end,
-    useFullWeek,
-    startDate: formatDateOnly(monday),
-    fridayDate: formatDateOnly(friday),
-    endDate: formatDateOnly(end),
-  };
-}
-
-function isSameTradingWeek(dateA, dateB) {
-  if (!dateA || !dateB) return false;
-
-  const weekA = getWeekRangeForDate(dateA, true);
-  const weekB = getWeekRangeForDate(dateB, true);
-
-  return weekA.startDate === weekB.startDate && weekA.fridayDate === weekB.fridayDate;
-}
-
-function weekdayNameFromDate(dateString) {
-  const date = new Date(`${dateString}T00:00:00.000Z`);
-
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    timeZone: "UTC",
-  }).format(date);
-}
-
-function candleDateOnly(datetimeValue = "") {
-  return String(datetimeValue).slice(0, 10);
-}
-
 function safeNumber(value) {
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
@@ -255,6 +281,112 @@ function formatPrice(value) {
   return value.toFixed(5);
 }
 
+function candleDateOnly(datetimeValue = "") {
+  return String(datetimeValue).slice(0, 10);
+}
+
+function getMonthName(monthIndex) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(2026, monthIndex, 1)));
+}
+
+function getQuarterLabel(monthIndex) {
+  if (monthIndex <= 2) return "Q1";
+  if (monthIndex <= 5) return "Q2";
+  if (monthIndex <= 8) return "Q3";
+  return "Q4";
+}
+
+function getWeekRangeForDate(chartDate, useFullWeek = false) {
+  const day = chartDate.getUTCDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  const monday = addDays(chartDate, mondayOffset);
+  const friday = addDays(monday, 4);
+  const end = useFullWeek ? friday : chartDate < friday ? chartDate : friday;
+
+  return {
+    start: monday,
+    end,
+    final: friday,
+    startDate: formatDateOnly(monday),
+    endDate: formatDateOnly(end),
+    finalDate: formatDateOnly(friday),
+    label: `${formatDateOnly(monday)} to ${formatDateOnly(friday)}`,
+  };
+}
+
+function getMonthRangeForDate(chartDate, useFullMonth = false) {
+  const year = chartDate.getUTCFullYear();
+  const month = chartDate.getUTCMonth();
+  const start = new Date(Date.UTC(year, month, 1));
+  const monthEnd = new Date(Date.UTC(year, month + 1, 0));
+  const end = useFullMonth ? monthEnd : chartDate < monthEnd ? chartDate : monthEnd;
+
+  return {
+    start,
+    end,
+    final: monthEnd,
+    startDate: formatDateOnly(start),
+    endDate: formatDateOnly(end),
+    finalDate: formatDateOnly(monthEnd),
+    label: `${getMonthName(month)} ${year}`,
+  };
+}
+
+function getYearRangeForDate(chartDate, useFullYear = false) {
+  const year = chartDate.getUTCFullYear();
+  const start = new Date(Date.UTC(year, 0, 1));
+  const yearEnd = new Date(Date.UTC(year, 11, 31));
+  const end = useFullYear ? yearEnd : chartDate < yearEnd ? chartDate : yearEnd;
+
+  return {
+    start,
+    end,
+    final: yearEnd,
+    startDate: formatDateOnly(start),
+    endDate: formatDateOnly(end),
+    finalDate: formatDateOnly(yearEnd),
+    label: String(year),
+  };
+}
+
+function getMultiYearRangeForDate(chartDate, yearsBack = 4, useFullFinalYear = false) {
+  const year = chartDate.getUTCFullYear();
+  const start = new Date(Date.UTC(year - yearsBack, 0, 1));
+  const finalYearEnd = new Date(Date.UTC(year, 11, 31));
+  const end = useFullFinalYear ? finalYearEnd : chartDate < finalYearEnd ? chartDate : finalYearEnd;
+
+  return {
+    start,
+    end,
+    final: finalYearEnd,
+    startDate: formatDateOnly(start),
+    endDate: formatDateOnly(end),
+    finalDate: formatDateOnly(finalYearEnd),
+    label: `${year - yearsBack} to ${year}`,
+  };
+}
+
+function isSameTradingWeek(dateA, dateB) {
+  if (!dateA || !dateB) return false;
+
+  const weekA = getWeekRangeForDate(dateA, true);
+  const weekB = getWeekRangeForDate(dateB, true);
+
+  return weekA.startDate === weekB.startDate && weekA.finalDate === weekB.finalDate;
+}
+
+function weekdayNameFromDate(dateString) {
+  const date = new Date(`${dateString}T00:00:00.000Z`);
+
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    timeZone: "UTC",
+  }).format(date);
+}
+
 function getOutputSizeForInterval(interval) {
   const map = {
     "1min": "5000",
@@ -263,7 +395,9 @@ function getOutputSizeForInterval(interval) {
     "30min": "2000",
     "1h": "1000",
     "4h": "500",
-    "1day": "50",
+    "1day": "400",
+    "1week": "300",
+    "1month": "120",
   };
 
   return map[interval] || "1000";
@@ -292,91 +426,6 @@ function extractJsonObject(text = "") {
       return null;
     }
   }
-}
-
-function isUsableChartDateDetection(detection) {
-  if (!detection || !detection.latestVisibleDate) return false;
-  if (!parseISODateOnly(detection.latestVisibleDate)) return false;
-
-  const confidence = String(detection.dateConfidence || "").toLowerCase();
-  return confidence === "high" || confidence === "medium";
-}
-
-function chooseFinalChartDate({ selectedDate, detection, analysisType = "post-trade" }) {
-  const mode = normalizeAnalysisType(analysisType);
-  const detectedDate = isUsableChartDateDetection(detection)
-    ? parseISODateOnly(detection.latestVisibleDate)
-    : null;
-
-  if (mode === "pre-trade" && selectedDate) {
-    return {
-      finalDate: selectedDate,
-      finalDateText: formatDateOnly(selectedDate),
-      selectedDateText: formatDateOnly(selectedDate),
-      detectedDateText: detectedDate ? formatDateOnly(detectedDate) : null,
-      source: "pre-trade-user-selected-date",
-      reason:
-        "Pre-trade mode was selected, so the user-selected date was treated as the decision date. Later candles visible on the chart were ignored to avoid hindsight bias.",
-    };
-  }
-
-  if (mode === "pre-trade" && !selectedDate && detectedDate) {
-    return {
-      finalDate: detectedDate,
-      finalDateText: formatDateOnly(detectedDate),
-      selectedDateText: null,
-      detectedDateText: formatDateOnly(detectedDate),
-      source: "pre-trade-chart-detected-date-fallback",
-      reason:
-        "Pre-trade mode was selected but no user-selected date was provided, so the chart-detected latest visible date was used as a fallback.",
-    };
-  }
-
-  if (mode === "post-trade" && selectedDate) {
-    if (detectedDate && detectedDate > selectedDate && !isSameTradingWeek(selectedDate, detectedDate)) {
-      return {
-        finalDate: selectedDate,
-        finalDateText: formatDateOnly(selectedDate),
-        selectedDateText: formatDateOnly(selectedDate),
-        detectedDateText: formatDateOnly(detectedDate),
-        source: "post-trade-user-selected-date-detected-date-outside-week-ignored",
-        reason:
-          "Post-trade mode was selected, but the chart-detected date appeared outside the selected trade week. The user-selected date was used to prevent analysis from jumping into the wrong week.",
-      };
-    }
-
-    return {
-      finalDate: selectedDate,
-      finalDateText: formatDateOnly(selectedDate),
-      selectedDateText: formatDateOnly(selectedDate),
-      detectedDateText: detectedDate ? formatDateOnly(detectedDate) : null,
-      source: "post-trade-user-selected-date",
-      reason:
-        "Post-trade mode was selected, so the user-selected date was used to identify the correct Monday-to-Friday trade week.",
-    };
-  }
-
-  if (detectedDate) {
-    return {
-      finalDate: detectedDate,
-      finalDateText: formatDateOnly(detectedDate),
-      selectedDateText: null,
-      detectedDateText: formatDateOnly(detectedDate),
-      source: "chart-detected-date-fallback",
-      reason:
-        "No user-selected date was provided, so the chart-detected latest visible date was used as a fallback.",
-    };
-  }
-
-  return {
-    finalDate: null,
-    finalDateText: "Not provided",
-    selectedDateText: selectedDate ? formatDateOnly(selectedDate) : null,
-    detectedDateText: null,
-    source: "missing-date",
-    reason:
-      "No usable user-selected date or chart-detected latest visible date was available.",
-  };
 }
 
 const CONTEXT_ONLY_TRIGGER_WORDS = [
@@ -450,6 +499,7 @@ async function detectChartContextFromImage({ imageBase64, mimeType }) {
       latestVisibleDate: null,
       dateConfidence: "low",
       visibleTrigger: null,
+      rejectedTriggerContext: null,
       triggerDirection: null,
       triggerConfidence: "low",
       notes: "OPENAI_API_KEY is missing.",
@@ -461,14 +511,16 @@ async function detectChartContextFromImage({ imageBase64, mimeType }) {
     const response = await openai.responses.create({
       model: "gpt-4.1-mini",
       input: [
-        { role: "system", content: CHART_DETECTION_PROMPT },
+        {
+          role: "system",
+          content: CHART_DETECTION_PROMPT,
+        },
         {
           role: "user",
           content: [
             {
               type: "input_text",
-              text:
-                "Inspect this uploaded image. First confirm whether it is a valid financial trading chart. Return only the requested JSON.",
+              text: "Inspect this uploaded image. First confirm whether it is a valid financial trading chart. Return only the requested JSON.",
             },
             {
               type: "input_image",
@@ -527,28 +579,89 @@ async function detectChartContextFromImage({ imageBase64, mimeType }) {
   }
 }
 
-function buildInvalidChartAnalysis({ submittedInstrument, timeframe, chartDetection }) {
-  return `Invalid Chart Upload
+function isUsableChartDateDetection(detection) {
+  if (!detection || !detection.latestVisibleDate) return false;
+  if (!parseISODateOnly(detection.latestVisibleDate)) return false;
 
-What happened:
-- The uploaded image does not appear to be a financial trading chart.
+  const confidence = String(detection.dateConfidence || "").toLowerCase();
+  return confidence === "high" || confidence === "medium";
+}
 
-Why analysis was stopped:
-- CSA Coach can only review trading chart screenshots with visible price movement, price scale, and date/time structure.
-- The uploaded image appears out of sync with the selected market inputs, so producing trade feedback would be misleading.
+function chooseFinalChartDate({ selectedDate, detection, analysisType = "post-trade" }) {
+  const mode = normalizeAnalysisType(analysisType);
+  const detectedDate = isUsableChartDateDetection(detection)
+    ? parseISODateOnly(detection.latestVisibleDate)
+    : null;
 
-Selected:
-- Instrument: ${submittedInstrument || "Not provided"}
-- Timeframe: ${timeframe || "Not provided"}
+  if (mode === "pre-trade" && selectedDate) {
+    return {
+      finalDate: selectedDate,
+      finalDateText: formatDateOnly(selectedDate),
+      selectedDateText: formatDateOnly(selectedDate),
+      detectedDateText: detectedDate ? formatDateOnly(detectedDate) : null,
+      source: "pre-trade-user-selected-date",
+      reason:
+        "Pre-trade mode was selected, so the user-selected date was treated as the decision date. Later candles visible on the chart were ignored to avoid hindsight bias.",
+    };
+  }
 
-AI image check:
-- Status: Not a valid trading chart
-- Reason: ${chartDetection?.chartValidityReason || "The uploaded image could not be verified as a trading chart."}
+  if (mode === "pre-trade" && !selectedDate && detectedDate) {
+    return {
+      finalDate: detectedDate,
+      finalDateText: formatDateOnly(detectedDate),
+      selectedDateText: null,
+      detectedDateText: formatDateOnly(detectedDate),
+      source: "pre-trade-chart-detected-date-fallback",
+      reason:
+        "Pre-trade mode was selected but no user-selected date was provided, so the chart-detected latest visible date was used as a fallback.",
+    };
+  }
 
-How to fix:
-- Upload a real TradingView / MT4 / MT5 / broker chart screenshot.
-- Make sure candles or price movement are visible.
-- Make sure the selected pair and timeframe match the uploaded chart.`;
+  if (mode === "post-trade" && selectedDate) {
+    if (detectedDate && detectedDate > selectedDate && !isSameTradingWeek(selectedDate, detectedDate)) {
+      return {
+        finalDate: selectedDate,
+        finalDateText: formatDateOnly(selectedDate),
+        selectedDateText: formatDateOnly(selectedDate),
+        detectedDateText: formatDateOnly(detectedDate),
+        source: "post-trade-user-selected-date-detected-date-outside-week-ignored",
+        reason:
+          "Post-trade mode was selected, but the chart-detected date appeared outside the selected structure period. The user-selected date was used to prevent analysis from jumping into the wrong period.",
+      };
+    }
+
+    return {
+      finalDate: selectedDate,
+      finalDateText: formatDateOnly(selectedDate),
+      selectedDateText: formatDateOnly(selectedDate),
+      detectedDateText: detectedDate ? formatDateOnly(detectedDate) : null,
+      source: "post-trade-user-selected-date",
+      reason:
+        "Post-trade mode was selected, so the user-selected date was used to identify the correct CSA structure period.",
+    };
+  }
+
+  if (detectedDate) {
+    return {
+      finalDate: detectedDate,
+      finalDateText: formatDateOnly(detectedDate),
+      selectedDateText: null,
+      detectedDateText: formatDateOnly(detectedDate),
+      source: "chart-detected-date-fallback",
+      reason:
+        "No user-selected date was provided, so the chart-detected latest visible date was used as a fallback.",
+    };
+  }
+
+  return {
+    finalDate: null,
+    finalDateText: "Not provided",
+    selectedDateText: selectedDate ? formatDateOnly(selectedDate) : null,
+    detectedDateText: null,
+    source: "missing-date",
+    reason:
+      "No usable user-selected date or chart-detected latest visible date was available.",
+  };
 }
 
 function getCleanBreakTolerance(symbol = "") {
@@ -569,7 +682,6 @@ function compareHighWithTolerance(currentHigh, previousHigh, symbol = "") {
   if (!Number.isFinite(current) || !Number.isFinite(previous)) {
     return {
       cleanBreak: false,
-      equalOrInsideTolerance: false,
       difference: null,
       tolerance,
       label: "unavailable",
@@ -581,7 +693,6 @@ function compareHighWithTolerance(currentHigh, previousHigh, symbol = "") {
   if (difference > tolerance) {
     return {
       cleanBreak: true,
-      equalOrInsideTolerance: false,
       difference,
       tolerance,
       label: "clean higher high",
@@ -591,7 +702,6 @@ function compareHighWithTolerance(currentHigh, previousHigh, symbol = "") {
   if (Math.abs(difference) <= tolerance) {
     return {
       cleanBreak: false,
-      equalOrInsideTolerance: true,
       difference,
       tolerance,
       label: "equal high / retest of previous high",
@@ -600,7 +710,6 @@ function compareHighWithTolerance(currentHigh, previousHigh, symbol = "") {
 
   return {
     cleanBreak: false,
-    equalOrInsideTolerance: false,
     difference,
     tolerance,
     label: "failed to break previous high",
@@ -615,7 +724,6 @@ function compareLowWithTolerance(currentLow, previousLow, symbol = "") {
   if (!Number.isFinite(current) || !Number.isFinite(previous)) {
     return {
       cleanBreak: false,
-      equalOrInsideTolerance: false,
       difference: null,
       tolerance,
       label: "unavailable",
@@ -627,7 +735,6 @@ function compareLowWithTolerance(currentLow, previousLow, symbol = "") {
   if (difference > tolerance) {
     return {
       cleanBreak: true,
-      equalOrInsideTolerance: false,
       difference,
       tolerance,
       label: "clean lower low",
@@ -637,7 +744,6 @@ function compareLowWithTolerance(currentLow, previousLow, symbol = "") {
   if (Math.abs(previous - current) <= tolerance) {
     return {
       cleanBreak: false,
-      equalOrInsideTolerance: true,
       difference,
       tolerance,
       label: "equal low / retest of previous low",
@@ -646,14 +752,199 @@ function compareLowWithTolerance(currentLow, previousLow, symbol = "") {
 
   return {
     cleanBreak: false,
-    equalOrInsideTolerance: false,
     difference,
     tolerance,
     label: "held above previous low",
   };
 }
 
-function buildDailyLevelsFromCandles(candles, weekRange) {
+function getSupportedCsaTimeframeProfile(timeframe = "H1") {
+  const tf = comparableTimeframe(timeframe) || "H1";
+
+  if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) {
+    return {
+      selectedTimeframe: tf,
+      interval: normalizeTimeframe(tf),
+      structureMode: "daily-in-week",
+      structureLabel: "Daily highs/lows inside the selected Monday-to-Friday week",
+      sourceUnitSingular: "day",
+      sourceUnitPlural: "daily levels",
+      firstPeriodText: "Monday high/low creates the first support and resistance for the week.",
+      startPriceLabel: "Monday open",
+      currentPriceLabel: "latest close for the selected week",
+      rangeKind: "week",
+      breakdownTitle: "Monday-to-Friday CSA Breakdown",
+    };
+  }
+
+  if (tf === "H4") {
+    return {
+      selectedTimeframe: tf,
+      interval: "4h",
+      structureMode: "weekly-in-month",
+      structureLabel: "Weekly highs/lows inside the selected calendar month",
+      sourceUnitSingular: "week",
+      sourceUnitPlural: "weekly levels",
+      firstPeriodText: "The first available week high/low creates the first support and resistance for the month.",
+      startPriceLabel: "first week open",
+      currentPriceLabel: "latest close for the selected month",
+      rangeKind: "month",
+      breakdownTitle: "Weekly CSA Breakdown For Selected Month",
+    };
+  }
+
+  if (tf === "D1") {
+    return {
+      selectedTimeframe: tf,
+      interval: "1day",
+      structureMode: "monthly-in-year",
+      structureLabel: "Monthly highs/lows inside the selected calendar year",
+      sourceUnitSingular: "month",
+      sourceUnitPlural: "monthly levels",
+      firstPeriodText: "January high/low, or the first available month high/low, creates the first support and resistance for the year.",
+      startPriceLabel: "first month open",
+      currentPriceLabel: "latest close for the selected year",
+      rangeKind: "year",
+      breakdownTitle: "Monthly CSA Breakdown For Selected Year",
+    };
+  }
+
+  if (tf === "W1") {
+    return {
+      selectedTimeframe: tf,
+      interval: "1week",
+      structureMode: "quarterly-in-year",
+      structureLabel: "Quarterly highs/lows inside the selected calendar year",
+      sourceUnitSingular: "quarter",
+      sourceUnitPlural: "quarterly levels",
+      firstPeriodText: "Q1 high/low, or the first available quarter high/low, creates the first support and resistance for the year.",
+      startPriceLabel: "first quarter open",
+      currentPriceLabel: "latest close for the selected year",
+      rangeKind: "year",
+      breakdownTitle: "Quarterly CSA Breakdown For Selected Year",
+    };
+  }
+
+  if (tf === "MN") {
+    return {
+      selectedTimeframe: tf,
+      interval: "1month",
+      structureMode: "yearly-in-multi-year",
+      structureLabel: "Yearly highs/lows across selected year plus previous 4 years",
+      sourceUnitSingular: "year",
+      sourceUnitPlural: "yearly levels",
+      firstPeriodText: "The first available year high/low creates the first support and resistance for the multi-year range.",
+      startPriceLabel: "first year open",
+      currentPriceLabel: "latest close for the selected multi-year range",
+      rangeKind: "multi-year range",
+      breakdownTitle: "Yearly CSA Breakdown For Monthly Chart",
+    };
+  }
+
+  return {
+    selectedTimeframe: tf,
+    interval: "1h",
+    structureMode: "daily-in-week",
+    structureLabel: "Daily highs/lows inside the selected Monday-to-Friday week",
+    sourceUnitSingular: "day",
+    sourceUnitPlural: "daily levels",
+    firstPeriodText: "Monday high/low creates the first support and resistance for the week.",
+    startPriceLabel: "Monday open",
+    currentPriceLabel: "latest close for the selected week",
+    rangeKind: "week",
+    breakdownTitle: "Monday-to-Friday CSA Breakdown",
+  };
+}
+
+function getStructureRangeForProfile(chartDate, profile, analysisType = "post-trade") {
+  const isPostTrade = normalizeAnalysisType(analysisType) === "post-trade";
+
+  if (profile.structureMode === "daily-in-week") {
+    return getWeekRangeForDate(chartDate, isPostTrade);
+  }
+
+  if (profile.structureMode === "weekly-in-month") {
+    return getMonthRangeForDate(chartDate, isPostTrade);
+  }
+
+  if (profile.structureMode === "monthly-in-year") {
+    return getYearRangeForDate(chartDate, isPostTrade);
+  }
+
+  if (profile.structureMode === "quarterly-in-year") {
+    return getYearRangeForDate(chartDate, isPostTrade);
+  }
+
+  if (profile.structureMode === "yearly-in-multi-year") {
+    return getMultiYearRangeForDate(chartDate, 4, isPostTrade);
+  }
+
+  return getWeekRangeForDate(chartDate, isPostTrade);
+}
+
+function getPeriodKeyAndLabel(date, profile) {
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth();
+
+  if (profile.structureMode === "daily-in-week") {
+    const dateOnly = formatDateOnly(date);
+
+    return {
+      key: dateOnly,
+      label: weekdayNameFromDate(dateOnly),
+      date: dateOnly,
+    };
+  }
+
+  if (profile.structureMode === "weekly-in-month") {
+    const monthStart = new Date(Date.UTC(year, month, 1));
+    const dayOfMonth = date.getUTCDate();
+    const weekNumber = Math.ceil((dayOfMonth + monthStart.getUTCDay()) / 7);
+    const dateOnly = formatDateOnly(date);
+
+    return {
+      key: `${year}-${String(month + 1).padStart(2, "0")}-W${weekNumber}`,
+      label: `Week ${weekNumber}`,
+      date: dateOnly,
+    };
+  }
+
+  if (profile.structureMode === "monthly-in-year") {
+    return {
+      key: `${year}-${String(month + 1).padStart(2, "0")}`,
+      label: getMonthName(month),
+      date: `${year}-${String(month + 1).padStart(2, "0")}-01`,
+    };
+  }
+
+  if (profile.structureMode === "quarterly-in-year") {
+    const quarter = getQuarterLabel(month);
+
+    return {
+      key: `${year}-${quarter}`,
+      label: quarter,
+      date: `${year}-${quarter}`,
+    };
+  }
+
+  if (profile.structureMode === "yearly-in-multi-year") {
+    return {
+      key: String(year),
+      label: String(year),
+      date: `${year}-01-01`,
+    };
+  }
+
+  const dateOnly = formatDateOnly(date);
+
+  return {
+    key: dateOnly,
+    label: dateOnly,
+    date: dateOnly,
+  };
+}
+
+function buildStructureLevelsFromCandles(candles, structureRange, profile) {
   const grouped = new Map();
 
   candles.forEach((bar) => {
@@ -663,10 +954,12 @@ function buildDailyLevelsFromCandles(candles, weekRange) {
     const date = new Date(`${dateOnly}T00:00:00.000Z`);
     if (Number.isNaN(date.getTime())) return;
 
-    const dayNum = date.getUTCDay();
+    if (dateOnly < structureRange.startDate || dateOnly > structureRange.endDate) return;
 
-    if (dayNum < 1 || dayNum > 5) return;
-    if (dateOnly < weekRange.startDate || dateOnly > weekRange.endDate) return;
+    if (profile.structureMode === "daily-in-week") {
+      const dayNum = date.getUTCDay();
+      if (dayNum < 1 || dayNum > 5) return;
+    }
 
     const open = safeNumber(bar.open);
     const high = safeNumber(bar.high);
@@ -675,11 +968,14 @@ function buildDailyLevelsFromCandles(candles, weekRange) {
 
     if (open === null || high === null || low === null || close === null) return;
 
-    if (!grouped.has(dateOnly)) {
-      grouped.set(dateOnly, {
-        date: dateOnly,
-        weekday: weekdayNameFromDate(dateOnly),
-        dayNum,
+    const period = getPeriodKeyAndLabel(date, profile);
+
+    if (!grouped.has(period.key)) {
+      grouped.set(period.key, {
+        key: period.key,
+        date: period.date,
+        weekday: period.label,
+        periodLabel: period.label,
         open,
         high,
         low,
@@ -688,96 +984,106 @@ function buildDailyLevelsFromCandles(candles, weekRange) {
         firstCandleTime: bar.datetime,
         lastCandleTime: bar.datetime,
       });
+
       return;
     }
 
-    const day = grouped.get(dateOnly);
-    day.high = Math.max(day.high, high);
-    day.low = Math.min(day.low, low);
-    day.close = close;
-    day.candleCount += 1;
-    day.lastCandleTime = bar.datetime;
+    const existing = grouped.get(period.key);
+    existing.high = Math.max(existing.high, high);
+    existing.low = Math.min(existing.low, low);
+    existing.close = close;
+    existing.candleCount += 1;
+    existing.lastCandleTime = bar.datetime;
   });
 
-  return Array.from(grouped.values()).sort((a, b) => a.date.localeCompare(b.date));
+  return Array.from(grouped.values()).sort((a, b) => String(a.key).localeCompare(String(b.key)));
 }
 
-function buildCsaAreas(dailyLevels = [], symbol = "") {
+function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
   const areas = [];
 
-  dailyLevels.forEach((day, index) => {
-    if (day.weekday === "Monday") {
+  levels.forEach((period, index) => {
+    const label = period.periodLabel || period.weekday || period.key;
+
+    if (index === 0) {
       areas.push({
-        day: "Monday",
-        date: day.date,
+        day: label,
+        period: label,
+        date: period.date,
         type: "resistance",
-        price: day.high,
-        priceText: formatPrice(day.high),
-        logic: "Monday high represents Monday resistance.",
+        price: period.high,
+        priceText: formatPrice(period.high),
+        logic: `${label} high represents the first resistance for this ${profile.rangeKind}.`,
       });
 
       areas.push({
-        day: "Monday",
-        date: day.date,
+        day: label,
+        period: label,
+        date: period.date,
         type: "support",
-        price: day.low,
-        priceText: formatPrice(day.low),
-        logic: "Monday low represents Monday support.",
+        price: period.low,
+        priceText: formatPrice(period.low),
+        logic: `${label} low represents the first support for this ${profile.rangeKind}.`,
       });
 
       return;
     }
 
-    const previous = dailyLevels[index - 1];
-    if (!previous) return;
+    const previous = levels[index - 1];
+    const previousLabel = previous.periodLabel || previous.weekday || previous.key;
 
-    const highComparison = compareHighWithTolerance(day.high, previous.high, symbol);
-    const lowComparison = compareLowWithTolerance(day.low, previous.low, symbol);
+    const highComparison = compareHighWithTolerance(period.high, previous.high, symbol);
+    const lowComparison = compareLowWithTolerance(period.low, previous.low, symbol);
 
     areas.push({
-      day: day.weekday,
-      date: day.date,
+      day: label,
+      period: label,
+      date: period.date,
       type: highComparison.cleanBreak ? "resistance" : "supply",
-      price: day.high,
-      priceText: formatPrice(day.high),
-      comparedWith: `${previous.weekday} ${previous.date}`,
+      price: period.high,
+      priceText: formatPrice(period.high),
+      comparedWith: `${previousLabel} ${previous.date}`,
       comparison: highComparison,
       logic: highComparison.cleanBreak
-        ? `${day.weekday} high made a clean break above ${previous.weekday} high, so ${day.weekday} high is resistance.`
-        : `${day.weekday} high did not cleanly break above ${previous.weekday} high, so ${day.weekday} high is supply.`,
+        ? `${label} high made a clean break above ${previousLabel} high, so ${label} high is resistance.`
+        : `${label} high did not cleanly break above ${previousLabel} high, so ${label} high is supply.`,
     });
 
     areas.push({
-      day: day.weekday,
-      date: day.date,
+      day: label,
+      period: label,
+      date: period.date,
       type: lowComparison.cleanBreak ? "support" : "demand",
-      price: day.low,
-      priceText: formatPrice(day.low),
-      comparedWith: `${previous.weekday} ${previous.date}`,
+      price: period.low,
+      priceText: formatPrice(period.low),
+      comparedWith: `${previousLabel} ${previous.date}`,
       comparison: lowComparison,
       logic: lowComparison.cleanBreak
-        ? `${day.weekday} low made a clean break below ${previous.weekday} low, so ${day.weekday} low is support.`
-        : `${day.weekday} low did not cleanly break below ${previous.weekday} low, so ${day.weekday} low is demand.`,
+        ? `${label} low made a clean break below ${previousLabel} low, so ${label} low is support.`
+        : `${label} low did not cleanly break below ${previousLabel} low, so ${label} low is demand.`,
     });
   });
 
   return areas;
 }
 
-function countClosesDirection(dailyLevels = []) {
+function countClosesDirection(levels = []) {
   let risingCloses = 0;
   let fallingCloses = 0;
 
-  for (let i = 1; i < dailyLevels.length; i += 1) {
-    if (dailyLevels[i].close > dailyLevels[i - 1].close) risingCloses += 1;
-    if (dailyLevels[i].close < dailyLevels[i - 1].close) fallingCloses += 1;
+  for (let i = 1; i < levels.length; i += 1) {
+    if (levels[i].close > levels[i - 1].close) risingCloses += 1;
+    if (levels[i].close < levels[i - 1].close) fallingCloses += 1;
   }
 
-  return { risingCloses, fallingCloses };
+  return {
+    risingCloses,
+    fallingCloses,
+  };
 }
 
-function calculateCsaDirectionalBias(dailyLevels = [], symbol = "") {
-  if (!Array.isArray(dailyLevels) || dailyLevels.length < 2) {
+function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
+  if (!Array.isArray(levels) || levels.length < 2) {
     return {
       bias: "Insufficient data",
       biasCode: "insufficient",
@@ -795,20 +1101,20 @@ function calculateCsaDirectionalBias(dailyLevels = [], symbol = "") {
       fallingCloses: 0,
       highBreakCount: 0,
       lowBreakCount: 0,
-      reason: "At least two weekdays are needed to compare OHLC progression and form a directional bias.",
+      reason: `At least two ${profile.sourceUnitPlural} are needed to compare OHLC progression and form a directional bias.`,
       progression: [],
     };
   }
 
   const tolerance = getCleanBreakTolerance(symbol);
-  const firstDay = dailyLevels[0];
-  const lastDay = dailyLevels[dailyLevels.length - 1];
+  const firstPeriod = levels[0];
+  const lastPeriod = levels[levels.length - 1];
 
-  const periodStartPrice = firstDay.open;
-  const presentPrice = lastDay.close;
+  const periodStartPrice = firstPeriod.open;
+  const presentPrice = lastPeriod.close;
   const priceMove = presentPrice - periodStartPrice;
-  const periodHigh = Math.max(...dailyLevels.map((day) => Number(day.high)));
-  const periodLow = Math.min(...dailyLevels.map((day) => Number(day.low)));
+  const periodHigh = Math.max(...levels.map((item) => Number(item.high)));
+  const periodLow = Math.min(...levels.map((item) => Number(item.low)));
 
   let resistanceCount = 0;
   let supportCount = 0;
@@ -816,17 +1122,21 @@ function calculateCsaDirectionalBias(dailyLevels = [], symbol = "") {
   let demandCount = 0;
   let highBreakCount = 0;
   let lowBreakCount = 0;
+
   const progression = [];
 
-  for (let i = 0; i < dailyLevels.length; i += 1) {
-    const current = dailyLevels[i];
+  for (let i = 0; i < levels.length; i += 1) {
+    const current = levels[i];
+    const currentLabel = current.periodLabel || current.weekday || current.key;
 
     if (i === 0) {
-      progression.push(`${current.weekday} ${current.date}: Monday high is weekly resistance and Monday low is weekly support.`);
+      progression.push(`${currentLabel}: ${profile.firstPeriodText}`);
       continue;
     }
 
-    const previous = dailyLevels[i - 1];
+    const previous = levels[i - 1];
+    const previousLabel = previous.periodLabel || previous.weekday || previous.key;
+
     const highComparison = compareHighWithTolerance(current.high, previous.high, symbol);
     const lowComparison = compareLowWithTolerance(current.low, previous.low, symbol);
 
@@ -845,17 +1155,18 @@ function calculateCsaDirectionalBias(dailyLevels = [], symbol = "") {
     }
 
     if (highComparison.cleanBreak && !lowComparison.cleanBreak) {
-      progression.push(`${current.weekday} ${current.date}: bullish expansion because price created a clean higher high and did not create a clean lower low.`);
+      progression.push(`${currentLabel}: bullish expansion because price created a clean higher high above ${previousLabel} and did not create a clean lower low.`);
     } else if (lowComparison.cleanBreak && !highComparison.cleanBreak) {
-      progression.push(`${current.weekday} ${current.date}: bearish expansion because price created a clean lower low and did not create a clean higher high.`);
+      progression.push(`${currentLabel}: bearish expansion because price created a clean lower low below ${previousLabel} and did not create a clean higher high.`);
     } else if (highComparison.cleanBreak && lowComparison.cleanBreak) {
-      progression.push(`${current.weekday} ${current.date}: both sides expanded, so the direction is less clean.`);
+      progression.push(`${currentLabel}: both sides expanded, so the direction is less clean.`);
     } else {
-      progression.push(`${current.weekday} ${current.date}: range/retest condition because price did not cleanly break the previous day's high or low.`);
+      progression.push(`${currentLabel}: range/retest condition because price did not cleanly break the previous ${profile.sourceUnitSingular}'s high or low.`);
     }
   }
 
-  const { risingCloses, fallingCloses } = countClosesDirection(dailyLevels);
+  const { risingCloses, fallingCloses } = countClosesDirection(levels);
+
   let bullishScore = 0;
   let bearishScore = 0;
 
@@ -884,10 +1195,10 @@ function calculateCsaDirectionalBias(dailyLevels = [], symbol = "") {
 
   const reason =
     biasCode === "bearish"
-      ? `Price moved down from Monday open ${formatPrice(periodStartPrice)} to the latest close ${formatPrice(presentPrice)}. The highest price from Monday to now is ${formatPrice(periodHigh)}, and price is trading below that high. The week shows downside pressure because price created ${supportCount} new support level(s) from lower lows, meaning support was pushed lower as sellers stayed in control.`
+      ? `Price moved down from ${profile.startPriceLabel} ${formatPrice(periodStartPrice)} to the ${profile.currentPriceLabel} ${formatPrice(presentPrice)}. The highest price in the selected ${profile.rangeKind} is ${formatPrice(periodHigh)}, and price is trading below that high. The structure shows downside pressure because price created ${supportCount} new support level(s) from lower lows, meaning support was pushed lower as sellers stayed in control.`
       : biasCode === "bullish"
-      ? `Price moved up from Monday open ${formatPrice(periodStartPrice)} to the latest close ${formatPrice(presentPrice)}. The lowest price from Monday to now is ${formatPrice(periodLow)}, and price is trading above that low. The week shows upside pressure because price created ${resistanceCount} new resistance level(s) from higher highs, meaning resistance was pushed higher as buyers stayed in control.`
-      : `Price has not shown a clean one-sided move from Monday open ${formatPrice(periodStartPrice)} to the latest close ${formatPrice(presentPrice)}. The structure is mixed because price has not clearly continued in one direction.`;
+      ? `Price moved up from ${profile.startPriceLabel} ${formatPrice(periodStartPrice)} to the ${profile.currentPriceLabel} ${formatPrice(presentPrice)}. The lowest price in the selected ${profile.rangeKind} is ${formatPrice(periodLow)}, and price is trading above that low. The structure shows upside pressure because price created ${resistanceCount} new resistance level(s) from higher highs, meaning resistance was pushed higher as buyers stayed in control.`
+      : `Price has not shown a clean one-sided move from ${profile.startPriceLabel} ${formatPrice(periodStartPrice)} to the ${profile.currentPriceLabel} ${formatPrice(presentPrice)}. The structure is mixed because price has not clearly continued in one direction.`;
 
   return {
     bias,
@@ -914,15 +1225,16 @@ function calculateCsaDirectionalBias(dailyLevels = [], symbol = "") {
   };
 }
 
-async function fetchTwelveDataIntradayLevels({
+async function fetchTwelveDataStructureLevels({
   symbol,
   chartDate,
   timeframe = "H1",
   timezone = "UTC",
-  useFullWeek = false,
+  analysisType = "post-trade",
 }) {
   const apiKey = process.env.TWELVE_DATA_API_KEY;
-  const interval = normalizeTimeframe(timeframe);
+  const profile = getSupportedCsaTimeframeProfile(timeframe);
+  const interval = profile.interval;
 
   if (!apiKey) {
     return {
@@ -930,11 +1242,12 @@ async function fetchTwelveDataIntradayLevels({
       error: "TWELVE_DATA_API_KEY is missing on the server.",
       dailyLevels: [],
       csaAreas: [],
-      directionalBias: calculateCsaDirectionalBias([], symbol),
+      directionalBias: calculateCsaDirectionalBias([], symbol, profile),
       rawCandleCount: 0,
-      weekRange: chartDate ? getWeekRangeForDate(chartDate, useFullWeek) : null,
+      weekRange: null,
       interval,
-      useFullWeek,
+      profile,
+      useFullWeek: normalizeAnalysisType(analysisType) === "post-trade",
     };
   }
 
@@ -944,11 +1257,12 @@ async function fetchTwelveDataIntradayLevels({
       error: "Instrument/pair is missing or unsupported.",
       dailyLevels: [],
       csaAreas: [],
-      directionalBias: calculateCsaDirectionalBias([], symbol),
+      directionalBias: calculateCsaDirectionalBias([], symbol, profile),
       rawCandleCount: 0,
-      weekRange: chartDate ? getWeekRangeForDate(chartDate, useFullWeek) : null,
+      weekRange: null,
       interval,
-      useFullWeek,
+      profile,
+      useFullWeek: normalizeAnalysisType(analysisType) === "post-trade",
     };
   }
 
@@ -956,24 +1270,26 @@ async function fetchTwelveDataIntradayLevels({
     return {
       ok: false,
       error:
-        "Final visible chart date is missing. Add the latest date visible on the chart so the backend can fetch the correct Monday-to-Friday data.",
+        "Final visible chart date is missing. Add the latest date visible on the chart so the backend can fetch the correct CSA structure data.",
       dailyLevels: [],
       csaAreas: [],
-      directionalBias: calculateCsaDirectionalBias([], symbol),
+      directionalBias: calculateCsaDirectionalBias([], symbol, profile),
       rawCandleCount: 0,
       weekRange: null,
       interval,
-      useFullWeek,
+      profile,
+      useFullWeek: normalizeAnalysisType(analysisType) === "post-trade",
     };
   }
 
-  const weekRange = getWeekRangeForDate(chartDate, useFullWeek);
+  const useFullRange = normalizeAnalysisType(analysisType) === "post-trade";
+  const structureRange = getStructureRangeForProfile(chartDate, profile, analysisType);
 
   const params = new URLSearchParams({
     symbol,
     interval,
-    start_date: `${weekRange.startDate} 00:00:00`,
-    end_date: `${weekRange.endDate} 23:59:59`,
+    start_date: `${structureRange.startDate} 00:00:00`,
+    end_date: `${structureRange.endDate} 23:59:59`,
     timezone,
     order: "ASC",
     outputsize: getOutputSizeForInterval(interval),
@@ -992,37 +1308,39 @@ async function fetchTwelveDataIntradayLevels({
         `Twelve Data request failed with status ${response.status}.`,
       dailyLevels: [],
       csaAreas: [],
-      directionalBias: calculateCsaDirectionalBias([], symbol),
+      directionalBias: calculateCsaDirectionalBias([], symbol, profile),
       rawCandleCount: 0,
-      weekRange,
+      weekRange: structureRange,
       symbol,
       timezone,
       interval,
-      useFullWeek,
+      profile,
+      useFullWeek: useFullRange,
       twelveDataStatus: data.status || "unknown",
     };
   }
 
   const rawCandles = data.values || [];
-  const dailyLevels = buildDailyLevelsFromCandles(rawCandles, weekRange);
-  const csaAreas = buildCsaAreas(dailyLevels, symbol);
-  const directionalBias = calculateCsaDirectionalBias(dailyLevels, symbol);
+  const dailyLevels = buildStructureLevelsFromCandles(rawCandles, structureRange, profile);
+  const csaAreas = buildCsaAreas(dailyLevels, symbol, profile);
+  const directionalBias = calculateCsaDirectionalBias(dailyLevels, symbol, profile);
 
   return {
     ok: dailyLevels.length > 0,
     error:
       dailyLevels.length > 0
         ? ""
-        : "No Monday-to-Friday intraday candles were returned for the selected week/date/timeframe.",
+        : `No usable ${profile.sourceUnitPlural} were returned for the selected ${profile.rangeKind}.`,
     dailyLevels,
     csaAreas,
     directionalBias,
     rawCandleCount: rawCandles.length,
-    weekRange,
+    weekRange: structureRange,
     symbol,
     timezone,
     interval,
-    useFullWeek,
+    profile,
+    useFullWeek: useFullRange,
     meta: data.meta || null,
   };
 }
@@ -1047,106 +1365,87 @@ function listAreas(areaList = [], label = "area", max = 3) {
     .join("\n");
 }
 
-function areaBrokenByCloseLater(area, dailyLevels = [], symbol = "") {
-  if (!area || !Array.isArray(dailyLevels)) return false;
+function areaBrokenByCloseLater(area, levels = [], symbol = "") {
+  if (!area || !Array.isArray(levels)) return false;
 
   const level = Number(area.price);
   const tolerance = getCleanBreakTolerance(symbol);
+
   if (!Number.isFinite(level)) return false;
 
-  const laterDays = dailyLevels.filter((day) => String(day.date || "") > String(area.date || ""));
+  const laterPeriods = levels.filter((item) => String(item.date || "") > String(area.date || ""));
 
   if (area.type === "supply" || area.type === "resistance") {
-    return laterDays.some((day) => Number(day.close) > level + tolerance);
+    return laterPeriods.some((item) => Number(item.close) > level + tolerance);
   }
 
   if (area.type === "demand" || area.type === "support") {
-    return laterDays.some((day) => Number(day.close) < level - tolerance);
+    return laterPeriods.some((item) => Number(item.close) < level - tolerance);
   }
 
   return false;
 }
 
-function filterValidAreas(areaList = [], dailyLevels = [], symbol = "") {
-  return areaList.filter((area) => !areaBrokenByCloseLater(area, dailyLevels, symbol));
+function filterValidAreas(areaList = [], levels = [], symbol = "") {
+  return areaList.filter((area) => !areaBrokenByCloseLater(area, levels, symbol));
 }
 
-function filterBrokenAreas(areaList = [], dailyLevels = [], symbol = "") {
-  return areaList.filter((area) => areaBrokenByCloseLater(area, dailyLevels, symbol));
+function filterBrokenAreas(areaList = [], levels = [], symbol = "") {
+  return areaList.filter((area) => areaBrokenByCloseLater(area, levels, symbol));
 }
 
-function getCurrentDayDate(dailyLevels = []) {
-  if (!Array.isArray(dailyLevels) || !dailyLevels.length) return null;
-  return dailyLevels[dailyLevels.length - 1]?.date || null;
+function getCurrentPeriodDate(levels = []) {
+  if (!Array.isArray(levels) || !levels.length) return null;
+  return levels[levels.length - 1]?.date || null;
 }
 
-function filterPreviousDayAreas(areaList = [], dailyLevels = []) {
-  const currentDate = getCurrentDayDate(dailyLevels);
+function filterPreviousPeriodAreas(areaList = [], levels = []) {
+  const currentDate = getCurrentPeriodDate(levels);
   if (!currentDate) return areaList;
 
   return areaList.filter((area) => String(area.date || "") < String(currentDate));
 }
 
-function buildSimpleDayBreakdown(dailyLevels = [], normalizedSymbol = "") {
-  if (!dailyLevels.length) return "- No weekday data available.";
-
-  return dailyLevels
-    .map((day, index) => {
-      if (index === 0 || String(day.weekday || "").toLowerCase() === "monday") {
-        return `${day.weekday}:
-- High ${formatPrice(day.high)} = Monday resistance.
-- Low ${formatPrice(day.low)} = Monday support.`;
-      }
-
-      const previous = dailyLevels[index - 1];
-      const highComparison = compareHighWithTolerance(day.high, previous.high, normalizedSymbol);
-      const lowComparison = compareLowWithTolerance(day.low, previous.low, normalizedSymbol);
-
-      const highResult = highComparison.cleanBreak
-        ? `High broke above ${previous.weekday}'s high, so ${day.weekday} high became resistance.`
-        : `High failed to cleanly break ${previous.weekday}'s high, so ${day.weekday} high became supply.`;
-
-      const lowResult = lowComparison.cleanBreak
-        ? `Low broke below ${previous.weekday}'s low, so ${day.weekday} low became support.`
-        : `Low held/retested ${previous.weekday}'s low, so ${day.weekday} low became demand.`;
-
-      return `${day.weekday}:
-- ${highResult}
-- ${lowResult}`;
-    })
-    .join("\n\n");
-}
-
-function sortTargetAreas(targetAreas = [], direction = "", entryPrice = null, dailyLevels = []) {
+function sortTargetAreas(targetAreas = [], direction = "", entryPrice = null, levels = []) {
   const entry = Number(entryPrice);
 
   let filtered = targetAreas.filter((area) => Number.isFinite(Number(area.price)));
-  filtered = filterPreviousDayAreas(filtered, dailyLevels);
+  filtered = filterPreviousPeriodAreas(filtered, levels);
 
   if (Number.isFinite(entry)) {
-    if (direction === "bearish") filtered = filtered.filter((area) => Number(area.price) < entry);
-    if (direction === "bullish") filtered = filtered.filter((area) => Number(area.price) > entry);
+    if (direction === "bearish") {
+      filtered = filtered.filter((area) => Number(area.price) < entry);
+    }
+
+    if (direction === "bullish") {
+      filtered = filtered.filter((area) => Number(area.price) > entry);
+    }
   }
 
-  if (direction === "bearish") return filtered.sort((a, b) => Number(b.price) - Number(a.price));
-  if (direction === "bullish") return filtered.sort((a, b) => Number(a.price) - Number(b.price));
+  if (direction === "bearish") {
+    return filtered.sort((a, b) => Number(b.price) - Number(a.price));
+  }
+
+  if (direction === "bullish") {
+    return filtered.sort((a, b) => Number(a.price) - Number(b.price));
+  }
 
   return filtered.sort((a, b) => Number(a.price) - Number(b.price));
 }
 
-function buildTargetsText(targetAreas = [], direction = "", entryPrice = null, dailyLevels = []) {
-  const sortedTargets = sortTargetAreas(targetAreas, direction, entryPrice, dailyLevels);
+function buildTargetsText(targetAreas = [], direction = "", entryPrice = null, levels = [], profile = getSupportedCsaTimeframeProfile("H1")) {
+  const sortedTargets = sortTargetAreas(targetAreas, direction, entryPrice, levels);
 
   if (!sortedTargets.length) {
     if (direction === "bearish") {
-      return "No valid previous-day support/demand target is available below the entry area. Skip the sell setup unless a lower higher-timeframe target is clearly visible.";
+      return `No valid previous-${profile.sourceUnitSingular} support/demand target is available below the entry area. Skip the sell setup unless a lower higher-timeframe target is clearly visible.`;
     }
 
     if (direction === "bullish") {
-      return "No valid previous-day resistance/supply target is available above the entry area. Skip the buy setup unless a higher higher-timeframe target is clearly visible.";
+      return `No valid previous-${profile.sourceUnitSingular} resistance/supply target is available above the entry area. Skip the buy setup unless a higher higher-timeframe target is clearly visible.`;
     }
 
-    return "Use the closest previous-day support/resistance or supply/demand area. If no clear target exists, skip the setup.";
+    return `Use the closest previous-${profile.sourceUnitSingular} support/resistance or supply/demand area. If no clear target exists, skip the setup.`;
   }
 
   const first = sortedTargets[0];
@@ -1160,14 +1459,14 @@ function buildTargetsText(targetAreas = [], direction = "", entryPrice = null, d
   if (third) lines.push(`Third TP: ${third.day} ${third.type} around ${third.priceText}.`);
 
   if (direction === "bearish") {
-    lines.push("For bearish setups, TP1 starts from the closest previous-day level below entry; TP2 must be lower than TP1.");
+    lines.push("For bearish setups, TP1 starts from the closest previous structural level below entry; TP2 must be lower than TP1.");
   }
 
   if (direction === "bullish") {
-    lines.push("For bullish setups, TP1 starts from the closest previous-day level above entry; TP2 must be higher than TP1.");
+    lines.push("For bullish setups, TP1 starts from the closest previous structural level above entry; TP2 must be higher than TP1.");
   }
 
-  lines.push("Higher-timeframe areas of interest should override smaller intraday targets when visible.");
+  lines.push("Higher-timeframe areas of interest should override smaller structure targets when visible.");
 
   return lines.join(" ");
 }
@@ -1231,18 +1530,19 @@ function buildTradeCoachingSummary({
   supportAreas,
   supplyAreas,
   demandAreas,
-  dailyLevels,
+  levels,
   bias,
   symbol,
   chartDetection,
+  profile,
 }) {
   const biasValue = String(bias?.bias || "").toLowerCase();
 
-  const validSupplyAreas = filterValidAreas(supplyAreas, dailyLevels, symbol);
-  const validDemandAreas = filterValidAreas(demandAreas, dailyLevels, symbol);
+  const validSupplyAreas = filterValidAreas(supplyAreas, levels, symbol);
+  const validDemandAreas = filterValidAreas(demandAreas, levels, symbol);
 
-  const brokenSupportAreas = filterBrokenAreas(supportAreas, dailyLevels, symbol);
-  const brokenResistanceAreas = filterBrokenAreas(resistanceAreas, dailyLevels, symbol);
+  const brokenSupportAreas = filterBrokenAreas(supportAreas, levels, symbol);
+  const brokenResistanceAreas = filterBrokenAreas(resistanceAreas, levels, symbol);
 
   const latestValidSupply = latestArea(validSupplyAreas);
   const latestValidDemand = latestArea(validDemandAreas);
@@ -1252,11 +1552,16 @@ function buildTradeCoachingSummary({
   const latestSupport = latestArea(supportAreas);
 
   let direction = "Mixed / Wait";
-  let directionReason = buildDirectionalProgressionText({ bias, brokenSupportAreas, brokenResistanceAreas });
+  let directionReason = buildDirectionalProgressionText({
+    bias,
+    brokenSupportAreas,
+    brokenResistanceAreas,
+  });
+
   let bestEntryArea = "No clean entry area yet. Wait for price to reach a valid support/resistance or supply/demand area.";
   let entryTrigger = buildEntryTriggerText({ direction: "mixed", chartDetection });
   let stopLoss = "Place stop loss on the other side of the candlestick or chart pattern trigger, or on the other side of the support/resistance or supply/demand area.";
-  let takeProfit = "Use the closest previous-day support/resistance or supply/demand area as TP1, the next valid area as TP2, and a higher-timeframe area as TP3 if available.";
+  let takeProfit = "Use the closest previous support/resistance or supply/demand area as TP1, the next valid area as TP2, and a higher-timeframe area as TP3 if available.";
   let riskReward = "Minimum risk-to-reward should be 1:2. Skip the setup if price is too close to the first target.";
   let tradeManagement = "Use trailing stop, partial close, and breakeven after price moves in your favour or reaches the first trouble area.";
   let verdict = "Setup is not clean enough to chase. Wait for price to return to a valid CSA area and confirm with a trigger.";
@@ -1266,9 +1571,10 @@ function buildTradeCoachingSummary({
     direction = "Bullish";
 
     const entryRef = latestBrokenResistance || latestValidDemand || latestSupport;
+
     const targetAreas = [
-      ...filterValidAreas(resistanceAreas, dailyLevels, symbol),
-      ...filterValidAreas(supplyAreas, dailyLevels, symbol),
+      ...filterValidAreas(resistanceAreas, levels, symbol),
+      ...filterValidAreas(supplyAreas, levels, symbol),
     ];
 
     const entryPrice = entryRef ? Number(entryRef.price) : null;
@@ -1279,9 +1585,13 @@ function buildTradeCoachingSummary({
         : `${entryRef.day} ${entryRef.type} around ${entryRef.priceText}. For bullish bias, a broken resistance that becomes support, or a valid demand/support area, is the preferred entry area.`
       : "No clean bullish entry area confirmed yet. Wait for price to retest a broken resistance as support, or return to valid demand/support.";
 
-    entryTrigger = buildEntryTriggerText({ direction: "bullish", chartDetection });
+    entryTrigger = buildEntryTriggerText({
+      direction: "bullish",
+      chartDetection,
+    });
+
     stopLoss = "Place stop loss below the bullish trigger candle/pattern, or below the support/demand area. Do not place the stop inside the same area being used for entry.";
-    takeProfit = buildTargetsText(targetAreas, "bullish", entryPrice, dailyLevels);
+    takeProfit = buildTargetsText(targetAreas, "bullish", entryPrice, levels, profile);
     riskReward = "Only consider the bullish setup if the distance from entry to TP1 gives at least 1:2 risk-to-reward.";
     tradeManagement = "Move to breakeven only after price reacts strongly in your favour or reaches the first trouble area. Consider partial close at TP1 and trail stop behind higher lows if price continues.";
     verdict = "Bullish setup is valid only if price pulls back to support/demand or broken resistance and confirms with a clean trigger. Do not buy in the middle without confirmation.";
@@ -1290,9 +1600,10 @@ function buildTradeCoachingSummary({
     direction = "Bearish";
 
     const entryRef = latestBrokenSupport || latestValidSupply || latestResistance;
+
     const targetAreas = [
-      ...filterValidAreas(supportAreas, dailyLevels, symbol),
-      ...filterValidAreas(demandAreas, dailyLevels, symbol),
+      ...filterValidAreas(supportAreas, levels, symbol),
+      ...filterValidAreas(demandAreas, levels, symbol),
     ];
 
     const entryPrice = entryRef ? Number(entryRef.price) : null;
@@ -1303,9 +1614,13 @@ function buildTradeCoachingSummary({
         : `${entryRef.day} ${entryRef.type} around ${entryRef.priceText}. For bearish bias, a broken support that becomes resistance, or a valid supply/resistance area, is the preferred entry area.`
       : "No clean bearish entry area confirmed yet. Wait for price to retest a broken support as resistance, or return to valid supply/resistance.";
 
-    entryTrigger = buildEntryTriggerText({ direction: "bearish", chartDetection });
+    entryTrigger = buildEntryTriggerText({
+      direction: "bearish",
+      chartDetection,
+    });
+
     stopLoss = "Place stop loss above the bearish trigger candle/pattern, or above the resistance/supply area. Do not place the stop inside the same area being used for entry.";
-    takeProfit = buildTargetsText(targetAreas, "bearish", entryPrice, dailyLevels);
+    takeProfit = buildTargetsText(targetAreas, "bearish", entryPrice, levels, profile);
     riskReward = "Only consider the bearish setup if the distance from entry to TP1 gives at least 1:2 risk-to-reward.";
     tradeManagement = "Move to breakeven only after price reacts strongly in your favour or reaches the first trouble area. Consider partial close at TP1 and trail stop behind lower highs if price continues.";
     verdict = "Bearish setup is valid only if price pulls back to resistance/supply or broken support and confirms with a clean trigger. Do not sell in the middle without confirmation.";
@@ -1321,9 +1636,13 @@ function buildTradeCoachingSummary({
         ? `Mixed condition. Buyer area: ${buyerRef ? `${buyerRef.day} ${buyerRef.type} around ${buyerRef.priceText}` : "none"}. Seller area: ${sellerRef ? `${sellerRef.day} ${sellerRef.type} around ${sellerRef.priceText}` : "none"}. Avoid entries in the middle.`
         : "No clean CSA entry area confirmed. Wait.";
 
-    entryTrigger = buildEntryTriggerText({ direction: "mixed", chartDetection });
+    entryTrigger = buildEntryTriggerText({
+      direction: "mixed",
+      chartDetection,
+    });
+
     stopLoss = "Place stop beyond the outer area that created the reaction, not inside the range.";
-    takeProfit = "Target the opposite side of the range first using previous-day levels. TP2 and TP3 only apply if price breaks and holds beyond that opposite area.";
+    takeProfit = "Target the opposite side of the range first using previous structure levels. TP2 and TP3 only apply if price breaks and holds beyond that opposite area.";
     riskReward = "Minimum 1:2 risk-to-reward is still required. Skip if the opposite side of the range is too close.";
     tradeManagement = "Manage faster in mixed conditions. Use partial close at the range midpoint or opposite side, move to breakeven only after strong reaction, and trail only if price breaks out cleanly.";
     verdict = "Mixed setup. The best trade is often no trade until price reaches an outer CSA area or breaks and holds beyond the range.";
@@ -1348,22 +1667,56 @@ function buildTradeCoachingSummary({
   };
 }
 
+function buildSimpleStructureBreakdown(levels = [], normalizedSymbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
+  if (!levels.length) return "- No structure data available.";
+
+  return levels
+    .map((period, index) => {
+      const label = period.periodLabel || period.weekday || period.key;
+
+      if (index === 0) {
+        return `${label}:
+- High ${formatPrice(period.high)} = first resistance for this ${profile.rangeKind}.
+- Low ${formatPrice(period.low)} = first support for this ${profile.rangeKind}.`;
+      }
+
+      const previous = levels[index - 1];
+      const previousLabel = previous.periodLabel || previous.weekday || previous.key;
+
+      const highComparison = compareHighWithTolerance(period.high, previous.high, normalizedSymbol);
+      const lowComparison = compareLowWithTolerance(period.low, previous.low, normalizedSymbol);
+
+      const highResult = highComparison.cleanBreak
+        ? `High broke above ${previousLabel}'s high, so ${label} high became resistance.`
+        : `High failed to cleanly break ${previousLabel}'s high, so ${label} high became supply.`;
+
+      const lowResult = lowComparison.cleanBreak
+        ? `Low broke below ${previousLabel}'s low, so ${label} low became support.`
+        : `Low held/retested ${previousLabel}'s low, so ${label} low became demand.`;
+
+      return `${label}:
+- ${highResult}
+- ${lowResult}`;
+    })
+    .join("\n\n");
+}
+
 function buildDeterministicCsaAnalysis({
   marketReference,
   dateDecision,
   chartDetection,
-  analysisType,
   submittedInstrument,
   normalizedSymbol,
   timeframe,
-  timezone,
 }) {
+  const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
+
   if (!marketReference || !marketReference.ok) {
     return `CSA COACH VERDICT
 
 Directional Bias:
 - Insufficient data
-- Reason: Backend OHLC market data was not available, so CSA Coach cannot reliably compare Monday start price to present price, highest price, lowest price, broken support/resistance count, or price progression.
+- Reason: Backend OHLC market data was not available, so CSA Coach cannot reliably compare the required ${profile.structureLabel}, broken support/resistance count, or price progression.
 
 Best Entry Area:
 - Not available. Wait until backend OHLC data confirms valid support/resistance or supply/demand areas.
@@ -1396,14 +1749,15 @@ Data Issue:
 - Reason: ${marketReference?.error || "Unknown error"}
 - Selected date: ${dateDecision?.selectedDateText || "Not provided"}
 - Final date used: ${dateDecision?.finalDateText || "Not provided"}
+- CSA structure expected: ${profile.structureLabel}
 - Detected instrument: ${chartDetection?.detectedInstrument || "Not detected"}
 - Detected timeframe: ${chartDetection?.detectedTimeframe || "Not detected"}
 - Visible trigger: ${chartDetection?.visibleTrigger || "Not detected"}`;
   }
 
-  const dailyLevels = marketReference.dailyLevels || [];
+  const levels = marketReference.dailyLevels || [];
   const areas = marketReference.csaAreas || [];
-  const bias = marketReference.directionalBias || calculateCsaDirectionalBias(dailyLevels, normalizedSymbol);
+  const bias = marketReference.directionalBias || calculateCsaDirectionalBias(levels, normalizedSymbol, profile);
   const tolerance = getCleanBreakTolerance(normalizedSymbol);
 
   const resistanceAreas = areas.filter((area) => area.type === "resistance");
@@ -1411,25 +1765,29 @@ Data Issue:
   const supplyAreas = areas.filter((area) => area.type === "supply");
   const demandAreas = areas.filter((area) => area.type === "demand");
 
-  const validSupplyAreas = filterValidAreas(supplyAreas, dailyLevels, normalizedSymbol);
-  const validDemandAreas = filterValidAreas(demandAreas, dailyLevels, normalizedSymbol);
-  const brokenSupplyAreas = filterBrokenAreas(supplyAreas, dailyLevels, normalizedSymbol);
-  const brokenDemandAreas = filterBrokenAreas(demandAreas, dailyLevels, normalizedSymbol);
-  const brokenSupportAreas = filterBrokenAreas(supportAreas, dailyLevels, normalizedSymbol);
-  const brokenResistanceAreas = filterBrokenAreas(resistanceAreas, dailyLevels, normalizedSymbol);
+  const validSupplyAreas = filterValidAreas(supplyAreas, levels, normalizedSymbol);
+  const validDemandAreas = filterValidAreas(demandAreas, levels, normalizedSymbol);
+  const brokenSupplyAreas = filterBrokenAreas(supplyAreas, levels, normalizedSymbol);
+  const brokenDemandAreas = filterBrokenAreas(demandAreas, levels, normalizedSymbol);
+  const brokenSupportAreas = filterBrokenAreas(supportAreas, levels, normalizedSymbol);
+  const brokenResistanceAreas = filterBrokenAreas(resistanceAreas, levels, normalizedSymbol);
 
   const tradeCoach = buildTradeCoachingSummary({
     resistanceAreas,
     supportAreas,
     supplyAreas,
     demandAreas,
-    dailyLevels,
+    levels,
     bias,
     symbol: normalizedSymbol,
     chartDetection,
+    profile,
   });
 
   return `CSA COACH VERDICT
+
+CSA Structure Used:
+- ${profile.structureLabel}
 
 Directional Bias:
 - ${tradeCoach.direction}
@@ -1463,10 +1821,12 @@ Overall Setup Score:
 READ_MORE_DETAILS:
 
 CSA Bias Calculation:
-- Monday start price: ${formatPrice(bias.periodStartPrice)}
-- Current/latest close: ${formatPrice(bias.presentPrice)}
-- Highest price from Monday to now: ${formatPrice(bias.periodHigh)}
-- Lowest price from Monday to now: ${formatPrice(bias.periodLow)}
+- Timeframe selected: ${profile.selectedTimeframe}
+- Structure source: ${profile.structureLabel}
+- ${profile.startPriceLabel}: ${formatPrice(bias.periodStartPrice)}
+- ${profile.currentPriceLabel}: ${formatPrice(bias.presentPrice)}
+- Highest price in selected ${profile.rangeKind}: ${formatPrice(bias.periodHigh)}
+- Lowest price in selected ${profile.rangeKind}: ${formatPrice(bias.periodLow)}
 - Price movement: ${formatPrice(bias.priceMove)}
 - New resistance levels created from higher highs: ${bias.resistanceCount}
 - New support levels created from lower lows: ${bias.supportCount}
@@ -1500,8 +1860,8 @@ ${listAreas(brokenSupplyAreas, "supply")}
 Broken Demand:
 ${listAreas(brokenDemandAreas, "demand")}
 
-Monday-to-Friday CSA Breakdown:
-${buildSimpleDayBreakdown(dailyLevels, normalizedSymbol)}
+${profile.breakdownTitle}:
+${buildSimpleStructureBreakdown(levels, normalizedSymbol, profile)}
 
 Chart Trigger Scan:
 - Confirmed visible trigger: ${chartDetection?.visibleTrigger || "None confirmed"}
@@ -1513,17 +1873,43 @@ Technical Notes:
 - Data source: Twelve Data
 - Symbol used: ${marketReference.symbol}
 - Selected instrument: ${submittedInstrument}
-- Timeframe used: ${marketReference.interval}
-- Week used: ${marketReference.weekRange.startDate} to ${marketReference.weekRange.fridayDate}
+- Selected timeframe: ${timeframe}
+- Timeframe used by data source: ${marketReference.interval}
+- CSA structure used: ${profile.structureLabel}
+- Range used: ${marketReference.weekRange.startDate} to ${marketReference.weekRange.finalDate}
 - Data used up to: ${marketReference.weekRange.endDate}
 - Clean-break tolerance: ${formatPrice(tolerance)}
 - Supply/demand is ignored once price breaks and closes past the area.
-- Take-profit levels start from previous-day areas, not the present day.
+- Take-profit levels start from previous structure areas, not the present area.
 - Bounce, pullback, retracement, consolidation, or reaction is treated as context only, not a confirmed entry trigger.
 - For bearish setups, TP levels are sorted below the entry area.
 - For bullish setups, TP levels are sorted above the entry area.
 - Chart image was used for context, mismatch checks, and visible trigger scan.
 - Stop loss, target, and risk-to-reward are structural coaching comments only. They are not financial advice.`;
+}
+
+function buildInvalidChartAnalysis({ submittedInstrument, timeframe, chartDetection }) {
+  return `Invalid Chart Upload
+
+What happened:
+- The uploaded image does not appear to be a financial trading chart.
+
+Why analysis was stopped:
+- CSA Coach can only review trading chart screenshots with visible price movement, price scale, and date/time structure.
+- The uploaded image appears out of sync with the selected market inputs, so producing trade feedback would be misleading.
+
+Selected:
+- Instrument: ${submittedInstrument || "Not provided"}
+- Timeframe: ${timeframe || "Not provided"}
+
+AI image check:
+- Status: Not a valid trading chart
+- Reason: ${chartDetection?.chartValidityReason || "The uploaded image could not be verified as a trading chart."}
+
+How to fix:
+- Upload a real TradingView / MT4 / MT5 / broker chart screenshot.
+- Make sure candles or price movement are visible.
+- Make sure the selected pair and timeframe match the uploaded chart.`;
 }
 
 function buildInstrumentMismatchAnalysis({
@@ -1601,12 +1987,9 @@ app.get("/test-twelve", async (req, res) => {
   try {
     const symbol = normalizeSymbol(req.query.symbol || "GBP/USD");
     const timeframe = req.query.timeframe || "H1";
-    const date = req.query.date || "2026-06-30";
+    const date = req.query.date || "2026-07-15";
     const timezone = req.query.timezone || "UTC";
-    const mode = normalizeAnalysisType(req.query.analysisType || "post-trade");
-    const useFullWeek =
-      mode === "post-trade" ||
-      String(req.query.useFullWeek || "").toLowerCase() === "true";
+    const analysisType = normalizeAnalysisType(req.query.analysisType || "post-trade");
 
     const chartDate = parseISODateOnly(date);
 
@@ -1617,12 +2000,12 @@ app.get("/test-twelve", async (req, res) => {
       });
     }
 
-    const result = await fetchTwelveDataIntradayLevels({
+    const result = await fetchTwelveDataStructureLevels({
       symbol,
       chartDate,
       timeframe,
       timezone,
-      useFullWeek,
+      analysisType,
     });
 
     res.json({
@@ -1632,10 +2015,11 @@ app.get("/test-twelve", async (req, res) => {
       interval: result.interval,
       date,
       timezone,
-      analysisType: mode,
-      useFullWeek,
+      analysisType,
       error: result.error,
-      weekRange: result.weekRange,
+      structureMode: result.profile?.structureMode,
+      structureLabel: result.profile?.structureLabel,
+      range: result.weekRange,
       rawCandleCount: result.rawCandleCount,
       dailyLevels: result.dailyLevels,
       csaAreas: result.csaAreas,
@@ -1685,7 +2069,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const submittedNotes = notes || userNotes || "";
     const normalizedSymbol = normalizeSymbol(submittedInstrument);
     const mode = normalizeAnalysisType(analysisType);
-    const useFullWeek = mode === "post-trade";
+    const selectedTimeframeProfile = getSupportedCsaTimeframeProfile(timeframe);
 
     const imageBase64 = req.file.buffer.toString("base64");
     const mimeType = req.file.mimetype || "image/png";
@@ -1737,8 +2121,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           weekRange: null,
           dailyLevels: [],
           csaAreas: [],
-          directionalBias: calculateCsaDirectionalBias([], normalizedSymbol),
-          useFullWeek,
+          directionalBias: calculateCsaDirectionalBias([], normalizedSymbol, selectedTimeframeProfile),
+          profile: selectedTimeframeProfile,
         },
       });
     }
@@ -1788,8 +2172,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           weekRange: null,
           dailyLevels: [],
           csaAreas: [],
-          directionalBias: calculateCsaDirectionalBias([], normalizedSymbol),
-          useFullWeek,
+          directionalBias: calculateCsaDirectionalBias([], normalizedSymbol, selectedTimeframeProfile),
+          profile: selectedTimeframeProfile,
         },
       });
     }
@@ -1839,8 +2223,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           weekRange: null,
           dailyLevels: [],
           csaAreas: [],
-          directionalBias: calculateCsaDirectionalBias([], normalizedSymbol),
-          useFullWeek,
+          directionalBias: calculateCsaDirectionalBias([], normalizedSymbol, selectedTimeframeProfile),
+          profile: selectedTimeframeProfile,
         },
       });
     }
@@ -1851,12 +2235,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       analysisType: mode,
     });
 
-    const marketReference = await fetchTwelveDataIntradayLevels({
+    const marketReference = await fetchTwelveDataStructureLevels({
       symbol: normalizedSymbol,
       chartDate: dateDecision.finalDate,
       timeframe,
       timezone: timezone || "UTC",
-      useFullWeek,
+      analysisType: mode,
     });
 
     const analysis = buildDeterministicCsaAnalysis({
@@ -1871,9 +2255,17 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       submittedNotes,
     });
 
-    const bias = marketReference.directionalBias || calculateCsaDirectionalBias([], normalizedSymbol);
+    const bias =
+      marketReference.directionalBias ||
+      calculateCsaDirectionalBias([], normalizedSymbol, selectedTimeframeProfile);
+
     const setupScoreMatch = String(analysis).match(/Overall Setup Score:\s*\n- (\d+)\/10/i);
     const setupScore = setupScoreMatch ? Number(setupScoreMatch[1]) : 0;
+
+    const structureLabel =
+      marketReference.profile?.structureLabel ||
+      selectedTimeframeProfile.structureLabel ||
+      "CSA structure levels";
 
     res.json({
       success: true,
@@ -1883,7 +2275,6 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       selectedTimeframe: timeframe,
       selectedDate: chartDate || tradeDate || "Not provided",
       analysisType: mode,
-      useFullWeek,
       detectedPair: chartDetection.detectedInstrument || normalizedSymbol || "Not available",
       detectedTimeframe: chartDetection.detectedTimeframe || timeframe,
       detectedLatestVisibleDate: chartDetection.latestVisibleDate || "Not detected",
@@ -1891,22 +2282,29 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       dateDecision,
       csaDirectionalBias: bias,
       contextStatus: marketReference.ok
-        ? useFullWeek
-          ? "Market-data-backed post-trade full-week setup review completed"
-          : "Market-data-backed pre-trade date-capped setup review completed"
+        ? `Market-data-backed CSA setup review completed using ${structureLabel}.`
         : `Setup review completed without market data: ${marketReference.error}`,
-      grade: setupScore >= 8 ? "A" : setupScore >= 7 ? "B" : setupScore >= 6 ? "C" : setupScore >= 4 ? "D" : "F",
+      grade:
+        setupScore >= 8
+          ? "A"
+          : setupScore >= 7
+          ? "B"
+          : setupScore >= 6
+          ? "C"
+          : setupScore >= 4
+          ? "D"
+          : "F",
       confidence: setupScore * 10,
       structureScore: setupScore * 10,
       executionScore: 0,
       riskScore: 0,
       strengths: marketReference.ok
         ? [
-            `CSA areas calculated from Twelve Data ${marketReference.interval} candles for the selected Monday-to-Friday week.`,
+            `CSA areas calculated from Twelve Data ${marketReference.interval} candles using: ${structureLabel}.`,
             `CSA directional bias calculated as ${bias.bias} with ${bias.confidence} confidence.`,
             "Main feedback follows the requested format: bias, entry area, trigger, stop, target, risk/reward, management, verdict.",
-            "Take-profit levels now start from previous-day areas and respect trade direction.",
-            "Bounce, pullback, retracement, consolidation, or reaction is now treated as context only, not a confirmed entry trigger.",
+            "Take-profit levels start from previous structural areas and respect trade direction.",
+            "Bounce, pullback, retracement, consolidation, or reaction is treated as context only, not a confirmed entry trigger.",
           ]
         : ["CSA setup review could not be fully market-data-backed."],
       weaknesses: marketReference.ok
@@ -1925,7 +2323,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         "take profit placement",
         "risk reward",
         "trade management",
-        useFullWeek ? "post-trade-full-week" : "pre-trade-date-capped",
+        marketReference.profile?.selectedTimeframe || selectedTimeframeProfile.selectedTimeframe,
+        marketReference.profile?.structureMode || selectedTimeframeProfile.structureMode,
         marketReference.ok ? "market-data-backed" : "vision-only fallback",
         bias.biasCode || "bias-unavailable",
       ],
@@ -1941,7 +2340,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         dailyLevels: marketReference.dailyLevels,
         csaAreas: marketReference.csaAreas,
         directionalBias: marketReference.directionalBias,
-        useFullWeek: marketReference.useFullWeek,
+        profile: marketReference.profile,
+        structureMode: marketReference.profile?.structureMode,
+        structureLabel: marketReference.profile?.structureLabel,
         cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol),
       },
     });
