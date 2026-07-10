@@ -2069,44 +2069,6 @@ function buildDashboardAliases(dashboardFeedback = {}) {
   };
 }
 
-function buildSimpleStructureBreakdown(
-  levels = [],
-  normalizedSymbol = "",
-  profile = getSupportedCsaTimeframeProfile("H1")
-) {
-  if (!levels.length) return "- No structure data available.";
-
-  return levels
-    .map((period, index) => {
-      const label = period.periodLabel || period.weekday || period.key;
-
-      if (index === 0) {
-        return `${label}:
-- High ${formatPrice(period.high)} = first resistance for this ${profile.rangeKind}.
-- Low ${formatPrice(period.low)} = first support for this ${profile.rangeKind}.`;
-      }
-
-      const previous = levels[index - 1];
-      const previousLabel = previous.periodLabel || previous.weekday || previous.key;
-
-      const highComparison = compareHighWithTolerance(period.high, previous.high, normalizedSymbol);
-      const lowComparison = compareLowWithTolerance(period.low, previous.low, normalizedSymbol);
-
-      const highResult = highComparison.cleanBreak
-        ? `High broke above ${previousLabel}'s high, so ${label} high became resistance.`
-        : `High failed to cleanly break ${previousLabel}'s high, so ${label} high became supply.`;
-
-      const lowResult = lowComparison.cleanBreak
-        ? `Low broke below ${previousLabel}'s low, so ${label} low became support.`
-        : `Low held/retested ${previousLabel}'s low, so ${label} low became demand.`;
-
-      return `${label}:
-- ${highResult}
-- ${lowResult}`;
-    })
-    .join("\n\n");
-}
-
 function buildDeterministicCsaAnalysis({
   marketReference,
   dateDecision,
@@ -2745,9 +2707,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       executionScore: dashboardFeedback.scores.entryAccuracy,
       riskScore: dashboardFeedback.scores.riskManagement,
 
-      // These fields are intentionally returned in multiple formats
-      // so the frontend can read them whether it expects flat fields,
-      // nested dashboard fields, or older names.
+      // Important: returned in many aliases so frontend cards can find them.
       ...dashboardAliases,
 
       coachAdvice: [analysis],
