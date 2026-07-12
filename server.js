@@ -21,16 +21,16 @@ You are CSA Coach's chart screenshot validator. Return ONLY valid JSON.
 A valid trading chart screenshot must show visible candles/bars/line movement, price scale, and time/date axis.
 A platform screenshot alone is not enough.
 
-Invalid or insufficient images include:
-- photos, documents, logos, rooms, screenshots with no financial chart
-- blank charts, loading charts, heavily cropped charts, or charts where candles are not visible
-- charts with fewer than about 20 visible candles/bars/price points
+Invalid/insufficient images:
+- photos, logos, documents, rooms, screenshots with no financial chart
+- blank charts, loading charts, charts where no candle/line movement is visible
+- charts with fewer than about 15 visible candles/bars/points
 
-Selected-date rule:
-- If a selected chart/trade date is provided and it is later than the latest visible date on the chart, selectedDateVisible must be false.
-- Example: selected date 2026-07-10 but latest visible chart date around 2026-06-11 means selectedDateVisible=false and latestVisibleDate=2026-06-11 if readable.
-- Always estimate latestVisibleDate from the bottom time axis when possible.
-- Twelve Data must not replace a blank, unclear, or wrong-date uploaded chart.
+Important:
+- Be practical. If a chart clearly has visible price movement, do not mark it insufficient just because the exact selected date is hard to read.
+- If the selected date is clearly far after the latest visible chart date, set selectedDateVisible=false and provide latestVisibleDate.
+- If the date axis is hard to read, set dateConfidence="low" instead of blocking the chart.
+- Only mark hasUsablePriceData=false when the chart is truly blank/unclear/cropped/loading or has almost no price movement.
 
 Entry trigger rule:
 Only return visibleTrigger if there is real confirmation such as engulfing, pin bar, hammer, doji rejection, inside bar break, lower high/higher low, breakout/breakdown, flag/channel/triangle break, head and shoulders, Quasimodo, or clean break-and-hold.
@@ -143,24 +143,10 @@ function parseISODateOnly(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function formatDateOnly(date) {
-  return date.toISOString().slice(0, 10);
-}
-
-function addDays(date, days) {
-  const next = new Date(date);
-  next.setUTCDate(next.getUTCDate() + days);
-  return next;
-}
-
-function safeNumber(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
-
-function candleDateOnly(datetimeValue = "") {
-  return String(datetimeValue).slice(0, 10);
-}
+function formatDateOnly(date) { return date.toISOString().slice(0, 10); }
+function addDays(date, days) { const next = new Date(date); next.setUTCDate(next.getUTCDate() + days); return next; }
+function safeNumber(value) { const n = Number(value); return Number.isFinite(n) ? n : null; }
+function candleDateOnly(datetimeValue = "") { return String(datetimeValue).slice(0, 10); }
 
 function formatPrice(value) {
   const n = Number(value);
@@ -177,13 +163,10 @@ function stripCodeFence(text = "") {
 
 function extractJsonObject(text = "") {
   const cleaned = stripCodeFence(text);
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (!match) return null;
-    try { return JSON.parse(match[0]); } catch { return null; }
-  }
+  try { return JSON.parse(cleaned); } catch {}
+  const match = cleaned.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try { return JSON.parse(match[0]); } catch { return null; }
 }
 
 function clampScore(value, min = 0, max = 100) {
@@ -202,39 +185,24 @@ function scoreLabel(score) {
 function makeSimpleMistake(title, severity = "REVIEW") {
   const cleanTitle = String(title || "").trim() || "Review setup";
   const cleanSeverity = String(severity || "REVIEW").trim().toUpperCase();
-  return {
-    title: cleanTitle,
-    severity: cleanSeverity,
-    tag: cleanSeverity,
-    label: cleanSeverity,
-    detail: "",
-    correction: "",
-    summary: "",
-  };
+  return { title: cleanTitle, severity: cleanSeverity, tag: cleanSeverity, label: cleanSeverity, detail: "", correction: "", summary: "" };
 }
 
 function normalizeArrayOfStrings(value = [], fallback = []) {
   if (!Array.isArray(value)) return fallback;
-  return value
-    .map((item) => {
-      if (typeof item === "string") return item.trim();
-      if (item && typeof item === "object") return String(item.title || item.summary || item.detail || "").trim();
-      return "";
-    })
-    .filter(Boolean);
+  return value.map((item) => {
+    if (typeof item === "string") return item.trim();
+    if (item && typeof item === "object") return String(item.title || item.summary || item.detail || "").trim();
+    return "";
+  }).filter(Boolean);
 }
 
 function normalizeVisualMistakeItems(items = []) {
   if (!Array.isArray(items)) return [];
-  return items
-    .map((item) => {
-      if (typeof item === "string") return makeSimpleMistake(item, "REVIEW");
-      const title = item?.title || item?.mistake || item?.name || "";
-      const tag = item?.tag || item?.severity || item?.label || "REVIEW";
-      return makeSimpleMistake(title, tag);
-    })
-    .filter((item) => item.title && item.title !== "Review setup")
-    .slice(0, 5);
+  return items.map((item) => {
+    if (typeof item === "string") return makeSimpleMistake(item, "REVIEW");
+    return makeSimpleMistake(item?.title || item?.mistake || item?.name || "", item?.tag || item?.severity || item?.label || "REVIEW");
+  }).filter((item) => item.title && item.title !== "Review setup").slice(0, 5);
 }
 
 function sanitizeVisibleTrigger(trigger, confidence = "low") {
@@ -259,9 +227,7 @@ function getCleanBreakTolerance(symbol = "") {
 }
 
 function compareHighWithTolerance(currentHigh, previousHigh, symbol = "") {
-  const current = Number(currentHigh);
-  const previous = Number(previousHigh);
-  const tolerance = getCleanBreakTolerance(symbol);
+  const current = Number(currentHigh), previous = Number(previousHigh), tolerance = getCleanBreakTolerance(symbol);
   if (!Number.isFinite(current) || !Number.isFinite(previous)) return { cleanBreak: false, difference: null, tolerance, label: "unavailable" };
   const difference = current - previous;
   if (difference > tolerance) return { cleanBreak: true, difference, tolerance, label: "clean higher high" };
@@ -270,9 +236,7 @@ function compareHighWithTolerance(currentHigh, previousHigh, symbol = "") {
 }
 
 function compareLowWithTolerance(currentLow, previousLow, symbol = "") {
-  const current = Number(currentLow);
-  const previous = Number(previousLow);
-  const tolerance = getCleanBreakTolerance(symbol);
+  const current = Number(currentLow), previous = Number(previousLow), tolerance = getCleanBreakTolerance(symbol);
   if (!Number.isFinite(current) || !Number.isFinite(previous)) return { cleanBreak: false, difference: null, tolerance, label: "unavailable" };
   const difference = previous - current;
   if (difference > tolerance) return { cleanBreak: true, difference, tolerance, label: "clean lower low" };
@@ -283,97 +247,20 @@ function compareLowWithTolerance(currentLow, previousLow, symbol = "") {
 function getSupportedCsaTimeframeProfile(timeframe = "H1") {
   const tf = comparableTimeframe(timeframe) || "H1";
   if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) {
-    return {
-      selectedTimeframe: tf,
-      interval: normalizeTimeframe(tf),
-      structureMode: "daily-in-week",
-      structureLabel: "Daily highs/lows inside the selected Monday-to-Friday week",
-      sourceUnitSingular: "day",
-      sourceUnitPlural: "daily levels",
-      firstPeriodText: "Monday high/low creates the first support and resistance for the week.",
-      startPriceLabel: "Monday open",
-      currentPriceLabel: "latest close for the selected week",
-      rangeKind: "week",
-      breakdownTitle: "Monday-to-Friday CSA Breakdown",
-    };
+    return { selectedTimeframe: tf, interval: normalizeTimeframe(tf), structureMode: "daily-in-week", structureLabel: "Daily highs/lows inside the selected Monday-to-Friday week", sourceUnitSingular: "day", sourceUnitPlural: "daily levels", firstPeriodText: "Monday high/low creates first support and resistance.", startPriceLabel: "Monday open", currentPriceLabel: "latest close for selected week", rangeKind: "week", breakdownTitle: "Monday-to-Friday CSA Breakdown" };
   }
-  if (tf === "H4") {
-    return {
-      selectedTimeframe: tf,
-      interval: "4h",
-      structureMode: "weekly-in-month",
-      structureLabel: "Weekly highs/lows inside the selected calendar month",
-      sourceUnitSingular: "week",
-      sourceUnitPlural: "weekly levels",
-      firstPeriodText: "The first available week high/low creates the first support and resistance for the month.",
-      startPriceLabel: "first week open",
-      currentPriceLabel: "latest close for the selected month",
-      rangeKind: "month",
-      breakdownTitle: "Weekly CSA Breakdown For Selected Month",
-    };
-  }
-  if (tf === "D1") {
-    return {
-      selectedTimeframe: tf,
-      interval: "1day",
-      structureMode: "monthly-in-year",
-      structureLabel: "Monthly highs/lows inside the selected calendar year",
-      sourceUnitSingular: "month",
-      sourceUnitPlural: "monthly levels",
-      firstPeriodText: "January high/low, or the first available month high/low, creates the first support and resistance for the year.",
-      startPriceLabel: "first month open",
-      currentPriceLabel: "latest close for the selected year",
-      rangeKind: "year",
-      breakdownTitle: "Monthly CSA Breakdown For Selected Year",
-    };
-  }
-  if (tf === "W1") {
-    return {
-      selectedTimeframe: tf,
-      interval: "1week",
-      structureMode: "quarterly-in-year",
-      structureLabel: "Quarterly highs/lows inside the selected calendar year",
-      sourceUnitSingular: "quarter",
-      sourceUnitPlural: "quarterly levels",
-      firstPeriodText: "Q1 high/low, or the first available quarter high/low, creates the first support and resistance for the year.",
-      startPriceLabel: "first quarter open",
-      currentPriceLabel: "latest close for the selected year",
-      rangeKind: "year",
-      breakdownTitle: "Quarterly CSA Breakdown For Selected Year",
-    };
-  }
-  if (tf === "MN") {
-    return {
-      selectedTimeframe: tf,
-      interval: "1month",
-      structureMode: "yearly-in-multi-year",
-      structureLabel: "Yearly highs/lows across selected year plus previous 4 years",
-      sourceUnitSingular: "year",
-      sourceUnitPlural: "yearly levels",
-      firstPeriodText: "The first available year high/low creates the first support and resistance for the multi-year range.",
-      startPriceLabel: "first year open",
-      currentPriceLabel: "latest close for the selected multi-year range",
-      rangeKind: "multi-year range",
-      breakdownTitle: "Yearly CSA Breakdown For Monthly Chart",
-    };
-  }
+  if (tf === "H4") return { selectedTimeframe: tf, interval: "4h", structureMode: "weekly-in-month", structureLabel: "Weekly highs/lows inside the selected calendar month", sourceUnitSingular: "week", sourceUnitPlural: "weekly levels", firstPeriodText: "First week high/low creates first support and resistance.", startPriceLabel: "first week open", currentPriceLabel: "latest close for selected month", rangeKind: "month", breakdownTitle: "Weekly CSA Breakdown For Selected Month" };
+  if (tf === "D1") return { selectedTimeframe: tf, interval: "1day", structureMode: "monthly-in-year", structureLabel: "Monthly highs/lows inside the selected calendar year", sourceUnitSingular: "month", sourceUnitPlural: "monthly levels", firstPeriodText: "First month high/low creates first support and resistance.", startPriceLabel: "first month open", currentPriceLabel: "latest close for selected year", rangeKind: "year", breakdownTitle: "Monthly CSA Breakdown For Selected Year" };
+  if (tf === "W1") return { selectedTimeframe: tf, interval: "1week", structureMode: "quarterly-in-year", structureLabel: "Quarterly highs/lows inside the selected calendar year", sourceUnitSingular: "quarter", sourceUnitPlural: "quarterly levels", firstPeriodText: "First quarter high/low creates first support and resistance.", startPriceLabel: "first quarter open", currentPriceLabel: "latest close for selected year", rangeKind: "year", breakdownTitle: "Quarterly CSA Breakdown For Selected Year" };
+  if (tf === "MN") return { selectedTimeframe: tf, interval: "1month", structureMode: "yearly-in-multi-year", structureLabel: "Yearly highs/lows across selected year plus previous 4 years", sourceUnitSingular: "year", sourceUnitPlural: "yearly levels", firstPeriodText: "First year high/low creates first support and resistance.", startPriceLabel: "first year open", currentPriceLabel: "latest close for selected multi-year range", rangeKind: "multi-year range", breakdownTitle: "Yearly CSA Breakdown For Monthly Chart" };
   return getSupportedCsaTimeframeProfile("H1");
 }
 
 function getMonthName(monthIndex) {
   return new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2026, monthIndex, 1)));
 }
-
-function getQuarterLabel(monthIndex) {
-  if (monthIndex <= 2) return "Q1";
-  if (monthIndex <= 5) return "Q2";
-  if (monthIndex <= 8) return "Q3";
-  return "Q4";
-}
-
-function weekdayNameFromDate(dateString) {
-  return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(new Date(`${dateString}T00:00:00.000Z`));
-}
+function getQuarterLabel(monthIndex) { return monthIndex <= 2 ? "Q1" : monthIndex <= 5 ? "Q2" : monthIndex <= 8 ? "Q3" : "Q4"; }
+function weekdayNameFromDate(dateString) { return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(new Date(`${dateString}T00:00:00.000Z`)); }
 
 function getWeekRangeForDate(chartDate, useFullWeek = false) {
   const day = chartDate.getUTCDay();
@@ -384,8 +271,7 @@ function getWeekRangeForDate(chartDate, useFullWeek = false) {
 }
 
 function getMonthRangeForDate(chartDate, useFullMonth = false) {
-  const year = chartDate.getUTCFullYear();
-  const month = chartDate.getUTCMonth();
+  const year = chartDate.getUTCFullYear(), month = chartDate.getUTCMonth();
   const start = new Date(Date.UTC(year, month, 1));
   const final = new Date(Date.UTC(year, month + 1, 0));
   const end = useFullMonth ? final : chartDate < final ? chartDate : final;
@@ -418,33 +304,16 @@ function getStructureRangeForProfile(chartDate, profile, analysisType = "post-tr
 }
 
 function getPeriodKeyAndLabel(date, profile) {
-  const year = date.getUTCFullYear();
-  const month = date.getUTCMonth();
-
-  if (profile.structureMode === "daily-in-week") {
-    const dateOnly = formatDateOnly(date);
-    return { key: dateOnly, label: weekdayNameFromDate(dateOnly), date: dateOnly };
-  }
-
+  const year = date.getUTCFullYear(), month = date.getUTCMonth();
+  if (profile.structureMode === "daily-in-week") { const dateOnly = formatDateOnly(date); return { key: dateOnly, label: weekdayNameFromDate(dateOnly), date: dateOnly }; }
   if (profile.structureMode === "weekly-in-month") {
     const monthStart = new Date(Date.UTC(year, month, 1));
     const weekNumber = Math.ceil((date.getUTCDate() + monthStart.getUTCDay()) / 7);
     return { key: `${year}-${String(month + 1).padStart(2, "0")}-W${weekNumber}`, label: `Week ${weekNumber}`, date: formatDateOnly(date) };
   }
-
-  if (profile.structureMode === "monthly-in-year") {
-    return { key: `${year}-${String(month + 1).padStart(2, "0")}`, label: getMonthName(month), date: `${year}-${String(month + 1).padStart(2, "0")}-01` };
-  }
-
-  if (profile.structureMode === "quarterly-in-year") {
-    const q = getQuarterLabel(month);
-    return { key: `${year}-${q}`, label: q, date: `${year}-${q}` };
-  }
-
-  if (profile.structureMode === "yearly-in-multi-year") {
-    return { key: String(year), label: String(year), date: `${year}-01-01` };
-  }
-
+  if (profile.structureMode === "monthly-in-year") return { key: `${year}-${String(month + 1).padStart(2, "0")}`, label: getMonthName(month), date: `${year}-${String(month + 1).padStart(2, "0")}-01` };
+  if (profile.structureMode === "quarterly-in-year") { const q = getQuarterLabel(month); return { key: `${year}-${q}`, label: q, date: `${year}-${q}` }; }
+  if (profile.structureMode === "yearly-in-multi-year") return { key: String(year), label: String(year), date: `${year}-01-01` };
   const dateOnly = formatDateOnly(date);
   return { key: dateOnly, label: dateOnly, date: dateOnly };
 }
@@ -456,100 +325,60 @@ function getOutputSizeForInterval(interval) {
 
 function buildStructureLevelsFromCandles(candles, structureRange, profile) {
   const grouped = new Map();
-
   candles.forEach((bar) => {
     const dateOnly = candleDateOnly(bar.datetime);
     if (!dateOnly) return;
-
     const date = new Date(`${dateOnly}T00:00:00.000Z`);
     if (Number.isNaN(date.getTime())) return;
     if (dateOnly < structureRange.startDate || dateOnly > structureRange.endDate) return;
-
-    if (profile.structureMode === "daily-in-week") {
-      const dayNum = date.getUTCDay();
-      if (dayNum < 1 || dayNum > 5) return;
-    }
-
-    const open = safeNumber(bar.open);
-    const high = safeNumber(bar.high);
-    const low = safeNumber(bar.low);
-    const close = safeNumber(bar.close);
+    if (profile.structureMode === "daily-in-week") { const dayNum = date.getUTCDay(); if (dayNum < 1 || dayNum > 5) return; }
+    const open = safeNumber(bar.open), high = safeNumber(bar.high), low = safeNumber(bar.low), close = safeNumber(bar.close);
     if ([open, high, low, close].some((v) => v === null)) return;
-
     const period = getPeriodKeyAndLabel(date, profile);
-
     if (!grouped.has(period.key)) {
-      grouped.set(period.key, {
-        key: period.key,
-        date: period.date,
-        day: period.label,
-        periodLabel: period.label,
-        open,
-        high,
-        low,
-        close,
-        candleCount: 1,
-      });
-      return;
+      grouped.set(period.key, { key: period.key, date: period.date, day: period.label, periodLabel: period.label, open, high, low, close, candleCount: 1 });
+    } else {
+      const existing = grouped.get(period.key);
+      existing.high = Math.max(existing.high, high);
+      existing.low = Math.min(existing.low, low);
+      existing.close = close;
+      existing.candleCount += 1;
     }
-
-    const existing = grouped.get(period.key);
-    existing.high = Math.max(existing.high, high);
-    existing.low = Math.min(existing.low, low);
-    existing.close = close;
-    existing.candleCount += 1;
   });
-
   return Array.from(grouped.values()).sort((a, b) => String(a.key).localeCompare(String(b.key)));
 }
 
-function buildCsaAreas(levels = [], symbol = "") {
+function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
   const areas = [];
-
   levels.forEach((period, index) => {
     const label = period.periodLabel || period.day || period.key;
-
     if (index === 0) {
       areas.push({ day: label, period: label, date: period.date, type: "resistance", price: period.high, priceText: formatPrice(period.high) });
       areas.push({ day: label, period: label, date: period.date, type: "support", price: period.low, priceText: formatPrice(period.low) });
       return;
     }
-
     const previous = levels[index - 1];
     const highComparison = compareHighWithTolerance(period.high, previous.high, symbol);
     const lowComparison = compareLowWithTolerance(period.low, previous.low, symbol);
-
     areas.push({ day: label, period: label, date: period.date, type: highComparison.cleanBreak ? "resistance" : "supply", price: period.high, priceText: formatPrice(period.high), comparison: highComparison });
     areas.push({ day: label, period: label, date: period.date, type: lowComparison.cleanBreak ? "support" : "demand", price: period.low, priceText: formatPrice(period.low), comparison: lowComparison });
   });
-
   return areas;
 }
 
 function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
-  if (!Array.isArray(levels) || levels.length < 2) {
-    return { bias: "Insufficient data", biasCode: "insufficient", confidence: "low", reason: `At least two ${profile.sourceUnitPlural} are needed.` };
-  }
-
-  const first = levels[0];
-  const last = levels[levels.length - 1];
-  let highBreakCount = 0;
-  let lowBreakCount = 0;
-  let risingCloses = 0;
-  let fallingCloses = 0;
-
+  if (!Array.isArray(levels) || levels.length < 2) return { bias: "Insufficient data", biasCode: "insufficient", confidence: "low", reason: `At least two ${profile.sourceUnitPlural} are needed.`, periodStartPrice: null, presentPrice: null, periodHigh: null, periodLow: null };
+  const first = levels[0], last = levels[levels.length - 1];
+  let highBreakCount = 0, lowBreakCount = 0, risingCloses = 0, fallingCloses = 0;
   for (let i = 1; i < levels.length; i += 1) {
     if (compareHighWithTolerance(levels[i].high, levels[i - 1].high, symbol).cleanBreak) highBreakCount += 1;
     if (compareLowWithTolerance(levels[i].low, levels[i - 1].low, symbol).cleanBreak) lowBreakCount += 1;
     if (levels[i].close > levels[i - 1].close) risingCloses += 1;
     if (levels[i].close < levels[i - 1].close) fallingCloses += 1;
   }
-
-  let bias = "Mixed / Range-bound";
-  let biasCode = "mixed";
+  let bias = "Mixed / Range-bound", biasCode = "mixed";
   if (last.close > first.open && highBreakCount >= lowBreakCount) { bias = "Bullish"; biasCode = "bullish"; }
   if (last.close < first.open && lowBreakCount >= highBreakCount) { bias = "Bearish"; biasCode = "bearish"; }
-
   return {
     bias,
     biasCode,
@@ -572,68 +401,25 @@ function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupp
 async function fetchTwelveDataStructureLevels({ symbol, chartDate, timeframe = "H1", timezone = "UTC", analysisType = "post-trade" }) {
   const apiKey = process.env.TWELVE_DATA_API_KEY;
   const profile = getSupportedCsaTimeframeProfile(timeframe);
-
-  const empty = (error, range = null) => ({
-    ok: false,
-    error,
-    dailyLevels: [],
-    csaAreas: [],
-    directionalBias: calculateCsaDirectionalBias([], symbol, profile),
-    rawCandleCount: 0,
-    weekRange: range,
-    symbol,
-    timezone,
-    interval: profile.interval,
-    profile,
-  });
-
+  const empty = (error, range = null) => ({ ok: false, error, dailyLevels: [], csaAreas: [], directionalBias: calculateCsaDirectionalBias([], symbol, profile), rawCandleCount: 0, weekRange: range, symbol, timezone, interval: profile.interval, profile });
   if (!apiKey) return empty("TWELVE_DATA_API_KEY is missing on the server.");
   if (!symbol) return empty("Instrument/pair is missing or unsupported.");
   if (!chartDate) return empty("Final visible chart date is missing.");
-
   const structureRange = getStructureRangeForProfile(chartDate, profile, analysisType);
-  const params = new URLSearchParams({
-    symbol,
-    interval: profile.interval,
-    start_date: `${structureRange.startDate} 00:00:00`,
-    end_date: `${structureRange.endDate} 23:59:59`,
-    timezone,
-    order: "ASC",
-    outputsize: getOutputSizeForInterval(profile.interval),
-    apikey: apiKey,
-  });
-
+  const params = new URLSearchParams({ symbol, interval: profile.interval, start_date: `${structureRange.startDate} 00:00:00`, end_date: `${structureRange.endDate} 23:59:59`, timezone, order: "ASC", outputsize: getOutputSizeForInterval(profile.interval), apikey: apiKey });
   const response = await fetch(`${TWELVE_DATA_BASE_URL}?${params.toString()}`);
   const data = await response.json();
-
-  if (!response.ok || data.status === "error" || !Array.isArray(data.values)) {
-    return { ...empty(data.message || data.error || `Twelve Data request failed with status ${response.status}.`, structureRange), twelveDataStatus: data.status || "unknown" };
-  }
-
+  if (!response.ok || data.status === "error" || !Array.isArray(data.values)) return { ...empty(data.message || data.error || `Twelve Data request failed with status ${response.status}.`, structureRange), twelveDataStatus: data.status || "unknown" };
   const rawCandles = data.values || [];
   const dailyLevels = buildStructureLevelsFromCandles(rawCandles, structureRange, profile);
-  const csaAreas = buildCsaAreas(dailyLevels, symbol);
+  const csaAreas = buildCsaAreas(dailyLevels, symbol, profile);
   const directionalBias = calculateCsaDirectionalBias(dailyLevels, symbol, profile);
-
-  return {
-    ok: dailyLevels.length > 0,
-    error: dailyLevels.length > 0 ? "" : `No usable ${profile.sourceUnitPlural} were returned.`,
-    dailyLevels,
-    csaAreas,
-    directionalBias,
-    rawCandleCount: rawCandles.length,
-    weekRange: structureRange,
-    symbol,
-    timezone,
-    interval: profile.interval,
-    profile,
-  };
+  return { ok: dailyLevels.length > 0, error: dailyLevels.length > 0 ? "" : `No usable ${profile.sourceUnitPlural} were returned.`, dailyLevels, csaAreas, directionalBias, rawCandleCount: rawCandles.length, weekRange: structureRange, symbol, timezone, interval: profile.interval, profile };
 }
 
 function areaBrokenByCloseLater(area, levels = [], symbol = "") {
   if (!area || !Array.isArray(levels)) return false;
-  const level = Number(area.price);
-  const tol = getCleanBreakTolerance(symbol);
+  const level = Number(area.price), tol = getCleanBreakTolerance(symbol);
   if (!Number.isFinite(level)) return false;
   const laterPeriods = levels.filter((item) => String(item.date || "") > String(area.date || ""));
   if (area.type === "supply" || area.type === "resistance") return laterPeriods.some((item) => Number(item.close) > level + tol);
@@ -641,21 +427,13 @@ function areaBrokenByCloseLater(area, levels = [], symbol = "") {
   return false;
 }
 
-function splitAreas(areas = []) {
-  return {
-    resistanceAreas: areas.filter((area) => area.type === "resistance"),
-    supportAreas: areas.filter((area) => area.type === "support"),
-    supplyAreas: areas.filter((area) => area.type === "supply"),
-    demandAreas: areas.filter((area) => area.type === "demand"),
-  };
-}
-
-function filterBrokenAreas(areaList = [], levels = [], symbol = "") {
-  return areaList.filter((area) => areaBrokenByCloseLater(area, levels, symbol));
-}
+function filterValidAreas(areaList = [], levels = [], symbol = "") { return areaList.filter((area) => !areaBrokenByCloseLater(area, levels, symbol)); }
+function filterBrokenAreas(areaList = [], levels = [], symbol = "") { return areaList.filter((area) => areaBrokenByCloseLater(area, levels, symbol)); }
+function splitAreas(areas = []) { return { resistanceAreas: areas.filter((a) => a.type === "resistance"), supportAreas: areas.filter((a) => a.type === "support"), supplyAreas: areas.filter((a) => a.type === "supply"), demandAreas: areas.filter((a) => a.type === "demand") }; }
+function areaLabel(area) { const period = area?.day || area?.period || area?.date || "Unknown period"; return `${period} ${area?.type || "area"} around ${area?.priceText || formatPrice(Number(area?.price))}`; }
 
 function describeFailedArea(area) {
-  const label = `${area?.day || area?.period || area?.date || "Unknown"} ${area?.type || "area"} around ${area?.priceText || formatPrice(area?.price)}`;
+  const label = areaLabel(area);
   if (area.type === "support") return `${label} failed because price later closed below it.`;
   if (area.type === "demand") return `${label} failed because price later closed below demand.`;
   if (area.type === "resistance") return `${label} failed because price later closed above it.`;
@@ -664,29 +442,18 @@ function describeFailedArea(area) {
 }
 
 function buildFailedAreas({ supportAreas = [], resistanceAreas = [], supplyAreas = [], demandAreas = [], levels = [], symbol = "" }) {
-  const mapArea = (area, failedType, mistakeLabel, newRole) => ({
-    ...area,
-    failedType,
-    mistakeLabel,
-    newRole,
-    explanation: describeFailedArea(area),
-  });
-
+  const mapArea = (area, failedType, mistakeLabel, newRole) => ({ ...area, failedType, mistakeLabel, newRole, explanation: describeFailedArea(area) });
   return [
     ...filterBrokenAreas(supportAreas, levels, symbol).map((area) => mapArea(area, "failed_support", "Failed support area", "Can become resistance if retested from below")),
     ...filterBrokenAreas(demandAreas, levels, symbol).map((area) => mapArea(area, "failed_demand", "Failed demand area", "Invalid as demand until reclaimed")),
     ...filterBrokenAreas(resistanceAreas, levels, symbol).map((area) => mapArea(area, "failed_resistance", "Failed resistance area", "Can become support if retested from above")),
     ...filterBrokenAreas(supplyAreas, levels, symbol).map((area) => mapArea(area, "failed_supply", "Failed supply area", "Invalid as supply until price loses it again")),
-  ].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  ].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || String(a.failedType || "").localeCompare(String(b.failedType || "")));
 }
 
 function listAreas(areaList = [], label = "area", max = 3) {
   if (!Array.isArray(areaList) || !areaList.length) return "- None identified.";
-  return [...areaList]
-    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
-    .slice(0, max)
-    .map((area) => `- ${area.day} ${label}: ${area.priceText}`)
-    .join("\n");
+  return [...areaList].sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))).slice(0, max).map((area) => `- ${area.day} ${label}: ${area.priceText}`).join("\n");
 }
 
 function listFailedAreas(failedAreas = [], max = 6) {
@@ -705,45 +472,20 @@ function simpleFailedAreaTitle(area) {
 
 function buildFrameworkMistakeHub({ failedAreas = [], hasConfirmedTrigger = false, rejectedContext = null, mixedBias = false, marketOk = true, entryAccuracyScore = 0, riskManagementScore = 0 }) {
   const items = [];
-  const add = (title, tag) => {
-    if (!title) return;
-    if (items.some((item) => item.title.toLowerCase() === String(title).toLowerCase())) return;
-    items.push(makeSimpleMistake(title, tag));
-  };
-
+  const add = (title, tag) => { if (title && !items.some((item) => item.title.toLowerCase() === String(title).toLowerCase())) items.push(makeSimpleMistake(title, tag)); };
   if (!marketOk) add("Market data unavailable", "DATA ISSUE");
-  if (!hasConfirmedTrigger) add("Failed to wait for confirmation", "DISCIPLINE");
-  if (rejectedContext && !hasConfirmedTrigger) add("Entered too early", "HIGH RISK");
-  if (mixedBias) add("Entered in unclear structure", "STRUCTURAL");
+  if (!hasConfirmedTrigger) add("No visible trigger", "REVIEW");
+  if (rejectedContext && !hasConfirmedTrigger) add("Context only, no trigger", "DISCIPLINE");
+  if (mixedBias) add("Unclear structure", "STRUCTURAL");
   failedAreas.slice(0, 4).forEach((area) => add(simpleFailedAreaTitle(area), "STRUCTURAL"));
-  if (Number(entryAccuracyScore) > 0 && Number(entryAccuracyScore) < 50) add("Entry accuracy weak", "WARNING");
-  if (Number(riskManagementScore) > 0 && Number(riskManagementScore) < 55) add("Risk-to-reward below plan", "MATH FLAW");
+  if (Number(entryAccuracyScore) > 0 && Number(entryAccuracyScore) < 50) add("Entry evidence weak", "WARNING");
+  if (Number(riskManagementScore) > 0 && Number(riskManagementScore) < 55) add("Risk evidence unclear", "REVIEW");
   if (!items.length) add("No major mistake detected", "REVIEW");
   return items.slice(0, 5);
 }
 
 async function detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument = "", selectedTimeframe = "", selectedDateText = "", analysisType = "post-trade" }) {
-  const fallback = (reason) => ({
-    ok: false,
-    isTradingChart: false,
-    chartValidityReason: reason,
-    hasUsablePriceData: false,
-    visibleCandleCount: 0,
-    chartDataQuality: "unclear",
-    selectedDateVisible: false,
-    insufficientDataReason: reason,
-    detectedInstrument: null,
-    detectedTimeframe: null,
-    latestVisibleDate: null,
-    dateConfidence: "low",
-    visibleTrigger: null,
-    rejectedTriggerContext: null,
-    triggerDirection: null,
-    triggerConfidence: "low",
-    notes: reason,
-    raw: "",
-  });
-
+  const fallback = (reason) => ({ ok: false, isTradingChart: false, chartValidityReason: reason, hasUsablePriceData: false, visibleCandleCount: 0, chartDataQuality: "unclear", selectedDateVisible: false, insufficientDataReason: reason, detectedInstrument: null, detectedTimeframe: null, latestVisibleDate: null, dateConfidence: "low", visibleTrigger: null, rejectedTriggerContext: null, triggerDirection: null, triggerConfidence: "low", notes: reason, raw: "" });
   if (!process.env.OPENAI_API_KEY) return fallback("OPENAI_API_KEY is missing.");
 
   try {
@@ -751,37 +493,32 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
       model: "gpt-4.1-mini",
       input: [
         { role: "system", content: CHART_DETECTION_PROMPT },
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: `Inspect this uploaded chart image.\nSelected instrument: ${submittedInstrument || "not provided"}\nSelected timeframe: ${selectedTimeframe || "not provided"}\nSelected chart/trade date: ${selectedDateText || "not provided"}\nAnalysis type: ${analysisType || "post-trade"}\nReturn only JSON.`,
-            },
-            { type: "input_image", image_url: `data:${mimeType};base64,${imageBase64}` },
-          ],
-        },
+        { role: "user", content: [
+          { type: "input_text", text: `Inspect this uploaded chart image.\nSelected instrument: ${submittedInstrument || "not provided"}\nSelected timeframe: ${selectedTimeframe || "not provided"}\nSelected chart/trade date: ${selectedDateText || "not provided"}\nAnalysis type: ${analysisType || "post-trade"}\nReturn only JSON.` },
+          { type: "input_image", image_url: `data:${mimeType};base64,${imageBase64}` },
+        ]},
       ],
       max_output_tokens: 700,
     });
 
     const parsed = extractJsonObject(response.output_text || "");
     if (!parsed) return fallback("Chart validation did not return usable JSON.");
-
     const isTradingChart = parsed?.isTradingChart === true;
     const rawTrigger = parsed?.visibleTrigger || null;
     const triggerConfidence = parsed?.triggerConfidence || "low";
     const cleanTrigger = sanitizeVisibleTrigger(rawTrigger, triggerConfidence);
+    const visibleCandleCount = Number.isFinite(Number(parsed?.visibleCandleCount)) ? Number(parsed.visibleCandleCount) : 0;
+    const quality = isTradingChart ? parsed?.chartDataQuality || "usable" : "unclear";
 
     return {
       ok: true,
       isTradingChart,
       chartValidityReason: parsed?.chartValidityReason || (isTradingChart ? "The uploaded image appears to be a valid trading chart." : "The uploaded image does not appear to be a valid financial trading chart."),
-      hasUsablePriceData: isTradingChart ? parsed?.hasUsablePriceData === true : false,
-      visibleCandleCount: Number.isFinite(Number(parsed?.visibleCandleCount)) ? Number(parsed.visibleCandleCount) : 0,
-      chartDataQuality: isTradingChart ? parsed?.chartDataQuality || "unclear" : "unclear",
+      hasUsablePriceData: isTradingChart ? parsed?.hasUsablePriceData !== false : false,
+      visibleCandleCount,
+      chartDataQuality: quality,
       selectedDateVisible: isTradingChart ? parsed?.selectedDateVisible === true : false,
-      insufficientDataReason: parsed?.insufficientDataReason || (!isTradingChart ? "The uploaded image is not a financial trading chart." : parsed?.hasUsablePriceData === true ? null : "The uploaded chart does not show enough usable visible price data."),
+      insufficientDataReason: parsed?.insufficientDataReason || (!isTradingChart ? "The uploaded image is not a financial trading chart." : null),
       detectedInstrument: isTradingChart ? parsed?.detectedInstrument || null : null,
       detectedTimeframe: isTradingChart ? parsed?.detectedTimeframe || null : null,
       latestVisibleDate: isTradingChart ? parsed?.latestVisibleDate || null : null,
@@ -801,12 +538,11 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
 
 function isUploadedChartDataUsable(chartDetection, selectedDateText = "") {
   if (!chartDetection?.isTradingChart) return false;
-  if (chartDetection.hasUsablePriceData !== true) return false;
   const quality = String(chartDetection.chartDataQuality || "").toLowerCase();
-  if (["blank", "insufficient", "unclear"].includes(quality)) return false;
+  if (["blank", "insufficient"].includes(quality)) return false;
+  if (chartDetection.hasUsablePriceData === false && quality === "unclear") return false;
   const candles = Number(chartDetection.visibleCandleCount || 0);
-  if (Number.isFinite(candles) && candles > 0 && candles < 20) return false;
-  if (selectedDateText && chartDetection.selectedDateVisible === false) return false;
+  if (Number.isFinite(candles) && candles > 0 && candles < 15) return false;
   return true;
 }
 
@@ -820,35 +556,23 @@ function getDaysBetweenDates(earlierDate, laterDate) {
 
 function getAllowedFutureDateGapDays(timeframe = "") {
   const tf = comparableTimeframe(timeframe);
-  if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) return 2;
-  if (tf === "H4") return 7;
-  if (tf === "D1") return 31;
-  if (tf === "W1") return 92;
-  if (tf === "MN") return 370;
-  return 2;
+  if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) return 3;
+  if (tf === "H4") return 10;
+  if (tf === "D1") return 45;
+  if (tf === "W1") return 120;
+  if (tf === "MN") return 400;
+  return 3;
 }
 
 function getSelectedDateMismatch(chartDetection, selectedDate, timeframe = "") {
   if (!selectedDate || !chartDetection?.latestVisibleDate) return { hasMismatch: false };
   const latestVisibleDate = parseISODateOnly(chartDetection.latestVisibleDate);
   if (!latestVisibleDate) return { hasMismatch: false };
-
   const daysAfterLatestVisible = getDaysBetweenDates(latestVisibleDate, selectedDate);
   const allowedGapDays = getAllowedFutureDateGapDays(timeframe);
-  const confidence = String(chartDetection.dateConfidence || "").toLowerCase();
+  const confidence = String(chartDetection.dateConfidence || "low").toLowerCase();
   const hasMismatch = ["high", "medium"].includes(confidence) && Number.isFinite(daysAfterLatestVisible) && daysAfterLatestVisible > allowedGapDays;
-
-  return {
-    hasMismatch,
-    selectedDateText: formatDateOnly(selectedDate),
-    latestVisibleDateText: formatDateOnly(latestVisibleDate),
-    daysAfterLatestVisible,
-    allowedGapDays,
-    dateConfidence: confidence || "low",
-    reason: hasMismatch
-      ? `Selected date is ${daysAfterLatestVisible} day(s) after the latest visible chart date, beyond the allowed ${allowedGapDays} day(s).`
-      : "Selected date is not clearly beyond the latest visible chart date.",
-  };
+  return { hasMismatch, selectedDateText: formatDateOnly(selectedDate), latestVisibleDateText: formatDateOnly(latestVisibleDate), daysAfterLatestVisible, allowedGapDays, dateConfidence: confidence || "low", reason: hasMismatch ? `Selected date is ${daysAfterLatestVisible} day(s) after the latest visible chart date, beyond the allowed ${allowedGapDays} day(s).` : "Selected date is not clearly beyond the latest visible chart date." };
 }
 
 function isUsableChartDateDetection(detection) {
@@ -860,26 +584,8 @@ function isUsableChartDateDetection(detection) {
 
 function chooseFinalChartDate({ selectedDate, detection }) {
   const detectedDate = isUsableChartDateDetection(detection) ? parseISODateOnly(detection.latestVisibleDate) : null;
-  if (selectedDate) {
-    return {
-      finalDate: selectedDate,
-      finalDateText: formatDateOnly(selectedDate),
-      selectedDateText: formatDateOnly(selectedDate),
-      detectedDateText: detectedDate ? formatDateOnly(detectedDate) : null,
-      source: "user-selected-date",
-      reason: "User-selected chart/trade date was used.",
-    };
-  }
-  if (detectedDate) {
-    return {
-      finalDate: detectedDate,
-      finalDateText: formatDateOnly(detectedDate),
-      selectedDateText: null,
-      detectedDateText: formatDateOnly(detectedDate),
-      source: "chart-detected-date",
-      reason: "No user-selected date was provided, so the chart-detected latest visible date was used.",
-    };
-  }
+  if (selectedDate) return { finalDate: selectedDate, finalDateText: formatDateOnly(selectedDate), selectedDateText: formatDateOnly(selectedDate), detectedDateText: detectedDate ? formatDateOnly(detectedDate) : null, source: "user-selected-date", reason: "User-selected chart/trade date was used." };
+  if (detectedDate) return { finalDate: detectedDate, finalDateText: formatDateOnly(detectedDate), selectedDateText: null, detectedDateText: formatDateOnly(detectedDate), source: "chart-detected-date", reason: "No user-selected date was provided, so the chart-detected latest visible date was used." };
   return { finalDate: null, finalDateText: "Not provided", selectedDateText: null, detectedDateText: null, source: "missing-date", reason: "No usable date was available." };
 }
 
@@ -888,14 +594,8 @@ function buildCsaFrameworkSummaryForVision(marketReference = {}) {
   const levels = Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [];
   const areas = Array.isArray(marketReference?.csaAreas) ? marketReference.csaAreas : [];
   const bias = marketReference?.directionalBias || {};
-
-  const levelLines = levels.slice(0, 12).map((level) => {
-    const label = level.periodLabel || level.day || level.key || level.date;
-    return `- ${label} (${level.date || level.key}): open ${formatPrice(level.open)}, high ${formatPrice(level.high)}, low ${formatPrice(level.low)}, close ${formatPrice(level.close)}`;
-  });
-
+  const levelLines = levels.slice(0, 12).map((level) => `- ${level.periodLabel || level.day || level.key || level.date}: open ${formatPrice(level.open)}, high ${formatPrice(level.high)}, low ${formatPrice(level.low)}, close ${formatPrice(level.close)}`);
   const areaLines = areas.slice(0, 20).map((area) => `- ${area.day || area.period || area.date}: ${area.type} at ${area.priceText || formatPrice(area.price)}`);
-
   return [
     `CSA structure mode: ${profile.structureLabel || "Not available"}`,
     `Structure range: ${marketReference?.weekRange ? `${marketReference.weekRange.startDate} to ${marketReference.weekRange.endDate}` : "Not available"}`,
@@ -909,60 +609,37 @@ function buildCsaFrameworkSummaryForVision(marketReference = {}) {
   ].join("\n");
 }
 
-async function compareUploadedChartWithCsaFramework({
-  imageBase64,
-  mimeType,
-  marketReference,
-  chartDetection,
-  submittedInstrument = "",
-  timeframe = "",
-  analysisType = "post-trade",
-  submittedNotes = "",
-}) {
-  const fallback = (reason) => ({
-    ok: false,
-    frameworkMatch: "not reviewed",
-    visualChartStyle: "not reviewed",
-    csaLevelVisibility: "not reviewed",
-    chartSpecificStrengths: [],
-    chartSpecificWeaknesses: [reason],
-    simpleMistakeHub: [makeSimpleMistake("Visual comparison unavailable", "REVIEW")],
-    setupQualityScore: null,
-    entryAccuracyScore: null,
-    riskManagementScore: null,
-    visualSummary: reason,
-    chartMarkupAssessment: "",
-    entryEvidence: "",
-    riskEvidence: "",
-    raw: "",
-  });
+function visualFallback(reason) {
+  return { ok: false, frameworkMatch: "not reviewed", visualChartStyle: "not reviewed", csaLevelVisibility: "not reviewed", chartSpecificStrengths: [], chartSpecificWeaknesses: [reason], simpleMistakeHub: [], setupQualityScore: null, entryAccuracyScore: null, riskManagementScore: null, visualSummary: reason, chartMarkupAssessment: "", entryEvidence: "", riskEvidence: "", raw: "" };
+}
 
-  if (!process.env.OPENAI_API_KEY) return fallback("OPENAI_API_KEY is missing.");
-  if (!marketReference?.ok) return fallback("CSA market structure was unavailable, so visual comparison could not be completed.");
-  if (!imageBase64) return fallback("Uploaded chart image was not available for visual comparison.");
+function isBadVisualReview(parsed) {
+  const text = [parsed?.visualSummary, parsed?.chartMarkupAssessment, parsed?.entryEvidence, parsed?.riskEvidence, ...(Array.isArray(parsed?.chartSpecificWeaknesses) ? parsed.chartSpecificWeaknesses : [])].join(" ").toLowerCase();
+  return text.includes("insufficient chart data") || text.includes("uploaded image appears to be a trading chart, but") || text.includes("not enough visible price data");
+}
 
-  const csaFramework = buildCsaFrameworkSummaryForVision(marketReference);
+async function compareUploadedChartWithCsaFramework({ imageBase64, mimeType, marketReference, chartDetection, submittedInstrument = "", timeframe = "", analysisType = "post-trade", submittedNotes = "" }) {
+  if (!process.env.OPENAI_API_KEY) return visualFallback("OPENAI_API_KEY is missing.");
+  if (!marketReference?.ok) return visualFallback("CSA market structure was unavailable, so visual comparison could not be completed.");
+  if (!imageBase64) return visualFallback("Uploaded chart image was not available for visual comparison.");
 
   const prompt = `
 You are CSA Coach's visual framework comparison assistant.
-
-You must compare the uploaded chart image against the CSA framework supplied below.
 Return ONLY valid JSON. Do not use markdown.
 
-Important:
-- Do not give generic trading advice.
-- Do not invent entries, stop loss, targets, or mistakes if they are not visible on the uploaded chart.
-- Do not reuse the same feedback for every chart.
-- Your feedback must be specific to visible chart markings, visible price action, visible levels, visible indicators, and visible trade notes.
-- If the chart uses diagonal trendlines/channels, indicators, Fibonacci, moving averages, or another strategy, explain whether that conflicts with CSA or whether CSA levels are still visible.
-- If CSA daily/weekly/monthly highs/lows are not drawn or not obvious on the uploaded chart, say so.
-- If the chart is clean and mostly horizontal-level based, say that.
-- If there is no visible entry/SL/TP on the chart, do not say stop loss is too tight or risk-to-reward is bad. Instead say "No visible entry/SL/TP to judge" where appropriate.
-- The AI Mistake Detection Hub must contain only short chart-specific mistake titles and short tags.
-- Only include a mistake if visual evidence supports it or if the trader's notes explicitly support it.
+Compare the uploaded chart image against the CSA framework below.
+
+Critical rules:
+- The chart has already passed basic validation. Do NOT return "insufficient chart data" unless the image is truly blank.
+- Do not give generic feedback.
+- Do not invent entries, stop loss, or targets if they are not visible.
+- If no entry/SL/TP is visible, say "No visible entry/SL/TP to judge" rather than giving risk mistakes.
+- Compare visible markings with CSA: horizontal levels, trendlines/channels, indicators, marked zones, arrows, circles, entry/SL/TP, and whether CSA levels are visible.
+- Two different looking charts must receive different chartSpecificStrengths, chartSpecificWeaknesses, simpleMistakeHub, and scores.
+- The simpleMistakeHub must only include short chart-specific mistake titles with tags.
 
 CSA framework:
-${csaFramework}
+${buildCsaFrameworkSummaryForVision(marketReference)}
 
 Selected context:
 - Instrument: ${submittedInstrument}
@@ -990,9 +667,9 @@ Return exactly this JSON shape:
   "simpleMistakeHub": [
     { "title": "short mistake title", "tag": "HIGH RISK | WARNING | STRUCTURAL | MATH FLAW | DISCIPLINE | REVIEW" }
   ],
-  "setupQualityScore": 0,
-  "entryAccuracyScore": 0,
-  "riskManagementScore": 0
+  "setupQualityScore": 50,
+  "entryAccuracyScore": 50,
+  "riskManagementScore": 50
 }`;
 
   try {
@@ -1000,19 +677,16 @@ Return exactly this JSON shape:
       model: "gpt-4.1-mini",
       input: [
         { role: "system", content: prompt },
-        {
-          role: "user",
-          content: [
-            { type: "input_text", text: "Compare this uploaded chart visually against the CSA framework. Return only the required JSON." },
-            { type: "input_image", image_url: `data:${mimeType};base64,${imageBase64}` },
-          ],
-        },
+        { role: "user", content: [
+          { type: "input_text", text: "Compare this uploaded chart visually against the CSA framework. Return only the required JSON." },
+          { type: "input_image", image_url: `data:${mimeType};base64,${imageBase64}` },
+        ]},
       ],
       max_output_tokens: 1200,
     });
 
     const parsed = extractJsonObject(response.output_text || "");
-    if (!parsed) return fallback("Visual comparison did not return usable JSON.");
+    if (!parsed || isBadVisualReview(parsed)) return visualFallback("Visual comparison was inconclusive, so CSA framework fallback was used.");
 
     return {
       ok: true,
@@ -1033,8 +707,15 @@ Return exactly this JSON shape:
     };
   } catch (error) {
     console.error("Visual CSA comparison error:", error);
-    return fallback(`Visual CSA comparison failed: ${error.message}`);
+    return visualFallback(`Visual CSA comparison failed: ${error.message}`);
   }
+}
+
+function shouldUseVisualScore(score, marketOk) {
+  const n = Number(score);
+  if (!Number.isFinite(n)) return false;
+  if (marketOk && n < 20) return false;
+  return true;
 }
 
 function buildDashboardFeedback({ marketReference, chartDetection, visualReview = null, submittedInstrument, timeframe, selectedDateText, detectedDateText, setupScore = 0 }) {
@@ -1053,33 +734,29 @@ function buildDashboardFeedback({ marketReference, chartDetection, visualReview 
 
   const frameworkStrengths = [];
   const frameworkWeaknesses = [];
-
   if (marketOk) {
     frameworkStrengths.push(`CSA structure calculated: ${profile.structureLabel}.`);
     frameworkStrengths.push(`${levels.length} ${profile.sourceUnitPlural} were reviewed from market data.`);
     frameworkStrengths.push(`Framework bias: ${bias.bias}.`);
-  } else {
-    frameworkWeaknesses.push(marketReference?.error || "Market data unavailable.");
-  }
+  } else frameworkWeaknesses.push(marketReference?.error || "Market data unavailable.");
 
   if (chartDetection?.hasUsablePriceData) frameworkStrengths.push("Uploaded chart contains usable visible price data.");
-  if (!hasConfirmedTrigger) frameworkWeaknesses.push("No confirmed entry trigger was visible on the uploaded chart.");
+  if (!hasConfirmedTrigger) frameworkWeaknesses.push("No confirmed entry trigger was detected automatically on the uploaded chart.");
   failedAreas.forEach((area) => frameworkWeaknesses.push(area.explanation));
   if (mixedBias) frameworkWeaknesses.push("Directional bias is mixed; avoid middle-of-range entries.");
 
   const visualStrengths = visualOk ? normalizeArrayOfStrings(visualReview.chartSpecificStrengths, []) : [];
   const visualWeaknesses = visualOk ? normalizeArrayOfStrings(visualReview.chartSpecificWeaknesses, []) : [];
-
   const strengths = [...visualStrengths, ...frameworkStrengths].filter(Boolean);
   const weaknesses = [...visualWeaknesses, ...frameworkWeaknesses].filter(Boolean);
 
   const baseSetupQualityScore = clampScore((setupScore || 0) * 10 - failedAreas.length * 8 - (mixedBias ? 12 : 0) + (marketOk ? 5 : -20));
-  const baseEntryAccuracyScore = clampScore(65 + (hasConfirmedTrigger ? 15 : -18) - failedAreas.length * 10 - (mixedBias ? 8 : 0));
-  const baseRiskManagementScore = clampScore(70 - failedAreas.length * 8 - (!hasConfirmedTrigger ? 8 : 0) - (mixedBias ? 5 : 0));
+  const baseEntryAccuracyScore = clampScore(65 + (hasConfirmedTrigger ? 15 : -10) - failedAreas.length * 10 - (mixedBias ? 8 : 0));
+  const baseRiskManagementScore = clampScore(70 - failedAreas.length * 8 - (mixedBias ? 5 : 0));
 
-  const setupQualityScore = Number.isFinite(Number(visualReview?.setupQualityScore)) ? clampScore(visualReview.setupQualityScore) : baseSetupQualityScore;
-  const entryAccuracyScore = Number.isFinite(Number(visualReview?.entryAccuracyScore)) ? clampScore(visualReview.entryAccuracyScore) : baseEntryAccuracyScore;
-  const riskManagementScore = Number.isFinite(Number(visualReview?.riskManagementScore)) ? clampScore(visualReview.riskManagementScore) : baseRiskManagementScore;
+  const setupQualityScore = visualOk && shouldUseVisualScore(visualReview.setupQualityScore, marketOk) ? clampScore(visualReview.setupQualityScore) : baseSetupQualityScore;
+  const entryAccuracyScore = visualOk && shouldUseVisualScore(visualReview.entryAccuracyScore, marketOk) ? clampScore(visualReview.entryAccuracyScore) : baseEntryAccuracyScore;
+  const riskManagementScore = visualOk && shouldUseVisualScore(visualReview.riskManagementScore, marketOk) ? clampScore(visualReview.riskManagementScore) : baseRiskManagementScore;
 
   const contextCheck = {
     selectedInstrument: submittedInstrument || "Not provided",
@@ -1100,35 +777,12 @@ function buildDashboardFeedback({ marketReference, chartDetection, visualReview 
   };
 
   const visualMistakes = visualOk ? normalizeVisualMistakeItems(visualReview.simpleMistakeHub) : [];
-  const frameworkMistakes = buildFrameworkMistakeHub({
-    failedAreas,
-    hasConfirmedTrigger,
-    rejectedContext,
-    mixedBias,
-    marketOk,
-    entryAccuracyScore: baseEntryAccuracyScore,
-    riskManagementScore: baseRiskManagementScore,
-  });
-
+  const frameworkMistakes = buildFrameworkMistakeHub({ failedAreas, hasConfirmedTrigger, rejectedContext, mixedBias, marketOk, entryAccuracyScore: baseEntryAccuracyScore, riskManagementScore: baseRiskManagementScore });
   const aiMistakeDetectionHub = visualMistakes.length ? visualMistakes : frameworkMistakes;
 
-  const setupQuality = {
-    score: setupQualityScore,
-    label: scoreLabel(setupQualityScore),
-    summary: visualOk && visualReview.visualSummary ? visualReview.visualSummary : "Setup quality is based on CSA structure, failed areas, and visual chart comparison.",
-  };
-
-  const entryAccuracy = {
-    score: entryAccuracyScore,
-    label: scoreLabel(entryAccuracyScore),
-    summary: visualOk && visualReview.entryEvidence ? visualReview.entryEvidence : "Entry accuracy depends on visible confirmation at the CSA area.",
-  };
-
-  const riskManagement = {
-    score: riskManagementScore,
-    label: scoreLabel(riskManagementScore),
-    summary: visualOk && visualReview.riskEvidence ? visualReview.riskEvidence : "Risk score checks visible stop/target evidence and failed area risk.",
-  };
+  const setupQuality = { score: setupQualityScore, label: scoreLabel(setupQualityScore), summary: visualOk && visualReview.visualSummary ? visualReview.visualSummary : "Setup quality is based on CSA structure, failed areas, and chart context." };
+  const entryAccuracy = { score: entryAccuracyScore, label: scoreLabel(entryAccuracyScore), summary: visualOk && visualReview.entryEvidence ? visualReview.entryEvidence : "Entry accuracy depends on visible confirmation at the CSA area." };
+  const riskManagement = { score: riskManagementScore, label: scoreLabel(riskManagementScore), summary: visualOk && visualReview.riskEvidence ? visualReview.riskEvidence : "Risk score checks visible stop/target evidence and failed area risk." };
 
   return {
     strengths: strengths.length ? strengths.slice(0, 7) : ["CSA Coach completed the review."],
@@ -1162,32 +816,15 @@ function buildDashboardAliases(dashboardFeedback = {}) {
   const weaknesses = Array.isArray(dashboardFeedback.weaknesses) && dashboardFeedback.weaknesses.length ? dashboardFeedback.weaknesses : ["No major weakness detected."];
   const aiMistakeDetectionHub = Array.isArray(dashboardFeedback.aiMistakeDetectionHub) && dashboardFeedback.aiMistakeDetectionHub.length ? dashboardFeedback.aiMistakeDetectionHub : [makeSimpleMistake("No major mistake detected", "REVIEW")];
   const failedAreas = Array.isArray(dashboardFeedback.failedAreas) ? dashboardFeedback.failedAreas : [];
-
   return {
-    strengths,
-    weaknesses,
-    chartContextCheck: contextCheck,
-    contextCheck,
-    chartContext: contextCheck,
-    chartContextStatus: contextCheck.status || "Not available",
+    strengths, weaknesses,
+    chartContextCheck: contextCheck, contextCheck, chartContext: contextCheck, chartContextStatus: contextCheck.status || "Not available",
     selectedContext: { instrument: contextCheck.selectedInstrument || "Not provided", timeframe: contextCheck.selectedTimeframe || "Not provided", date: contextCheck.selectedDate || "Not provided" },
     detectedContext: { instrument: contextCheck.detectedInstrument || "Not detected", timeframe: contextCheck.detectedTimeframe || "Not detected", latestVisibleDate: contextCheck.detectedLatestVisibleDate || "Not detected" },
-    setupQuality,
-    setupQualityScore: setupQuality.score,
-    setupQualityLabel: setupQuality.label,
-    setupQualitySummary: setupQuality.summary,
-    entryAccuracy,
-    entryAccuracyScore: entryAccuracy.score,
-    entryAccuracyLabel: entryAccuracy.label,
-    entryAccuracySummary: entryAccuracy.summary,
-    riskManagement,
-    riskManagementScore: riskManagement.score,
-    riskManagementLabel: riskManagement.label,
-    riskManagementSummary: riskManagement.summary,
-    aiMistakeDetectionHub,
-    mistakeDetectionHub: aiMistakeDetectionHub,
-    mistakeHub: aiMistakeDetectionHub,
-    mistakes: aiMistakeDetectionHub,
+    setupQuality, setupQualityScore: setupQuality.score, setupQualityLabel: setupQuality.label, setupQualitySummary: setupQuality.summary,
+    entryAccuracy, entryAccuracyScore: entryAccuracy.score, entryAccuracyLabel: entryAccuracy.label, entryAccuracySummary: entryAccuracy.summary,
+    riskManagement, riskManagementScore: riskManagement.score, riskManagementLabel: riskManagement.label, riskManagementSummary: riskManagement.summary,
+    aiMistakeDetectionHub, mistakeDetectionHub: aiMistakeDetectionHub, mistakeHub: aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub,
     failedAreas,
     dashboard: { strengths, weaknesses, chartContextCheck: contextCheck, contextCheck, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub, failedAreas },
     dashboardCards: { strengths, weaknesses, chartContextCheck: contextCheck, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, failedAreas },
@@ -1208,23 +845,13 @@ function buildSimpleStructureBreakdown(levels = [], normalizedSymbol = "") {
 
 function buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, visualReview = null, submittedInstrument, normalizedSymbol, timeframe }) {
   const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
-  if (!marketReference || !marketReference.ok) {
-    return `CSA COACH VERDICT
-
-Directional Bias:
-- Insufficient data
-- Reason: ${marketReference?.error || "Market data unavailable."}
-
-Overall Setup Score:
-- 0/10`;
-  }
-
+  if (!marketReference || !marketReference.ok) return `CSA COACH VERDICT\n\nDirectional Bias:\n- Insufficient data\n- Reason: ${marketReference?.error || "Market data unavailable."}\n\nOverall Setup Score:\n- 0/10`;
   const levels = marketReference.dailyLevels || [];
   const areas = marketReference.csaAreas || [];
   const bias = marketReference.directionalBias || calculateCsaDirectionalBias(levels, normalizedSymbol, profile);
   const { resistanceAreas, supportAreas, supplyAreas, demandAreas } = splitAreas(areas);
   const failedAreas = buildFailedAreas({ supportAreas, resistanceAreas, supplyAreas, demandAreas, levels, symbol: normalizedSymbol });
-  const overallScore = Number.isFinite(Number(visualReview?.setupQualityScore)) ? Math.max(1, Math.round(Number(visualReview.setupQualityScore) / 10)) : (failedAreas.length ? 5 : bias.biasCode === "mixed" ? 6 : 7);
+  const overallScore = Number.isFinite(Number(visualReview?.setupQualityScore)) && Number(visualReview.setupQualityScore) >= 20 ? Math.max(1, Math.round(Number(visualReview.setupQualityScore) / 10)) : (failedAreas.length ? 5 : bias.biasCode === "mixed" ? 6 : 7);
 
   return `CSA COACH VERDICT
 
@@ -1304,96 +931,26 @@ ${buildSimpleStructureBreakdown(levels, normalizedSymbol)}`;
 }
 
 function buildInvalidChartAnalysis({ submittedInstrument, timeframe, chartDetection }) {
-  return `Invalid Chart Upload
-
-Selected:
-- Instrument: ${submittedInstrument || "Not provided"}
-- Timeframe: ${timeframe || "Not provided"}
-
-Reason: ${chartDetection?.chartValidityReason || "The uploaded image could not be verified as a trading chart."}`;
+  return `Invalid Chart Upload\n\nSelected:\n- Instrument: ${submittedInstrument || "Not provided"}\n- Timeframe: ${timeframe || "Not provided"}\n\nReason: ${chartDetection?.chartValidityReason || "The uploaded image could not be verified as a trading chart."}`;
 }
-
 function buildInsufficientChartDataAnalysis({ submittedInstrument, timeframe, selectedDateText, chartDetection }) {
-  return `Insufficient Chart Data
-
-The uploaded image appears to be a trading chart, but it does not show enough usable visible price data for CSA Coach to review the setup.
-
-Selected:
-- Instrument: ${submittedInstrument || "Not provided"}
-- Timeframe: ${timeframe || "Not provided"}
-- Selected chart/trade date: ${selectedDateText || "Not provided"}
-
-AI image check:
-- Chart data quality: ${chartDetection?.chartDataQuality || "unclear"}
-- Visible candle count: ${chartDetection?.visibleCandleCount ?? "Not detected"}
-- Selected date visible/covered: ${chartDetection?.selectedDateVisible === true ? "Yes" : "No / not confirmed"}
-- Reason: ${chartDetection?.insufficientDataReason || "The chart does not show enough usable price movement."}
-
-How to fix:
-- Upload a clearer chart screenshot where candles and the selected date are visible.`;
+  return `Insufficient Chart Data\n\nThe uploaded image appears to be a trading chart, but it does not show enough usable visible price data for CSA Coach to review the setup.\n\nSelected:\n- Instrument: ${submittedInstrument || "Not provided"}\n- Timeframe: ${timeframe || "Not provided"}\n- Selected chart/trade date: ${selectedDateText || "Not provided"}\n\nAI image check:\n- Chart data quality: ${chartDetection?.chartDataQuality || "unclear"}\n- Visible candle count: ${chartDetection?.visibleCandleCount ?? "Not detected"}\n- Reason: ${chartDetection?.insufficientDataReason || "The chart does not show enough usable price movement."}`;
 }
-
 function buildDateMismatchAnalysis({ selectedDateText, chartDetection, dateMismatch }) {
-  return `Selected Date Not Visible On Chart
-
-Selected date: ${selectedDateText || "Not provided"}
-Latest visible chart date: ${dateMismatch?.latestVisibleDateText || chartDetection?.latestVisibleDate || "Not detected"}
-Reason: ${dateMismatch?.reason || "Selected date was not confirmed on the uploaded chart."}
-
-Upload a chart where the selected chart/trade date is visible, or change the selected date.`;
+  return `Selected Date Not Visible On Chart\n\nSelected date: ${selectedDateText || "Not provided"}\nLatest visible chart date: ${dateMismatch?.latestVisibleDateText || chartDetection?.latestVisibleDate || "Not detected"}\nReason: ${dateMismatch?.reason || "Selected date was not confirmed on the uploaded chart."}\n\nUpload a chart where the selected chart/trade date is visible, or change the selected date.`;
 }
-
 function buildInstrumentMismatchAnalysis({ selectedInstrument, detectedInstrument, selectedTimeframe, detectedTimeframe }) {
-  return `Chart Context Mismatch
-
-Selected Instrument:
-${selectedInstrument || "Not provided"}
-
-Detected Chart Instrument:
-${detectedInstrument || "Not detected"}
-
-Selected Timeframe:
-${selectedTimeframe || "Not provided"}
-
-Detected Chart Timeframe:
-${detectedTimeframe || "Not detected"}`;
+  return `Chart Context Mismatch\n\nSelected Instrument:\n${selectedInstrument || "Not provided"}\n\nDetected Chart Instrument:\n${detectedInstrument || "Not detected"}\n\nSelected Timeframe:\n${selectedTimeframe || "Not provided"}\n\nDetected Chart Timeframe:\n${detectedTimeframe || "Not detected"}`;
 }
-
 function buildTimeframeMismatchAnalysis({ selectedInstrument, detectedInstrument, selectedTimeframe, detectedTimeframe }) {
-  return `Chart Timeframe Mismatch
-
-Selected Instrument:
-${selectedInstrument || "Not provided"}
-
-Detected Chart Instrument:
-${detectedInstrument || "Not detected"}
-
-Selected Timeframe:
-${selectedTimeframe || "Not provided"}
-
-Detected Chart Timeframe:
-${detectedTimeframe || "Not detected"}`;
+  return `Chart Timeframe Mismatch\n\nSelected Instrument:\n${selectedInstrument || "Not provided"}\n\nDetected Chart Instrument:\n${detectedInstrument || "Not detected"}\n\nSelected Timeframe:\n${selectedTimeframe || "Not provided"}\n\nDetected Chart Timeframe:\n${detectedTimeframe || "Not detected"}`;
 }
 
 function buildStoppedDashboard({ errorType, error, submittedInstrument, timeframe, chartDetection, selectedTimeframeProfile }) {
   return buildDashboardAliases({
     strengths: ["Chart context validation was completed before the review was stopped."],
     weaknesses: [error, chartDetection?.insufficientDataReason || chartDetection?.chartValidityReason || "Analysis stopped."],
-    contextCheck: {
-      selectedInstrument: submittedInstrument || "Not provided",
-      selectedTimeframe: timeframe || "Not provided",
-      detectedInstrument: chartDetection?.detectedInstrument || "Not detected",
-      detectedTimeframe: chartDetection?.detectedTimeframe || "Not detected",
-      detectedLatestVisibleDate: chartDetection?.latestVisibleDate || "Not detected",
-      status: "Analysis stopped",
-      structureUsed: selectedTimeframeProfile?.structureLabel || "Not available",
-      chartValidation: chartDetection?.isTradingChart ? "Valid trading chart" : "Invalid or unverified chart",
-      chartDataQuality: chartDetection?.chartDataQuality || "unclear",
-      visibleCandleCount: chartDetection?.visibleCandleCount || 0,
-      visualFrameworkMatch: "Not reviewed",
-      visualChartStyle: "Not reviewed",
-      csaLevelVisibility: "Not reviewed",
-    },
+    contextCheck: { selectedInstrument: submittedInstrument || "Not provided", selectedTimeframe: timeframe || "Not provided", detectedInstrument: chartDetection?.detectedInstrument || "Not detected", detectedTimeframe: chartDetection?.detectedTimeframe || "Not detected", detectedLatestVisibleDate: chartDetection?.latestVisibleDate || "Not detected", status: "Analysis stopped", structureUsed: selectedTimeframeProfile?.structureLabel || "Not available", chartValidation: chartDetection?.isTradingChart ? "Valid trading chart" : "Invalid or unverified chart", chartDataQuality: chartDetection?.chartDataQuality || "unclear", visibleCandleCount: chartDetection?.visibleCandleCount || 0, visualFrameworkMatch: "Not reviewed", visualChartStyle: "Not reviewed", csaLevelVisibility: "Not reviewed" },
     setupQuality: { score: 0, label: "Stopped", summary: error },
     entryAccuracy: { score: 0, label: "Stopped", summary: error },
     riskManagement: { score: 0, label: "Stopped", summary: error },
@@ -1405,50 +962,17 @@ function buildStoppedDashboard({ errorType, error, submittedInstrument, timefram
 function stoppedResponse({ res, errorType, error, analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile }) {
   const stoppedDashboard = buildStoppedDashboard({ errorType, error, submittedInstrument, timeframe, chartDetection, selectedTimeframeProfile });
   return res.status(200).json({
-    success: false,
-    errorType,
-    error,
-    analysis,
-    summary: analysis,
-    selectedPair: submittedInstrument,
-    selectedTimeframe: timeframe,
-    detectedPair: chartDetection?.detectedInstrument || "Not detected",
-    detectedTimeframe: chartDetection?.detectedTimeframe || "Not detected",
-    detectedLatestVisibleDate: chartDetection?.latestVisibleDate || "Not detected",
-    contextStatus: "Analysis stopped before market-data-backed CSA feedback was generated.",
-    grade: "--",
-    confidence: 0,
-    structureScore: 0,
-    executionScore: 0,
-    riskScore: 0,
+    success: false, errorType, error, analysis, summary: analysis, selectedPair: submittedInstrument, selectedTimeframe: timeframe,
+    detectedPair: chartDetection?.detectedInstrument || "Not detected", detectedTimeframe: chartDetection?.detectedTimeframe || "Not detected", detectedLatestVisibleDate: chartDetection?.latestVisibleDate || "Not detected",
+    contextStatus: "Analysis stopped before market-data-backed CSA feedback was generated.", grade: "--", confidence: 0, structureScore: 0, executionScore: 0, riskScore: 0,
     ...stoppedDashboard,
-    coachAdvice: [analysis],
-    journalTags: [errorType, "analysis-stopped"],
-    chartDetection,
-    visualReview: null,
-    marketReference: {
-      ok: false,
-      error,
-      symbol: normalizedSymbol,
-      timezone,
-      interval: normalizeTimeframe(timeframe),
-      rawCandleCount: 0,
-      weekRange: null,
-      dailyLevels: [],
-      csaAreas: [],
-      directionalBias: calculateCsaDirectionalBias([], normalizedSymbol, selectedTimeframeProfile),
-      profile: selectedTimeframeProfile,
-    },
+    coachAdvice: [analysis], journalTags: [errorType, "analysis-stopped"], chartDetection, visualReview: null,
+    marketReference: { ok: false, error, symbol: normalizedSymbol, timezone, interval: normalizeTimeframe(timeframe), rawCandleCount: 0, weekRange: null, dailyLevels: [], csaAreas: [], directionalBias: calculateCsaDirectionalBias([], normalizedSymbol, selectedTimeframeProfile), profile: selectedTimeframeProfile },
   });
 }
 
 app.get("/", (req, res) => res.json({ status: "ok", message: "CSA Coach backend is running" }));
-
-app.get("/health", (req, res) => res.json({
-  ok: true,
-  service: "csa-coach-backend",
-  time: new Date().toISOString(),
-}));
+app.get("/health", (req, res) => res.json({ ok: true, service: "csa-coach-backend", time: new Date().toISOString() }));
 
 app.get("/test-twelve", async (req, res) => {
   try {
@@ -1472,19 +996,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     if (!process.env.OPENAI_API_KEY) return res.status(500).json({ success: false, error: "OPENAI_API_KEY is missing on the server." });
     if (!req.file) return res.status(400).json({ success: false, error: "No chart image uploaded." });
 
-    const {
-      timeframe = "Not provided",
-      instrument = "",
-      pair = "",
-      selectedPair = "",
-      analysisType = "post-trade",
-      notes = "",
-      userNotes = "",
-      chartDate = "",
-      tradeDate = "",
-      timezone = "UTC",
-    } = req.body;
-
+    const { timeframe = "Not provided", instrument = "", pair = "", selectedPair = "", analysisType = "post-trade", notes = "", userNotes = "", chartDate = "", tradeDate = "", timezone = "UTC" } = req.body;
     const submittedInstrument = instrument || pair || selectedPair || "Not provided";
     const submittedNotes = notes || userNotes || "";
     const normalizedSymbol = normalizeSymbol(submittedInstrument);
@@ -1494,14 +1006,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const mimeType = req.file.mimetype || "image/png";
     const selectedDate = parseISODateOnly(chartDate || tradeDate);
 
-    const chartDetection = await detectChartContextFromImage({
-      imageBase64,
-      mimeType,
-      submittedInstrument,
-      selectedTimeframe: timeframe,
-      selectedDateText: chartDate || tradeDate || "",
-      analysisType: mode,
-    });
+    const chartDetection = await detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument, selectedTimeframe: timeframe, selectedDateText: chartDate || tradeDate || "", analysisType: mode });
 
     if (!chartDetection.isTradingChart) {
       const analysis = buildInvalidChartAnalysis({ submittedInstrument, timeframe, chartDetection });
@@ -1532,50 +1037,14 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     }
 
     const dateDecision = chooseFinalChartDate({ selectedDate, detection: chartDetection, analysisType: mode });
-    const marketReference = await fetchTwelveDataStructureLevels({
-      symbol: normalizedSymbol,
-      chartDate: dateDecision.finalDate,
-      timeframe,
-      timezone: timezone || "UTC",
-      analysisType: mode,
-    });
-
-    const visualReview = await compareUploadedChartWithCsaFramework({
-      imageBase64,
-      mimeType,
-      marketReference,
-      chartDetection,
-      submittedInstrument,
-      timeframe,
-      analysisType: mode,
-      submittedNotes,
-    });
-
-    const analysis = buildDeterministicCsaAnalysis({
-      marketReference,
-      dateDecision,
-      chartDetection,
-      visualReview,
-      submittedInstrument,
-      normalizedSymbol,
-      timeframe,
-    });
-
+    const marketReference = await fetchTwelveDataStructureLevels({ symbol: normalizedSymbol, chartDate: dateDecision.finalDate, timeframe, timezone: timezone || "UTC", analysisType: mode });
+    const visualReview = await compareUploadedChartWithCsaFramework({ imageBase64, mimeType, marketReference, chartDetection, submittedInstrument, timeframe, analysisType: mode, submittedNotes });
+    const analysis = buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, visualReview, submittedInstrument, normalizedSymbol, timeframe });
     const bias = marketReference.directionalBias || calculateCsaDirectionalBias([], normalizedSymbol, selectedTimeframeProfile);
     const setupScoreMatch = String(analysis).match(/Overall Setup Score:\s*\n- (\d+)\/10/i);
     const setupScore = setupScoreMatch ? Number(setupScoreMatch[1]) : 0;
 
-    const dashboardFeedback = buildDashboardFeedback({
-      marketReference,
-      chartDetection,
-      visualReview,
-      submittedInstrument,
-      timeframe,
-      selectedDateText: chartDate || tradeDate || "Not provided",
-      detectedDateText: chartDetection.latestVisibleDate || "Not detected",
-      setupScore,
-    });
-
+    const dashboardFeedback = buildDashboardFeedback({ marketReference, chartDetection, visualReview, submittedInstrument, timeframe, selectedDateText: chartDate || tradeDate || "Not provided", detectedDateText: chartDetection.latestVisibleDate || "Not detected", setupScore });
     const dashboardAliases = buildDashboardAliases(dashboardFeedback);
     const structureLabel = marketReference.profile?.structureLabel || selectedTimeframeProfile.structureLabel || "CSA structure levels";
 
@@ -1593,9 +1062,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       finalDateUsed: dateDecision.finalDateText,
       dateDecision,
       csaDirectionalBias: bias,
-      contextStatus: marketReference.ok
-        ? `Market-data-backed CSA setup review completed using ${structureLabel} and visual chart comparison.`
-        : `Setup review completed without market data: ${marketReference.error}`,
+      contextStatus: marketReference.ok ? `Market-data-backed CSA setup review completed using ${structureLabel} and visual chart comparison.` : `Setup review completed without market data: ${marketReference.error}`,
       grade: dashboardFeedback.setupQualityScore >= 85 ? "A" : dashboardFeedback.setupQualityScore >= 75 ? "B" : dashboardFeedback.setupQualityScore >= 60 ? "C" : dashboardFeedback.setupQualityScore >= 40 ? "D" : "F",
       confidence: dashboardFeedback.setupQualityScore,
       structureScore: dashboardFeedback.scores.setupQuality,
@@ -1603,45 +1070,14 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       riskScore: dashboardFeedback.scores.riskManagement,
       ...dashboardAliases,
       coachAdvice: [analysis],
-      journalTags: [
-        "setup review",
-        "directional bias",
-        "entry area",
-        "visual csa comparison",
-        "uploaded chart comparison",
-        "risk reward",
-        marketReference.profile?.selectedTimeframe || selectedTimeframeProfile.selectedTimeframe,
-        marketReference.profile?.structureMode || selectedTimeframeProfile.structureMode,
-        marketReference.ok ? "market-data-backed" : "vision-only fallback",
-        visualReview?.frameworkMatch || "visual-not-reviewed",
-        bias.biasCode || "bias-unavailable",
-      ],
+      journalTags: ["setup review", "directional bias", "entry area", "visual csa comparison", "uploaded chart comparison", "risk reward", marketReference.profile?.selectedTimeframe || selectedTimeframeProfile.selectedTimeframe, marketReference.profile?.structureMode || selectedTimeframeProfile.structureMode, marketReference.ok ? "market-data-backed" : "vision-only fallback", visualReview?.frameworkMatch || "visual-not-reviewed", bias.biasCode || "bias-unavailable"],
       visualReview,
       chartDetection,
-      marketReference: {
-        ok: marketReference.ok,
-        error: marketReference.error,
-        symbol: marketReference.symbol,
-        timezone: marketReference.timezone,
-        interval: marketReference.interval,
-        rawCandleCount: marketReference.rawCandleCount,
-        weekRange: marketReference.weekRange,
-        dailyLevels: marketReference.dailyLevels,
-        csaAreas: marketReference.csaAreas,
-        directionalBias: marketReference.directionalBias,
-        profile: marketReference.profile,
-        structureMode: marketReference.profile?.structureMode,
-        structureLabel: marketReference.profile?.structureLabel,
-        cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol),
-      },
+      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, weekRange: marketReference.weekRange, dailyLevels: marketReference.dailyLevels, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
     });
   } catch (error) {
     console.error("CSA Coach analyze error:", error);
-    return res.status(500).json({
-      success: false,
-      error: "Something went wrong while analyzing the chart.",
-      details: error.message,
-    });
+    return res.status(500).json({ success: false, error: "Something went wrong while analyzing the chart.", details: error.message });
   }
 });
 
