@@ -31,9 +31,10 @@ Important:
 - If the selected date is clearly far after the latest visible chart date, set selectedDateVisible=false and provide latestVisibleDate.
 - If the date axis is hard to read, set dateConfidence="low" instead of blocking the chart.
 - Only mark hasUsablePriceData=false when the chart is truly blank/unclear/cropped/loading or has almost no price movement.
+- Do not comment on strategies such as trendlines, channels, indicators, Fibonacci, or moving averages in this step. This step only validates the chart and detects basic context.
 
 Entry trigger rule:
-Only return visibleTrigger if there is real confirmation such as engulfing, pin bar, hammer, doji rejection, inside bar break, lower high/higher low, breakout/breakdown, flag/channel/triangle break, head and shoulders, Quasimodo, or clean break-and-hold.
+Only return visibleTrigger if there is real confirmation such as engulfing, pin bar, hammer, doji rejection, inside bar break, lower high/higher low, breakout/breakdown, retest-and-hold, or clean break-and-hold.
 Bounce, pullback, reaction, retracement, ranging, or consolidation alone is not a trigger.
 
 Return exactly this JSON shape:
@@ -366,35 +367,164 @@ function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimefr
   return areas;
 }
 
+
 function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
-  if (!Array.isArray(levels) || levels.length < 2) return { bias: "Insufficient data", biasCode: "insufficient", confidence: "low", reason: `At least two ${profile.sourceUnitPlural} are needed.`, periodStartPrice: null, presentPrice: null, periodHigh: null, periodLow: null };
-  const first = levels[0], last = levels[levels.length - 1];
-  let highBreakCount = 0, lowBreakCount = 0, risingCloses = 0, fallingCloses = 0;
-  for (let i = 1; i < levels.length; i += 1) {
-    if (compareHighWithTolerance(levels[i].high, levels[i - 1].high, symbol).cleanBreak) highBreakCount += 1;
-    if (compareLowWithTolerance(levels[i].low, levels[i - 1].low, symbol).cleanBreak) lowBreakCount += 1;
-    if (levels[i].close > levels[i - 1].close) risingCloses += 1;
-    if (levels[i].close < levels[i - 1].close) fallingCloses += 1;
+  if (!Array.isArray(levels) || levels.length < 2) {
+    return {
+      bias: "Insufficient data",
+      biasCode: "insufficient",
+      confidence: "low",
+      traderBias: "Not enough market data to form a reliable direction.",
+      higherTimeframeView: "Not enough market data to compare the key highs, lows, and closes.",
+      timeframeView: "Not enough chart data.",
+      reason: `At least two ${profile.sourceUnitPlural} are needed.`,
+      periodStartPrice: null,
+      presentPrice: null,
+      periodHigh: null,
+      periodLow: null,
+      priceMove: null,
+      movePercentOfRange: null,
+      highBreakCount: 0,
+      lowBreakCount: 0,
+      risingCloses: 0,
+      fallingCloses: 0,
+      rangeScore: 0,
+    };
   }
-  let bias = "Mixed / Range-bound", biasCode = "mixed";
-  if (last.close > first.open && highBreakCount >= lowBreakCount) { bias = "Bullish"; biasCode = "bullish"; }
-  if (last.close < first.open && lowBreakCount >= highBreakCount) { bias = "Bearish"; biasCode = "bearish"; }
+
+  const first = levels[0];
+  const last = levels[levels.length - 1];
+  const periodStartPrice = Number(first.open);
+  const presentPrice = Number(last.close);
+  const periodHigh = Math.max(...levels.map((item) => Number(item.high)));
+  const periodLow = Math.min(...levels.map((item) => Number(item.low)));
+  const fullRange = Math.max(Math.abs(periodHigh - periodLow), getCleanBreakTolerance(symbol));
+  const priceMove = presentPrice - periodStartPrice;
+  const movePercentOfRange = Math.abs(priceMove) / fullRange;
+
+  let highBreakCount = 0;
+  let lowBreakCount = 0;
+  let risingCloses = 0;
+  let fallingCloses = 0;
+  let insideOrOverlapCount = 0;
+
+  for (let i = 1; i < levels.length; i += 1) {
+    const highBreak = compareHighWithTolerance(levels[i].high, levels[i - 1].high, symbol).cleanBreak;
+    const lowBreak = compareLowWithTolerance(levels[i].low, levels[i - 1].low, symbol).cleanBreak;
+
+    if (highBreak) highBreakCount += 1;
+    if (lowBreak) lowBreakCount += 1;
+    if (!highBreak && !lowBreak) insideOrOverlapCount += 1;
+
+    if (Number(levels[i].close) > Number(levels[i - 1].close)) risingCloses += 1;
+    if (Number(levels[i].close) < Number(levels[i - 1].close)) fallingCloses += 1;
+  }
+
+  let bullishScore = 0;
+  let bearishScore = 0;
+  let rangeScore = 0;
+
+  if (priceMove > 0) bullishScore += 1;
+  if (priceMove < 0) bearishScore += 1;
+
+  if (movePercentOfRange >= 0.55 && priceMove > 0) bullishScore += 2;
+  if (movePercentOfRange >= 0.55 && priceMove < 0) bearishScore += 2;
+  if (movePercentOfRange < 0.35) rangeScore += 2;
+
+  if (highBreakCount > lowBreakCount) bullishScore += 1.5;
+  if (lowBreakCount > highBreakCount) bearishScore += 1.5;
+  if (highBreakCount === lowBreakCount) rangeScore += 1;
+
+  if (risingCloses > fallingCloses) bullishScore += 1;
+  if (fallingCloses > risingCloses) bearishScore += 1;
+  if (Math.abs(risingCloses - fallingCloses) <= 1) rangeScore += 1;
+
+  if (insideOrOverlapCount >= Math.max(1, Math.floor((levels.length - 1) / 2))) rangeScore += 1.5;
+
+  const nearHigh = (periodHigh - presentPrice) / fullRange <= 0.25;
+  const nearLow = (presentPrice - periodLow) / fullRange <= 0.25;
+  if (nearHigh && priceMove > 0) bullishScore += 0.75;
+  if (nearLow && priceMove < 0) bearishScore += 0.75;
+  if (!nearHigh && !nearLow) rangeScore += 0.75;
+
+  let bias = "Range-bound";
+  let biasCode = "range";
+  let traderBias = "The bigger-picture view is mostly sideways.";
+  let confidence = "medium";
+
+  const scoreDifference = Math.abs(bullishScore - bearishScore);
+
+  if (rangeScore >= Math.max(bullishScore, bearishScore) || scoreDifference < 1.25) {
+    if (bearishScore > bullishScore + 0.25) {
+      bias = "Range-bound with bearish pressure";
+      biasCode = "range_bearish";
+      traderBias = "The bigger-picture view is mostly sideways, but sellers have slightly more pressure.";
+    } else if (bullishScore > bearishScore + 0.25) {
+      bias = "Range-bound with bullish pressure";
+      biasCode = "range_bullish";
+      traderBias = "The bigger-picture view is mostly sideways, but buyers have slightly more pressure.";
+    }
+    confidence = rangeScore >= 3 ? "medium" : "low";
+  } else if (bullishScore > bearishScore) {
+    bias = scoreDifference >= 3 && movePercentOfRange >= 0.45 ? "Bullish" : "Slightly bullish";
+    biasCode = scoreDifference >= 3 && movePercentOfRange >= 0.45 ? "bullish" : "slightly_bullish";
+    traderBias = bias === "Bullish"
+      ? "The bigger-picture view is bullish."
+      : "The bigger-picture view leans bullish, but it is not a clean one-way move.";
+    confidence = scoreDifference >= 3 ? "high" : "medium";
+  } else {
+    bias = scoreDifference >= 3 && movePercentOfRange >= 0.45 ? "Bearish" : "Slightly bearish";
+    biasCode = scoreDifference >= 3 && movePercentOfRange >= 0.45 ? "bearish" : "slightly_bearish";
+    traderBias = bias === "Bearish"
+      ? "The bigger-picture view is bearish."
+      : "The bigger-picture view leans bearish, but it is not a clean one-way move.";
+    confidence = scoreDifference >= 3 ? "high" : "medium";
+  }
+
+  const structureLabelForUsers =
+    profile.structureMode === "daily-in-week"
+      ? "this week's daily highs, lows, and closes"
+      : profile.structureMode === "weekly-in-month"
+      ? "this month's weekly highs, lows, and closes"
+      : profile.structureMode === "monthly-in-year"
+      ? "this year's monthly highs, lows, and closes"
+      : profile.structureMode === "quarterly-in-year"
+      ? "this year's quarterly highs, lows, and closes"
+      : "the higher-timeframe highs, lows, and closes";
+
+  const higherTimeframeView =
+    `${traderBias} This is based on ${structureLabelForUsers}. ` +
+    `Price opened around ${formatPrice(periodStartPrice)} and is now around ${formatPrice(presentPrice)}. ` +
+    `The high of the reviewed period is ${formatPrice(periodHigh)} and the low is ${formatPrice(periodLow)}. ` +
+    `Daily/period closes were mixed: ${risingCloses} higher close(s), ${fallingCloses} lower close(s).`;
+
+  const timeframeView =
+    `The uploaded ${profile.selectedTimeframe || ""} chart should be read as the execution view. ` +
+    `A short-term move on the uploaded chart can be bullish or bearish, but it should still be compared with the bigger-picture view above.`;
+
   return {
     bias,
     biasCode,
-    confidence: Math.abs(highBreakCount - lowBreakCount) >= 2 ? "high" : "medium",
-    periodStartPrice: first.open,
-    presentPrice: last.close,
-    periodHigh: Math.max(...levels.map((item) => Number(item.high))),
-    periodLow: Math.min(...levels.map((item) => Number(item.low))),
-    priceMove: last.close - first.open,
+    confidence,
+    traderBias,
+    higherTimeframeView,
+    timeframeView,
+    periodStartPrice,
+    presentPrice,
+    periodHigh,
+    periodLow,
+    priceMove,
+    movePercentOfRange,
     resistanceCount: highBreakCount,
     supportCount: lowBreakCount,
     risingCloses,
     fallingCloses,
     highBreakCount,
     lowBreakCount,
-    reason: `${bias} bias based on ${profile.structureLabel}.`,
+    bullishScore,
+    bearishScore,
+    rangeScore,
+    reason: higherTimeframeView,
   };
 }
 
@@ -589,22 +719,36 @@ function chooseFinalChartDate({ selectedDate, detection }) {
   return { finalDate: null, finalDateText: "Not provided", selectedDateText: null, detectedDateText: null, source: "missing-date", reason: "No usable date was available." };
 }
 
+
 function buildCsaFrameworkSummaryForVision(marketReference = {}) {
   const profile = marketReference?.profile || {};
   const levels = Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [];
   const areas = Array.isArray(marketReference?.csaAreas) ? marketReference.csaAreas : [];
   const bias = marketReference?.directionalBias || {};
-  const levelLines = levels.slice(0, 12).map((level) => `- ${level.periodLabel || level.day || level.key || level.date}: open ${formatPrice(level.open)}, high ${formatPrice(level.high)}, low ${formatPrice(level.low)}, close ${formatPrice(level.close)}`);
-  const areaLines = areas.slice(0, 20).map((area) => `- ${area.day || area.period || area.date}: ${area.type} at ${area.priceText || formatPrice(area.price)}`);
+
+  const levelLines = levels.slice(0, 12).map((level) => {
+    const label = level.periodLabel || level.day || level.key || level.date;
+    return `- ${label}: open ${formatPrice(level.open)}, high ${formatPrice(level.high)}, low ${formatPrice(level.low)}, close ${formatPrice(level.close)}`;
+  });
+
+  const areaLines = areas.slice(0, 20).map((area) => {
+    const userType =
+      area.type === "resistance" || area.type === "supply"
+        ? "possible selling area"
+        : "possible buying area";
+    return `- ${area.day || area.period || area.date}: ${userType} around ${area.priceText || formatPrice(area.price)}`;
+  });
+
   return [
-    `CSA structure mode: ${profile.structureLabel || "Not available"}`,
-    `Structure range: ${marketReference?.weekRange ? `${marketReference.weekRange.startDate} to ${marketReference.weekRange.endDate}` : "Not available"}`,
-    `Directional bias: ${bias.bias || "Not available"} (${bias.confidence || "low"} confidence)`,
+    `Internal structure source: ${profile.structureLabel || "Not available"}`,
+    `Reviewed range: ${marketReference?.weekRange ? `${marketReference.weekRange.startDate} to ${marketReference.weekRange.endDate}` : "Not available"}`,
+    `Bigger-picture direction: ${bias.bias || "Not available"} (${bias.confidence || "low"} confidence)`,
+    `Plain-language direction note: ${bias.higherTimeframeView || bias.reason || "Not available"}`,
     "",
-    "CSA OHLC levels:",
+    "Key highs/lows/closes:",
     levelLines.length ? levelLines.join("\n") : "- No levels available.",
     "",
-    "CSA areas:",
+    "Important support/resistance areas, stated in simple language:",
     areaLines.length ? areaLines.join("\n") : "- No areas available.",
   ].join("\n");
 }
@@ -618,32 +762,33 @@ function isBadVisualReview(parsed) {
   return text.includes("insufficient chart data") || text.includes("uploaded image appears to be a trading chart, but") || text.includes("not enough visible price data");
 }
 
+
 async function compareUploadedChartWithCsaFramework({ imageBase64, mimeType, marketReference, chartDetection, submittedInstrument = "", timeframe = "", analysisType = "post-trade", submittedNotes = "" }) {
   if (!process.env.OPENAI_API_KEY) return visualFallback("OPENAI_API_KEY is missing.");
-  if (!marketReference?.ok) return visualFallback("CSA market structure was unavailable, so visual comparison could not be completed.");
+  if (!marketReference?.ok) return visualFallback("Market structure was unavailable, so visual comparison could not be completed.");
   if (!imageBase64) return visualFallback("Uploaded chart image was not available for visual comparison.");
 
   const prompt = `
-You are CSA Coach's visual framework comparison assistant.
+You are CSA Coach's visual trade review assistant.
 Return ONLY valid JSON. Do not use markdown.
 
-Compare the uploaded chart image against the CSA framework below.
-
-Critical rules:
-- The chart has already passed basic validation. Do NOT return "insufficient chart data" unless the image is truly blank.
-- Do not give generic feedback.
-- Do not invent entries, stop loss, or targets if they are not visible.
+Your job:
+- Review the uploaded chart using the internal support/resistance framework below.
+- The user does NOT know the CSA framework, so speak in simple trading language.
+- Do not say "CSA", "framework match", "CSA level visibility", "daily high/low logic", "supply/demand classification", or other internal method language in user-facing fields.
+- Do not mention trendlines, channels, Fibonacci, indicators, or moving averages. They are not part of this review. If the chart has extra drawings, ignore them unless they hide price.
+- Focus only on: market direction, range vs trend, key support/resistance areas, entry timing, confirmation, stop/target visibility, and what the trader should wait for.
+- Two different-looking charts must receive different strengths, weaknesses, mistake hub items, scores, and short-term chart direction.
+- Do not invent entries, stop loss, targets, or mistakes if they are not visible.
 - If no entry/SL/TP is visible, say "No visible entry/SL/TP to judge" rather than giving risk mistakes.
-- Compare visible markings with CSA: horizontal levels, trendlines/channels, indicators, marked zones, arrows, circles, entry/SL/TP, and whether CSA levels are visible.
-- Two different looking charts must receive different chartSpecificStrengths, chartSpecificWeaknesses, simpleMistakeHub, and scores.
-- The simpleMistakeHub must only include short chart-specific mistake titles with tags.
+- If the bigger-picture view and uploaded chart timeframe disagree, state both clearly. Example: "Bigger picture is slightly bearish, but the ${timeframe} chart is pushing up short-term."
 
-CSA framework:
+Internal support/resistance framework:
 ${buildCsaFrameworkSummaryForVision(marketReference)}
 
 Selected context:
 - Instrument: ${submittedInstrument}
-- Timeframe: ${timeframe}
+- Timeframe uploaded/selected: ${timeframe}
 - Mode: ${analysisType}
 - User notes: ${submittedNotes || "None"}
 
@@ -656,14 +801,16 @@ Initial image validation:
 Return exactly this JSON shape:
 {
   "frameworkMatch": "strong | partial | weak | not enough evidence",
-  "visualChartStyle": "horizontal CSA levels | trendline/channel based | indicator based | clean price action | mixed | unclear",
+  "visualChartStyle": "clear support/resistance | clean price action | marked chart | unclear",
   "csaLevelVisibility": "clear | partial | not marked | unclear",
-  "visualSummary": "2-4 sentences comparing this exact uploaded chart to CSA",
-  "chartMarkupAssessment": "short assessment of visible drawings/markings",
+  "shortTermDirection": "bullish | bearish | range-bound | range-bound with bullish pressure | range-bound with bearish pressure | unclear",
+  "timeframeSummary": "one simple sentence describing what the uploaded ${timeframe} chart is doing",
+  "visualSummary": "2-4 simple sentences. Mention bigger-picture direction and uploaded timeframe direction if different.",
+  "chartMarkupAssessment": "simple comment about whether the important support/resistance areas are clear; do not mention trendlines/channels/indicators",
   "entryEvidence": "what entry evidence is visible, or 'No visible entry evidence'",
   "riskEvidence": "what SL/TP/risk evidence is visible, or 'No visible SL/TP evidence'",
-  "chartSpecificStrengths": ["specific strength visible on this chart"],
-  "chartSpecificWeaknesses": ["specific weakness visible on this chart"],
+  "chartSpecificStrengths": ["simple strength visible on this chart"],
+  "chartSpecificWeaknesses": ["simple weakness visible on this chart"],
   "simpleMistakeHub": [
     { "title": "short mistake title", "tag": "HIGH RISK | WARNING | STRUCTURAL | MATH FLAW | DISCIPLINE | REVIEW" }
   ],
@@ -678,7 +825,7 @@ Return exactly this JSON shape:
       input: [
         { role: "system", content: prompt },
         { role: "user", content: [
-          { type: "input_text", text: "Compare this uploaded chart visually against the CSA framework. Return only the required JSON." },
+          { type: "input_text", text: "Review this uploaded chart in simple trader language using the internal support/resistance framework. Return only the required JSON." },
           { type: "input_image", image_url: `data:${mimeType};base64,${imageBase64}` },
         ]},
       ],
@@ -686,13 +833,15 @@ Return exactly this JSON shape:
     });
 
     const parsed = extractJsonObject(response.output_text || "");
-    if (!parsed || isBadVisualReview(parsed)) return visualFallback("Visual comparison was inconclusive, so CSA framework fallback was used.");
+    if (!parsed || isBadVisualReview(parsed)) return visualFallback("Visual comparison was inconclusive, so market-structure fallback was used.");
 
     return {
       ok: true,
       frameworkMatch: parsed.frameworkMatch || "not enough evidence",
       visualChartStyle: parsed.visualChartStyle || "unclear",
       csaLevelVisibility: parsed.csaLevelVisibility || "unclear",
+      shortTermDirection: parsed.shortTermDirection || "unclear",
+      timeframeSummary: String(parsed.timeframeSummary || "").trim(),
       chartSpecificStrengths: normalizeArrayOfStrings(parsed.chartSpecificStrengths, []),
       chartSpecificWeaknesses: normalizeArrayOfStrings(parsed.chartSpecificWeaknesses, []),
       simpleMistakeHub: normalizeVisualMistakeItems(parsed.simpleMistakeHub),
@@ -706,8 +855,8 @@ Return exactly this JSON shape:
       raw: response.output_text || "",
     };
   } catch (error) {
-    console.error("Visual CSA comparison error:", error);
-    return visualFallback(`Visual CSA comparison failed: ${error.message}`);
+    console.error("Visual trade review error:", error);
+    return visualFallback(`Visual trade review failed: ${error.message}`);
   }
 }
 
@@ -717,6 +866,7 @@ function shouldUseVisualScore(score, marketOk) {
   if (marketOk && n < 20) return false;
   return true;
 }
+
 
 function buildDashboardFeedback({ marketReference, chartDetection, visualReview = null, submittedInstrument, timeframe, selectedDateText, detectedDateText, setupScore = 0 }) {
   const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
@@ -728,30 +878,32 @@ function buildDashboardFeedback({ marketReference, chartDetection, visualReview 
   const failedAreas = buildFailedAreas({ supportAreas, resistanceAreas, supplyAreas, demandAreas, levels, symbol });
   const hasConfirmedTrigger = Boolean(chartDetection?.visibleTrigger);
   const rejectedContext = chartDetection?.rejectedTriggerContext || null;
-  const mixedBias = String(bias?.biasCode || "").toLowerCase() === "mixed" || String(bias?.bias || "").toLowerCase().includes("mixed");
+  const mixedBias = String(bias?.biasCode || "").toLowerCase().includes("range") || String(bias?.bias || "").toLowerCase().includes("range");
   const marketOk = Boolean(marketReference?.ok);
   const visualOk = Boolean(visualReview?.ok);
 
   const frameworkStrengths = [];
   const frameworkWeaknesses = [];
-  if (marketOk) {
-    frameworkStrengths.push(`CSA structure calculated: ${profile.structureLabel}.`);
-    frameworkStrengths.push(`${levels.length} ${profile.sourceUnitPlural} were reviewed from market data.`);
-    frameworkStrengths.push(`Framework bias: ${bias.bias}.`);
-  } else frameworkWeaknesses.push(marketReference?.error || "Market data unavailable.");
 
-  if (chartDetection?.hasUsablePriceData) frameworkStrengths.push("Uploaded chart contains usable visible price data.");
-  if (!hasConfirmedTrigger) frameworkWeaknesses.push("No confirmed entry trigger was detected automatically on the uploaded chart.");
+  if (marketOk) {
+    frameworkStrengths.push(`Bigger-picture direction checked using the main highs, lows, and closes.`);
+    frameworkStrengths.push(`Main view: ${bias.bias}.`);
+  } else {
+    frameworkWeaknesses.push(marketReference?.error || "Market data unavailable.");
+  }
+
+  if (chartDetection?.hasUsablePriceData) frameworkStrengths.push("Uploaded chart has enough visible price action to review.");
+  if (!hasConfirmedTrigger) frameworkWeaknesses.push("No clear entry confirmation was detected on the uploaded chart.");
   failedAreas.forEach((area) => frameworkWeaknesses.push(area.explanation));
-  if (mixedBias) frameworkWeaknesses.push("Directional bias is mixed; avoid middle-of-range entries.");
+  if (mixedBias) frameworkWeaknesses.push("The bigger-picture view is not a clean trend, so middle-of-range trades need caution.");
 
   const visualStrengths = visualOk ? normalizeArrayOfStrings(visualReview.chartSpecificStrengths, []) : [];
   const visualWeaknesses = visualOk ? normalizeArrayOfStrings(visualReview.chartSpecificWeaknesses, []) : [];
   const strengths = [...visualStrengths, ...frameworkStrengths].filter(Boolean);
   const weaknesses = [...visualWeaknesses, ...frameworkWeaknesses].filter(Boolean);
 
-  const baseSetupQualityScore = clampScore((setupScore || 0) * 10 - failedAreas.length * 8 - (mixedBias ? 12 : 0) + (marketOk ? 5 : -20));
-  const baseEntryAccuracyScore = clampScore(65 + (hasConfirmedTrigger ? 15 : -10) - failedAreas.length * 10 - (mixedBias ? 8 : 0));
+  const baseSetupQualityScore = clampScore((setupScore || 0) * 10 - failedAreas.length * 8 - (mixedBias ? 8 : 0) + (marketOk ? 5 : -20));
+  const baseEntryAccuracyScore = clampScore(65 + (hasConfirmedTrigger ? 15 : -10) - failedAreas.length * 10 - (mixedBias ? 5 : 0));
   const baseRiskManagementScore = clampScore(70 - failedAreas.length * 8 - (mixedBias ? 5 : 0));
 
   const setupQualityScore = visualOk && shouldUseVisualScore(visualReview.setupQualityScore, marketOk) ? clampScore(visualReview.setupQualityScore) : baseSetupQualityScore;
@@ -765,28 +917,57 @@ function buildDashboardFeedback({ marketReference, chartDetection, visualReview 
     detectedTimeframe: chartDetection?.detectedTimeframe || "Not detected",
     selectedDate: selectedDateText || "Not provided",
     detectedLatestVisibleDate: detectedDateText || chartDetection?.latestVisibleDate || "Not detected",
-    status: marketOk ? "Matched and reviewed" : "Review limited",
-    structureUsed: profile.structureLabel,
+    status: marketOk ? "Reviewed" : "Review limited",
+    structureUsed:
+      profile.structureMode === "daily-in-week"
+        ? "This week's key highs, lows, and closes"
+        : profile.structureMode === "weekly-in-month"
+        ? "This month's key weekly highs and lows"
+        : profile.structureMode === "monthly-in-year"
+        ? "This year's key monthly highs and lows"
+        : "Higher-timeframe key highs and lows",
     rangeUsed: marketReference?.weekRange ? `${marketReference.weekRange.startDate} to ${marketReference.weekRange.endDate}` : "Not available",
     chartValidation: chartDetection?.isTradingChart ? "Valid trading chart" : "Invalid or unverified chart",
     chartDataQuality: chartDetection?.chartDataQuality || "unclear",
     visibleCandleCount: chartDetection?.visibleCandleCount || 0,
+    biggerPictureView: bias.bias || "Not available",
+    selectedTimeframeView: visualReview?.shortTermDirection || "Not reviewed",
     visualFrameworkMatch: visualReview?.frameworkMatch || "Not reviewed",
     visualChartStyle: visualReview?.visualChartStyle || "Not reviewed",
     csaLevelVisibility: visualReview?.csaLevelVisibility || "Not reviewed",
   };
 
   const visualMistakes = visualOk ? normalizeVisualMistakeItems(visualReview.simpleMistakeHub) : [];
-  const frameworkMistakes = buildFrameworkMistakeHub({ failedAreas, hasConfirmedTrigger, rejectedContext, mixedBias, marketOk, entryAccuracyScore: baseEntryAccuracyScore, riskManagementScore: baseRiskManagementScore });
+  const frameworkMistakes = buildFrameworkMistakeHub({
+    failedAreas,
+    hasConfirmedTrigger,
+    rejectedContext,
+    mixedBias,
+    marketOk,
+    entryAccuracyScore: baseEntryAccuracyScore,
+    riskManagementScore: baseRiskManagementScore,
+  });
   const aiMistakeDetectionHub = visualMistakes.length ? visualMistakes : frameworkMistakes;
 
-  const setupQuality = { score: setupQualityScore, label: scoreLabel(setupQualityScore), summary: visualOk && visualReview.visualSummary ? visualReview.visualSummary : "Setup quality is based on CSA structure, failed areas, and chart context." };
-  const entryAccuracy = { score: entryAccuracyScore, label: scoreLabel(entryAccuracyScore), summary: visualOk && visualReview.entryEvidence ? visualReview.entryEvidence : "Entry accuracy depends on visible confirmation at the CSA area." };
-  const riskManagement = { score: riskManagementScore, label: scoreLabel(riskManagementScore), summary: visualOk && visualReview.riskEvidence ? visualReview.riskEvidence : "Risk score checks visible stop/target evidence and failed area risk." };
+  const setupQuality = {
+    score: setupQualityScore,
+    label: scoreLabel(setupQualityScore),
+    summary: visualOk && visualReview.visualSummary ? visualReview.visualSummary : "Setup quality is based on the bigger-picture direction, key areas, and what is visible on the uploaded chart.",
+  };
+  const entryAccuracy = {
+    score: entryAccuracyScore,
+    label: scoreLabel(entryAccuracyScore),
+    summary: visualOk && visualReview.entryEvidence ? visualReview.entryEvidence : "Entry accuracy depends on whether there is clear confirmation around a key area.",
+  };
+  const riskManagement = {
+    score: riskManagementScore,
+    label: scoreLabel(riskManagementScore),
+    summary: visualOk && visualReview.riskEvidence ? visualReview.riskEvidence : "Risk score checks whether stop loss and target placement are visible and logical.",
+  };
 
   return {
-    strengths: strengths.length ? strengths.slice(0, 7) : ["CSA Coach completed the review."],
-    weaknesses: weaknesses.length ? weaknesses.slice(0, 7) : ["No major weakness detected from the available CSA structure data."],
+    strengths: strengths.length ? strengths.slice(0, 7) : ["Trade review completed."],
+    weaknesses: weaknesses.length ? weaknesses.slice(0, 7) : ["No major weakness detected from the available chart information."],
     mistakes: aiMistakeDetectionHub,
     aiMistakeDetectionHub,
     mistakeDetectionHub: aiMistakeDetectionHub,
@@ -843,90 +1024,110 @@ function buildSimpleStructureBreakdown(levels = [], normalizedSymbol = "") {
   }).join("\n\n");
 }
 
+
 function buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, visualReview = null, submittedInstrument, normalizedSymbol, timeframe }) {
   const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
-  if (!marketReference || !marketReference.ok) return `CSA COACH VERDICT\n\nDirectional Bias:\n- Insufficient data\n- Reason: ${marketReference?.error || "Market data unavailable."}\n\nOverall Setup Score:\n- 0/10`;
+
+  if (!marketReference || !marketReference.ok) {
+    return `COACH VERDICT
+
+Market Direction:
+- Not enough data to judge the bigger-picture direction.
+- Reason: ${marketReference?.error || "Market data unavailable."}
+
+What This Means:
+- Upload a clearer chart or check that the selected instrument, timeframe, and date are correct.
+
+Overall Setup Score:
+- 0/10`;
+  }
+
   const levels = marketReference.dailyLevels || [];
   const areas = marketReference.csaAreas || [];
   const bias = marketReference.directionalBias || calculateCsaDirectionalBias(levels, normalizedSymbol, profile);
   const { resistanceAreas, supportAreas, supplyAreas, demandAreas } = splitAreas(areas);
   const failedAreas = buildFailedAreas({ supportAreas, resistanceAreas, supplyAreas, demandAreas, levels, symbol: normalizedSymbol });
-  const overallScore = Number.isFinite(Number(visualReview?.setupQualityScore)) && Number(visualReview.setupQualityScore) >= 20 ? Math.max(1, Math.round(Number(visualReview.setupQualityScore) / 10)) : (failedAreas.length ? 5 : bias.biasCode === "mixed" ? 6 : 7);
 
-  return `CSA COACH VERDICT
+  const overallScore =
+    Number.isFinite(Number(visualReview?.setupQualityScore)) && Number(visualReview.setupQualityScore) >= 20
+      ? Math.max(1, Math.round(Number(visualReview.setupQualityScore) / 10))
+      : failedAreas.length
+      ? 5
+      : String(bias.biasCode || "").includes("range")
+      ? 6
+      : 7;
 
-CSA Structure Used:
-- ${profile.structureLabel}
+  const directionSummary = visualReview?.shortTermDirection && visualReview.shortTermDirection !== "unclear"
+    ? `Bigger picture: ${bias.bias}. Uploaded ${timeframe} chart: ${visualReview.shortTermDirection}.`
+    : `Bigger picture: ${bias.bias}. Uploaded ${timeframe} chart: ${visualReview?.timeframeSummary || "short-term direction was not clear enough to judge."}`;
 
-Directional Bias:
-- ${bias.bias}
-- Reason: ${bias.reason}
+  const supportText = listAreas([...supportAreas, ...demandAreas], "buying area", 3);
+  const resistanceText = listAreas([...resistanceAreas, ...supplyAreas], "selling area", 3);
 
-VISUAL CSA FRAMEWORK COMPARISON:
-- Framework match: ${visualReview?.frameworkMatch || "Not reviewed"}
-- Visible chart style: ${visualReview?.visualChartStyle || "Not reviewed"}
-- CSA level visibility: ${visualReview?.csaLevelVisibility || "Not reviewed"}
-- Visual summary: ${visualReview?.visualSummary || "Visual comparison was not available."}
-- Chart markings: ${visualReview?.chartMarkupAssessment || "Not reviewed."}
-- Entry evidence: ${visualReview?.entryEvidence || "Not reviewed."}
-- Risk evidence: ${visualReview?.riskEvidence || "Not reviewed."}
+  return `COACH VERDICT
+
+Market Direction:
+- ${directionSummary}
+- ${bias.higherTimeframeView || bias.reason}
+
+What The Uploaded Chart Shows:
+- ${visualReview?.visualSummary || "The uploaded chart was reviewed against the main support and resistance areas."}
+- ${visualReview?.timeframeSummary || "Short-term chart direction was not clear enough to judge."}
+
+Key Areas To Watch:
+Potential buying/support areas:
+${supportText}
+
+Potential selling/resistance areas:
+${resistanceText}
 
 Best Entry Area:
-- Use the valid CSA area that aligns with the framework bias and is actually visible/relevant on the uploaded chart.
+- Wait for price to reach a clear support or resistance area first.
+- Avoid entering in the middle of the range unless there is a strong confirmation candle/pattern.
 
-Entry Trigger:
-- ${chartDetection?.visibleTrigger ? `Visible confirmed trigger: ${chartDetection.visibleTrigger}` : "No confirmed entry trigger is visible yet. Do not treat bounce/pullback as confirmation."}
+Entry Confirmation:
+- ${visualReview?.entryEvidence || (chartDetection?.visibleTrigger ? `Visible confirmation detected: ${chartDetection.visibleTrigger}` : "No clear entry confirmation is visible yet. A bounce or pullback alone is not enough.")}
 
-Stop Loss Placement:
-- Place stop beyond the trigger candle/pattern and beyond the CSA area. If no SL is visible on the uploaded chart, risk cannot be fully judged.
+Stop Loss And Target:
+- ${visualReview?.riskEvidence || "No visible stop loss or target was clear enough to judge. A good setup should have a stop beyond the key area and enough space to the next target."}
 
-Take Profit Placement:
-- Use previous CSA structural areas as targets. If no TP is visible on the uploaded chart, target quality cannot be fully judged.
-
-Risk-to-Reward:
-- Minimum 1:2. Skip the setup if TP1 is too close or if SL/TP is not visible enough to judge.
+Main Mistake / Warning:
+- ${
+    failedAreas.length
+      ? "One or more key areas failed to hold, so do not keep treating those areas as valid without a fresh confirmation."
+      : String(bias.biasCode || "").includes("range")
+      ? "The bigger-picture market is not trending cleanly, so chasing entries in the middle can be risky."
+      : "Wait for price to react from a key area before judging the trade."
+  }
 
 Trade Management:
-- Partial close at TP1, breakeven after strong reaction, trail behind structure.
-
-Coach Verdict:
-- ${visualReview?.visualSummary || "CSA review completed using market structure and uploaded chart context."}
-- These are coaching guidelines only, not buy/sell signals.
+- If already in a trade, protect the position after price reaches the first trouble area.
+- If price does not move away cleanly from entry, reduce risk or wait for a better setup.
 
 Overall Setup Score:
 - ${overallScore}/10
 
 READ_MORE_DETAILS:
 
-Final date used: ${dateDecision?.finalDateText || "Not provided"}
 Selected instrument: ${submittedInstrument}
 Selected timeframe: ${timeframe}
+Final date used: ${dateDecision?.finalDateText || "Not provided"}
 Latest visible chart date: ${chartDetection?.latestVisibleDate || "Not detected"}
 Chart data quality: ${chartDetection?.chartDataQuality || "unclear"}
 
-CSA Bias Calculation:
-- ${profile.startPriceLabel}: ${formatPrice(bias.periodStartPrice)}
-- ${profile.currentPriceLabel}: ${formatPrice(bias.presentPrice)}
-- Highest price: ${formatPrice(bias.periodHigh)}
-- Lowest price: ${formatPrice(bias.periodLow)}
-- Bias confidence: ${bias.confidence}
+Bigger-picture calculation:
+- Start price: ${formatPrice(bias.periodStartPrice)}
+- Current/review price: ${formatPrice(bias.presentPrice)}
+- Reviewed high: ${formatPrice(bias.periodHigh)}
+- Reviewed low: ${formatPrice(bias.periodLow)}
+- Higher closes: ${bias.risingCloses ?? "N/A"}
+- Lower closes: ${bias.fallingCloses ?? "N/A"}
+- Direction confidence: ${bias.confidence}
 
-Resistance:
-${listAreas(resistanceAreas, "resistance")}
-
-Support:
-${listAreas(supportAreas, "support")}
-
-Supply:
-${listAreas(supplyAreas, "supply")}
-
-Demand:
-${listAreas(demandAreas, "demand")}
-
-Failed CSA Areas:
+Failed areas:
 ${listFailedAreas(failedAreas)}
 
-${profile.breakdownTitle}:
+Internal structure summary:
 ${buildSimpleStructureBreakdown(levels, normalizedSymbol)}`;
 }
 
