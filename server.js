@@ -27,6 +27,9 @@ Invalid/insufficient images:
 - charts with fewer than about 15 visible candles/bars/points
 
 Important:
+- Be strict with instrument/timeframe detection. If the symbol or timeframe text is not clearly readable on the uploaded chart, return null for that field.
+- Do not assume the uploaded chart matches the user's selected dropdown.
+- The backend will stop the analysis if the uploaded chart does not clearly confirm the selected instrument and timeframe.
 - Be practical. If a chart clearly has visible price movement, do not mark it insufficient just because the exact selected date is hard to read.
 - If the selected date is clearly far after the latest visible chart date, set selectedDateVisible=false and provide latestVisibleDate.
 - If the date axis is hard to read, set dateConfidence="low" instead of blocking the chart.
@@ -136,6 +139,31 @@ function hasStrongTimeframeMismatch({ selectedTimeframe, detectedTimeframe }) {
   const detected = comparableTimeframe(detectedTimeframe);
   if (!selected || !detected) return false;
   return selected !== detected;
+}
+
+
+function hasVerifiedChartContext({ selectedInstrument = "", selectedTimeframe = "", chartDetection = null }) {
+  const selectedSymbol = comparableInstrument(selectedInstrument);
+  const selectedTf = comparableTimeframe(selectedTimeframe);
+  const detectedSymbol = comparableInstrument(chartDetection?.detectedInstrument || "");
+  const detectedTf = comparableTimeframe(chartDetection?.detectedTimeframe || "");
+
+  const instrumentVerified = Boolean(selectedSymbol && detectedSymbol && selectedSymbol === detectedSymbol);
+  const timeframeVerified = Boolean(selectedTf && detectedTf && selectedTf === detectedTf);
+
+  return {
+    verified: instrumentVerified && timeframeVerified,
+    instrumentVerified,
+    timeframeVerified,
+    selectedSymbol,
+    selectedTf,
+    detectedSymbol,
+    detectedTf,
+    missingInstrument: !detectedSymbol,
+    missingTimeframe: !detectedTf,
+    instrumentMismatch: Boolean(selectedSymbol && detectedSymbol && selectedSymbol !== detectedSymbol),
+    timeframeMismatch: Boolean(selectedTf && detectedTf && selectedTf !== detectedTf),
+  };
 }
 
 function parseISODateOnly(value) {
@@ -1147,6 +1175,21 @@ function buildTimeframeMismatchAnalysis({ selectedInstrument, detectedInstrument
   return `Chart Timeframe Mismatch\n\nSelected Instrument:\n${selectedInstrument || "Not provided"}\n\nDetected Chart Instrument:\n${detectedInstrument || "Not detected"}\n\nSelected Timeframe:\n${selectedTimeframe || "Not provided"}\n\nDetected Chart Timeframe:\n${detectedTimeframe || "Not detected"}`;
 }
 
+
+function buildUnverifiedChartContextAnalysis({ selectedInstrument, selectedTimeframe, chartDetection, contextVerification }) {
+  const detectedInstrument = chartDetection?.detectedInstrument || "Not detected";
+  const detectedTimeframe = chartDetection?.detectedTimeframe || "Not detected";
+
+  let issue = "The uploaded chart does not clearly confirm the selected instrument and timeframe.";
+  if (contextVerification?.instrumentMismatch) issue = "The selected instrument appears different from the uploaded chart.";
+  if (contextVerification?.timeframeMismatch) issue = "The selected timeframe appears different from the uploaded chart.";
+  if (contextVerification?.missingInstrument && contextVerification?.missingTimeframe) issue = "The uploaded chart does not clearly show a readable instrument and timeframe.";
+  else if (contextVerification?.missingInstrument) issue = "The uploaded chart does not clearly show a readable instrument/symbol.";
+  else if (contextVerification?.missingTimeframe) issue = "The uploaded chart does not clearly show a readable timeframe.";
+
+  return `Could Not Verify Chart Context\n\nSelected:\n- Instrument: ${selectedInstrument || "Not provided"}\n- Timeframe: ${selectedTimeframe || "Not provided"}\n\nUploaded chart detected:\n- Instrument: ${detectedInstrument}\n- Timeframe: ${detectedTimeframe}\n\nWhy analysis was stopped:\n- ${issue}\n- The coach must verify that the uploaded chart matches the selected market and timeframe before generating feedback.\n- This prevents the tool from reviewing Gold/H4, EURUSD/M15, or any selected dropdown using the wrong uploaded chart.\n\nHow to fix:\n- Upload a clearer screenshot where the symbol and timeframe are visible at the top of the chart.\n- Or change the selected instrument/timeframe to match the uploaded chart.\n- Then run the analysis again.`;
+}
+
 function buildStoppedDashboard({ errorType, error, submittedInstrument, timeframe, chartDetection, selectedTimeframeProfile }) {
   return buildDashboardAliases({
     strengths: ["Chart context validation was completed before the review was stopped."],
@@ -1225,16 +1268,58 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       return stoppedResponse({ res, errorType: "selected_date_not_visible", error: "Selected chart/trade date is not visible or reasonably covered by the uploaded chart.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
 
-    const instrumentMismatch = hasStrongInstrumentMismatch({ selectedInstrument: normalizedSymbol || submittedInstrument, detectedInstrument: chartDetection.detectedInstrument });
-    if (instrumentMismatch) {
-      const analysis = buildInstrumentMismatchAnalysis({ selectedInstrument: submittedInstrument, detectedInstrument: chartDetection.detectedInstrument, selectedTimeframe: timeframe, detectedTimeframe: chartDetection.detectedTimeframe });
-      return stoppedResponse({ res, errorType: "instrument_mismatch", error: "Selected instrument does not match uploaded chart.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
-    }
+    const contextVerification = hasVerifiedChartContext({
+      selectedInstrument: normalizedSymbol || submittedInstrument,
+      selectedTimeframe: timeframe,
+      chartDetection,
+    });
 
-    const timeframeMismatch = hasStrongTimeframeMismatch({ selectedTimeframe: timeframe, detectedTimeframe: chartDetection.detectedTimeframe });
-    if (timeframeMismatch) {
-      const analysis = buildTimeframeMismatchAnalysis({ selectedInstrument: submittedInstrument, detectedInstrument: chartDetection.detectedInstrument, selectedTimeframe: timeframe, detectedTimeframe: chartDetection.detectedTimeframe });
-      return stoppedResponse({ res, errorType: "timeframe_mismatch", error: "Selected timeframe does not match uploaded chart timeframe.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
+    if (!contextVerification.verified) {
+      const errorType = contextVerification.instrumentMismatch
+        ? "instrument_mismatch"
+        : contextVerification.timeframeMismatch
+        ? "timeframe_mismatch"
+        : "chart_context_not_verified";
+
+      const error = contextVerification.instrumentMismatch
+        ? "Selected instrument does not match uploaded chart."
+        : contextVerification.timeframeMismatch
+        ? "Selected timeframe does not match uploaded chart timeframe."
+        : "Uploaded chart context could not be verified.";
+
+      const analysis = contextVerification.instrumentMismatch
+        ? buildInstrumentMismatchAnalysis({
+            selectedInstrument: submittedInstrument,
+            detectedInstrument: chartDetection.detectedInstrument,
+            selectedTimeframe: timeframe,
+            detectedTimeframe: chartDetection.detectedTimeframe,
+          })
+        : contextVerification.timeframeMismatch
+        ? buildTimeframeMismatchAnalysis({
+            selectedInstrument: submittedInstrument,
+            detectedInstrument: chartDetection.detectedInstrument,
+            selectedTimeframe: timeframe,
+            detectedTimeframe: chartDetection.detectedTimeframe,
+          })
+        : buildUnverifiedChartContextAnalysis({
+            selectedInstrument: submittedInstrument,
+            selectedTimeframe: timeframe,
+            chartDetection,
+            contextVerification,
+          });
+
+      return stoppedResponse({
+        res,
+        errorType,
+        error,
+        analysis,
+        submittedInstrument,
+        timeframe,
+        chartDetection,
+        normalizedSymbol,
+        timezone,
+        selectedTimeframeProfile,
+      });
     }
 
     const dateDecision = chooseFinalChartDate({ selectedDate, detection: chartDetection, analysisType: mode });
