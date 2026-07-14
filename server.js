@@ -27,9 +27,6 @@ Invalid/insufficient images:
 - charts with fewer than about 15 visible candles/bars/points
 
 Important:
-- Be strict with instrument/timeframe detection. If the symbol or timeframe text is not clearly readable on the uploaded chart, return null for that field.
-- Do not assume the uploaded chart matches the user's selected dropdown.
-- The backend will stop the analysis if the uploaded chart does not clearly confirm the selected instrument and timeframe.
 - Be practical. If a chart clearly has visible price movement, do not mark it insufficient just because the exact selected date is hard to read.
 - If the selected date is clearly far after the latest visible chart date, set selectedDateVisible=false and provide latestVisibleDate.
 - If the date axis is hard to read, set dateConfidence="low" instead of blocking the chart.
@@ -139,31 +136,6 @@ function hasStrongTimeframeMismatch({ selectedTimeframe, detectedTimeframe }) {
   const detected = comparableTimeframe(detectedTimeframe);
   if (!selected || !detected) return false;
   return selected !== detected;
-}
-
-
-function hasVerifiedChartContext({ selectedInstrument = "", selectedTimeframe = "", chartDetection = null }) {
-  const selectedSymbol = comparableInstrument(selectedInstrument);
-  const selectedTf = comparableTimeframe(selectedTimeframe);
-  const detectedSymbol = comparableInstrument(chartDetection?.detectedInstrument || "");
-  const detectedTf = comparableTimeframe(chartDetection?.detectedTimeframe || "");
-
-  const instrumentVerified = Boolean(selectedSymbol && detectedSymbol && selectedSymbol === detectedSymbol);
-  const timeframeVerified = Boolean(selectedTf && detectedTf && selectedTf === detectedTf);
-
-  return {
-    verified: instrumentVerified && timeframeVerified,
-    instrumentVerified,
-    timeframeVerified,
-    selectedSymbol,
-    selectedTf,
-    detectedSymbol,
-    detectedTf,
-    missingInstrument: !detectedSymbol,
-    missingTimeframe: !detectedTf,
-    instrumentMismatch: Boolean(selectedSymbol && detectedSymbol && selectedSymbol !== detectedSymbol),
-    timeframeMismatch: Boolean(selectedTf && detectedTf && selectedTf !== detectedTf),
-  };
 }
 
 function parseISODateOnly(value) {
@@ -797,19 +769,28 @@ async function compareUploadedChartWithCsaFramework({ imageBase64, mimeType, mar
   if (!imageBase64) return visualFallback("Uploaded chart image was not available for visual comparison.");
 
   const prompt = `
-You are CSA Coach's visual trade review assistant.
+You are CSA Coach's beginner-friendly trade review assistant.
 Return ONLY valid JSON. Do not use markdown.
 
 Your job:
 - Review the uploaded chart using the internal support/resistance framework below.
-- The user does NOT know the CSA framework, so speak in simple trading language.
-- Do not say "CSA", "framework match", "CSA level visibility", "daily high/low logic", "supply/demand classification", or other internal method language in user-facing fields.
-- Do not mention trendlines, channels, Fibonacci, indicators, or moving averages. They are not part of this review. If the chart has extra drawings, ignore them unless they hide price.
-- Focus only on: market direction, range vs trend, key support/resistance areas, entry timing, confirmation, stop/target visibility, and what the trader should wait for.
+- The user is likely a beginner. Use very simple trading language.
+- The backend can use the internal method, but user-facing fields must NOT say "CSA", "framework", "daily high/low logic", "supply/demand classification", or other internal method words.
+- Do not mention trendlines, channels, Fibonacci, indicators, or moving averages. They are outside this review. Ignore them unless they hide price.
+- Explain only what matters to a beginner:
+  1. Is the bigger picture bullish, bearish, or ranging?
+  2. What is the selected ${timeframe} chart doing right now?
+  3. Should the trader wait, buy, sell, or avoid chasing?
+  4. Where should price return before a better setup forms?
+  5. Is there a clear entry confirmation?
+  6. Is stop loss/target visible enough to judge?
+- Keep all user-facing answers short, plain, and useful.
 - Two different-looking charts must receive different strengths, weaknesses, mistake hub items, scores, and short-term chart direction.
 - Do not invent entries, stop loss, targets, or mistakes if they are not visible.
-- If no entry/SL/TP is visible, say "No visible entry/SL/TP to judge" rather than giving risk mistakes.
-- If the bigger-picture view and uploaded chart timeframe disagree, state both clearly. Example: "Bigger picture is slightly bearish, but the ${timeframe} chart is pushing up short-term."
+- If no entry/SL/TP is visible, say "No visible entry, stop loss, or target to judge."
+- If the bigger-picture view and uploaded chart timeframe disagree, state both clearly.
+  Example: "The bigger picture is slightly bearish, but the ${timeframe} chart is pushing up short-term."
+- Do not give financial advice or guaranteed predictions. This is only chart feedback.
 
 Internal support/resistance framework:
 ${buildCsaFrameworkSummaryForVision(marketReference)}
@@ -832,11 +813,17 @@ Return exactly this JSON shape:
   "visualChartStyle": "clear support/resistance | clean price action | marked chart | unclear",
   "csaLevelVisibility": "clear | partial | not marked | unclear",
   "shortTermDirection": "bullish | bearish | range-bound | range-bound with bullish pressure | range-bound with bearish pressure | unclear",
+  "quickVerdict": "one very simple sentence saying wait, avoid chasing, or setup looks acceptable",
+  "plainMarketDirection": "one simple sentence combining bigger-picture direction and ${timeframe} chart direction",
+  "whatThisMeans": "one simple sentence explaining what the trader should understand from the chart",
   "timeframeSummary": "one simple sentence describing what the uploaded ${timeframe} chart is doing",
-  "visualSummary": "2-4 simple sentences. Mention bigger-picture direction and uploaded timeframe direction if different.",
+  "bestAreaToWatch": "one simple sentence saying where price should return before a better setup",
+  "visualSummary": "2 short beginner-friendly sentences. Mention bigger-picture direction and uploaded timeframe direction if different.",
   "chartMarkupAssessment": "simple comment about whether the important support/resistance areas are clear; do not mention trendlines/channels/indicators",
   "entryEvidence": "what entry evidence is visible, or 'No visible entry evidence'",
-  "riskEvidence": "what SL/TP/risk evidence is visible, or 'No visible SL/TP evidence'",
+  "riskEvidence": "what SL/TP/risk evidence is visible, or 'No visible entry, stop loss, or target to judge'",
+  "mainWarning": "one simple warning the trader should remember",
+  "coachVerdict": "one short final verdict in beginner language",
   "chartSpecificStrengths": ["simple strength visible on this chart"],
   "chartSpecificWeaknesses": ["simple weakness visible on this chart"],
   "simpleMistakeHub": [
@@ -853,11 +840,11 @@ Return exactly this JSON shape:
       input: [
         { role: "system", content: prompt },
         { role: "user", content: [
-          { type: "input_text", text: "Review this uploaded chart in simple trader language using the internal support/resistance framework. Return only the required JSON." },
+          { type: "input_text", text: "Review this uploaded chart in simple beginner trader language using the internal support/resistance framework. Return only the required JSON." },
           { type: "input_image", image_url: `data:${mimeType};base64,${imageBase64}` },
         ]},
       ],
-      max_output_tokens: 1200,
+      max_output_tokens: 1300,
     });
 
     const parsed = extractJsonObject(response.output_text || "");
@@ -869,7 +856,13 @@ Return exactly this JSON shape:
       visualChartStyle: parsed.visualChartStyle || "unclear",
       csaLevelVisibility: parsed.csaLevelVisibility || "unclear",
       shortTermDirection: parsed.shortTermDirection || "unclear",
+      quickVerdict: String(parsed.quickVerdict || "").trim(),
+      plainMarketDirection: String(parsed.plainMarketDirection || "").trim(),
+      whatThisMeans: String(parsed.whatThisMeans || "").trim(),
       timeframeSummary: String(parsed.timeframeSummary || "").trim(),
+      bestAreaToWatch: String(parsed.bestAreaToWatch || "").trim(),
+      mainWarning: String(parsed.mainWarning || "").trim(),
+      coachVerdict: String(parsed.coachVerdict || "").trim(),
       chartSpecificStrengths: normalizeArrayOfStrings(parsed.chartSpecificStrengths, []),
       chartSpecificWeaknesses: normalizeArrayOfStrings(parsed.chartSpecificWeaknesses, []),
       simpleMistakeHub: normalizeVisualMistakeItems(parsed.simpleMistakeHub),
@@ -1059,12 +1052,14 @@ function buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDet
   if (!marketReference || !marketReference.ok) {
     return `COACH VERDICT
 
+Quick Verdict:
+- I could not review this chart properly because the market data was not available.
+
 Market Direction:
 - Not enough data to judge the bigger-picture direction.
-- Reason: ${marketReference?.error || "Market data unavailable."}
 
 What This Means:
-- Upload a clearer chart or check that the selected instrument, timeframe, and date are correct.
+- Check that the selected instrument, timeframe, and date are correct, then run the review again.
 
 Overall Setup Score:
 - 0/10`;
@@ -1085,77 +1080,110 @@ Overall Setup Score:
       ? 6
       : 7;
 
-  const directionSummary = visualReview?.shortTermDirection && visualReview.shortTermDirection !== "unclear"
-    ? `Bigger picture: ${bias.bias}. Uploaded ${timeframe} chart: ${visualReview.shortTermDirection}.`
-    : `Bigger picture: ${bias.bias}. Uploaded ${timeframe} chart: ${visualReview?.timeframeSummary || "short-term direction was not clear enough to judge."}`;
+  const directionSummary = visualReview?.plainMarketDirection
+    ? visualReview.plainMarketDirection
+    : visualReview?.shortTermDirection && visualReview.shortTermDirection !== "unclear"
+    ? `The bigger picture is ${String(bias.bias || "").toLowerCase()}, while the ${timeframe} chart is ${visualReview.shortTermDirection}.`
+    : `The bigger picture is ${String(bias.bias || "").toLowerCase()}. The ${timeframe} chart direction is not clear enough to judge.`;
 
-  const supportText = listAreas([...supportAreas, ...demandAreas], "buying area", 3);
-  const resistanceText = listAreas([...resistanceAreas, ...supplyAreas], "selling area", 3);
+  const quickVerdict =
+    visualReview?.quickVerdict ||
+    (String(bias.biasCode || "").includes("range")
+      ? "Wait. The market is not trending cleanly, so avoid chasing trades in the middle."
+      : "Wait for price to return to a clear support or resistance area before judging the setup.");
+
+  const whatThisMeans =
+    visualReview?.whatThisMeans ||
+    (String(bias.biasCode || "").includes("range")
+      ? "This means the trader should be patient and only act near the edge of the range."
+      : "This means the trader should wait for a cleaner reaction from a key area.");
+
+  const bestAreaToWatch =
+    visualReview?.bestAreaToWatch ||
+    "Watch the nearest clear support or resistance area and wait for price to react there.";
+
+  const mainWarning =
+    visualReview?.mainWarning ||
+    (failedAreas.length
+      ? "One or more key areas failed to hold, so do not keep trusting them without a fresh confirmation."
+      : String(bias.biasCode || "").includes("range")
+      ? "Avoid entering in the middle of the range. Wait for price to reach a clearer area."
+      : "Do not chase price after it has already moved. Wait for confirmation first.");
+
+  const coachVerdict =
+    visualReview?.coachVerdict ||
+    (overallScore >= 7
+      ? "The setup has some promise, but it still needs clear confirmation before it is considered clean."
+      : "This is more of a wait setup than an active trade setup.");
+
+  const supportText = listAreas([...supportAreas, ...demandAreas], "support area", 3);
+  const resistanceText = listAreas([...resistanceAreas, ...supplyAreas], "resistance area", 3);
 
   return `COACH VERDICT
 
+Quick Verdict:
+- ${quickVerdict}
+
 Market Direction:
 - ${directionSummary}
-- ${bias.higherTimeframeView || bias.reason}
 
-What The Uploaded Chart Shows:
-- ${visualReview?.visualSummary || "The uploaded chart was reviewed against the main support and resistance areas."}
-- ${visualReview?.timeframeSummary || "Short-term chart direction was not clear enough to judge."}
+What This Means:
+- ${whatThisMeans}
 
-Key Areas To Watch:
-Potential buying/support areas:
-${supportText}
-
-Potential selling/resistance areas:
-${resistanceText}
-
-Best Entry Area:
-- Wait for price to reach a clear support or resistance area first.
-- Avoid entering in the middle of the range unless there is a strong confirmation candle/pattern.
+Best Area To Watch:
+- ${bestAreaToWatch}
 
 Entry Confirmation:
-- ${visualReview?.entryEvidence || (chartDetection?.visibleTrigger ? `Visible confirmation detected: ${chartDetection.visibleTrigger}` : "No clear entry confirmation is visible yet. A bounce or pullback alone is not enough.")}
+- ${visualReview?.entryEvidence || (chartDetection?.visibleTrigger ? `A possible confirmation is visible: ${chartDetection.visibleTrigger}` : "No clear entry confirmation is visible yet.")}
 
 Stop Loss And Target:
-- ${visualReview?.riskEvidence || "No visible stop loss or target was clear enough to judge. A good setup should have a stop beyond the key area and enough space to the next target."}
+- ${visualReview?.riskEvidence || "No visible entry, stop loss, or target to judge. A good trade idea should show where the risk is and where the target is."}
 
-Main Mistake / Warning:
-- ${
-    failedAreas.length
-      ? "One or more key areas failed to hold, so do not keep treating those areas as valid without a fresh confirmation."
-      : String(bias.biasCode || "").includes("range")
-      ? "The bigger-picture market is not trending cleanly, so chasing entries in the middle can be risky."
-      : "Wait for price to react from a key area before judging the trade."
-  }
+Main Warning:
+- ${mainWarning}
 
-Trade Management:
-- If already in a trade, protect the position after price reaches the first trouble area.
-- If price does not move away cleanly from entry, reduce risk or wait for a better setup.
+Coach Verdict:
+- ${coachVerdict}
 
 Overall Setup Score:
 - ${overallScore}/10
 
 READ_MORE_DETAILS:
 
-Selected instrument: ${submittedInstrument}
-Selected timeframe: ${timeframe}
-Final date used: ${dateDecision?.finalDateText || "Not provided"}
-Latest visible chart date: ${chartDetection?.latestVisibleDate || "Not detected"}
-Chart data quality: ${chartDetection?.chartDataQuality || "unclear"}
+Bigger Picture:
+- ${bias.higherTimeframeView || bias.reason}
 
-Bigger-picture calculation:
-- Start price: ${formatPrice(bias.periodStartPrice)}
-- Current/review price: ${formatPrice(bias.presentPrice)}
+Uploaded Chart:
+- ${visualReview?.visualSummary || "The uploaded chart was reviewed using the main support and resistance areas."}
+- ${visualReview?.timeframeSummary || "Short-term direction was not clear enough to judge."}
+
+Key Areas To Watch:
+Support areas:
+${supportText}
+
+Resistance areas:
+${resistanceText}
+
+Trade Management:
+- If already in a trade, protect the position when price reaches the first trouble area.
+- If price does not move away cleanly from entry, reduce risk or wait for a better setup.
+
+Review Details:
+- Selected instrument: ${submittedInstrument}
+- Selected timeframe: ${timeframe}
+- Final date used: ${dateDecision?.finalDateText || "Not provided"}
+- Latest visible chart date: ${chartDetection?.latestVisibleDate || "Not detected"}
+- Chart data quality: ${chartDetection?.chartDataQuality || "unclear"}
 - Reviewed high: ${formatPrice(bias.periodHigh)}
 - Reviewed low: ${formatPrice(bias.periodLow)}
 - Higher closes: ${bias.risingCloses ?? "N/A"}
 - Lower closes: ${bias.fallingCloses ?? "N/A"}
 - Direction confidence: ${bias.confidence}
 
-Failed areas:
+Failed Areas:
 ${listFailedAreas(failedAreas)}
 
-Internal structure summary:
+Technical Structure Summary:
 ${buildSimpleStructureBreakdown(levels, normalizedSymbol)}`;
 }
 
@@ -1173,21 +1201,6 @@ function buildInstrumentMismatchAnalysis({ selectedInstrument, detectedInstrumen
 }
 function buildTimeframeMismatchAnalysis({ selectedInstrument, detectedInstrument, selectedTimeframe, detectedTimeframe }) {
   return `Chart Timeframe Mismatch\n\nSelected Instrument:\n${selectedInstrument || "Not provided"}\n\nDetected Chart Instrument:\n${detectedInstrument || "Not detected"}\n\nSelected Timeframe:\n${selectedTimeframe || "Not provided"}\n\nDetected Chart Timeframe:\n${detectedTimeframe || "Not detected"}`;
-}
-
-
-function buildUnverifiedChartContextAnalysis({ selectedInstrument, selectedTimeframe, chartDetection, contextVerification }) {
-  const detectedInstrument = chartDetection?.detectedInstrument || "Not detected";
-  const detectedTimeframe = chartDetection?.detectedTimeframe || "Not detected";
-
-  let issue = "The uploaded chart does not clearly confirm the selected instrument and timeframe.";
-  if (contextVerification?.instrumentMismatch) issue = "The selected instrument appears different from the uploaded chart.";
-  if (contextVerification?.timeframeMismatch) issue = "The selected timeframe appears different from the uploaded chart.";
-  if (contextVerification?.missingInstrument && contextVerification?.missingTimeframe) issue = "The uploaded chart does not clearly show a readable instrument and timeframe.";
-  else if (contextVerification?.missingInstrument) issue = "The uploaded chart does not clearly show a readable instrument/symbol.";
-  else if (contextVerification?.missingTimeframe) issue = "The uploaded chart does not clearly show a readable timeframe.";
-
-  return `Could Not Verify Chart Context\n\nSelected:\n- Instrument: ${selectedInstrument || "Not provided"}\n- Timeframe: ${selectedTimeframe || "Not provided"}\n\nUploaded chart detected:\n- Instrument: ${detectedInstrument}\n- Timeframe: ${detectedTimeframe}\n\nWhy analysis was stopped:\n- ${issue}\n- The coach must verify that the uploaded chart matches the selected market and timeframe before generating feedback.\n- This prevents the tool from reviewing Gold/H4, EURUSD/M15, or any selected dropdown using the wrong uploaded chart.\n\nHow to fix:\n- Upload a clearer screenshot where the symbol and timeframe are visible at the top of the chart.\n- Or change the selected instrument/timeframe to match the uploaded chart.\n- Then run the analysis again.`;
 }
 
 function buildStoppedDashboard({ errorType, error, submittedInstrument, timeframe, chartDetection, selectedTimeframeProfile }) {
@@ -1268,58 +1281,16 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       return stoppedResponse({ res, errorType: "selected_date_not_visible", error: "Selected chart/trade date is not visible or reasonably covered by the uploaded chart.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
 
-    const contextVerification = hasVerifiedChartContext({
-      selectedInstrument: normalizedSymbol || submittedInstrument,
-      selectedTimeframe: timeframe,
-      chartDetection,
-    });
+    const instrumentMismatch = hasStrongInstrumentMismatch({ selectedInstrument: normalizedSymbol || submittedInstrument, detectedInstrument: chartDetection.detectedInstrument });
+    if (instrumentMismatch) {
+      const analysis = buildInstrumentMismatchAnalysis({ selectedInstrument: submittedInstrument, detectedInstrument: chartDetection.detectedInstrument, selectedTimeframe: timeframe, detectedTimeframe: chartDetection.detectedTimeframe });
+      return stoppedResponse({ res, errorType: "instrument_mismatch", error: "Selected instrument does not match uploaded chart.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
+    }
 
-    if (!contextVerification.verified) {
-      const errorType = contextVerification.instrumentMismatch
-        ? "instrument_mismatch"
-        : contextVerification.timeframeMismatch
-        ? "timeframe_mismatch"
-        : "chart_context_not_verified";
-
-      const error = contextVerification.instrumentMismatch
-        ? "Selected instrument does not match uploaded chart."
-        : contextVerification.timeframeMismatch
-        ? "Selected timeframe does not match uploaded chart timeframe."
-        : "Uploaded chart context could not be verified.";
-
-      const analysis = contextVerification.instrumentMismatch
-        ? buildInstrumentMismatchAnalysis({
-            selectedInstrument: submittedInstrument,
-            detectedInstrument: chartDetection.detectedInstrument,
-            selectedTimeframe: timeframe,
-            detectedTimeframe: chartDetection.detectedTimeframe,
-          })
-        : contextVerification.timeframeMismatch
-        ? buildTimeframeMismatchAnalysis({
-            selectedInstrument: submittedInstrument,
-            detectedInstrument: chartDetection.detectedInstrument,
-            selectedTimeframe: timeframe,
-            detectedTimeframe: chartDetection.detectedTimeframe,
-          })
-        : buildUnverifiedChartContextAnalysis({
-            selectedInstrument: submittedInstrument,
-            selectedTimeframe: timeframe,
-            chartDetection,
-            contextVerification,
-          });
-
-      return stoppedResponse({
-        res,
-        errorType,
-        error,
-        analysis,
-        submittedInstrument,
-        timeframe,
-        chartDetection,
-        normalizedSymbol,
-        timezone,
-        selectedTimeframeProfile,
-      });
+    const timeframeMismatch = hasStrongTimeframeMismatch({ selectedTimeframe: timeframe, detectedTimeframe: chartDetection.detectedTimeframe });
+    if (timeframeMismatch) {
+      const analysis = buildTimeframeMismatchAnalysis({ selectedInstrument: submittedInstrument, detectedInstrument: chartDetection.detectedInstrument, selectedTimeframe: timeframe, detectedTimeframe: chartDetection.detectedTimeframe });
+      return stoppedResponse({ res, errorType: "timeframe_mismatch", error: "Selected timeframe does not match uploaded chart timeframe.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
 
     const dateDecision = chooseFinalChartDate({ selectedDate, detection: chartDetection, analysisType: mode });
