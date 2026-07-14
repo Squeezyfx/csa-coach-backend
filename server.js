@@ -59,7 +59,7 @@ Return exactly this JSON shape:
 const CONFIRMED_TRIGGER_WORDS = [
   "engulfing", "pin bar", "pinbar", "hammer", "doji", "inside bar", "lower high",
   "higher low", "breakout", "breakdown", "break-and-hold", "break and hold",
-  "head and shoulders", "quasimodo", "rejection", "retest-and-hold", "retest and hold"
+  "head and shoulders", "quasimodo", "channel", "flag", "triangle", "rejection"
 ];
 
 const CONTEXT_ONLY_TRIGGER_WORDS = [
@@ -402,6 +402,28 @@ function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupp
   const priceMove = presentPrice - periodStartPrice;
   const movePercentOfRange = Math.abs(priceMove) / fullRange;
 
+  const anchorHigh = Number(first.high);
+  const anchorLow = Number(first.low);
+  const anchorRange = Math.max(Math.abs(anchorHigh - anchorLow), getCleanBreakTolerance(symbol));
+  const anchorPositionPercent = Number.isFinite(presentPrice) && Number.isFinite(anchorHigh) && Number.isFinite(anchorLow)
+    ? ((presentPrice - anchorLow) / anchorRange) * 100
+    : null;
+  const anchorLabel = first.periodLabel || first.day || first.key || "the first key range";
+  let rangePositionNote = "Price position inside the first key range is not clear.";
+  if (Number.isFinite(anchorPositionPercent)) {
+    if (presentPrice > anchorHigh + getCleanBreakTolerance(symbol)) {
+      rangePositionNote = `Price is above ${anchorLabel} resistance around ${formatPrice(anchorHigh)}, which shows bullish breakout pressure.`;
+    } else if (presentPrice < anchorLow - getCleanBreakTolerance(symbol)) {
+      rangePositionNote = `Price is below ${anchorLabel} support around ${formatPrice(anchorLow)}, which shows bearish breakout pressure.`;
+    } else if (anchorPositionPercent >= 61.8) {
+      rangePositionNote = `Price is in the upper part of ${anchorLabel}'s range, closer to resistance around ${formatPrice(anchorHigh)}.`;
+    } else if (anchorPositionPercent <= 38.2) {
+      rangePositionNote = `Price is in the lower part of ${anchorLabel}'s range, closer to support around ${formatPrice(anchorLow)}.`;
+    } else {
+      rangePositionNote = `Price is around the middle of ${anchorLabel}'s range, between support around ${formatPrice(anchorLow)} and resistance around ${formatPrice(anchorHigh)}.`;
+    }
+  }
+
   let highBreakCount = 0;
   let lowBreakCount = 0;
   let risingCloses = 0;
@@ -481,6 +503,18 @@ function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupp
     confidence = scoreDifference >= 3 ? "high" : "medium";
   }
 
+  if (String(biasCode || "").includes("range") && Number.isFinite(anchorPositionPercent)) {
+    if (anchorPositionPercent <= 38.2) {
+      bias = "Range-bound with bearish pressure";
+      biasCode = "range_bearish";
+      traderBias = "The bigger-picture view is mostly sideways, but price is trading in the lower part of the first key range, so sellers have pressure for now.";
+    } else if (anchorPositionPercent >= 61.8) {
+      bias = "Range-bound with bullish pressure";
+      biasCode = "range_bullish";
+      traderBias = "The bigger-picture view is mostly sideways, but price is trading in the upper part of the first key range, so buyers have pressure for now.";
+    }
+  }
+
   const structureLabelForUsers =
     profile.structureMode === "daily-in-week"
       ? "this week's daily highs, lows, and closes"
@@ -496,6 +530,7 @@ function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupp
     `${traderBias} This is based on ${structureLabelForUsers}. ` +
     `Price opened around ${formatPrice(periodStartPrice)} and is now around ${formatPrice(presentPrice)}. ` +
     `The high of the reviewed period is ${formatPrice(periodHigh)} and the low is ${formatPrice(periodLow)}. ` +
+    `${rangePositionNote} ` +
     `Daily/period closes were mixed: ${risingCloses} higher close(s), ${fallingCloses} lower close(s).`;
 
   const timeframeView =
@@ -524,6 +559,11 @@ function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupp
     bullishScore,
     bearishScore,
     rangeScore,
+    anchorHigh,
+    anchorLow,
+    anchorLabel,
+    anchorPositionPercent,
+    rangePositionNote,
     reason: higherTimeframeView,
   };
 }
@@ -781,17 +821,12 @@ Your job:
   1. Is the bigger picture bullish, bearish, or ranging?
   2. What is the selected ${timeframe} chart doing right now?
   3. Should the trader wait, buy, sell, or avoid chasing?
-  4. Exactly where should price return before a better setup forms?
+  4. Where exactly should price return before a better setup forms? Always include support/resistance and the price level.
   5. Is there a clear entry confirmation?
   6. Is stop loss/target visible enough to judge?
-- Treat the internal method as mainly a trend-trading strategy:
-  - If the bigger-picture direction is clearly bullish, guide the user to wait for a pullback to a buying/support area before considering a buy.
-  - If the bigger-picture direction is clearly bearish, guide the user to wait for a pullback/rally to a selling/resistance area before considering a sell.
-  - If there is no clear direction, do not force a trend trade. Tell the user to buy only if price drops to support and holds, or sell only if price rises to resistance and rejects.
-- Every user-facing entry-area sentence must include the area type and price level.
-  - Bad: "Wait for price to drop back before considering a buy."
-  - Good: "Wait for price to drop back to support around 1.08450 before considering a buy."
-  - Good: "Wait for price to rise back to resistance around 1.09200 before considering a sell."
+- The internal range-position check may use the first key high/low like a Fibonacci/range-position guide, but user-facing wording should say it simply: "price is in the upper/middle/lower part of the range."
+- CSA is mainly a trend-trading strategy. If there is no clean trend yet, do not force a buy or sell. Give both sides: buy at support if it holds, or sell at resistance if it rejects.
+- Never write incomplete advice like "wait for price to drop back" without saying the exact support/resistance area and price.
 - Keep all user-facing answers short, plain, and useful.
 - Two different-looking charts must receive different strengths, weaknesses, mistake hub items, scores, and short-term chart direction.
 - Do not invent entries, stop loss, targets, or mistakes if they are not visible.
@@ -825,7 +860,7 @@ Return exactly this JSON shape:
   "plainMarketDirection": "one simple sentence combining bigger-picture direction and ${timeframe} chart direction",
   "whatThisMeans": "one simple sentence explaining what the trader should understand from the chart",
   "timeframeSummary": "one simple sentence describing what the uploaded ${timeframe} chart is doing",
-  "bestAreaToWatch": "one simple sentence saying the exact support/resistance area and price where price should return before a better setup",
+  "bestAreaToWatch": "one simple sentence saying exactly where price should return before a better setup, including support/resistance and price level",
   "visualSummary": "2 short beginner-friendly sentences. Mention bigger-picture direction and uploaded timeframe direction if different.",
   "chartMarkupAssessment": "simple comment about whether the important support/resistance areas are clear; do not mention trendlines/channels/indicators",
   "entryEvidence": "what entry evidence is visible, or 'No visible entry evidence'",
@@ -1054,95 +1089,128 @@ function buildSimpleStructureBreakdown(levels = [], normalizedSymbol = "") {
 }
 
 
-function getAreaDisplayName(area, fallback = "key area") {
-  if (!area) return fallback;
-  if (area.type === "support" || area.type === "demand") return "support";
-  if (area.type === "resistance" || area.type === "supply") return "resistance";
-  return fallback;
+
+function getFirstAnchorLabel(profile = getSupportedCsaTimeframeProfile("H1")) {
+  if (profile.structureMode === "daily-in-week") return "Monday";
+  if (profile.structureMode === "weekly-in-month") return "the first week";
+  if (profile.structureMode === "monthly-in-year") return "the first month";
+  if (profile.structureMode === "quarterly-in-year") return "the first quarter";
+  if (profile.structureMode === "yearly-in-multi-year") return "the first year";
+  return "the first key range";
 }
 
-function formatAreaForBeginner(area, fallback = "a clear key area") {
-  if (!area) return fallback;
-  const areaName = getAreaDisplayName(area);
-  const priceText = area.priceText || formatPrice(area.price);
-  return `${areaName} around ${priceText}`;
+function getInitialRangeAreas(levels = [], profile = getSupportedCsaTimeframeProfile("H1")) {
+  const first = Array.isArray(levels) && levels.length ? levels[0] : null;
+  const label = first?.periodLabel || first?.day || getFirstAnchorLabel(profile);
+  return {
+    label,
+    support: first && Number.isFinite(Number(first.low)) ? Number(first.low) : null,
+    resistance: first && Number.isFinite(Number(first.high)) ? Number(first.high) : null,
+  };
 }
 
-function pickNearestAreaByPrice(areas = [], currentPrice = null, side = "buy") {
-  const cleaned = areas.filter((area) => area && Number.isFinite(Number(area.price)));
-  if (!cleaned.length) return null;
-
+function getNearestAreaForDirection({ areas = [], levels = [], symbol = "", direction = "buy", currentPrice = null, profile = getSupportedCsaTimeframeProfile("H1") }) {
+  const initial = getInitialRangeAreas(levels, profile);
+  const tolerance = getCleanBreakTolerance(symbol);
   const price = Number(currentPrice);
-  if (!Number.isFinite(price)) {
-    return [...cleaned].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))[0];
+  const validAreas = areas.filter((area) => !areaBrokenByCloseLater(area, levels, symbol));
+
+  if (direction === "buy") {
+    const buyAreas = validAreas
+      .filter((area) => area.type === "support" || area.type === "demand")
+      .filter((area) => !Number.isFinite(price) || Number(area.price) <= price + tolerance)
+      .sort((a, b) => Math.abs(Number(a.price) - price) - Math.abs(Number(b.price) - price));
+
+    if (buyAreas.length) {
+      const area = buyAreas[0];
+      return { label: area.day || area.period || initial.label, type: "support", price: Number(area.price), priceText: area.priceText || formatPrice(area.price) };
+    }
+
+    return { label: initial.label, type: "support", price: initial.support, priceText: formatPrice(initial.support) };
   }
 
-  if (side === "buy") {
-    const below = cleaned.filter((area) => Number(area.price) <= price);
-    if (below.length) return below.sort((a, b) => Number(b.price) - Number(a.price))[0];
+  const sellAreas = validAreas
+    .filter((area) => area.type === "resistance" || area.type === "supply")
+    .filter((area) => !Number.isFinite(price) || Number(area.price) >= price - tolerance)
+    .sort((a, b) => Math.abs(Number(a.price) - price) - Math.abs(Number(b.price) - price));
+
+  if (sellAreas.length) {
+    const area = sellAreas[0];
+    return { label: area.day || area.period || initial.label, type: "resistance", price: Number(area.price), priceText: area.priceText || formatPrice(area.price) };
   }
 
-  if (side === "sell") {
-    const above = cleaned.filter((area) => Number(area.price) >= price);
-    if (above.length) return above.sort((a, b) => Number(a.price) - Number(b.price))[0];
-  }
-
-  return cleaned.sort((a, b) => Math.abs(Number(a.price) - price) - Math.abs(Number(b.price) - price))[0];
+  return { label: initial.label, type: "resistance", price: initial.resistance, priceText: formatPrice(initial.resistance) };
 }
 
-function hasPriceAndAreaReference(text = "") {
-  const value = String(text || "");
-  const hasPrice = /\d+\.\d+|\b\d{3,}\b/.test(value);
-  const hasArea = /(support|resistance|buying area|selling area|demand|supply)/i.test(value);
-  return hasPrice && hasArea;
+function getBiasGroup(biasCode = "") {
+  const code = String(biasCode || "").toLowerCase();
+  if (code === "bullish" || code === "slightly_bullish") return "bullish";
+  if (code === "bearish" || code === "slightly_bearish") return "bearish";
+  if (code === "range_bullish") return "range_bullish";
+  if (code === "range_bearish") return "range_bearish";
+  return "range";
 }
 
-function buildBeginnerTrendPlan({ bias = {}, buyingAreas = [], sellingAreas = [], currentPrice = null }) {
-  const biasCode = String(bias?.biasCode || "").toLowerCase();
-  const biasText = String(bias?.bias || "Unclear").toLowerCase();
-  const buyArea = pickNearestAreaByPrice(buyingAreas, currentPrice, "buy");
-  const sellArea = pickNearestAreaByPrice(sellingAreas, currentPrice, "sell");
-  const buyAreaText = formatAreaForBeginner(buyArea, "the nearest support area");
-  const sellAreaText = formatAreaForBeginner(sellArea, "the nearest resistance area");
+function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "", profile = getSupportedCsaTimeframeProfile("H1") }) {
+  const currentPrice = Number(bias.presentPrice);
+  const biasGroup = getBiasGroup(bias.biasCode);
+  const initial = getInitialRangeAreas(levels, profile);
+  const buyArea = getNearestAreaForDirection({ areas, levels, symbol, direction: "buy", currentPrice, profile });
+  const sellArea = getNearestAreaForDirection({ areas, levels, symbol, direction: "sell", currentPrice, profile });
 
-  const isClearBullish = biasCode === "bullish" || biasCode === "slightly_bullish" || biasText.includes("bullish");
-  const isClearBearish = biasCode === "bearish" || biasCode === "slightly_bearish" || biasText.includes("bearish");
-  const isRange = biasCode.includes("range") || biasText.includes("range") || biasText.includes("sideways") || biasCode === "mixed" || biasCode === "insufficient";
+  const initialSupportText = formatPrice(initial.support);
+  const initialResistanceText = formatPrice(initial.resistance);
+  const buyPriceText = buyArea.priceText || formatPrice(buyArea.price);
+  const sellPriceText = sellArea.priceText || formatPrice(sellArea.price);
 
-  if (isClearBullish && !isRange) {
-    return {
-      mode: "bullish-trend",
-      quickVerdict: `Wait for price to pull back to ${buyAreaText} before considering a buy.`,
-      whatThisMeans: `The main idea is to look for buys with the trend, but only after price returns to support and holds.`,
-      bestAreaToWatch: `Best buy area to watch: ${buyAreaText}. Only consider a buy if price holds this area and shows a clear bullish reaction.`,
-      entryConfirmation: `For a buy, wait for price to hold ${buyAreaText} and then show a clear bullish candle or strong rejection from that area.`,
-      mainWarning: `Do not buy just because price is moving up. Wait for the pullback to ${buyAreaText} first.`,
-      coachVerdict: `The better plan is to wait for a pullback to support, then look for confirmation before considering a buy.`,
-    };
-  }
+  let quickVerdict = "Wait for price to reach a clear area before taking action.";
+  let whatThisMeans = "The safest plan is to wait for price to reach support or resistance, then look for a clear reaction.";
+  let bestAreaToWatch = `Buy only if price drops to support around ${initialSupportText} and holds. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
+  let mainWarning = "Do not trade in the middle of the range. Wait for price to reach a clear support or resistance area first.";
+  let coachVerdict = "This is a wait setup until price reaches one of the key areas and shows a clear reaction.";
 
-  if (isClearBearish && !isRange) {
-    return {
-      mode: "bearish-trend",
-      quickVerdict: `Wait for price to rise back to ${sellAreaText} before considering a sell.`,
-      whatThisMeans: `The main idea is to look for sells with the trend, but only after price returns to resistance and rejects.`,
-      bestAreaToWatch: `Best sell area to watch: ${sellAreaText}. Only consider a sell if price rejects this area and shows a clear bearish reaction.`,
-      entryConfirmation: `For a sell, wait for price to reject ${sellAreaText} and then show a clear bearish candle or strong rejection from that area.`,
-      mainWarning: `Do not sell after price has already dropped too far. Wait for a pullback to ${sellAreaText} first.`,
-      coachVerdict: `The better plan is to wait for a pullback to resistance, then look for confirmation before considering a sell.`,
-    };
+  if (biasGroup === "bullish") {
+    quickVerdict = `Bullish plan: wait for price to pull back to support around ${buyPriceText} before considering a buy.`;
+    whatThisMeans = `The better buy idea is not to chase price now, but to wait for price to drop back to support around ${buyPriceText} and hold.`;
+    bestAreaToWatch = `For a buy, wait for price to drop back to support around ${buyPriceText} and then show a clear bullish candle or strong rejection from that area.`;
+    mainWarning = `Do not buy in the middle. Wait for support around ${buyPriceText} or a fresh breakout-and-hold before considering a buy.`;
+    coachVerdict = `The cleaner plan is to look for buys only after price holds support around ${buyPriceText}.`;
+  } else if (biasGroup === "bearish") {
+    quickVerdict = `Bearish plan: wait for price to rise back to resistance around ${sellPriceText} before considering a sell.`;
+    whatThisMeans = `The better sell idea is not to chase price now, but to wait for price to pull back up to resistance around ${sellPriceText} and reject.`;
+    bestAreaToWatch = `For a sell, wait for price to rise back to resistance around ${sellPriceText} and then show a clear bearish candle or strong rejection from that area.`;
+    mainWarning = `Do not sell after price has already dropped. Wait for resistance around ${sellPriceText} or a fresh breakdown-and-hold before considering a sell.`;
+    coachVerdict = `The cleaner plan is to look for sells only after price rejects resistance around ${sellPriceText}.`;
+  } else if (biasGroup === "range_bullish") {
+    quickVerdict = `No clean trend yet, but buyers have pressure. Buy only if price drops to support around ${initialSupportText} and holds.`;
+    whatThisMeans = `Price is still inside the main range, so support around ${initialSupportText} and resistance around ${initialResistanceText} are the key areas for now.`;
+    bestAreaToWatch = `Buy only if price drops to support around ${initialSupportText} and holds. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
+    mainWarning = `The market has not fully opened up yet. Do not chase; wait for support around ${initialSupportText} or resistance around ${initialResistanceText}.`;
+    coachVerdict = `For now, treat this as a range with bullish pressure until price clearly breaks above ${initialResistanceText} or below ${initialSupportText}.`;
+  } else if (biasGroup === "range_bearish") {
+    quickVerdict = `No clean trend yet, but sellers have pressure. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
+    whatThisMeans = `Price is still inside the main range, so support around ${initialSupportText} and resistance around ${initialResistanceText} are the key areas for now.`;
+    bestAreaToWatch = `Buy only if price drops to support around ${initialSupportText} and holds. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
+    mainWarning = `The market has not fully opened up yet. Do not chase; wait for support around ${initialSupportText} or resistance around ${initialResistanceText}.`;
+    coachVerdict = `For now, treat this as a range with bearish pressure until price clearly breaks below ${initialSupportText} or above ${initialResistanceText}.`;
   }
 
   return {
-    mode: "range-or-unclear",
-    quickVerdict: `Wait. There is no clean trend yet, so only trade from the edges of the range.`,
-    whatThisMeans: `For now, buying only makes sense near support and selling only makes sense near resistance.`,
-    bestAreaToWatch: `For now: consider a buy only if price drops to ${buyAreaText} and holds. Consider a sell only if price rises to ${sellAreaText} and rejects.`,
-    entryConfirmation: `Buy confirmation should happen at ${buyAreaText}. Sell confirmation should happen at ${sellAreaText}. Do not trade in the middle.`,
-    mainWarning: `The market has not opened up with a clear direction yet. Avoid forcing a trade in the middle of the range.`,
-    coachVerdict: `This is a wait setup. Let price reach support or resistance first, then decide based on the reaction.`,
+    biasGroup,
+    initialSupport: initial.support,
+    initialResistance: initial.resistance,
+    initialSupportText,
+    initialResistanceText,
+    buyArea,
+    sellArea,
+    quickVerdict,
+    whatThisMeans,
+    bestAreaToWatch,
+    mainWarning,
+    coachVerdict,
   };
 }
+
 
 function buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, visualReview = null, submittedInstrument, normalizedSymbol, timeframe }) {
   const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
@@ -1168,15 +1236,7 @@ Overall Setup Score:
   const bias = marketReference.directionalBias || calculateCsaDirectionalBias(levels, normalizedSymbol, profile);
   const { resistanceAreas, supportAreas, supplyAreas, demandAreas } = splitAreas(areas);
   const failedAreas = buildFailedAreas({ supportAreas, resistanceAreas, supplyAreas, demandAreas, levels, symbol: normalizedSymbol });
-  const validBuyingAreas = filterValidAreas([...supportAreas, ...demandAreas], levels, normalizedSymbol);
-  const validSellingAreas = filterValidAreas([...resistanceAreas, ...supplyAreas], levels, normalizedSymbol);
-  const currentPrice = Number(bias.presentPrice);
-  const trendPlan = buildBeginnerTrendPlan({
-    bias,
-    buyingAreas: validBuyingAreas.length ? validBuyingAreas : [...supportAreas, ...demandAreas],
-    sellingAreas: validSellingAreas.length ? validSellingAreas : [...resistanceAreas, ...supplyAreas],
-    currentPrice,
-  });
+  const trendPlan = buildBeginnerTrendPlan({ levels, areas, bias, symbol: normalizedSymbol, profile });
 
   const overallScore =
     Number.isFinite(Number(visualReview?.setupQualityScore)) && Number(visualReview.setupQualityScore) >= 20
@@ -1193,32 +1253,21 @@ Overall Setup Score:
     ? `The bigger picture is ${String(bias.bias || "").toLowerCase()}, while the ${timeframe} chart is ${visualReview.shortTermDirection}.`
     : `The bigger picture is ${String(bias.bias || "").toLowerCase()}. The ${timeframe} chart direction is not clear enough to judge.`;
 
-  const quickVerdict = visualReview?.quickVerdict || trendPlan.quickVerdict;
+  const quickVerdict = trendPlan.quickVerdict;
 
-  const whatThisMeans = visualReview?.whatThisMeans || trendPlan.whatThisMeans;
+  const whatThisMeans = trendPlan.whatThisMeans;
 
-  const bestAreaToWatch =
-    visualReview?.bestAreaToWatch && hasPriceAndAreaReference(visualReview.bestAreaToWatch)
-      ? visualReview.bestAreaToWatch
-      : trendPlan.bestAreaToWatch;
+  const bestAreaToWatch = trendPlan.bestAreaToWatch;
 
-  const entryConfirmationText =
-    visualReview?.entryEvidence && !/no visible entry evidence/i.test(visualReview.entryEvidence)
-      ? visualReview.entryEvidence
-      : chartDetection?.visibleTrigger
-      ? `A possible confirmation is visible: ${chartDetection.visibleTrigger}. Still make sure it happened at the key area mentioned above.`
-      : trendPlan.entryConfirmation;
+  const mainWarning =
+    failedAreas.length
+      ? "One or more key areas failed to hold, so do not keep trusting them without a fresh confirmation."
+      : trendPlan.mainWarning;
 
-  const riskEvidenceText =
-    visualReview?.riskEvidence ||
-    "No visible entry, stop loss, or target to judge. A good trade idea should show where the risk is and where the target is.";
+  const coachVerdict = trendPlan.coachVerdict;
 
-  const mainWarning = visualReview?.mainWarning || trendPlan.mainWarning;
-
-  const coachVerdict = visualReview?.coachVerdict || trendPlan.coachVerdict;
-
-  const supportText = listAreas(validBuyingAreas.length ? validBuyingAreas : [...supportAreas, ...demandAreas], "support area", 3);
-  const resistanceText = listAreas(validSellingAreas.length ? validSellingAreas : [...resistanceAreas, ...supplyAreas], "resistance area", 3);
+  const supportText = listAreas([...supportAreas, ...demandAreas], "support area", 3);
+  const resistanceText = listAreas([...resistanceAreas, ...supplyAreas], "resistance area", 3);
 
   return `COACH VERDICT
 
@@ -1235,10 +1284,10 @@ Best Area To Watch:
 - ${bestAreaToWatch}
 
 Entry Confirmation:
-- ${entryConfirmationText}
+- ${visualReview?.entryEvidence || (chartDetection?.visibleTrigger ? `A possible confirmation is visible: ${chartDetection.visibleTrigger}` : "No clear entry confirmation is visible yet.")}
 
 Stop Loss And Target:
-- ${riskEvidenceText}
+- ${visualReview?.riskEvidence || "No visible entry, stop loss, or target to judge. A good trade idea should show where the risk is and where the target is."}
 
 Main Warning:
 - ${mainWarning}
@@ -1253,6 +1302,13 @@ READ_MORE_DETAILS:
 
 Bigger Picture:
 - ${bias.higherTimeframeView || bias.reason}
+- Range position guide: ${bias.rangePositionNote || "Not available."}
+
+Trend Trading Plan:
+- Main support to watch: ${trendPlan.initialSupportText}
+- Main resistance to watch: ${trendPlan.initialResistanceText}
+- Buy plan: wait for price to drop to support around ${trendPlan.initialSupportText} and hold before considering a buy.
+- Sell plan: wait for price to rise to resistance around ${trendPlan.initialResistanceText} and reject before considering a sell.
 
 Uploaded Chart:
 - ${visualReview?.visualSummary || "The uploaded chart was reviewed using the main support and resistance areas."}
