@@ -59,7 +59,7 @@ Return exactly this JSON shape:
 const CONFIRMED_TRIGGER_WORDS = [
   "engulfing", "pin bar", "pinbar", "hammer", "doji", "inside bar", "lower high",
   "higher low", "breakout", "breakdown", "break-and-hold", "break and hold",
-  "head and shoulders", "quasimodo", "channel", "flag", "triangle", "rejection"
+  "head and shoulders", "quasimodo", "rejection", "retest-and-hold", "retest and hold"
 ];
 
 const CONTEXT_ONLY_TRIGGER_WORDS = [
@@ -781,9 +781,17 @@ Your job:
   1. Is the bigger picture bullish, bearish, or ranging?
   2. What is the selected ${timeframe} chart doing right now?
   3. Should the trader wait, buy, sell, or avoid chasing?
-  4. Where should price return before a better setup forms?
+  4. Exactly where should price return before a better setup forms?
   5. Is there a clear entry confirmation?
   6. Is stop loss/target visible enough to judge?
+- Treat the internal method as mainly a trend-trading strategy:
+  - If the bigger-picture direction is clearly bullish, guide the user to wait for a pullback to a buying/support area before considering a buy.
+  - If the bigger-picture direction is clearly bearish, guide the user to wait for a pullback/rally to a selling/resistance area before considering a sell.
+  - If there is no clear direction, do not force a trend trade. Tell the user to buy only if price drops to support and holds, or sell only if price rises to resistance and rejects.
+- Every user-facing entry-area sentence must include the area type and price level.
+  - Bad: "Wait for price to drop back before considering a buy."
+  - Good: "Wait for price to drop back to support around 1.08450 before considering a buy."
+  - Good: "Wait for price to rise back to resistance around 1.09200 before considering a sell."
 - Keep all user-facing answers short, plain, and useful.
 - Two different-looking charts must receive different strengths, weaknesses, mistake hub items, scores, and short-term chart direction.
 - Do not invent entries, stop loss, targets, or mistakes if they are not visible.
@@ -817,7 +825,7 @@ Return exactly this JSON shape:
   "plainMarketDirection": "one simple sentence combining bigger-picture direction and ${timeframe} chart direction",
   "whatThisMeans": "one simple sentence explaining what the trader should understand from the chart",
   "timeframeSummary": "one simple sentence describing what the uploaded ${timeframe} chart is doing",
-  "bestAreaToWatch": "one simple sentence saying where price should return before a better setup",
+  "bestAreaToWatch": "one simple sentence saying the exact support/resistance area and price where price should return before a better setup",
   "visualSummary": "2 short beginner-friendly sentences. Mention bigger-picture direction and uploaded timeframe direction if different.",
   "chartMarkupAssessment": "simple comment about whether the important support/resistance areas are clear; do not mention trendlines/channels/indicators",
   "entryEvidence": "what entry evidence is visible, or 'No visible entry evidence'",
@@ -1046,6 +1054,96 @@ function buildSimpleStructureBreakdown(levels = [], normalizedSymbol = "") {
 }
 
 
+function getAreaDisplayName(area, fallback = "key area") {
+  if (!area) return fallback;
+  if (area.type === "support" || area.type === "demand") return "support";
+  if (area.type === "resistance" || area.type === "supply") return "resistance";
+  return fallback;
+}
+
+function formatAreaForBeginner(area, fallback = "a clear key area") {
+  if (!area) return fallback;
+  const areaName = getAreaDisplayName(area);
+  const priceText = area.priceText || formatPrice(area.price);
+  return `${areaName} around ${priceText}`;
+}
+
+function pickNearestAreaByPrice(areas = [], currentPrice = null, side = "buy") {
+  const cleaned = areas.filter((area) => area && Number.isFinite(Number(area.price)));
+  if (!cleaned.length) return null;
+
+  const price = Number(currentPrice);
+  if (!Number.isFinite(price)) {
+    return [...cleaned].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))[0];
+  }
+
+  if (side === "buy") {
+    const below = cleaned.filter((area) => Number(area.price) <= price);
+    if (below.length) return below.sort((a, b) => Number(b.price) - Number(a.price))[0];
+  }
+
+  if (side === "sell") {
+    const above = cleaned.filter((area) => Number(area.price) >= price);
+    if (above.length) return above.sort((a, b) => Number(a.price) - Number(b.price))[0];
+  }
+
+  return cleaned.sort((a, b) => Math.abs(Number(a.price) - price) - Math.abs(Number(b.price) - price))[0];
+}
+
+function hasPriceAndAreaReference(text = "") {
+  const value = String(text || "");
+  const hasPrice = /\d+\.\d+|\b\d{3,}\b/.test(value);
+  const hasArea = /(support|resistance|buying area|selling area|demand|supply)/i.test(value);
+  return hasPrice && hasArea;
+}
+
+function buildBeginnerTrendPlan({ bias = {}, buyingAreas = [], sellingAreas = [], currentPrice = null }) {
+  const biasCode = String(bias?.biasCode || "").toLowerCase();
+  const biasText = String(bias?.bias || "Unclear").toLowerCase();
+  const buyArea = pickNearestAreaByPrice(buyingAreas, currentPrice, "buy");
+  const sellArea = pickNearestAreaByPrice(sellingAreas, currentPrice, "sell");
+  const buyAreaText = formatAreaForBeginner(buyArea, "the nearest support area");
+  const sellAreaText = formatAreaForBeginner(sellArea, "the nearest resistance area");
+
+  const isClearBullish = biasCode === "bullish" || biasCode === "slightly_bullish" || biasText.includes("bullish");
+  const isClearBearish = biasCode === "bearish" || biasCode === "slightly_bearish" || biasText.includes("bearish");
+  const isRange = biasCode.includes("range") || biasText.includes("range") || biasText.includes("sideways") || biasCode === "mixed" || biasCode === "insufficient";
+
+  if (isClearBullish && !isRange) {
+    return {
+      mode: "bullish-trend",
+      quickVerdict: `Wait for price to pull back to ${buyAreaText} before considering a buy.`,
+      whatThisMeans: `The main idea is to look for buys with the trend, but only after price returns to support and holds.`,
+      bestAreaToWatch: `Best buy area to watch: ${buyAreaText}. Only consider a buy if price holds this area and shows a clear bullish reaction.`,
+      entryConfirmation: `For a buy, wait for price to hold ${buyAreaText} and then show a clear bullish candle or strong rejection from that area.`,
+      mainWarning: `Do not buy just because price is moving up. Wait for the pullback to ${buyAreaText} first.`,
+      coachVerdict: `The better plan is to wait for a pullback to support, then look for confirmation before considering a buy.`,
+    };
+  }
+
+  if (isClearBearish && !isRange) {
+    return {
+      mode: "bearish-trend",
+      quickVerdict: `Wait for price to rise back to ${sellAreaText} before considering a sell.`,
+      whatThisMeans: `The main idea is to look for sells with the trend, but only after price returns to resistance and rejects.`,
+      bestAreaToWatch: `Best sell area to watch: ${sellAreaText}. Only consider a sell if price rejects this area and shows a clear bearish reaction.`,
+      entryConfirmation: `For a sell, wait for price to reject ${sellAreaText} and then show a clear bearish candle or strong rejection from that area.`,
+      mainWarning: `Do not sell after price has already dropped too far. Wait for a pullback to ${sellAreaText} first.`,
+      coachVerdict: `The better plan is to wait for a pullback to resistance, then look for confirmation before considering a sell.`,
+    };
+  }
+
+  return {
+    mode: "range-or-unclear",
+    quickVerdict: `Wait. There is no clean trend yet, so only trade from the edges of the range.`,
+    whatThisMeans: `For now, buying only makes sense near support and selling only makes sense near resistance.`,
+    bestAreaToWatch: `For now: consider a buy only if price drops to ${buyAreaText} and holds. Consider a sell only if price rises to ${sellAreaText} and rejects.`,
+    entryConfirmation: `Buy confirmation should happen at ${buyAreaText}. Sell confirmation should happen at ${sellAreaText}. Do not trade in the middle.`,
+    mainWarning: `The market has not opened up with a clear direction yet. Avoid forcing a trade in the middle of the range.`,
+    coachVerdict: `This is a wait setup. Let price reach support or resistance first, then decide based on the reaction.`,
+  };
+}
+
 function buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, visualReview = null, submittedInstrument, normalizedSymbol, timeframe }) {
   const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
 
@@ -1070,6 +1168,15 @@ Overall Setup Score:
   const bias = marketReference.directionalBias || calculateCsaDirectionalBias(levels, normalizedSymbol, profile);
   const { resistanceAreas, supportAreas, supplyAreas, demandAreas } = splitAreas(areas);
   const failedAreas = buildFailedAreas({ supportAreas, resistanceAreas, supplyAreas, demandAreas, levels, symbol: normalizedSymbol });
+  const validBuyingAreas = filterValidAreas([...supportAreas, ...demandAreas], levels, normalizedSymbol);
+  const validSellingAreas = filterValidAreas([...resistanceAreas, ...supplyAreas], levels, normalizedSymbol);
+  const currentPrice = Number(bias.presentPrice);
+  const trendPlan = buildBeginnerTrendPlan({
+    bias,
+    buyingAreas: validBuyingAreas.length ? validBuyingAreas : [...supportAreas, ...demandAreas],
+    sellingAreas: validSellingAreas.length ? validSellingAreas : [...resistanceAreas, ...supplyAreas],
+    currentPrice,
+  });
 
   const overallScore =
     Number.isFinite(Number(visualReview?.setupQualityScore)) && Number(visualReview.setupQualityScore) >= 20
@@ -1086,38 +1193,32 @@ Overall Setup Score:
     ? `The bigger picture is ${String(bias.bias || "").toLowerCase()}, while the ${timeframe} chart is ${visualReview.shortTermDirection}.`
     : `The bigger picture is ${String(bias.bias || "").toLowerCase()}. The ${timeframe} chart direction is not clear enough to judge.`;
 
-  const quickVerdict =
-    visualReview?.quickVerdict ||
-    (String(bias.biasCode || "").includes("range")
-      ? "Wait. The market is not trending cleanly, so avoid chasing trades in the middle."
-      : "Wait for price to return to a clear support or resistance area before judging the setup.");
+  const quickVerdict = visualReview?.quickVerdict || trendPlan.quickVerdict;
 
-  const whatThisMeans =
-    visualReview?.whatThisMeans ||
-    (String(bias.biasCode || "").includes("range")
-      ? "This means the trader should be patient and only act near the edge of the range."
-      : "This means the trader should wait for a cleaner reaction from a key area.");
+  const whatThisMeans = visualReview?.whatThisMeans || trendPlan.whatThisMeans;
 
   const bestAreaToWatch =
-    visualReview?.bestAreaToWatch ||
-    "Watch the nearest clear support or resistance area and wait for price to react there.";
+    visualReview?.bestAreaToWatch && hasPriceAndAreaReference(visualReview.bestAreaToWatch)
+      ? visualReview.bestAreaToWatch
+      : trendPlan.bestAreaToWatch;
 
-  const mainWarning =
-    visualReview?.mainWarning ||
-    (failedAreas.length
-      ? "One or more key areas failed to hold, so do not keep trusting them without a fresh confirmation."
-      : String(bias.biasCode || "").includes("range")
-      ? "Avoid entering in the middle of the range. Wait for price to reach a clearer area."
-      : "Do not chase price after it has already moved. Wait for confirmation first.");
+  const entryConfirmationText =
+    visualReview?.entryEvidence && !/no visible entry evidence/i.test(visualReview.entryEvidence)
+      ? visualReview.entryEvidence
+      : chartDetection?.visibleTrigger
+      ? `A possible confirmation is visible: ${chartDetection.visibleTrigger}. Still make sure it happened at the key area mentioned above.`
+      : trendPlan.entryConfirmation;
 
-  const coachVerdict =
-    visualReview?.coachVerdict ||
-    (overallScore >= 7
-      ? "The setup has some promise, but it still needs clear confirmation before it is considered clean."
-      : "This is more of a wait setup than an active trade setup.");
+  const riskEvidenceText =
+    visualReview?.riskEvidence ||
+    "No visible entry, stop loss, or target to judge. A good trade idea should show where the risk is and where the target is.";
 
-  const supportText = listAreas([...supportAreas, ...demandAreas], "support area", 3);
-  const resistanceText = listAreas([...resistanceAreas, ...supplyAreas], "resistance area", 3);
+  const mainWarning = visualReview?.mainWarning || trendPlan.mainWarning;
+
+  const coachVerdict = visualReview?.coachVerdict || trendPlan.coachVerdict;
+
+  const supportText = listAreas(validBuyingAreas.length ? validBuyingAreas : [...supportAreas, ...demandAreas], "support area", 3);
+  const resistanceText = listAreas(validSellingAreas.length ? validSellingAreas : [...resistanceAreas, ...supplyAreas], "resistance area", 3);
 
   return `COACH VERDICT
 
@@ -1134,10 +1235,10 @@ Best Area To Watch:
 - ${bestAreaToWatch}
 
 Entry Confirmation:
-- ${visualReview?.entryEvidence || (chartDetection?.visibleTrigger ? `A possible confirmation is visible: ${chartDetection.visibleTrigger}` : "No clear entry confirmation is visible yet.")}
+- ${entryConfirmationText}
 
 Stop Loss And Target:
-- ${visualReview?.riskEvidence || "No visible entry, stop loss, or target to judge. A good trade idea should show where the risk is and where the target is."}
+- ${riskEvidenceText}
 
 Main Warning:
 - ${mainWarning}
