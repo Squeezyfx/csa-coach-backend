@@ -296,9 +296,9 @@ function getMultiYearRangeForDate(chartDate, yearsBack = 4, useFullFinalYear = f
 }
 
 function getStructureRangeForProfile(chartDate, profile, analysisType = "post-trade") {
-  // Use data only up to the selected chart/trade date.
-  // This prevents Tuesday charts from being judged with Wednesday-Friday data
-  // and keeps Monday high/low as the active range until it is actually broken.
+  // IMPORTANT: Always stop at the selected chart/trade date.
+  // Do not use candles after the selected date to judge the current setup.
+  // Example: if the selected date is Tuesday, the review must not use Wednesday-Friday data.
   const useFull = false;
   if (profile.structureMode === "daily-in-week") return getWeekRangeForDate(chartDate, useFull);
   if (profile.structureMode === "weekly-in-month") return getMonthRangeForDate(chartDate, useFull);
@@ -782,19 +782,11 @@ function buildCsaFrameworkSummaryForVision(marketReference = {}) {
     return `- ${area.day || area.period || area.date}: ${userType} around ${area.priceText || formatPrice(area.price)}`;
   });
 
-  const initialStatus = getInitialRangeStatus(levels, marketReference?.symbol || "", profile);
-  const activeRangeRule = initialStatus?.hasInitialRange
-    ? initialStatus.isStillInsideInitialRange
-      ? `Active rule: ${initialStatus.label} high around ${initialStatus.resistanceText} and ${initialStatus.label} low around ${initialStatus.supportText} have not been broken. Use ONLY those two areas for now. Do not choose smaller internal levels as main resistance/support.`
-      : `Active rule: ${initialStatus.rangeMessage}`
-    : "Active rule: first key range is not available.";
-
   return [
     `Internal structure source: ${profile.structureLabel || "Not available"}`,
     `Reviewed range: ${marketReference?.weekRange ? `${marketReference.weekRange.startDate} to ${marketReference.weekRange.endDate}` : "Not available"}`,
     `Bigger-picture direction: ${bias.bias || "Not available"} (${bias.confidence || "low"} confidence)`,
     `Plain-language direction note: ${bias.higherTimeframeView || bias.reason || "Not available"}`,
-    activeRangeRule,
     "",
     "Key highs/lows/closes:",
     levelLines.length ? levelLines.join("\n") : "- No levels available.",
@@ -842,8 +834,6 @@ Your job:
 - Two different-looking charts must receive different strengths, weaknesses, mistake hub items, scores, and short-term chart direction.
 - Do not invent entries, stop loss, targets, or mistakes if they are not visible.
 - If no entry/SL/TP is visible, say "No visible entry, stop loss, or target to judge."
-- If the internal notes say the first key high/low has not been broken, you MUST use ONLY the first key high as resistance and the first key low as support. Do not choose any smaller internal level as the main resistance/support.
-- If the first key high/low has not been broken, say the possible rejection areas are not the preferred trend-trading setup; the preferred setup is breakout, pullback, and retest.
 - If the bigger-picture view and uploaded chart timeframe disagree, state both clearly.
   Example: "The bigger picture is slightly bearish, but the ${timeframe} chart is pushing up short-term."
 - Do not give financial advice or guaranteed predictions. This is only chart feedback.
@@ -1133,8 +1123,8 @@ function getInitialRangeStatus(levels = [], symbol = "", profile = getSupportedC
     supportText: formatPrice(support),
     resistanceText: formatPrice(resistance),
     hasInitialRange: Number.isFinite(support) && Number.isFinite(resistance),
-    highBroken: false,
-    lowBroken: false,
+    wickAboveHigh: false,
+    wickBelowLow: false,
     closeAboveHigh: false,
     closeBelowLow: false,
     isStillInsideInitialRange: false,
@@ -1142,30 +1132,37 @@ function getInitialRangeStatus(levels = [], symbol = "", profile = getSupportedC
     rangeMessage: "",
   };
 
-  if (!status.hasInitialRange || !Array.isArray(levels) || levels.length < 2) {
-    status.isStillInsideInitialRange = status.hasInitialRange;
-    status.rangeMessage = status.hasInitialRange
-      ? `Price is still being judged against ${initial.label} support around ${status.supportText} and resistance around ${status.resistanceText}.`
-      : "The first key support/resistance range is not available.";
+  if (!status.hasInitialRange) {
+    status.rangeMessage = "The first key support/resistance range is not available.";
+    return status;
+  }
+
+  // If only the first period exists, nothing after it has broken the range yet.
+  if (!Array.isArray(levels) || levels.length < 2) {
+    status.isStillInsideInitialRange = true;
+    status.rangeMessage = `${initial.label} resistance around ${status.resistanceText} and ${initial.label} support around ${status.supportText} are the only active areas for now.`;
     return status;
   }
 
   const laterLevels = levels.slice(1);
-  status.highBroken = laterLevels.some((item) => Number(item.high) > resistance + tolerance);
-  status.lowBroken = laterLevels.some((item) => Number(item.low) < support - tolerance);
+
+  // Wicks are recorded, but a trend breakout is only accepted after a close beyond the first range.
+  // This prevents smaller internal levels from replacing Monday high/low too early.
+  status.wickAboveHigh = laterLevels.some((item) => Number(item.high) > resistance + tolerance);
+  status.wickBelowLow = laterLevels.some((item) => Number(item.low) < support - tolerance);
   status.closeAboveHigh = laterLevels.some((item) => Number(item.close) > resistance + tolerance);
   status.closeBelowLow = laterLevels.some((item) => Number(item.close) < support - tolerance);
-  status.isStillInsideInitialRange = !status.highBroken && !status.lowBroken;
+  status.isStillInsideInitialRange = !status.closeAboveHigh && !status.closeBelowLow;
 
-  if (status.closeAboveHigh || status.highBroken) status.breakoutDirection = "up";
-  if (status.closeBelowLow || status.lowBroken) status.breakoutDirection = status.breakoutDirection === "up" ? "both" : "down";
+  if (status.closeAboveHigh) status.breakoutDirection = "up";
+  if (status.closeBelowLow) status.breakoutDirection = status.breakoutDirection === "up" ? "both" : "down";
 
   status.rangeMessage = status.isStillInsideInitialRange
-    ? `${initial.label} high around ${status.resistanceText} and ${initial.label} low around ${status.supportText} have not been broken yet. For now, those are the only main rejection areas.`
+    ? `${initial.label} high around ${status.resistanceText} and ${initial.label} low around ${status.supportText} have not closed broken yet. For now, those remain the only main rejection areas.`
     : status.breakoutDirection === "up"
-    ? `Price has broken above ${initial.label} resistance around ${status.resistanceText}. The better trend setup is to wait for a pullback/retest of that broken resistance as support.`
+    ? `Price has closed above ${initial.label} resistance around ${status.resistanceText}. The better trend setup is to wait for a pullback/retest of that broken resistance as support.`
     : status.breakoutDirection === "down"
-    ? `Price has broken below ${initial.label} support around ${status.supportText}. The better trend setup is to wait for a pullback/retest of that broken support as resistance.`
+    ? `Price has closed below ${initial.label} support around ${status.supportText}. The better trend setup is to wait for a pullback/retest of that broken support as resistance.`
     : `Price has moved outside ${initial.label}'s range. Wait for a clear retest before judging the next setup.`;
 
   return status;
@@ -1219,9 +1216,10 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
   const initialStatus = getInitialRangeStatus(levels, symbol, profile);
   const initial = getInitialRangeAreas(levels, profile);
 
-  // Important CSA rule:
-  // Until the first key high/low is broken, do not use smaller internal areas
-  // as the main entry areas. The active areas are the first high and first low.
+  // Core CSA trend-trading rule:
+  // Until the first key high/low closes broken, do not use smaller internal levels
+  // as the main entry areas. The active areas remain the first high and first low.
+  // For H1/M15/M30/M5/M1 this means Monday high = resistance and Monday low = support.
   const useInitialRangeOnly = initialStatus.hasInitialRange && initialStatus.isStillInsideInitialRange;
 
   const buyArea = useInitialRangeOnly
@@ -1248,9 +1246,9 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
     quickVerdict = `Wait. Price is still inside ${initial.label}'s range.`;
     whatThisMeans = `${initialStatus.rangeMessage} This is not the preferred trend-trading setup yet.`;
     bestAreaToWatch = `For now, the only main areas are ${initial.label} support around ${initialSupportText} and ${initial.label} resistance around ${initialResistanceText}. A buy is only a possible rejection from support; a sell is only a possible rejection from resistance.`;
-    mainWarning = `Do not use smaller internal levels as the main entry area yet. Wait for a break above ${initialResistanceText} or below ${initialSupportText}, then wait for a pullback/retest.`;
-    coachVerdict = `Not recommended as a trend trade yet. Price needs to break ${initial.label}'s high around ${initialResistanceText} or ${initial.label}'s low around ${initialSupportText} before the cleaner trend setup forms.`;
-    preferredTrendSetup = `Preferred setup: break above ${initialResistanceText} then retest for buys, or break below ${initialSupportText} then retest for sells. Until then, only possible rejection trades exist at those two levels.`;
+    mainWarning = `Do not use smaller internal levels as the main entry area yet. Wait for a close above ${initialResistanceText} or below ${initialSupportText}, then wait for a pullback/retest.`;
+    coachVerdict = `Not recommended as a trend trade yet. Price needs to close above ${initial.label}'s high around ${initialResistanceText} or close below ${initial.label}'s low around ${initialSupportText} before the cleaner trend setup forms.`;
+    preferredTrendSetup = `Preferred setup: close above ${initialResistanceText} then retest for buys, or close below ${initialSupportText} then retest for sells. Until then, only possible rejection trades exist at those two levels.`;
   } else if (biasGroup === "bullish") {
     quickVerdict = `Bullish plan: wait for price to pull back to support around ${buyPriceText} before considering a buy.`;
     whatThisMeans = `The better buy idea is not to chase price now, but to wait for price to drop back to support around ${buyPriceText} and hold.`;
@@ -1268,13 +1266,13 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
     whatThisMeans = `Price is still inside the main range, so support around ${initialSupportText} and resistance around ${initialResistanceText} are the key areas for now.`;
     bestAreaToWatch = `Buy only if price drops to support around ${initialSupportText} and holds. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
     mainWarning = `The market has not fully opened up yet. Do not chase; wait for support around ${initialSupportText} or resistance around ${initialResistanceText}.`;
-    coachVerdict = `For now, treat this as a range with bullish pressure until price clearly breaks above ${initialResistanceText} or below ${initialSupportText}.`;
+    coachVerdict = `For now, treat this as a range with bullish pressure until price clearly closes above ${initialResistanceText} or below ${initialSupportText}.`;
   } else if (biasGroup === "range_bearish") {
     quickVerdict = `No clean trend yet, but sellers have pressure. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
     whatThisMeans = `Price is still inside the main range, so support around ${initialSupportText} and resistance around ${initialResistanceText} are the key areas for now.`;
     bestAreaToWatch = `Buy only if price drops to support around ${initialSupportText} and holds. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
     mainWarning = `The market has not fully opened up yet. Do not chase; wait for support around ${initialSupportText} or resistance around ${initialResistanceText}.`;
-    coachVerdict = `For now, treat this as a range with bearish pressure until price clearly breaks below ${initialSupportText} or above ${initialResistanceText}.`;
+    coachVerdict = `For now, treat this as a range with bearish pressure until price clearly closes below ${initialSupportText} or above ${initialResistanceText}.`;
   }
 
   return {
@@ -1295,7 +1293,6 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
     preferredTrendSetup,
   };
 }
-
 
 function buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, visualReview = null, submittedInstrument, normalizedSymbol, timeframe }) {
   const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
@@ -1351,12 +1348,8 @@ Overall Setup Score:
 
   const coachVerdict = trendPlan.coachVerdict;
 
-  const supportText = trendPlan.useInitialRangeOnly
-    ? `- ${trendPlan.initialRangeStatus.label} support: ${trendPlan.initialSupportText}`
-    : listAreas([...supportAreas, ...demandAreas], "support area", 3);
-  const resistanceText = trendPlan.useInitialRangeOnly
-    ? `- ${trendPlan.initialRangeStatus.label} resistance: ${trendPlan.initialResistanceText}`
-    : listAreas([...resistanceAreas, ...supplyAreas], "resistance area", 3);
+  const supportText = listAreas([...supportAreas, ...demandAreas], "support area", 3);
+  const resistanceText = listAreas([...resistanceAreas, ...supplyAreas], "resistance area", 3);
 
   return `COACH VERDICT
 
@@ -1373,7 +1366,7 @@ Best Area To Watch:
 - ${bestAreaToWatch}
 
 Preferred Trend Setup:
-- ${trendPlan.preferredTrendSetup}
+- ${trendPlan.preferredTrendSetup || "The preferred trend setup is breakout, pullback, and retest."}
 
 Entry Confirmation:
 - ${visualReview?.entryEvidence || (chartDetection?.visibleTrigger ? `A possible confirmation is visible: ${chartDetection.visibleTrigger}` : "No clear entry confirmation is visible yet.")}
@@ -1397,12 +1390,10 @@ Bigger Picture:
 - Range position guide: ${bias.rangePositionNote || "Not available."}
 
 Trend Trading Plan:
-- Active range status: ${trendPlan.initialRangeStatus?.rangeMessage || "Not available."}
 - Main support to watch: ${trendPlan.initialSupportText}
 - Main resistance to watch: ${trendPlan.initialResistanceText}
 - Buy plan: wait for price to drop to support around ${trendPlan.initialSupportText} and hold before considering a buy.
 - Sell plan: wait for price to rise to resistance around ${trendPlan.initialResistanceText} and reject before considering a sell.
-- Preferred trend setup: ${trendPlan.preferredTrendSetup}
 
 Uploaded Chart:
 - ${visualReview?.visualSummary || "The uploaded chart was reviewed using the main support and resistance areas."}
