@@ -1,1022 +1,1587 @@
-<div id="csafx-ai-coach"> <style> html, body { margin: 0 !important; padding: 0 !important; overflow-x: hidden !important; background: #020403 !important; } #csafx-ai-coach { font-family: Inter, Arial, sans-serif; color: #ffffff; background: #020403; min-height: 100vh; width: 100vw; position: relative; left: 50%; right: 50%; margin-left: -50vw; margin-right: -50vw; overflow-x: hidden; padding-top: 84px; box-sizing: border-box; } #csafx-ai-coach *, #csafx-ai-coach *:before, #csafx-ai-coach *:after { box-sizing: border-box; } #csafx-ai-coach button, #csafx-ai-coach select, #csafx-ai-coach textarea { font-family: inherit; } .csa-wrap { width: 100%; max-width: 1880px; margin: 0 auto; padding: 0 24px; } .csa-topbar { position: fixed; top: 0; left: 0; right: 0; width: 100vw; z-index: 999999; background: rgba(5, 8, 12, 0.97); border-bottom: 1px solid rgba(255, 255, 255, 0.08); backdrop-filter: blur(16px); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45); } .csa-nav { min-height: 84px; display: flex; align-items: center; justify-content: space-between; gap: 24px; } .csa-brand { display: flex; align-items: center; gap: 12px; min-width: 220px; flex-shrink: 0; } .csa-logo { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: #00c985; color: #04120d; font-weight: 950; font-size: 20px; letter-spacing: -0.06em; } .csa-brand-title { font-size: 21px; font-weight: 950; line-height: 1.05; letter-spacing: -0.03em; } .csa-brand-title span { display: block; margin-top: 4px; color: #00c985; font-size: 12px; font-weight: 800; } .csa-nav-links { display: flex; align-items: center; gap: 42px; color: #9aa6b8; font-size: 16px; font-weight: 900; flex: 1; justify-content: center; } .csa-nav-links a { color: inherit; text-decoration: none; cursor: pointer; transition: 0.2s ease; } .csa-nav-links a:hover { color: #ffffff; } .csa-nav-actions { display: flex; align-items: center; gap: 16px; flex-shrink: 0; } .csa-login { color: #d0d8e5; text-decoration: none; font-weight: 900; cursor: pointer; font-size: 16px; } .csa-btn { border: 0; cursor: pointer; font-weight: 950; transition: 0.2s ease; padding: 16px 24px; font-size: 15px; line-height: 1; } .csa-btn-green { background: #00c985; color: #04110c; } .csa-btn-green:hover { background: #00e699; transform: translateY(-1px); } .csa-btn-dark { background: #08101b; color: #ffffff; border: 1px solid rgba(255,255,255,0.12); } .csa-btn-dark:hover { border-color: rgba(127,124,255,0.45); } .csa-hero { background: radial-gradient(circle at 72% 10%, rgba(79, 82, 255, 0.16), transparent 28%), radial-gradient(circle at 18% 45%, rgba(0, 201, 133, 0.10), transparent 26%), #020403; padding: 36px 0 54px; width: 100%; } .csa-hero-grid { display: grid; grid-template-columns: minmax(260px, 0.50fr) minmax(980px, 2.10fr); gap: 22px; align-items: start; width: 100%; } .csa-hero-left { padding-top: 22px; min-width: 0; max-width: 500px; } .csa-right-column { display: grid; gap: 22px; min-width: 0; width: 100%; } .csa-alert-pill { display: inline-flex; align-items: center; gap: 10px; color: #ff4d73; border: 1px solid rgba(255, 77, 115, 0.45); background: rgba(255, 77, 115, 0.08); border-radius: 999px; padding: 10px 16px; font-size: 12px; font-weight: 950; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 26px; } .csa-hero h1 { font-size: clamp(42px, 4.5vw, 84px); line-height: 0.98; letter-spacing: -0.078em; margin: 0 0 18px; max-width: 500px; } .csa-hero h1 span { color: #ff4d73; } .csa-subline { color: #c9d5e4; line-height: 1.55; font-size: 17px; margin: 0 0 22px; max-width: 500px; } .csa-subline strong { color: #00c985; } .csa-bullets { list-style: none; margin: 0 0 28px; padding: 0; display: grid; gap: 16px; max-width: 500px; } .csa-bullets li { display: grid; grid-template-columns: 24px 1fr; gap: 12px; color: #e4ebf5; font-size: 16px; line-height: 1.55; } .csa-checkmark { color: #00c985; font-weight: 950; } .csa-hero-buttons { display: grid; gap: 12px; max-width: 500px; margin: 28px 0 24px; } .csa-wide-btn { width: 100%; text-align: center; font-size: 18px; padding: 20px 28px; } .csa-trust-note { background: rgba(127, 124, 255, 0.08); border: 1px solid rgba(127, 124, 255, 0.28); border-radius: 14px; padding: 16px; max-width: 500px; margin: 0 0 24px; color: #dce6f4; line-height: 1.55; font-size: 14px; } .csa-trust-note strong { display: block; color: #ffffff; margin-bottom: 6px; font-size: 15px; } .csa-sample-verdict { background: #08101b; border: 1px solid rgba(64,88,130,0.55); border-radius: 16px; padding: 18px; max-width: 500px; margin-bottom: 24px; } .csa-sample-verdict h3 { margin: 0 0 12px; color: #00c985; font-size: 15px; letter-spacing: 0.08em; text-transform: uppercase; } .csa-sample-verdict .csa-verdict-word { font-size: 30px; font-weight: 950; margin: 0 0 8px; color: #ffd447; } .csa-sample-verdict p { color: #d9e4f2; margin: 0; line-height: 1.55; font-size: 14px; } .csa-process { margin-top: 26px; max-width: 500px; } .csa-process-title { color: #78879b; text-transform: uppercase; font-size: 12px; letter-spacing: 0.16em; margin-bottom: 12px; } .csa-process-list { display: grid; gap: 10px; } .csa-process-row { display: grid; grid-template-columns: 38px 1fr; gap: 12px; align-items: center; border: 1px solid rgba(56, 98, 160, 0.45); background: rgba(5, 9, 17, 0.92); border-radius: 8px; padding: 11px 14px; color: #d9e4f2; font-size: 13px; font-weight: 800; } .csa-process-row span { color: #7d91b0; font-family: monospace; } .csa-green-text { color: #00c985; } .csa-purple-text { color: #7f7cff; } .csa-red-text { color: #ff4d73; } .csa-yellow-text { color: #ffd447; } .csa-stats-mini { display: flex; justify-content: space-between; max-width: 500px; margin-top: 28px; align-items: end; color: #ffffff; font-weight: 950; font-size: 20px; gap: 12px; } .csa-stats-mini small { display: block; color: #758397; font-size: 11px; font-weight: 800; margin-top: 4px; text-transform: uppercase; line-height: 1.4; } .csa-workspace, .csa-profile-panel, .csa-system-panel { background: #060b12; border: 1px solid rgba(58, 79, 114, 0.58); border-radius: 24px; padding: 28px; width: 100%; min-width: 0; box-shadow: 0 30px 90px rgba(0, 0, 0, 0.28); } .csa-workspace { min-height: 780px; box-shadow: 0 30px 90px rgba(0, 0, 0, 0.45); } .csa-workspace-head { display: flex; justify-content: space-between; align-items: center; padding: 0 2px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); margin-bottom: 22px; gap: 12px; } .csa-workspace-title { font-weight: 950; color: #ffffff; display: flex; align-items: center; gap: 10px; font-size: 22px; line-height: 1.2; } .csa-mini-tag { border: 1px solid rgba(107, 109, 255, 0.3); color: #8f9cff; padding: 9px 14px; border-radius: 4px; font-size: 12px; font-family: monospace; white-space: nowrap; } .csa-diagnostic-grid { display: grid; grid-template-columns: minmax(620px, 1.95fr) minmax(290px, 0.72fr); gap: 26px; align-items: start; width: 100%; } .csa-main-panel, .csa-side-stack { min-width: 0; width: 100%; } .csa-side-stack { display: grid; gap: 20px; } .csa-chart-card { background: #03060b; border-radius: 18px; overflow: hidden; border: 1px solid rgba(255,255,255,0.06); min-height: 430px; position: relative; display: grid; place-items: center; width: 100%; } .csa-upload-zone { width: 100%; min-height: 430px; display: grid; place-items: center; text-align: center; padding: 28px; cursor: pointer; background: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px), #03060b; background-size: 44px 44px; } .csa-upload-zone:hover { background-color: #07101a; } .csa-upload-icon { width: 74px; height: 74px; display: grid; place-items: center; margin: 0 auto 14px; border-radius: 18px; background: rgba(0, 201, 133, 0.12); color: #00c985; font-size: 36px; font-weight: 900; } .csa-upload-zone h3 { margin: 0 0 8px; font-size: 24px; letter-spacing: -0.04em; } .csa-upload-zone p { margin: 0 0 18px; color: #9aaabd; max-width: 520px; } #chartFile { display: none; } .csa-chart-preview { display: none; width: 100%; height: auto; min-height: auto; padding: 16px 16px 86px; background: #03060b; position: relative; } .csa-chart-preview img { display: block; width: 100%; max-height: 540px; object-fit: contain; border-radius: 12px; background: #ffffff; border: 1px solid rgba(255,255,255,0.08); } .csa-chart-card.csa-has-chart { min-height: auto; place-items: stretch; } .csa-chart-card.csa-has-chart .csa-chart-preview { min-height: auto; } .csa-expand-chart-btn { position: absolute; top: 28px; right: 28px; z-index: 8; border: 1px solid rgba(255,255,255,0.18); background: rgba(3, 6, 11, 0.82); color: #ffffff; border-radius: 999px; padding: 10px 13px; font-size: 13px; font-weight: 950; cursor: pointer; backdrop-filter: blur(12px); box-shadow: 0 10px 28px rgba(0,0,0,0.35); } .csa-expand-chart-btn:hover { background: rgba(0, 201, 133, 0.18); border-color: rgba(0, 201, 133, 0.45); color: #00c985; transform: translateY(-1px); } .csa-chart-modal { position: fixed; inset: 0; z-index: 1000000; display: none; align-items: center; justify-content: center; padding: 28px; background: rgba(0, 0, 0, 0.88); backdrop-filter: blur(8px); } .csa-chart-modal.open { display: flex; } .csa-chart-modal-inner { position: relative; width: min(96vw, 1500px); max-height: 92vh; background: #03060b; border: 1px solid rgba(255,255,255,0.14); border-radius: 18px; padding: 18px; box-shadow: 0 30px 90px rgba(0,0,0,0.70); } .csa-chart-modal-head { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 0 0 12px; color: #dbe7f5; font-size: 13px; font-weight: 900; } .csa-chart-modal-close { border: 1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.06); color: #ffffff; border-radius: 10px; padding: 10px 13px; cursor: pointer; font-weight: 950; } .csa-chart-modal-close:hover { border-color: rgba(255,77,115,0.55); color: #ff4d73; } .csa-chart-modal img { width: 100%; max-height: 82vh; object-fit: contain; border-radius: 12px; background: #ffffff; border: 1px solid rgba(255,255,255,0.08); } .csa-run-overlay { position: absolute; left: 32px; bottom: 24px; display: none; } .csa-form { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin: 18px 0; width: 100%; } .csa-field { display: grid; gap: 7px; min-width: 0; } .csa-field label { color: #8ea1ba; font-size: 13px; font-weight: 900; } .csa-field select, .csa-field textarea, .csa-field input { width: 100%; background: #040810; color: #ffffff; border: 1px solid rgba(88,114,158,0.55); border-radius: 10px; padding: 14px 14px; outline: none; font-size: 15px; min-width: 0; } .csa-field textarea { min-height: 94px; resize: vertical; } .csa-field-full { grid-column: 1 / -1; } .csa-action-row { display: flex; gap: 12px; flex-wrap: wrap; } .csa-status { color: #00c985; font-size: 13px; font-weight: 900; margin-top: 12px; display: none; } .csa-feedback-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; width: 100%; } .csa-feedback-card { background: #040910; border: 1px solid rgba(64,88,130,0.55); border-radius: 14px; padding: 18px; min-height: 170px; } .csa-feedback-card h4 { margin: 0 0 12px; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; display: flex; align-items: center; gap: 8px; } .csa-feedback-card ul { margin: 0; padding-left: 18px; color: #dce6f4; font-size: 14px; line-height: 1.55; } .csa-feedback-card li { margin-bottom: 7px; } .csa-plan { background: #050a12; border: 1px solid rgba(64,88,130,0.55); border-radius: 14px; padding: 20px; margin-top: 18px; min-height: 130px; width: 100%; } .csa-plan h4 { color: #7f7cff; margin: 0 0 10px; font-size: 15px; } .csa-plan p { margin: 0; color: #c8d6e8; line-height: 1.65; font-size: 14px; }
+import express from "express";
+import cors from "cors";
+import multer from "multer";
+import OpenAI from "openai";
 
-.csa-plan-text {
-  color: #c8d6e8;
-  line-height: 1.75;
-  font-size: 14px;
-  display: grid;
-  gap: 14px;
-}
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: "25mb" }));
 
-.csa-plan-text p {
-  margin: 0;
-}
-
-.csa-plan-text .csa-ai-section {
-  background: rgba(255, 255, 255, 0.035);
-  border: 1px solid rgba(255, 255, 255, 0.075);
-  border-radius: 14px;
-  padding: 15px 16px;
-}
-
-.csa-plan-text .csa-ai-heading {
-  color: #00c985;
-  font-weight: 950;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.10em;
-  margin-bottom: 9px;
-}
-
-.csa-plan-text .csa-ai-body {
-  color: #dbe7f5;
-  line-height: 1.72;
-}
-
-.csa-plan-text .csa-ai-body p + p {
-  margin-top: 9px;
-}
-
-.csa-plan-text ul {
-  margin: 8px 0 0;
-  padding-left: 18px;
-}
-
-.csa-plan-text li {
-  margin-bottom: 7px;
-}
-
-.csa-plan-text li:last-child {
-  margin-bottom: 0;
-}
-
-.csa-plan-text .csa-ai-note {
-  color: #9aaabd;
-  font-size: 13px;
-}
-
-.csa-read-more-details {
-  margin-top: 14px;
-  border: 1px solid rgba(0, 201, 133, 0.24);
-  border-radius: 14px;
-  background: rgba(0, 201, 133, 0.035);
-  overflow: hidden;
-}
-
-.csa-read-more-details summary {
-  list-style: none;
-  cursor: pointer;
-  padding: 14px 16px;
-  color: #00c985;
-  font-weight: 950;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.10em;
-  border-bottom: 1px solid transparent;
-  user-select: none;
-}
-
-.csa-read-more-details summary::-webkit-details-marker {
-  display: none;
-}
-
-.csa-read-more-details summary:hover {
-  background: rgba(0, 201, 133, 0.075);
-}
-
-.csa-read-more-details[open] summary {
-  border-bottom-color: rgba(0, 201, 133, 0.16);
-}
-
-.csa-read-more-details summary::before {
-  content: "+ ";
-  color: #ffffff;
-}
-
-.csa-read-more-details[open] summary::before {
-  content: "− ";
-}
-
-.csa-read-more-content {
-  padding: 14px;
-  display: grid;
-  gap: 14px;
-}
- .csa-context-box, .csa-grade-card, .csa-score-box, .csa-mistake-hub, .csa-system-card { background: #08101b; border: 1px solid rgba(64,88,130,0.55); border-radius: 16px; width: 100%; } .csa-context-box { padding: 18px; color: #dbe7f5; font-size: 14px; line-height: 1.55; } .csa-context-box.good { border-color: rgba(0, 201, 133, 0.40); background: rgba(0, 201, 133, 0.075); } .csa-context-box.warn { border-color: rgba(255, 212, 71, 0.40); background: rgba(255, 212, 71, 0.075); } .csa-context-box.bad { border-color: rgba(255, 77, 115, 0.40); background: rgba(255, 77, 115, 0.075); } .csa-context-box h4 { margin: 0 0 10px; color: #ffffff; } .csa-grade-card { padding: 26px; text-align: center; } .csa-grade-card small { display: block; color: #8192ab; letter-spacing: 0.14em; font-weight: 950; font-size: 12px; margin-bottom: 16px; } .csa-grade-ring { width: 124px; height: 124px; margin: 0 auto; border-radius: 50%; background: radial-gradient(circle at center, #08101b 0 52%, transparent 53%), conic-gradient(#00c985 0deg, #00c985 0deg, #132033 0deg); display: grid; place-items: center; color: #ffffff; font-size: 30px; font-weight: 950; } .csa-grade-ring span { display: block; font-size: 12px; color: #8597b1; margin-top: 4px; } .csa-score-box { padding: 20px; } .csa-score-row { margin-bottom: 18px; } .csa-score-row:last-child { margin-bottom: 0; } .csa-score-top { display: flex; justify-content: space-between; gap: 10px; color: #d8e3f1; font-size: 13px; font-weight: 900; margin-bottom: 8px; } .csa-bar { height: 8px; background: #121b2b; border-radius: 999px; overflow: hidden; } .csa-bar span { display: block; height: 100%; width: 0%; background: #00c985; border-radius: 999px; transition: width 0.4s ease; } .csa-mistake-hub { padding: 20px; } .csa-mistake-hub h4 { color: #ff4d73; margin: 0 0 14px; font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase; } .csa-mistake-list { display: grid; gap: 10px; } .csa-mistake-item { display: grid; grid-template-columns: 18px 1fr auto; gap: 10px; align-items: center; background: rgba(255, 77, 115, 0.055); border: 1px solid rgba(255, 77, 115, 0.18); border-radius: 8px; padding: 11px 10px; color: #f2dbe2; font-size: 12px; font-weight: 800; } .csa-risk-tag { color: #ff738e; background: rgba(255, 77, 115, 0.14); border-radius: 4px; padding: 4px 6px; font-size: 9px; text-transform: uppercase; white-space: nowrap; } .csa-error { display: none; background: rgba(255,77,115,0.10); color: #ff8ca3; border: 1px solid rgba(255,77,115,0.30); border-radius: 10px; padding: 12px; margin-bottom: 14px; font-size: 13px; line-height: 1.5; } .csa-profile-panel { background: radial-gradient(circle at 15% 20%, rgba(0, 201, 133, 0.15), transparent 26%), radial-gradient(circle at 80% 10%, rgba(127, 124, 255, 0.14), transparent 30%), #060b12; } .csa-profile-head, .csa-system-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; margin-bottom: 22px; } .csa-profile-head h2, .csa-system-head h2 { margin: 0; font-size: clamp(26px, 2.2vw, 40px); line-height: 1.08; letter-spacing: -0.055em; } .csa-profile-head p, .csa-system-head p { margin: 8px 0 0; color: #aab8c9; line-height: 1.55; max-width: 820px; } .csa-live-badge { color: #00c985; background: rgba(0, 201, 133, 0.11); border: 1px solid rgba(0, 201, 133, 0.28); border-radius: 999px; padding: 10px 14px; font-size: 12px; font-weight: 950; text-transform: uppercase; white-space: nowrap; } .csa-profile-grid, .csa-system-grid { display: grid; grid-template-columns: 1fr 1fr 1.2fr; gap: 16px; } .csa-profile-card, .csa-system-card { background: rgba(8, 16, 27, 0.88); border: 1px solid rgba(64,88,130,0.55); border-radius: 16px; padding: 20px; min-height: 210px; } .csa-profile-card h3, .csa-system-card h3 { margin: 0 0 14px; font-size: 15px; text-transform: uppercase; letter-spacing: 0.08em; color: #dce6f4; } .csa-pattern { display: grid; gap: 10px; } .csa-pattern-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 14px; color: #d9e4f2; font-size: 13px; font-weight: 850; } .csa-mini-bar { height: 7px; background: #121b2b; border-radius: 999px; overflow: hidden; margin-top: 7px; } .csa-mini-bar span { display: block; height: 100%; border-radius: 999px; background: #ff4d73; } .csa-focus-list, .csa-rule-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 11px; } .csa-focus-list li, .csa-rule-list li { display: grid; grid-template-columns: 24px 1fr; gap: 10px; color: #d9e4f2; font-size: 14px; line-height: 1.45; } .csa-journal-preview { overflow: hidden; border-radius: 12px; border: 1px solid rgba(255,255,255,0.08); } .csa-journal-row { display: grid; grid-template-columns: 0.8fr 0.8fr 1.2fr 0.6fr; gap: 10px; padding: 12px 12px; font-size: 12px; color: #d9e4f2; border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(3, 6, 11, 0.62); } .csa-journal-row:first-child { color: #8ea1ba; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 900; background: rgba(0, 201, 133, 0.08); } .csa-journal-row:last-child { border-bottom: 0; } .csa-system-panel { background: radial-gradient(circle at 82% 25%, rgba(255, 77, 115, 0.12), transparent 26%), radial-gradient(circle at 14% 70%, rgba(0, 201, 133, 0.10), transparent 26%), #060b12; } .csa-system-card.big { grid-column: span 2; } .csa-flow { display: grid; gap: 12px; } .csa-flow-step { display: grid; grid-template-columns: 48px 1fr; gap: 14px; align-items: center; background: rgba(3, 6, 11, 0.58); border: 1px solid rgba(255,255,255,0.07); border-radius: 14px; padding: 14px; } .csa-flow-num { width: 38px; height: 38px; border-radius: 12px; background: rgba(0,201,133,0.12); color: #00c985; display: grid; place-items: center; font-weight: 950; } .csa-flow-step strong { display: block; margin-bottom: 3px; color: #ffffff; } .csa-flow-step span { color: #9aaabd; font-size: 13px; line-height: 1.45; } .csa-coach-output { border-radius: 14px; border: 1px solid rgba(255,255,255,0.08); overflow: hidden; background: #03060b; } .csa-output-row { display: grid; grid-template-columns: 130px 1fr; gap: 12px; padding: 13px 14px; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 13px; color: #d9e4f2; } .csa-output-row:last-child { border-bottom: 0; } .csa-output-row strong { color: #8ea1ba; text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em; } .csa-metric-stack { display: grid; gap: 12px; } .csa-metric-box { background: rgba(3,6,11,0.58); border: 1px solid rgba(255,255,255,0.07); border-radius: 14px; padding: 16px; } .csa-metric-box strong { display: block; color: #00c985; font-size: 28px; margin-bottom: 4px; } .csa-metric-box span { color: #aab8c9; font-size: 13px; line-height: 1.4; } .csa-section { padding: 82px 0; background: #020403; border-top: 1px solid rgba(255,255,255,0.06); width: 100%; } .csa-section:nth-of-type(even) { background: #05080d; } .csa-section-head { text-align: center; max-width: 820px; margin: 0 auto 36px; } .csa-section-head h2 { margin: 0 0 14px; font-size: clamp(34px, 5vw, 56px); line-height: 1.05; letter-spacing: -0.06em; } .csa-section-head p { color: #aab8c9; line-height: 1.65; margin: 0; font-size: 16px; } .csa-card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; width: 100%; } .csa-info-card { background: #08101b; border: 1px solid rgba(64,88,130,0.55); border-radius: 16px; padding: 24px; min-height: 190px; } .csa-info-icon { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: rgba(0,201,133,0.12); color: #00c985; font-weight: 950; margin-bottom: 18px; } .csa-info-card h3 { margin: 0 0 10px; font-size: 19px; } .csa-info-card p { margin: 0; color: #aab8c9; line-height: 1.6; font-size: 14px; } .csa-checklist-card { background: linear-gradient(145deg, rgba(0,201,133,0.08), #08101b); border-color: rgba(0,201,133,0.28); } .csa-dashboard-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; width: 100%; } .csa-dashboard-tile { background: #08101b; border: 1px solid rgba(64,88,130,0.55); border-radius: 16px; padding: 22px; min-height: 150px; } .csa-dashboard-tile strong { font-size: 38px; color: #00c985; display: block; margin-bottom: 8px; line-height: 1; } .csa-dashboard-tile h3 { margin: 0 0 8px; font-size: 16px; } .csa-dashboard-tile p { margin: 0; color: #aab8c9; font-size: 13px; line-height: 1.55; } .csa-before-after { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 26px; } .csa-before-after-card { background: #08101b; border: 1px solid rgba(64,88,130,0.55); border-radius: 18px; padding: 26px; } .csa-before-after-card h3 { margin: 0 0 16px; font-size: 24px; letter-spacing: -0.04em; } .csa-before-after-card ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; } .csa-before-after-card li { color: #d9e4f2; font-size: 15px; line-height: 1.5; display: grid; grid-template-columns: 26px 1fr; gap: 10px; } .csa-pricing-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; width: 100%; } .csa-price-card { background: #08101b; border: 1px solid rgba(64,88,130,0.55); border-radius: 18px; padding: 26px; } .csa-price-card.featured { border-color: rgba(0,201,133,0.55); background: linear-gradient(145deg, rgba(0,201,133,0.12), #08101b); transform: translateY(-8px); } .csa-price-card h3 { margin: 0 0 8px; font-size: 22px; } .csa-price-card p { color: #aab8c9; margin: 0 0 18px; line-height: 1.55; font-size: 14px; } .csa-price { font-size: 44px; font-weight: 950; margin-bottom: 18px; } .csa-price span { color: #8492a5; font-size: 14px; } .csa-price-list { list-style: none; padding: 0; margin: 0 0 22px; display: grid; gap: 11px; } .csa-price-list li { color: #d9e4f2; font-size: 14px; }  .csa-popular-badge {    display: inline-flex;    align-items: center;    color: #04110c;    background: #00c985;    border-radius: 999px;    padding: 8px 12px;    font-size: 11px;    font-weight: 950;    margin-bottom: 14px;  }  .csa-faq-section {    padding-top: 72px;  }  .csa-faq-grid {    display: grid;    grid-template-columns: repeat(2, 1fr);    gap: 14px;    max-width: 1200px;    margin: 0 auto;  }  .csa-faq-card {    background: #08101b;    border: 1px solid rgba(64,88,130,0.55);    border-radius: 14px;    padding: 18px;  }  .csa-faq-card h3 {    margin: 0 0 8px;    color: #ffffff;    font-size: 16px;    letter-spacing: -0.02em;  }  .csa-faq-card p {    margin: 0;    color: #aab8c9;    font-size: 13px;    line-height: 1.6;  }  .csa-footer {    background: #020403;    border-top: 1px solid rgba(255,255,255,0.08);    padding: 30px 0;  }  .csa-footer-inner {    display: flex;    align-items: center;    justify-content: space-between;    gap: 20px;    color: #7e8da3;    font-size: 13px;  }  .csa-footer strong {    color: #ffffff;    display: block;    margin-bottom: 5px;  }  .csa-footer span {    display: block;    color: #7e8da3;  }  @media (max-width: 1500px) { .csa-hero-grid { grid-template-columns: minmax(250px, 0.56fr) minmax(760px, 1.95fr); } .csa-diagnostic-grid { grid-template-columns: minmax(0, 1.70fr) minmax(280px, 0.78fr); } .csa-profile-grid, .csa-system-grid { grid-template-columns: 1fr 1fr; } .csa-profile-card:last-child { grid-column: 1 / -1; } .csa-system-card.big { grid-column: 1 / -1; } } @media (max-width: 1180px) { .csa-hero-grid { grid-template-columns: 1fr; } .csa-hero-left, .csa-hero h1, .csa-subline, .csa-bullets, .csa-hero-buttons, .csa-trust-note, .csa-sample-verdict, .csa-process, .csa-stats-mini { max-width: 100%; } .csa-workspace { width: 100%; } } @media (max-width: 980px) { #csafx-ai-coach { padding-top: 78px; } .csa-nav-links { display: none; } .csa-diagnostic-grid, .csa-feedback-grid, .csa-card-grid, .csa-dashboard-grid, .csa-pricing-grid, .csa-faq-grid, .csa-form, .csa-profile-grid, .csa-system-grid, .csa-before-after { grid-template-columns: 1fr; } .csa-profile-card:last-child, .csa-system-card.big { grid-column: auto; } .csa-nav-actions .csa-login { display: none; } .csa-workspace { min-height: auto; } .csa-chart-card, .csa-upload-zone { min-height: 360px; } .csa-chart-card.csa-has-chart, .csa-chart-card.csa-has-chart .csa-chart-preview { min-height: auto; } .csa-chart-preview { padding-bottom: 74px; } .csa-chart-preview img { max-height: 420px; } .csa-workspace, .csa-profile-panel, .csa-system-panel { padding: 20px; } .csa-expand-chart-btn { top: 24px; right: 24px; } } @media (max-width: 620px) { .csa-wrap { padding: 0 16px; } .csa-nav { min-height: 74px; } .csa-brand-title { font-size: 14px; } .csa-brand-title span { font-size: 10px; } .csa-logo { width: 36px; height: 36px; font-size: 16px; } .csa-nav-actions .csa-btn { padding: 12px 14px; font-size: 12px; } .csa-hero h1 { font-size: 42px; } .csa-workspace-title { font-size: 18px; } .csa-mini-tag, .csa-live-badge { display: none; } .csa-journal-row, .csa-output-row { grid-template-columns: 1fr; } } 
-
-/* CSA Coach: clearer loading state + reset old analysis when a new chart is loaded */
-.csa-chart-card.csa-is-analyzing {
-  position: relative;
-  box-shadow: 0 0 0 1px rgba(0,201,133,0.35), 0 0 34px rgba(0,201,133,0.18);
-}
-.csa-analysis-loading-overlay {
-  display: none;
-  position: absolute;
-  inset: 0;
-  z-index: 25;
-  align-items: center;
-  justify-content: center;
-  padding: 22px;
-  border-radius: 18px;
-  background: rgba(2, 6, 12, 0.78);
-  backdrop-filter: blur(4px);
-  text-align: center;
-}
-.csa-chart-card.csa-is-analyzing .csa-analysis-loading-overlay {
-  display: flex;
-}
-.csa-loading-card {
-  width: min(420px, 92%);
-  border: 1px solid rgba(0,201,133,0.38);
-  background: linear-gradient(145deg, rgba(0,201,133,0.12), rgba(8,16,27,0.96));
-  border-radius: 18px;
-  padding: 24px 22px;
-  color: #dbe7f5;
-  box-shadow: 0 24px 70px rgba(0,0,0,0.42);
-}
-.csa-loading-spinner {
-  width: 46px;
-  height: 46px;
-  margin: 0 auto 14px;
-  border-radius: 50%;
-  border: 4px solid rgba(255,255,255,0.16);
-  border-top-color: #00c985;
-  animation: csaSpin 0.8s linear infinite;
-}
-.csa-loading-title {
-  color: #ffffff;
-  font-size: 18px;
-  font-weight: 950;
-  margin-bottom: 7px;
-}
-.csa-loading-text {
-  color: #aab8c9;
-  font-size: 14px;
-  line-height: 1.5;
-}
-.csa-btn.csa-loading-btn,
-button.csa-loading-btn {
-  position: relative;
-  opacity: 0.92;
-  cursor: wait !important;
-  box-shadow: 0 0 0 1px rgba(0,201,133,0.35), 0 0 24px rgba(0,201,133,0.22);
-}
-.csa-status-running {
-  border-color: rgba(0,201,133,0.46) !important;
-  background: rgba(0,201,133,0.11) !important;
-  color: #dffcf1 !important;
-}
-@keyframes csaSpin {
-  to { transform: rotate(360deg); }
-}
-
-</style> <div class="csa-topbar"> <div class="csa-wrap"> <div class="csa-nav"> <div class="csa-brand"> <div class="csa-logo">CS</div> <div class="csa-brand-title"> CSAFOREX <span>ai trading coach</span> </div> </div> <div class="csa-nav-links"> <a onclick="csaScrollTo('process')">The Process</a> <a onclick="csaScrollTo('features')">Features</a> <a onclick="csaScrollTo('dashboard')">Dashboard</a> <a onclick="csaScrollTo('pricing')">Pricing</a> <a onclick="csaScrollTo('faq')">FAQ</a> </div> <div class="csa-nav-actions"> <a class="csa-login">Log in</a> <button class="csa-btn csa-btn-green" onclick="csaScrollTo('coach')">Fix Your Trading Mistakes</button> </div> </div> </div> </div> <section class="csa-hero" id="process"> <div class="csa-wrap"> <div class="csa-hero-grid"> <div class="csa-hero-left"> <div class="csa-alert-pill">⊙ Stop losing capital to bad habits</div> <h1>Stop Repeating The <span>Same Trading Mistakes.</span></h1> <p class="csa-subline"> Upload your chart and let <strong>CSA Coach</strong> show you what you did right, what you did wrong, and what to fix before the next trade. </p> <ul class="csa-bullets"> <li><span class="csa-checkmark">◎</span><span>Get a clear trade breakdown covering entry, stop loss, target, risk, and execution quality.</span></li> <li><span class="csa-checkmark">◎</span><span>Find repeated habits like chasing entries, entering into resistance, or ignoring clean retests.</span></li> <li><span class="csa-checkmark">◎</span><span>Turn every chart review into a journal entry that tracks your recurring trading mistakes.</span></li> </ul> <div class="csa-hero-buttons"> <button class="csa-btn csa-btn-green csa-wide-btn" onclick="csaScrollTo('coach')">↥ Upload Your Last Trade</button> <button class="csa-btn csa-btn-dark csa-wide-btn" onclick="csaScrollTo('coach')">✣ See Coach In Action</button> </div> <div class="csa-trust-note"> <strong>Not signals. Coaching.</strong> CSA Coach does not predict the market or give random trade signals. It reviews your chart, your execution, and your discipline so you can stop repeating the same mistakes. </div> <div class="csa-sample-verdict"> <h3>Sample AI Verdict</h3> <div class="csa-verdict-word">WAIT</div> <p><strong>Reason:</strong> Price is in the middle of the range. No clean retest yet.</p> <p><strong>Fix:</strong> Wait for price to return to the marked support zone before considering entry.</p> </div> <div class="csa-process"> <div class="csa-process-title">How your AI coach builds consistency</div> <div class="csa-process-list"> <div class="csa-process-row"><span>01</span><div>Securely processes your uploaded trading screenshot</div></div> <div class="csa-process-row"><span>02</span><div><b class="csa-purple-text">Checks if the setup matches your support and resistance framework</b></div></div> <div class="csa-process-row"><span>03</span><div><b class="csa-green-text">Scores structure, execution, and risk quality</b></div></div> <div class="csa-process-row"><span>04</span><div><b class="csa-red-text">Highlights the exact technical or behavioral mistake</b></div></div> <div class="csa-process-row"><span>05</span><div>Turns each review into a simple trading journal entry</div></div> <div class="csa-process-row"><span>06</span><div><b class="csa-yellow-text">Tracks your repeated mistakes over time</b></div></div> <div class="csa-process-row"><span>07</span><div><b>Gives you one clear improvement focus for the next trade</b></div></div> </div> </div> <div class="csa-stats-mini"> <div> <div class="csa-green-text">★★★★★</div> <small>Built to catch the habits traders repeat most.</small> </div> <div style="text-align:right;"> S/R <small>rule-based trade review</small> </div> </div> </div> <div class="csa-right-column"> <div class="csa-workspace" id="coach"> <div class="csa-workspace-head"> <div class="csa-workspace-title">⌁ Real Trade Feedback Workspace</div> <div class="csa-mini-tag">CSA Framework Review</div> </div> <div class="csa-error" id="errorBox"></div> <div class="csa-diagnostic-grid"> <div class="csa-main-panel"> <div class="csa-chart-card"> <div class="csa-upload-zone" id="uploadBox"> <div> <div class="csa-upload-icon">↥</div> <h3>Upload Chart Screenshot</h3> <p>Click here, drag your TradingView / MT4 / MT5 chart image, or paste a screenshot with Ctrl + V.</p> <button class="csa-btn csa-btn-green" type="button">Choose Chart</button><p style="margin-top:12px;font-size:12px;color:#7f8fa6;">Tip: copy a chart screenshot, click this page, then press Ctrl + V.</p> </div> </div> <input type="file" id="chartFile" accept="image/png,image/jpeg,image/jpg,image/webp"> <div class="csa-chart-preview" id="previewWrap"> <button class="csa-expand-chart-btn" id="expandChartBtn" type="button" aria-label="Expand chart preview" title="Expand chart">⛶ Expand</button> <img id="chartPreview" alt="Uploaded chart preview"> </div> <div class="csa-run-overlay" id="runOverlay"> <button class="csa-btn csa-btn-green" id="analyzeOverlayBtn" type="button">Run AI Diagnostics ⊙</button> </div> </div> <div class="csa-form"> <div class="csa-field"> <label>Trade Mode</label> <select id="analysisType"> <option value="pre-trade">Pre-trade analysis</option> <option value="post-trade" selected>Post-trade review</option> </select> </div> <div class="csa-field"> <label>Pair / Instrument</label> <select id="pair"> <option value="EURUSD" selected>EURUSD</option> <option value="GBPUSD">GBPUSD</option> <option value="EURCHF">EURCHF</option> <option value="EURGBP">EURGBP</option> <option value="GBPJPY">GBPJPY</option> <option value="USDJPY">USDJPY</option> <option value="USDCHF">USDCHF</option> <option value="USDCAD">USDCAD</option> <option value="AUDUSD">AUDUSD</option> <option value="NZDUSD">NZDUSD</option> <option value="XAUUSD">XAUUSD / Gold</option> <option value="BTCUSD">BTCUSD</option> <option value="Other">Other</option> </select> </div> <div class="csa-field"> <label>Timeframe</label> <select id="timeframe"> <option value="M1">M1</option> <option value="M5" selected>M5</option> <option value="M15">M15</option> <option value="M30">M30</option> <option value="H1">H1</option> <option value="H4">H4</option> <option value="D1">D1</option> <option value="W1">W1</option> <option value="MN">MN</option> </select> </div> <div class="csa-field"> <label>Chart / Trade Date</label> <input type="date" id="chartDate" required> </div> <div class="csa-field csa-field-full"> <label>Trade Notes</label> <textarea id="userNotes" placeholder="Example: Entry was at support retest. Stop loss below low. Target next resistance."></textarea> </div> </div> <div class="csa-action-row"> <button class="csa-btn csa-btn-green" id="analyzeBtn" type="button">Run AI Diagnostics ⊙</button> <button class="csa-btn csa-btn-dark" id="resetBtn" type="button">Upload Another</button> </div> <div class="csa-status" id="statusBox"></div> <div class="csa-feedback-grid"> <div class="csa-feedback-card"> <h4 class="csa-green-text">◎ Strengths</h4> <ul id="strengthsList"> <li>Good support/resistance identification will appear here.</li> <li>Strong reaction candle feedback will appear here.</li> <li>Risk-reward strengths will appear here.</li> </ul> </div> <div class="csa-feedback-card"> <h4 class="csa-red-text">⊗ Weaknesses</h4> <ul id="weaknessesList"> <li>Entry mistakes will appear here.</li> <li>Stop loss issues will appear here.</li> <li>Trade management problems will appear here.</li> </ul> </div> </div> <div class="csa-plan"> <h4>Coach Analysis:</h4> <div id="coachPlanText" class="csa-plan-text"><div class="csa-ai-section"><div class="csa-ai-body">Upload a chart to get a clean CSA area identification based on the most recent Monday-to-Friday data visible on the chart.</div></div></div> </div> </div> <div class="csa-side-stack"> <div class="csa-context-box warn" id="contextBox"> <h4>Chart Context Check</h4> <p><b>Selected:</b> <span id="selectedContext">EURUSD / M5</span></p> <p><b>AI detected:</b> <span id="detectedContext">Waiting for chart</span></p> <p><b>Status:</b> <span id="contextStatus">Not analyzed yet</span></p> </div> <div class="csa-grade-card"> <small>Overall Grade</small> <div class="csa-grade-ring" id="gradeRing"> <div> <div id="gradeText">--</div> <span id="confidenceText">0/100</span> </div> </div> </div> <div class="csa-score-box"> <div class="csa-score-row"> <div class="csa-score-top"><span>Setup Quality</span><span id="structureScoreText">0/100</span></div> <div class="csa-bar"><span id="structureBar"></span></div> </div> <div class="csa-score-row"> <div class="csa-score-top"><span>Entry Accuracy</span><span id="executionScoreText">0/100</span></div> <div class="csa-bar"><span id="executionBar" style="background:#7f7cff;"></span></div> </div> <div class="csa-score-row"> <div class="csa-score-top"><span>Risk Management</span><span id="riskScoreText">0/100</span></div> <div class="csa-bar"><span id="riskBar" style="background:#00c985;"></span></div> </div> </div> <div class="csa-mistake-hub"> <h4>AI Mistake Detection Hub</h4> <div class="csa-mistake-list" id="mistakeList"> <div class="csa-mistake-item"><span>▴</span><span>Entered too early</span><span class="csa-risk-tag">High Risk</span></div> <div class="csa-mistake-item"><span>▴</span><span>Stop loss too tight</span><span class="csa-risk-tag">Warning</span></div> <div class="csa-mistake-item"><span>▴</span><span>Entry into resistance</span><span class="csa-risk-tag">Structural</span></div> <div class="csa-mistake-item"><span>▴</span><span>Risk-to-reward below plan</span><span class="csa-risk-tag">Math Flaw</span></div> <div class="csa-mistake-item"><span>▴</span><span>Failed to wait for confirmation</span><span class="csa-risk-tag">Discipline</span></div> </div> </div> </div> </div> </div> <div class="csa-profile-panel"> <div class="csa-profile-head"> <div> <h2>Your AI Coach Builds A Mistake Profile Over Time.</h2> <p>After each chart upload, the coach tracks repeated mistakes, assigns weekly focus areas, and turns your reviews into a simple trading journal.</p> </div> <div class="csa-live-badge">Live Product Preview</div> </div> <div class="csa-profile-grid"> <div class="csa-profile-card"> <h3 class="csa-red-text">Mistake Pattern</h3> <div class="csa-pattern"> <div> <div class="csa-pattern-row"><span>Entering before confirmation</span><span>78%</span></div> <div class="csa-mini-bar"><span style="width:78%;"></span></div> </div> <div> <div class="csa-pattern-row"><span>Stop loss too tight</span><span>64%</span></div> <div class="csa-mini-bar"><span style="width:64%;background:#ffd447;"></span></div> </div> <div> <div class="csa-pattern-row"><span>Trading into resistance</span><span>51%</span></div> <div class="csa-mini-bar"><span style="width:51%;background:#7f7cff;"></span></div> </div> <div> <div class="csa-pattern-row"><span>Poor risk-to-reward</span><span>43%</span></div> <div class="csa-mini-bar"><span style="width:43%;background:#00c985;"></span></div> </div> </div> </div> <div class="csa-profile-card"> <h3 class="csa-green-text">Next 7-Day Focus</h3> <ul class="csa-focus-list"> <li><span class="csa-checkmark">01</span><span>Wait for a confirmed retest before entry.</span></li> <li><span class="csa-checkmark">02</span><span>Mark D1/W1 levels before dropping to lower timeframe.</span></li> <li><span class="csa-checkmark">03</span><span>Only enter near clean flip zones, not in the middle.</span></li> <li><span class="csa-checkmark">04</span><span>Target minimum 1:3 risk-to-reward before taking trade.</span></li> </ul> </div> <div class="csa-profile-card"> <h3 class="csa-purple-text">Mini Journal Preview</h3> <div class="csa-journal-preview"> <div class="csa-journal-row"> <span>Pair</span> <span>Mode</span> <span>Main Lesson</span> <span>Grade</span> </div> <div class="csa-journal-row"> <span>GBPUSD</span> <span>Post</span> <span>Waited too late after first retest</span> <span>B-</span> </div> <div class="csa-journal-row"> <span>XAUUSD</span> <span>Pre</span> <span>Price too close to resistance</span> <span>C</span> </div> <div class="csa-journal-row"> <span>EURUSD</span> <span>Post</span> <span>Good zone, weak risk placement</span> <span>B+</span> </div> </div> </div> </div> </div> <div class="csa-system-panel"> <div class="csa-system-head"> <div> <h2>From One Chart Review To A Repeatable Improvement System.</h2> <p>This section fills the space with product value: it shows users that CSA Coach is not only analyzing one chart, it is building a repeatable process for better decision-making.</p> </div> <div class="csa-live-badge">Improvement Engine</div> </div> <div class="csa-system-grid"> <div class="csa-system-card big"> <h3 class="csa-green-text">What Happens After Each Upload</h3> <div class="csa-flow"> <div class="csa-flow-step"> <div class="csa-flow-num">1</div> <div> <strong>Chart is reviewed against your framework</strong> <span>The AI checks clean support/resistance levels, flip zones, retests, entry timing, stop placement, and target quality.</span> </div> </div> <div class="csa-flow-step"> <div class="csa-flow-num">2</div> <div> <strong>Your mistake is named clearly</strong> <span>Instead of vague feedback, the coach tells the trader the exact issue: early entry, weak retest, poor stop, bad location, or poor reward.</span> </div> </div> <div class="csa-flow-step"> <div class="csa-flow-num">3</div> <div> <strong>The next trade gets one focus</strong> <span>The user leaves with one clear action to improve, not a long confusing report.</span> </div> </div> </div> </div> <div class="csa-system-card"> <h3 class="csa-yellow-text">Coach Output Example</h3> <div class="csa-coach-output"> <div class="csa-output-row"> <strong>Verdict</strong> <span>WAIT</span> </div> <div class="csa-output-row"> <strong>Reason</strong> <span>No clean retest. Price is sitting too close to resistance.</span> </div> <div class="csa-output-row"> <strong>Risk</strong> <span>Stop placement would be too tight and vulnerable.</span> </div> <div class="csa-output-row"> <strong>Fix</strong> <span>Wait for price to return to the support zone and confirm rejection.</span> </div> </div> </div> <div class="csa-system-card"> <h3 class="csa-purple-text">What Users Track</h3> <div class="csa-metric-stack"> <div class="csa-metric-box"> <strong>Entry Discipline</strong> <span>Are they entering at the right area or chasing the move?</span> </div> <div class="csa-metric-box"> <strong>Risk Quality</strong> <span>Is the stop loss placed beyond invalidation or too close?</span> </div> <div class="csa-metric-box"> <strong>Setup Quality</strong> <span>Does the trade match the support/resistance framework?</span> </div> </div> </div> <div class="csa-system-card"> <h3 class="csa-red-text">Rules The Coach Checks</h3> <ul class="csa-rule-list"> <li><span>✓</span><span>Is price near a clean support or resistance zone?</span></li> <li><span>✓</span><span>Did support flip into resistance or resistance flip into support?</span></li> <li><span>✓</span><span>Was there a proper retest before entry?</span></li> <li><span>✓</span><span>Is the stop loss beyond invalidation?</span></li> <li><span>✓</span><span>Is the target realistic and worth the risk?</span></li> </ul> </div> </div> </div> </div> </div> </div> </section> <section class="csa-section" id="features"> <div class="csa-wrap"> <div class="csa-section-head"> <h2>Features that make the coach feel practical.</h2> <p>The tool should not just “talk.” It should diagnose trading mistakes visually, score performance, and give the trader a clear next action.</p> </div> <div class="csa-card-grid"> <div class="csa-info-card"> <div class="csa-info-icon">01</div> <h3>Chart context verification</h3> <p>AI checks the uploaded chart against the user-selected pair and timeframe to warn about possible mismatches.</p> </div> <div class="csa-info-card"> <div class="csa-info-icon">02</div> <h3>Support & resistance review</h3> <p>Feedback is based on clean levels, flip zones, retests, stop loss placement, and next key target zones.</p> </div> <div class="csa-info-card"> <div class="csa-info-icon">03</div> <h3>Execution scoring</h3> <p>Each chart receives structure, execution, risk, and confidence scores so traders can measure improvement.</p> </div> <div class="csa-info-card"> <div class="csa-info-icon">04</div> <h3>Mistake detection hub</h3> <p>The dashboard highlights common mistakes like chasing entries, entering into resistance, or using poor RR.</p> </div> <div class="csa-info-card"> <div class="csa-info-icon">05</div> <h3>Journal-ready output</h3> <p>The AI returns strengths, weaknesses, coach advice, risk comments, lessons, and tags for easy journaling.</p> </div> <div class="csa-info-card csa-checklist-card"> <div class="csa-info-icon">06</div> <h3>What the coach checks</h3> <p>Clean S/R zones, flip levels, retests, stop loss beyond invalidation, target quality, and risk-to-reward.</p> </div> </div> <div class="csa-before-after"> <div class="csa-before-after-card"> <h3 class="csa-red-text">Before CSA Coach</h3> <ul> <li><span>✕</span><span>Guessing entries without a clear retest.</span></li> <li><span>✕</span><span>Moving stops emotionally after entry.</span></li> <li><span>✕</span><span>Chasing trades after the move has already started.</span></li> <li><span>✕</span><span>Not knowing why the same mistake keeps repeating.</span></li> </ul> </div> <div class="csa-before-after-card"> <h3 class="csa-green-text">After CSA Coach</h3> <ul> <li><span>✓</span><span>Waiting for confirmed support/resistance retests.</span></li> <li><span>✓</span><span>Placing stops beyond clear invalidation points.</span></li> <li><span>✓</span><span>Only trading clean zones with enough reward potential.</span></li> <li><span>✓</span><span>Tracking repeated mistakes and fixing one habit at a time.</span></li> </ul> </div> </div> </div> </section> <section class="csa-section" id="dashboard"> <div class="csa-wrap"> <div class="csa-section-head"> <h2>Dashboard built for consistency.</h2> <p>These dashboard cards show how traders can track their behavior, not just individual trade outcomes.</p> </div> <div class="csa-dashboard-grid"> <div class="csa-dashboard-tile"> <strong>78%</strong> <h3>Average Execution</h3> <p>Track entry discipline, retest patience, and confirmation quality.</p> </div> <div class="csa-dashboard-tile"> <strong>42</strong> <h3>Trades Reviewed</h3> <p>Monitor total pre-trade and post-trade reviews completed.</p> </div> <div class="csa-dashboard-tile"> <strong>6</strong> <h3>Recurring Mistakes</h3> <p>Spot repeated technical and behavioral weaknesses quickly.</p> </div> <div class="csa-dashboard-tile"> <strong>2.8R</strong> <h3>Avg Planned RR</h3> <p>Check whether setups offer enough reward before execution.</p> </div> <div class="csa-dashboard-tile"> <strong>B+</strong> <h3>Current Grade</h3> <p>See the trader’s average performance grade over time.</p> </div> <div class="csa-dashboard-tile"> <strong>31%</strong> <h3>Chase Rate</h3> <p>Measure how often the trader enters before confirmation.</p> </div> <div class="csa-dashboard-tile"> <strong>64%</strong> <h3>Valid Setup Rate</h3> <p>Track how often uploaded trades match the CSA framework.</p> </div> <div class="csa-dashboard-tile"> <strong>Weekly</strong> <h3>Coach Review</h3> <p>Summarize mistakes and assign one focus area for the week.</p> </div> </div> </div> </section> 
-<section class="csa-section" id="pricing">
-  <div class="csa-wrap">
-    <div class="csa-section-head">
-      <h2>Pricing that sells improvement, not features.</h2>
-      <p>Simple plans for traders who want better execution and a personal trading feedback loop.</p>
-    </div>
-
-    <div class="csa-pricing-grid">
-      <div class="csa-price-card">
-        <h3>Starter</h3>
-        <p>For traders testing the coach.</p>
-
-        <div class="csa-price">$0<span>/mo</span></div>
-
-        <ul class="csa-price-list">
-          <li>✓ 3 coach reviews monthly</li>
-          <li>✓ Basic coach verdict</li>
-          <li>✓ Manual journal</li>
-        </ul>
-
-        <button class="csa-btn csa-btn-dark" onclick="csaScrollTo('coach')">Start Free</button>
-      </div>
-
-      <div class="csa-price-card featured">
-        <div class="csa-popular-badge">Most popular</div>
-
-        <h3>Pro</h3>
-        <p>For serious traders building consistency.</p>
-
-        <div class="csa-price">$29<span>/mo</span></div>
-
-        <ul class="csa-price-list">
-          <li>✓ Unlimited coach reviews</li>
-          <li>✓ Pre & post-trade modes</li>
-          <li>✓ Automatic journal</li>
-          <li>✓ Progress dashboard</li>
-        </ul>
-
-        <button class="csa-btn csa-btn-green" onclick="csaScrollTo('coach')">Start Pro →</button>
-      </div>
-
-      <div class="csa-price-card">
-        <h3>Elite</h3>
-        <p>For power users and future custom strategies.</p>
-
-        <div class="csa-price">$59<span>/mo</span></div>
-
-        <ul class="csa-price-list">
-          <li>✓ Everything in Pro</li>
-          <li>✓ Strategy profiles</li>
-          <li>✓ Weekly coach report</li>
-          <li>✓ Priority support</li>
-        </ul>
-
-        <button class="csa-btn csa-btn-dark" onclick="csaScrollTo('coach')">Join Elite</button>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="csa-section csa-faq-section" id="faq">
-  <div class="csa-wrap">
-    <div class="csa-section-head">
-      <h2>FAQ</h2>
-      <p>Clear answers for traders before they upload their first chart.</p>
-    </div>
-
-    <div class="csa-faq-grid">
-      <div class="csa-faq-card">
-        <h3>Does CSA Coach predict trades?</h3>
-        <p>No. CSA Coach focuses on execution, discipline, risk, and rule-following instead of market prediction.</p>
-      </div>
-
-      <div class="csa-faq-card">
-        <h3>Whose strategy does it use?</h3>
-        <p>It uses the CSA Framework. Later, advanced users may be able to add custom strategy onboarding.</p>
-      </div>
-
-      <div class="csa-faq-card">
-        <h3>Can it analyze ICT, SMC, or Elliott Wave charts?</h3>
-        <p>Yes, but the feedback depends on the selected coaching mode. CSA mode reviews the chart against CSA rules, not random chart markings.</p>
-      </div>
-
-      <div class="csa-faq-card">
-        <h3>Is this connected to AI yet?</h3>
-        <p>The frontend is ready for upload and response display. Your Render backend handles the AI analysis and returns the coach feedback.</p>
-      </div>
-
-      <div class="csa-faq-card">
-        <h3>Can I upload any market?</h3>
-        <p>The goal is to support forex, gold, crypto, stocks, and commodities as long as the instrument, timeframe, and chart date are clear.</p>
-      </div>
-
-      <div class="csa-faq-card">
-        <h3>Does it work for pre-trade and post-trade review?</h3>
-        <p>Yes. Pre-trade mode helps identify structure and areas of interest. Post-trade mode helps review execution and repeated mistakes.</p>
-      </div>
-
-      <div class="csa-faq-card">
-        <h3>Will it tell me where to buy or sell?</h3>
-        <p>No. CSA Coach is a coaching and review tool. It highlights structure, bias, risk, and mistakes without giving financial advice or guaranteed signals.</p>
-      </div>
-
-      <div class="csa-faq-card">
-        <h3>What makes it different from a normal AI chatbot?</h3>
-        <p>It is structured around your trading framework, chart upload workflow, journal-style feedback, mistake tagging, and dashboard improvement loop.</p>
-      </div>
-
-      <div class="csa-faq-card">
-        <h3>Can it save my reviews into a journal?</h3>
-        <p>That is part of the product direction. The dashboard is designed so each chart review can become a journal entry and mistake profile.</p>
-      </div>
-
-      <div class="csa-faq-card">
-        <h3>Can I cancel or upgrade later?</h3>
-        <p>Yes. The plan structure is designed so users can start free, upgrade to Pro, and move to Elite when they need deeper review and support.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<footer class="csa-footer">
-  <div class="csa-wrap csa-footer-inner">
-    <div>
-      <strong>CSA Coach™</strong>
-      <span>AI trading mentor for disciplined execution.</span>
-    </div>
-
-    <div>© 2026 CSA Coach. Trade better. Every session.</div>
-  </div>
-</footer>
-
-
-<div class="csa-chart-modal" id="chartModal" aria-hidden="true">
-  <div class="csa-chart-modal-inner" role="dialog" aria-modal="true" aria-label="Expanded chart preview">
-    <div class="csa-chart-modal-head">
-      <span>Expanded Chart Preview</span>
-      <button class="csa-chart-modal-close" id="closeChartModal" type="button">Close ✕</button>
-    </div>
-    <img id="chartModalImg" alt="Expanded uploaded chart preview">
-  </div>
-</div>
-
-<script> function csaScrollTo(id) { var el = document.getElementById(id); if (el) { var y = el.getBoundingClientRect().top + window.pageYOffset - 96; window.scrollTo({ top: y, behavior: "smooth" }); } } (function () { var API_URL = "https://csa-coach-backend.onrender.com/analyze-chart"; var uploadBox = document.getElementById("uploadBox"); var chartFile = document.getElementById("chartFile"); var chartPreview = document.getElementById("chartPreview"); var previewWrap = document.getElementById("previewWrap"); var chartCard = document.querySelector(".csa-chart-card"); var expandChartBtn = document.getElementById("expandChartBtn"); var chartModal = document.getElementById("chartModal"); var chartModalImg = document.getElementById("chartModalImg"); var closeChartModal = document.getElementById("closeChartModal"); var runOverlay = document.getElementById("runOverlay"); var analyzeBtn = document.getElementById("analyzeBtn"); var analyzeOverlayBtn = document.getElementById("analyzeOverlayBtn"); var resetBtn = document.getElementById("resetBtn"); var errorBox = document.getElementById("errorBox"); var statusBox = document.getElementById("statusBox"); var pair = document.getElementById("pair"); var timeframe = document.getElementById("timeframe"); var analysisType = document.getElementById("analysisType"); var userNotes = document.getElementById("userNotes"); var chartDate = document.getElementById("chartDate"); var selectedContext = document.getElementById("selectedContext"); var detectedContext = document.getElementById("detectedContext"); var contextStatus = document.getElementById("contextStatus"); var contextBox = document.getElementById("contextBox"); var gradeText = document.getElementById("gradeText"); var confidenceText = document.getElementById("confidenceText"); var gradeRing = document.getElementById("gradeRing"); var structureScoreText = document.getElementById("structureScoreText"); var executionScoreText = document.getElementById("executionScoreText"); var riskScoreText = document.getElementById("riskScoreText"); var structureBar = document.getElementById("structureBar"); var executionBar = document.getElementById("executionBar"); var riskBar = document.getElementById("riskBar"); var strengthsList = document.getElementById("strengthsList"); var weaknessesList = document.getElementById("weaknessesList"); var mistakeList = document.getElementById("mistakeList"); var coachPlanText = document.getElementById("coachPlanText"); var selectedFile = null; if (chartDate && !chartDate.value) { chartDate.value = new Date().toISOString().slice(0, 10); } function getSelectedContextText() { return pair.value + " / " + timeframe.value + (chartDate && chartDate.value ? " / " + chartDate.value : ""); }
-
-function ensureLoadingOverlay() {
-  if (!chartCard) return null;
-  var existing = document.getElementById("csaAnalysisLoadingOverlay");
-  if (existing) return existing;
-
-  var overlay = document.createElement("div");
-  overlay.id = "csaAnalysisLoadingOverlay";
-  overlay.className = "csa-analysis-loading-overlay";
-  overlay.innerHTML =
-    '<div class="csa-loading-card">' +
-      '<div class="csa-loading-spinner" aria-hidden="true"></div>' +
-      '<div class="csa-loading-title">AI diagnostics running...</div>' +
-      '<div class="csa-loading-text">Reading the chart, checking the selected pair/timeframe, and preparing the coach feedback. Please wait.</div>' +
-    '</div>';
-  chartCard.appendChild(overlay);
-  return overlay;
-}
-
-function clearPreviousAnalysisForNewChart(source) {
-  resetDashboard();
-  hideError();
-  setLoadingState(false);
-
-  var actionText = source === "pasted" ? "New pasted chart loaded" : source === "dropped" ? "New dropped chart loaded" : "New uploaded chart loaded";
-  detectedContext.textContent = "Waiting for new analysis";
-  contextStatus.textContent = "New chart loaded";
-  coachPlanText.innerHTML =
-    '<div class="csa-ai-section"><div class="csa-ai-heading">New chart ready</div>' +
-    '<div class="csa-ai-body">Previous feedback has been cleared. Click Run AI Diagnostics to analyze this new chart.</div></div>';
-  setStatus(actionText + ". Previous feedback cleared. Click Run AI Diagnostics.");
-}
-
-function openChartModal() {
-  if (!chartPreview || !chartPreview.src || !chartModal || !chartModalImg) return;
-  chartModalImg.src = chartPreview.src;
-  chartModal.classList.add("open");
-  chartModal.setAttribute("aria-hidden", "false");
-  document.body.style.overflow = "hidden";
-}
-function closeExpandedChart() {
-  if (!chartModal) return;
-  chartModal.classList.remove("open");
-  chartModal.setAttribute("aria-hidden", "true");
-  document.body.style.overflow = "";
-}
-if (expandChartBtn) { expandChartBtn.addEventListener("click", function (e) { e.stopPropagation(); openChartModal(); }); }
-if (closeChartModal) { closeChartModal.addEventListener("click", closeExpandedChart); }
-if (chartModal) { chartModal.addEventListener("click", function (e) { if (e.target === chartModal) closeExpandedChart(); }); }
-document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeExpandedChart(); });
-uploadBox.addEventListener("click", function () {
-  chartFile.click();
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 },
 });
 
-uploadBox.addEventListener("dragover", function (e) {
-  e.preventDefault();
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const TWELVE_DATA_BASE_URL = "https://api.twelvedata.com/time_series";
 
-uploadBox.addEventListener("drop", function (e) {
-  e.preventDefault();
-  handleFile(e.dataTransfer.files[0], "dropped");
-});
+const CHART_DETECTION_PROMPT = `
+You are CSA Coach's chart screenshot validator. Return ONLY valid JSON.
 
-chartFile.addEventListener("change", function (event) {
-  handleFile(event.target.files[0], "uploaded");
-});
+A valid trading chart screenshot must show visible candles/bars/line movement, price scale, and time/date axis.
+A platform screenshot alone is not enough.
 
-document.addEventListener("paste", function (event) {
-  var clipboardData = event.clipboardData || window.clipboardData;
-  if (!clipboardData || !clipboardData.items) return;
+Invalid/insufficient images:
+- photos, logos, documents, rooms, screenshots with no financial chart
+- blank charts, loading charts, charts where no candle/line movement is visible
+- charts with fewer than about 15 visible candles/bars/points
 
-  var imageFile = null;
+Important:
+- Be practical. If a chart clearly has visible price movement, do not mark it insufficient just because the exact selected date is hard to read.
+- If the selected date is clearly far after the latest visible chart date, set selectedDateVisible=false and provide latestVisibleDate.
+- If the date axis is hard to read, set dateConfidence="low" instead of blocking the chart.
+- Only mark hasUsablePriceData=false when the chart is truly blank/unclear/cropped/loading or has almost no price movement.
+- Do not comment on strategies such as trendlines, channels, indicators, Fibonacci, or moving averages in this step. This step only validates the chart and detects basic context.
 
-  for (var i = 0; i < clipboardData.items.length; i++) {
-    var item = clipboardData.items[i];
-    if (item && item.type && item.type.indexOf("image/") === 0) {
-      imageFile = item.getAsFile();
-      break;
-    }
-  }
+Entry trigger rule:
+Only return visibleTrigger if there is real confirmation such as engulfing, pin bar, hammer, doji rejection, inside bar break, lower high/higher low, breakout/breakdown, retest-and-hold, or clean break-and-hold.
+Bounce, pullback, reaction, retracement, ranging, or consolidation alone is not a trigger.
 
-  if (!imageFile) return;
+Return exactly this JSON shape:
+{
+  "isTradingChart": true,
+  "chartValidityReason": "brief reason",
+  "hasUsablePriceData": true,
+  "visibleCandleCount": 80,
+  "chartDataQuality": "usable",
+  "selectedDateVisible": true,
+  "insufficientDataReason": null,
+  "detectedInstrument": "GBPUSD or null",
+  "detectedTimeframe": "H1 or M5 or H4 or D1 or W1 or MN or null",
+  "latestVisibleDate": "YYYY-MM-DD or null",
+  "dateConfidence": "high or medium or low",
+  "visibleTrigger": "brief trigger description or null",
+  "triggerDirection": "bullish or bearish or neutral or null",
+  "triggerConfidence": "high or medium or low",
+  "notes": "brief note"
+}`;
 
-  event.preventDefault();
+const CONFIRMED_TRIGGER_WORDS = [
+  "engulfing", "pin bar", "pinbar", "hammer", "doji", "inside bar", "lower high",
+  "higher low", "breakout", "breakdown", "break-and-hold", "break and hold",
+  "head and shoulders", "quasimodo", "channel", "flag", "triangle", "rejection"
+];
 
-  var ext = imageFile.type && imageFile.type.indexOf("png") !== -1 ? "png" : "jpg";
-  var pastedFile = new File(
-    [imageFile],
-    "pasted-chart-" + new Date().toISOString().replace(/[:.]/g, "-") + "." + ext,
-    { type: imageFile.type || "image/png" }
-  );
+const CONTEXT_ONLY_TRIGGER_WORDS = [
+  "bounce", "bouncing", "pullback", "pull back", "retracement", "retrace",
+  "consolidation", "consolidating", "reaction", "range", "ranging", "moving away"
+];
 
-  handleFile(pastedFile, "pasted");
-});
-
-analyzeBtn.addEventListener("click", runAnalysis);
-analyzeOverlayBtn.addEventListener("click", runAnalysis);
-
-resetBtn.addEventListener("click", function () {
-  selectedFile = null;
-  chartFile.value = "";
-  chartPreview.src = "";
-  if (chartModalImg) chartModalImg.src = "";
-  closeExpandedChart();
-  previewWrap.style.display = "none";
-  uploadBox.style.display = "grid";
-  runOverlay.style.display = "none";
-  if (chartCard) {
-    chartCard.classList.remove("csa-has-chart");
-  }
-  userNotes.value = "";
-  hideError();
-  setStatus("Ready for a new chart. Upload, drag, or paste with Ctrl + V.");
-  resetDashboard();
-});
-
-function handleFile(file, source) {
-  if (!file) return;
-
-  if (!file.type || !file.type.startsWith("image/")) {
-    showError("Please upload or paste a valid chart image.");
-    return;
-  }
-
-  selectedFile = file;
-  clearPreviousAnalysisForNewChart(source);
-
-  var reader = new FileReader();
-  reader.onload = function (e) {
-    chartPreview.src = e.target.result;
-    if (chartModalImg) chartModalImg.src = e.target.result;
-    uploadBox.style.display = "none";
-    previewWrap.style.display = "block";
-    if (chartCard) {
-      chartCard.classList.add("csa-has-chart");
-    }
-    runOverlay.style.display = "block";
-    hideError();
-
-    var actionText = source === "pasted" ? "Chart pasted" : source === "dropped" ? "Chart dropped" : "Chart uploaded";
-    setStatus(actionText + ". Previous feedback cleared. Click Run AI Diagnostics.");
-
-    selectedContext.textContent = getSelectedContextText();
+function normalizeSymbol(input = "") {
+  const raw = String(input).trim().toUpperCase().replace(/\s+/g, "");
+  const map = {
+    EURUSD: "EUR/USD", GBPUSD: "GBP/USD", EURCHF: "EUR/CHF", EURGBP: "EUR/GBP",
+    GBPJPY: "GBP/JPY", USDJPY: "USD/JPY", USDCHF: "USD/CHF", USDCAD: "USD/CAD",
+    AUDUSD: "AUD/USD", NZDUSD: "NZD/USD", XAUUSD: "XAU/USD", GOLD: "XAU/USD",
+    BTCUSD: "BTC/USD", BTCUSDT: "BTC/USD",
   };
+  if (map[raw]) return map[raw];
+  if (raw.includes("/")) return raw;
+  if (raw.length === 6) return `${raw.slice(0, 3)}/${raw.slice(3)}`;
+  return raw || "";
+}
 
-  reader.onerror = function () {
-    showError("Could not read the chart image. Please try another screenshot.");
+function comparableInstrument(input = "") {
+  const raw = String(input).toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!raw) return "";
+  if (raw.includes("GOLD")) return "XAUUSD";
+  if (raw.includes("BTCUSDT")) return "BTCUSD";
+  const known = [
+    "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
+    "EURCHF", "EURGBP", "GBPJPY", "XAUUSD", "BTCUSD"
+  ];
+  return known.find((symbol) => raw.includes(symbol)) || normalizeSymbol(raw).replace(/[^A-Z0-9]/g, "");
+}
+
+function comparableTimeframe(input = "") {
+  const raw = String(input).trim().toUpperCase().replace(/\s+/g, "");
+  const cleaned = raw.replace(/[^A-Z0-9]/g, "");
+  if (!raw || raw === "NOTPROVIDED" || raw === "NOTDETECTED" || raw === "NULL") return "";
+  const map = {
+    "1": "M1", "1M": "M1", M1: "M1", "1MIN": "M1",
+    "5": "M5", "5M": "M5", M5: "M5", "5MIN": "M5",
+    "15": "M15", "15M": "M15", M15: "M15", "15MIN": "M15",
+    "30": "M30", "30M": "M30", M30: "M30", "30MIN": "M30",
+    "60": "H1", "60M": "H1", "1H": "H1", H1: "H1",
+    "240": "H4", "240M": "H4", "4H": "H4", H4: "H4",
+    D: "D1", "1D": "D1", D1: "D1", DAILY: "D1",
+    W: "W1", "1W": "W1", W1: "W1", WEEKLY: "W1",
+    MN: "MN", MTH: "MN", MONTH: "MN", MONTHLY: "MN", "1MO": "MN", "1MON": "MN", "1MONTH": "MN",
   };
-
-  reader.readAsDataURL(file);
+  return map[raw] || map[cleaned] || cleaned;
 }
 
-async function runAnalysis(e) {
-      if (e) e.stopPropagation();
-      if (analyzeBtn && analyzeBtn.disabled) return;
-
-      if (!selectedFile) {
-        showError("Please upload a chart screenshot first.");
-        return;
-      }
-
-      if (!chartDate || !chartDate.value) {
-        showError("Please select the chart/trade date so CSA Coach can fetch the correct Monday-to-Friday market data.");
-        return;
-      }
-
-      hideError();
-      setStatus("Preparing chart image...");
-      setLoadingState(true);
-
-      selectedContext.textContent = getSelectedContextText();
-      coachPlanText.innerHTML =
-        '<div class="csa-ai-section"><div class="csa-ai-heading">Analyzing chart</div><div class="csa-ai-body">Reading the uploaded chart and organizing the CSA area identification into cleaner sections...</div></div>';
-
-      try {
-        var formData = new FormData();
-
-        // IMPORTANT:
-        // The backend expects the uploaded file field to be named "chart".
-        // Do not send this request as JSON. It must be multipart/form-data.
-        formData.append("chart", selectedFile);
-        formData.append("instrument", pair.value);
-        formData.append("pair", pair.value);
-        formData.append("selectedPair", pair.value);
-        formData.append("timeframe", timeframe.value);
-        formData.append("selectedTimeframe", timeframe.value);
-        formData.append("analysisType", analysisType.value);
-        formData.append("tradeMode", analysisType.value);
-        formData.append("notes", userNotes.value || "");
-        formData.append("userNotes", userNotes.value || "");
-        formData.append("chartDate", chartDate.value || "");
-        formData.append("tradeDate", chartDate.value || "");
-        formData.append("timezone", "UTC");
-
-        setStatus("Fetching market data and running CSA diagnostics... please wait.");
-
-        var response = await fetch(API_URL, {
-          method: "POST",
-          body: formData
-        });
-
-        var rawText = await response.text();
-        var data;
-
-        try {
-          data = JSON.parse(rawText);
-        } catch (err) {
-          data = { analysis: rawText };
-        }
-
-        if (!response.ok) {
-          throw new Error(
-            data.error ||
-              data.message ||
-              data.details ||
-              "The backend returned an error."
-          );
-        }
-
-        var analysis = unwrap(data);
-        analysis.selectedPair = analysis.selectedPair || pair.value;
-        analysis.selectedTimeframe = analysis.selectedTimeframe || timeframe.value;
-
-        updateDashboard(analysis);
-        setStatus("Analysis completed.");
-      } catch (error) {
-        console.error(error);
-        showError(error.message || "Something went wrong while analyzing the chart.");
-        setStatus("");
-      } finally {
-        setLoadingState(false);
-      }
-    }
-
-    function updateDashboard(data) {
-  data = unwrap(data || {});
-
-  // Helpful when checking the browser console after a test.
-  console.log("CSA BACKEND RESPONSE:", data);
-
-  var dashboard = data.dashboard || {};
-  var dashboardCards = data.dashboardCards || {};
-
-  function firstValue(values, fallback) {
-    for (var i = 0; i < values.length; i += 1) {
-      var value = values[i];
-      if (value !== undefined && value !== null && value !== "") return value;
-    }
-    return fallback;
-  }
-
-  function firstArray(values, fallback) {
-    for (var i = 0; i < values.length; i += 1) {
-      var value = values[i];
-      if (Array.isArray(value) && value.length) return value;
-    }
-    return fallback || [];
-  }
-
-  function firstObject(values, fallback) {
-    for (var i = 0; i < values.length; i += 1) {
-      var value = values[i];
-      if (value && typeof value === "object" && !Array.isArray(value)) return value;
-    }
-    return fallback || {};
-  }
-
-  var context =
-    firstObject([
-      data.chartContextCheck,
-      data.contextCheck,
-      data.chartContext,
-      dashboard.chartContextCheck,
-      dashboard.contextCheck,
-      dashboardCards.chartContextCheck
-    ], {});
-
-  var setupQuality =
-    firstObject([
-      data.setupQuality,
-      dashboard.setupQuality,
-      dashboardCards.setupQuality
-    ], {
-      score: firstValue([data.setupQualityScore, data.structureScore], 0),
-      label: firstValue([data.setupQualityLabel], "Unavailable"),
-      summary: firstValue([data.setupQualitySummary], "Setup quality was not returned.")
-    });
-
-  var entryAccuracy =
-    firstObject([
-      data.entryAccuracy,
-      dashboard.entryAccuracy,
-      dashboardCards.entryAccuracy
-    ], {
-      score: firstValue([data.entryAccuracyScore, data.executionScore], 0),
-      label: firstValue([data.entryAccuracyLabel], "Unavailable"),
-      summary: firstValue([data.entryAccuracySummary], "Entry accuracy was not returned.")
-    });
-
-  var riskManagement =
-    firstObject([
-      data.riskManagement,
-      dashboard.riskManagement,
-      dashboardCards.riskManagement
-    ], {
-      score: firstValue([data.riskManagementScore, data.riskScore], 0),
-      label: firstValue([data.riskManagementLabel], "Unavailable"),
-      summary: firstValue([data.riskManagementSummary], "Risk management was not returned.")
-    });
-
-  var strengths =
-    firstArray([
-      data.strengths,
-      data.whatYouDidWell,
-      dashboard.strengths,
-      dashboardCards.strengths
-    ], []);
-
-  var weaknesses =
-    firstArray([
-      data.weaknesses,
-      data.whatCostYouProfit,
-      dashboard.weaknesses,
-      dashboardCards.weaknesses
-    ], []);
-
-  var mistakes =
-    firstArray([
-      data.aiMistakeDetectionHub,
-      data.mistakeDetectionHub,
-      data.mistakeHub,
-      data.mistakes,
-      dashboard.aiMistakeDetectionHub,
-      dashboard.mistakes,
-      dashboardCards.aiMistakeDetectionHub
-    ], []);
-
-  var selectedPair = firstValue([
-    context.selectedInstrument,
-    data.selectedPair,
-    data.pair
-  ], pair.value);
-
-  var selectedTimeframe = firstValue([
-    context.selectedTimeframe,
-    data.selectedTimeframe,
-    data.timeframe
-  ], timeframe.value);
-
-  var detectedPair = firstValue([
-    context.detectedInstrument,
-    data.detectedPair,
-    data.chartDetection && data.chartDetection.detectedInstrument
-  ], "Not clearly visible");
-
-  var detectedTimeframe = firstValue([
-    context.detectedTimeframe,
-    data.detectedTimeframe,
-    data.chartDetection && data.chartDetection.detectedTimeframe
-  ], "Not clearly visible");
-
-  var ctxStatus = firstValue([
-    context.status,
-    data.chartContextStatus,
-    data.contextStatus
-  ], "Could not verify");
-
-  selectedContext.textContent = selectedPair + " / " + selectedTimeframe;
-  detectedContext.textContent = detectedPair + " / " + detectedTimeframe;
-  contextStatus.textContent = ctxStatus;
-  contextBox.className = "csa-context-box " + getContextClass(ctxStatus);
-
-  var setupScore = normalizeScore(firstValue([setupQuality.score, data.setupQualityScore, data.structureScore], 0));
-  var entryScore = normalizeScore(firstValue([entryAccuracy.score, data.entryAccuracyScore, data.executionScore], 0));
-  var riskScore = normalizeScore(firstValue([riskManagement.score, data.riskManagementScore, data.riskScore], 0));
-
-  var confidence = normalizeScore(firstValue([
-    data.confidence,
-    Math.round((setupScore + entryScore + riskScore) / 3)
-  ], 0));
-
-  var grade = firstValue([data.grade], getGradeFromScore(confidence));
-
-  gradeText.textContent = grade;
-  confidenceText.textContent = confidence + "/100";
-  gradeRing.style.background =
-    "radial-gradient(circle at center, #08101b 0 52%, transparent 53%), conic-gradient(#00c985 0deg, #00c985 " +
-    Math.min(360, confidence * 3.6) +
-    "deg, #132033 " +
-    Math.min(360, confidence * 3.6) +
-    "deg)";
-
-  structureScoreText.textContent = setupScore + "/100";
-  executionScoreText.textContent = entryScore + "/100";
-  riskScoreText.textContent = riskScore + "/100";
-
-  structureBar.style.width = setupScore + "%";
-  executionBar.style.width = entryScore + "%";
-  riskBar.style.width = riskScore + "%";
-
-  if (!strengths.length && setupQuality.summary) {
-    strengths = [setupQuality.summary];
-  }
-
-  if (!weaknesses.length && entryAccuracy.summary) {
-    weaknesses = [entryAccuracy.summary, riskManagement.summary].filter(Boolean);
-  }
-
-  renderList(
-    strengthsList,
-    strengths.length ? strengths : ["CSA Coach completed the review, but no strength item was returned."]
-  );
-
-  renderList(
-    weaknessesList,
-    weaknesses.length ? weaknesses : ["No major weakness detected from the available CSA structure data."]
-  );
-
-  renderMistakes(mistakes);
-
-  var plan =
-    firstValue([
-      data.summary,
-      data.analysis,
-      data.todaysLesson,
-      data.riskComment
-    ], "Upload a clearer chart so CSA Coach can identify the correct CSA support, resistance, supply, and demand areas.");
-
-  coachPlanText.innerHTML = formatCoachPlan(plan);
-} function resetDashboard() {
-  selectedContext.textContent = getSelectedContextText();
-  detectedContext.textContent = "Waiting for chart";
-  contextStatus.textContent = "Not analyzed yet";
-  contextBox.className = "csa-context-box warn";
-  gradeText.textContent = "--";
-  confidenceText.textContent = "0/100";
-  gradeRing.style.background = "radial-gradient(circle at center, #08101b 0 52%, transparent 53%), conic-gradient(#00c985 0deg, #00c985 0deg, #132033 0deg)";
-  structureScoreText.textContent = "0/100";
-  executionScoreText.textContent = "0/100";
-  riskScoreText.textContent = "0/100";
-  structureBar.style.width = "0%";
-  executionBar.style.width = "0%";
-  riskBar.style.width = "0%";
-  strengthsList.innerHTML = "<li>New chart feedback will appear here after diagnostics.</li>";
-  weaknessesList.innerHTML = "<li>No weaknesses shown yet. Run diagnostics on the current chart first.</li>";
-  mistakeList.innerHTML = '<div class="csa-mistake-item"><span>•</span><span>No analysis yet for this chart</span><span class="csa-risk-tag">Waiting</span></div>';
-  coachPlanText.innerHTML = '<div class="csa-ai-section"><div class="csa-ai-body">Upload, drag, or paste a chart, then click Run AI Diagnostics to get feedback.</div></div>';
+function normalizeTimeframe(input = "") {
+  const tf = comparableTimeframe(input);
+  const map = { M1: "1min", M5: "5min", M15: "15min", M30: "30min", H1: "1h", H4: "4h", D1: "1day", W1: "1week", MN: "1month" };
+  return map[tf] || "1h";
 }
 
-function formatCoachPlan(text) {
-  if (!text || typeof text !== "string") {
-    return '<div class="csa-ai-section"><div class="csa-ai-body">No clear analysis returned yet.</div></div>';
-  }
-
-  var cleaned = text
-    .replace(/\r/g, "")
-    .replace(/\*\*/g, "")
-    .replace(/#{1,6}\s*/g, "")
-    .trim();
-
-  if (!cleaned) {
-    return '<div class="csa-ai-section"><div class="csa-ai-body">No clear analysis returned yet.</div></div>';
-  }
-
-  var splitMarker = "READ_MORE_DETAILS:";
-  var mainText = cleaned;
-  var readMoreText = "";
-
-  if (cleaned.indexOf(splitMarker) !== -1) {
-    var parts = cleaned.split(splitMarker);
-    mainText = parts[0].trim();
-    readMoreText = parts.slice(1).join(splitMarker).trim();
-  }
-
-  var html = formatCoachPlanSections(mainText);
-
-  if (readMoreText) {
-    html +=
-      '<details class="csa-read-more-details">' +
-        '<summary>Read More Details</summary>' +
-        '<div class="csa-read-more-content">' +
-          formatCoachPlanSections(readMoreText) +
-        '</div>' +
-      '</details>';
-  }
-
-  return html;
+function normalizeAnalysisType(input = "") {
+  const raw = String(input).trim().toLowerCase();
+  if (raw.includes("pre") || raw.includes("before")) return "pre-trade";
+  return "post-trade";
 }
 
-function formatCoachPlanSections(text) {
-  var cleaned = String(text || "").trim();
+function hasStrongInstrumentMismatch({ selectedInstrument, detectedInstrument }) {
+  const selected = comparableInstrument(selectedInstrument);
+  const detected = comparableInstrument(detectedInstrument);
+  if (!selected || !detected) return false;
+  if (selected.length < 6 || detected.length < 6) return false;
+  return selected !== detected;
+}
 
-  if (!cleaned) {
+function hasStrongTimeframeMismatch({ selectedTimeframe, detectedTimeframe }) {
+  const selected = comparableTimeframe(selectedTimeframe);
+  const detected = comparableTimeframe(detectedTimeframe);
+  if (!selected || !detected) return false;
+  return selected !== detected;
+}
+
+function parseISODateOnly(value) {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatDateOnly(date) { return date.toISOString().slice(0, 10); }
+function addDays(date, days) { const next = new Date(date); next.setUTCDate(next.getUTCDate() + days); return next; }
+function safeNumber(value) { const n = Number(value); return Number.isFinite(n) ? n : null; }
+function candleDateOnly(datetimeValue = "") { return String(datetimeValue).slice(0, 10); }
+
+function formatPrice(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "N/A";
+  if (Math.abs(n) >= 1000) return n.toFixed(2);
+  if (Math.abs(n) >= 100) return n.toFixed(3);
+  if (Math.abs(n) >= 10) return n.toFixed(4);
+  return n.toFixed(5);
+}
+
+function stripCodeFence(text = "") {
+  return String(text).replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
+}
+
+function extractJsonObject(text = "") {
+  const cleaned = stripCodeFence(text);
+  try { return JSON.parse(cleaned); } catch {}
+  const match = cleaned.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try { return JSON.parse(match[0]); } catch { return null; }
+}
+
+function clampScore(value, min = 0, max = 100) {
+  const num = Number(value);
+  return Number.isFinite(num) ? Math.max(min, Math.min(max, Math.round(num))) : min;
+}
+
+function scoreLabel(score) {
+  if (score >= 85) return "Excellent";
+  if (score >= 75) return "Good";
+  if (score >= 60) return "Fair";
+  if (score >= 40) return "Weak";
+  return "Poor";
+}
+
+function makeSimpleMistake(title, severity = "REVIEW") {
+  const cleanTitle = String(title || "").trim() || "Review setup";
+  const cleanSeverity = String(severity || "REVIEW").trim().toUpperCase();
+  return { title: cleanTitle, severity: cleanSeverity, tag: cleanSeverity, label: cleanSeverity, detail: "", correction: "", summary: "" };
+}
+
+function normalizeArrayOfStrings(value = [], fallback = []) {
+  if (!Array.isArray(value)) return fallback;
+  return value.map((item) => {
+    if (typeof item === "string") return item.trim();
+    if (item && typeof item === "object") return String(item.title || item.summary || item.detail || "").trim();
     return "";
+  }).filter(Boolean);
+}
+
+function normalizeVisualMistakeItems(items = []) {
+  if (!Array.isArray(items)) return [];
+  return items.map((item) => {
+    if (typeof item === "string") return makeSimpleMistake(item, "REVIEW");
+    return makeSimpleMistake(item?.title || item?.mistake || item?.name || "", item?.tag || item?.severity || item?.label || "REVIEW");
+  }).filter((item) => item.title && item.title !== "Review setup").slice(0, 5);
+}
+
+function sanitizeVisibleTrigger(trigger, confidence = "low") {
+  const text = String(trigger || "").trim();
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  const hasConfirmedWord = CONFIRMED_TRIGGER_WORDS.some((word) => lower.includes(word));
+  const hasContextOnlyWord = CONTEXT_ONLY_TRIGGER_WORDS.some((word) => lower.includes(word));
+  const isLowConfidence = String(confidence || "low").toLowerCase() === "low";
+  if (isLowConfidence) return null;
+  if (hasContextOnlyWord && !hasConfirmedWord) return null;
+  if (!hasConfirmedWord) return null;
+  return text;
+}
+
+function getCleanBreakTolerance(symbol = "") {
+  const compact = comparableInstrument(symbol);
+  if (compact.includes("JPY")) return 0.02;
+  if (compact.includes("XAU")) return 0.2;
+  if (compact.includes("BTC")) return 20;
+  return 0.0002;
+}
+
+function compareHighWithTolerance(currentHigh, previousHigh, symbol = "") {
+  const current = Number(currentHigh), previous = Number(previousHigh), tolerance = getCleanBreakTolerance(symbol);
+  if (!Number.isFinite(current) || !Number.isFinite(previous)) return { cleanBreak: false, difference: null, tolerance, label: "unavailable" };
+  const difference = current - previous;
+  if (difference > tolerance) return { cleanBreak: true, difference, tolerance, label: "clean higher high" };
+  if (Math.abs(difference) <= tolerance) return { cleanBreak: false, difference, tolerance, label: "equal high / retest of previous high" };
+  return { cleanBreak: false, difference, tolerance, label: "failed to break previous high" };
+}
+
+function compareLowWithTolerance(currentLow, previousLow, symbol = "") {
+  const current = Number(currentLow), previous = Number(previousLow), tolerance = getCleanBreakTolerance(symbol);
+  if (!Number.isFinite(current) || !Number.isFinite(previous)) return { cleanBreak: false, difference: null, tolerance, label: "unavailable" };
+  const difference = previous - current;
+  if (difference > tolerance) return { cleanBreak: true, difference, tolerance, label: "clean lower low" };
+  if (Math.abs(previous - current) <= tolerance) return { cleanBreak: false, difference, tolerance, label: "equal low / retest of previous low" };
+  return { cleanBreak: false, difference, tolerance, label: "held above previous low" };
+}
+
+function getSupportedCsaTimeframeProfile(timeframe = "H1") {
+  const tf = comparableTimeframe(timeframe) || "H1";
+  if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) {
+    return { selectedTimeframe: tf, interval: normalizeTimeframe(tf), structureMode: "daily-in-week", structureLabel: "Daily highs/lows inside the selected Monday-to-Friday week", sourceUnitSingular: "day", sourceUnitPlural: "daily levels", firstPeriodText: "Monday high/low creates first support and resistance.", startPriceLabel: "Monday open", currentPriceLabel: "latest close for selected week", rangeKind: "week", breakdownTitle: "Monday-to-Friday CSA Breakdown" };
   }
+  if (tf === "H4") return { selectedTimeframe: tf, interval: "4h", structureMode: "weekly-in-month", structureLabel: "Weekly highs/lows inside the selected calendar month", sourceUnitSingular: "week", sourceUnitPlural: "weekly levels", firstPeriodText: "First week high/low creates first support and resistance.", startPriceLabel: "first week open", currentPriceLabel: "latest close for selected month", rangeKind: "month", breakdownTitle: "Weekly CSA Breakdown For Selected Month" };
+  if (tf === "D1") return { selectedTimeframe: tf, interval: "1day", structureMode: "monthly-in-year", structureLabel: "Monthly highs/lows inside the selected calendar year", sourceUnitSingular: "month", sourceUnitPlural: "monthly levels", firstPeriodText: "First month high/low creates first support and resistance.", startPriceLabel: "first month open", currentPriceLabel: "latest close for selected year", rangeKind: "year", breakdownTitle: "Monthly CSA Breakdown For Selected Year" };
+  if (tf === "W1") return { selectedTimeframe: tf, interval: "1week", structureMode: "quarterly-in-year", structureLabel: "Quarterly highs/lows inside the selected calendar year", sourceUnitSingular: "quarter", sourceUnitPlural: "quarterly levels", firstPeriodText: "First quarter high/low creates first support and resistance.", startPriceLabel: "first quarter open", currentPriceLabel: "latest close for selected year", rangeKind: "year", breakdownTitle: "Quarterly CSA Breakdown For Selected Year" };
+  if (tf === "MN") return { selectedTimeframe: tf, interval: "1month", structureMode: "yearly-in-multi-year", structureLabel: "Yearly highs/lows across selected year plus previous 4 years", sourceUnitSingular: "year", sourceUnitPlural: "yearly levels", firstPeriodText: "First year high/low creates first support and resistance.", startPriceLabel: "first year open", currentPriceLabel: "latest close for selected multi-year range", rangeKind: "multi-year range", breakdownTitle: "Yearly CSA Breakdown For Monthly Chart" };
+  return getSupportedCsaTimeframeProfile("H1");
+}
 
-  var lines = cleaned.split("\n").map(function (line) {
-    return line.trim();
-  });
+function getMonthName(monthIndex) {
+  return new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2026, monthIndex, 1)));
+}
+function getQuarterLabel(monthIndex) { return monthIndex <= 2 ? "Q1" : monthIndex <= 5 ? "Q2" : monthIndex <= 8 ? "Q3" : "Q4"; }
+function weekdayNameFromDate(dateString) { return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(new Date(`${dateString}T00:00:00.000Z`)); }
 
-  var sections = [];
-  var current = null;
+function getWeekRangeForDate(chartDate, useFullWeek = false) {
+  const day = chartDate.getUTCDay();
+  const monday = addDays(chartDate, day === 0 ? -6 : 1 - day);
+  const friday = addDays(monday, 4);
+  const end = useFullWeek ? friday : chartDate < friday ? chartDate : friday;
+  return { start: monday, end, final: friday, startDate: formatDateOnly(monday), endDate: formatDateOnly(end), finalDate: formatDateOnly(friday) };
+}
 
-  lines.forEach(function (line) {
-    if (!line) return;
+function getMonthRangeForDate(chartDate, useFullMonth = false) {
+  const year = chartDate.getUTCFullYear(), month = chartDate.getUTCMonth();
+  const start = new Date(Date.UTC(year, month, 1));
+  const final = new Date(Date.UTC(year, month + 1, 0));
+  const end = useFullMonth ? final : chartDate < final ? chartDate : final;
+  return { start, end, final, startDate: formatDateOnly(start), endDate: formatDateOnly(end), finalDate: formatDateOnly(final) };
+}
 
-    var headingMatch = line.match(/^-?\s*([A-Za-z][A-Za-z0-9\s/&-]{2,60}):\s*(.*)$/);
+function getYearRangeForDate(chartDate, useFullYear = false) {
+  const year = chartDate.getUTCFullYear();
+  const start = new Date(Date.UTC(year, 0, 1));
+  const final = new Date(Date.UTC(year, 11, 31));
+  const end = useFullYear ? final : chartDate < final ? chartDate : final;
+  return { start, end, final, startDate: formatDateOnly(start), endDate: formatDateOnly(end), finalDate: formatDateOnly(final) };
+}
 
-    if (headingMatch && !line.startsWith("- ")) {
-      if (current) sections.push(current);
+function getMultiYearRangeForDate(chartDate, yearsBack = 4, useFullFinalYear = false) {
+  const year = chartDate.getUTCFullYear();
+  const start = new Date(Date.UTC(year - yearsBack, 0, 1));
+  const final = new Date(Date.UTC(year, 11, 31));
+  const end = useFullFinalYear ? final : chartDate < final ? chartDate : final;
+  return { start, end, final, startDate: formatDateOnly(start), endDate: formatDateOnly(end), finalDate: formatDateOnly(final) };
+}
 
-      current = {
-        heading: headingMatch[1].trim(),
-        body: []
-      };
+function getStructureRangeForProfile(chartDate, profile, analysisType = "post-trade") {
+  // IMPORTANT: Always stop at the selected chart/trade date.
+  // Do not use candles after the selected date to judge the current setup.
+  // Example: if the selected date is Tuesday, the review must not use Wednesday-Friday data.
+  const useFull = false;
+  if (profile.structureMode === "daily-in-week") return getWeekRangeForDate(chartDate, useFull);
+  if (profile.structureMode === "weekly-in-month") return getMonthRangeForDate(chartDate, useFull);
+  if (["monthly-in-year", "quarterly-in-year"].includes(profile.structureMode)) return getYearRangeForDate(chartDate, useFull);
+  if (profile.structureMode === "yearly-in-multi-year") return getMultiYearRangeForDate(chartDate, 4, useFull);
+  return getWeekRangeForDate(chartDate, useFull);
+}
 
-      if (headingMatch[2]) {
-        current.body.push(headingMatch[2].trim());
-      }
+function getPeriodKeyAndLabel(date, profile) {
+  const year = date.getUTCFullYear(), month = date.getUTCMonth();
+  if (profile.structureMode === "daily-in-week") { const dateOnly = formatDateOnly(date); return { key: dateOnly, label: weekdayNameFromDate(dateOnly), date: dateOnly }; }
+  if (profile.structureMode === "weekly-in-month") {
+    const monthStart = new Date(Date.UTC(year, month, 1));
+    const weekNumber = Math.ceil((date.getUTCDate() + monthStart.getUTCDay()) / 7);
+    return { key: `${year}-${String(month + 1).padStart(2, "0")}-W${weekNumber}`, label: `Week ${weekNumber}`, date: formatDateOnly(date) };
+  }
+  if (profile.structureMode === "monthly-in-year") return { key: `${year}-${String(month + 1).padStart(2, "0")}`, label: getMonthName(month), date: `${year}-${String(month + 1).padStart(2, "0")}-01` };
+  if (profile.structureMode === "quarterly-in-year") { const q = getQuarterLabel(month); return { key: `${year}-${q}`, label: q, date: `${year}-${q}` }; }
+  if (profile.structureMode === "yearly-in-multi-year") return { key: String(year), label: String(year), date: `${year}-01-01` };
+  const dateOnly = formatDateOnly(date);
+  return { key: dateOnly, label: dateOnly, date: dateOnly };
+}
+
+function getOutputSizeForInterval(interval) {
+  const map = { "1min": "5000", "5min": "5000", "15min": "3000", "30min": "2000", "1h": "1000", "4h": "500", "1day": "400", "1week": "300", "1month": "120" };
+  return map[interval] || "1000";
+}
+
+function buildStructureLevelsFromCandles(candles, structureRange, profile) {
+  const grouped = new Map();
+  candles.forEach((bar) => {
+    const dateOnly = candleDateOnly(bar.datetime);
+    if (!dateOnly) return;
+    const date = new Date(`${dateOnly}T00:00:00.000Z`);
+    if (Number.isNaN(date.getTime())) return;
+    if (dateOnly < structureRange.startDate || dateOnly > structureRange.endDate) return;
+    if (profile.structureMode === "daily-in-week") { const dayNum = date.getUTCDay(); if (dayNum < 1 || dayNum > 5) return; }
+    const open = safeNumber(bar.open), high = safeNumber(bar.high), low = safeNumber(bar.low), close = safeNumber(bar.close);
+    if ([open, high, low, close].some((v) => v === null)) return;
+    const period = getPeriodKeyAndLabel(date, profile);
+    if (!grouped.has(period.key)) {
+      grouped.set(period.key, { key: period.key, date: period.date, day: period.label, periodLabel: period.label, open, high, low, close, candleCount: 1 });
     } else {
-      if (!current) {
-        current = {
-          heading: "",
-          body: []
-        };
-      }
-      current.body.push(line);
+      const existing = grouped.get(period.key);
+      existing.high = Math.max(existing.high, high);
+      existing.low = Math.min(existing.low, low);
+      existing.close = close;
+      existing.candleCount += 1;
     }
   });
+  return Array.from(grouped.values()).sort((a, b) => String(a.key).localeCompare(String(b.key)));
+}
 
-  if (current) sections.push(current);
+function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
+  const areas = [];
+  levels.forEach((period, index) => {
+    const label = period.periodLabel || period.day || period.key;
+    if (index === 0) {
+      areas.push({ day: label, period: label, date: period.date, type: "resistance", price: period.high, priceText: formatPrice(period.high) });
+      areas.push({ day: label, period: label, date: period.date, type: "support", price: period.low, priceText: formatPrice(period.low) });
+      return;
+    }
+    const previous = levels[index - 1];
+    const highComparison = compareHighWithTolerance(period.high, previous.high, symbol);
+    const lowComparison = compareLowWithTolerance(period.low, previous.low, symbol);
+    areas.push({ day: label, period: label, date: period.date, type: highComparison.cleanBreak ? "resistance" : "supply", price: period.high, priceText: formatPrice(period.high), comparison: highComparison });
+    areas.push({ day: label, period: label, date: period.date, type: lowComparison.cleanBreak ? "support" : "demand", price: period.low, priceText: formatPrice(period.low), comparison: lowComparison });
+  });
+  return areas;
+}
 
-  if (!sections.length) {
-    sections = [{ heading: "", body: [cleaned] }];
+
+function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
+  if (!Array.isArray(levels) || levels.length < 2) {
+    return {
+      bias: "Insufficient data",
+      biasCode: "insufficient",
+      confidence: "low",
+      traderBias: "Not enough market data to form a reliable direction.",
+      higherTimeframeView: "Not enough market data to compare the key highs, lows, and closes.",
+      timeframeView: "Not enough chart data.",
+      reason: `At least two ${profile.sourceUnitPlural} are needed.`,
+      periodStartPrice: null,
+      presentPrice: null,
+      periodHigh: null,
+      periodLow: null,
+      priceMove: null,
+      movePercentOfRange: null,
+      highBreakCount: 0,
+      lowBreakCount: 0,
+      risingCloses: 0,
+      fallingCloses: 0,
+      rangeScore: 0,
+    };
   }
 
-  return sections.map(function (section) {
-    var bodyHtml = "";
-    var openList = false;
+  const first = levels[0];
+  const last = levels[levels.length - 1];
+  const periodStartPrice = Number(first.open);
+  const presentPrice = Number(last.close);
+  const periodHigh = Math.max(...levels.map((item) => Number(item.high)));
+  const periodLow = Math.min(...levels.map((item) => Number(item.low)));
+  const fullRange = Math.max(Math.abs(periodHigh - periodLow), getCleanBreakTolerance(symbol));
+  const priceMove = presentPrice - periodStartPrice;
+  const movePercentOfRange = Math.abs(priceMove) / fullRange;
 
-    section.body.forEach(function (line) {
-      var isBullet = /^[-•*]\s+/.test(line);
+  const anchorHigh = Number(first.high);
+  const anchorLow = Number(first.low);
+  const anchorRange = Math.max(Math.abs(anchorHigh - anchorLow), getCleanBreakTolerance(symbol));
+  const anchorPositionPercent = Number.isFinite(presentPrice) && Number.isFinite(anchorHigh) && Number.isFinite(anchorLow)
+    ? ((presentPrice - anchorLow) / anchorRange) * 100
+    : null;
+  const anchorLabel = first.periodLabel || first.day || first.key || "the first key range";
+  let rangePositionNote = "Price position inside the first key range is not clear.";
+  if (Number.isFinite(anchorPositionPercent)) {
+    if (presentPrice > anchorHigh + getCleanBreakTolerance(symbol)) {
+      rangePositionNote = `Price is above ${anchorLabel} resistance around ${formatPrice(anchorHigh)}, which shows bullish breakout pressure.`;
+    } else if (presentPrice < anchorLow - getCleanBreakTolerance(symbol)) {
+      rangePositionNote = `Price is below ${anchorLabel} support around ${formatPrice(anchorLow)}, which shows bearish breakout pressure.`;
+    } else if (anchorPositionPercent >= 61.8) {
+      rangePositionNote = `Price is in the upper part of ${anchorLabel}'s range, closer to resistance around ${formatPrice(anchorHigh)}.`;
+    } else if (anchorPositionPercent <= 38.2) {
+      rangePositionNote = `Price is in the lower part of ${anchorLabel}'s range, closer to support around ${formatPrice(anchorLow)}.`;
+    } else {
+      rangePositionNote = `Price is around the middle of ${anchorLabel}'s range, between support around ${formatPrice(anchorLow)} and resistance around ${formatPrice(anchorHigh)}.`;
+    }
+  }
 
-      if (isBullet) {
-        if (!openList) {
-          bodyHtml += "<ul>";
-          openList = true;
-        }
-        bodyHtml += "<li>" + escapeHtml(line.replace(/^[-•*]\s+/, "")) + "</li>";
-      } else {
-        if (openList) {
-          bodyHtml += "</ul>";
-          openList = false;
-        }
-        bodyHtml += "<p>" + escapeHtml(line) + "</p>";
-      }
+  let highBreakCount = 0;
+  let lowBreakCount = 0;
+  let risingCloses = 0;
+  let fallingCloses = 0;
+  let insideOrOverlapCount = 0;
+
+  for (let i = 1; i < levels.length; i += 1) {
+    const highBreak = compareHighWithTolerance(levels[i].high, levels[i - 1].high, symbol).cleanBreak;
+    const lowBreak = compareLowWithTolerance(levels[i].low, levels[i - 1].low, symbol).cleanBreak;
+
+    if (highBreak) highBreakCount += 1;
+    if (lowBreak) lowBreakCount += 1;
+    if (!highBreak && !lowBreak) insideOrOverlapCount += 1;
+
+    if (Number(levels[i].close) > Number(levels[i - 1].close)) risingCloses += 1;
+    if (Number(levels[i].close) < Number(levels[i - 1].close)) fallingCloses += 1;
+  }
+
+  let bullishScore = 0;
+  let bearishScore = 0;
+  let rangeScore = 0;
+
+  if (priceMove > 0) bullishScore += 1;
+  if (priceMove < 0) bearishScore += 1;
+
+  if (movePercentOfRange >= 0.55 && priceMove > 0) bullishScore += 2;
+  if (movePercentOfRange >= 0.55 && priceMove < 0) bearishScore += 2;
+  if (movePercentOfRange < 0.35) rangeScore += 2;
+
+  if (highBreakCount > lowBreakCount) bullishScore += 1.5;
+  if (lowBreakCount > highBreakCount) bearishScore += 1.5;
+  if (highBreakCount === lowBreakCount) rangeScore += 1;
+
+  if (risingCloses > fallingCloses) bullishScore += 1;
+  if (fallingCloses > risingCloses) bearishScore += 1;
+  if (Math.abs(risingCloses - fallingCloses) <= 1) rangeScore += 1;
+
+  if (insideOrOverlapCount >= Math.max(1, Math.floor((levels.length - 1) / 2))) rangeScore += 1.5;
+
+  const nearHigh = (periodHigh - presentPrice) / fullRange <= 0.25;
+  const nearLow = (presentPrice - periodLow) / fullRange <= 0.25;
+  if (nearHigh && priceMove > 0) bullishScore += 0.75;
+  if (nearLow && priceMove < 0) bearishScore += 0.75;
+  if (!nearHigh && !nearLow) rangeScore += 0.75;
+
+  let bias = "Range-bound";
+  let biasCode = "range";
+  let traderBias = "The bigger-picture view is mostly sideways.";
+  let confidence = "medium";
+
+  const scoreDifference = Math.abs(bullishScore - bearishScore);
+
+  if (rangeScore >= Math.max(bullishScore, bearishScore) || scoreDifference < 1.25) {
+    if (bearishScore > bullishScore + 0.25) {
+      bias = "Range-bound with bearish pressure";
+      biasCode = "range_bearish";
+      traderBias = "The bigger-picture view is mostly sideways, but sellers have slightly more pressure.";
+    } else if (bullishScore > bearishScore + 0.25) {
+      bias = "Range-bound with bullish pressure";
+      biasCode = "range_bullish";
+      traderBias = "The bigger-picture view is mostly sideways, but buyers have slightly more pressure.";
+    }
+    confidence = rangeScore >= 3 ? "medium" : "low";
+  } else if (bullishScore > bearishScore) {
+    bias = scoreDifference >= 3 && movePercentOfRange >= 0.45 ? "Bullish" : "Slightly bullish";
+    biasCode = scoreDifference >= 3 && movePercentOfRange >= 0.45 ? "bullish" : "slightly_bullish";
+    traderBias = bias === "Bullish"
+      ? "The bigger-picture view is bullish."
+      : "The bigger-picture view leans bullish, but it is not a clean one-way move.";
+    confidence = scoreDifference >= 3 ? "high" : "medium";
+  } else {
+    bias = scoreDifference >= 3 && movePercentOfRange >= 0.45 ? "Bearish" : "Slightly bearish";
+    biasCode = scoreDifference >= 3 && movePercentOfRange >= 0.45 ? "bearish" : "slightly_bearish";
+    traderBias = bias === "Bearish"
+      ? "The bigger-picture view is bearish."
+      : "The bigger-picture view leans bearish, but it is not a clean one-way move.";
+    confidence = scoreDifference >= 3 ? "high" : "medium";
+  }
+
+  if (String(biasCode || "").includes("range") && Number.isFinite(anchorPositionPercent)) {
+    if (anchorPositionPercent <= 38.2) {
+      bias = "Range-bound with bearish pressure";
+      biasCode = "range_bearish";
+      traderBias = "The bigger-picture view is mostly sideways, but price is trading in the lower part of the first key range, so sellers have pressure for now.";
+    } else if (anchorPositionPercent >= 61.8) {
+      bias = "Range-bound with bullish pressure";
+      biasCode = "range_bullish";
+      traderBias = "The bigger-picture view is mostly sideways, but price is trading in the upper part of the first key range, so buyers have pressure for now.";
+    }
+  }
+
+  const structureLabelForUsers =
+    profile.structureMode === "daily-in-week"
+      ? "this week's daily highs, lows, and closes"
+      : profile.structureMode === "weekly-in-month"
+      ? "this month's weekly highs, lows, and closes"
+      : profile.structureMode === "monthly-in-year"
+      ? "this year's monthly highs, lows, and closes"
+      : profile.structureMode === "quarterly-in-year"
+      ? "this year's quarterly highs, lows, and closes"
+      : "the higher-timeframe highs, lows, and closes";
+
+  const higherTimeframeView =
+    `${traderBias} This is based on ${structureLabelForUsers}. ` +
+    `Price opened around ${formatPrice(periodStartPrice)} and is now around ${formatPrice(presentPrice)}. ` +
+    `The high of the reviewed period is ${formatPrice(periodHigh)} and the low is ${formatPrice(periodLow)}. ` +
+    `${rangePositionNote} ` +
+    `Daily/period closes were mixed: ${risingCloses} higher close(s), ${fallingCloses} lower close(s).`;
+
+  const timeframeView =
+    `The uploaded ${profile.selectedTimeframe || ""} chart should be read as the execution view. ` +
+    `A short-term move on the uploaded chart can be bullish or bearish, but it should still be compared with the bigger-picture view above.`;
+
+  return {
+    bias,
+    biasCode,
+    confidence,
+    traderBias,
+    higherTimeframeView,
+    timeframeView,
+    periodStartPrice,
+    presentPrice,
+    periodHigh,
+    periodLow,
+    priceMove,
+    movePercentOfRange,
+    resistanceCount: highBreakCount,
+    supportCount: lowBreakCount,
+    risingCloses,
+    fallingCloses,
+    highBreakCount,
+    lowBreakCount,
+    bullishScore,
+    bearishScore,
+    rangeScore,
+    anchorHigh,
+    anchorLow,
+    anchorLabel,
+    anchorPositionPercent,
+    rangePositionNote,
+    reason: higherTimeframeView,
+  };
+}
+
+async function fetchTwelveDataStructureLevels({ symbol, chartDate, timeframe = "H1", timezone = "UTC", analysisType = "post-trade" }) {
+  const apiKey = process.env.TWELVE_DATA_API_KEY;
+  const profile = getSupportedCsaTimeframeProfile(timeframe);
+  const empty = (error, range = null) => ({ ok: false, error, dailyLevels: [], csaAreas: [], directionalBias: calculateCsaDirectionalBias([], symbol, profile), rawCandleCount: 0, weekRange: range, symbol, timezone, interval: profile.interval, profile });
+  if (!apiKey) return empty("TWELVE_DATA_API_KEY is missing on the server.");
+  if (!symbol) return empty("Instrument/pair is missing or unsupported.");
+  if (!chartDate) return empty("Final visible chart date is missing.");
+  const structureRange = getStructureRangeForProfile(chartDate, profile, analysisType);
+  const params = new URLSearchParams({ symbol, interval: profile.interval, start_date: `${structureRange.startDate} 00:00:00`, end_date: `${structureRange.endDate} 23:59:59`, timezone, order: "ASC", outputsize: getOutputSizeForInterval(profile.interval), apikey: apiKey });
+  const response = await fetch(`${TWELVE_DATA_BASE_URL}?${params.toString()}`);
+  const data = await response.json();
+  if (!response.ok || data.status === "error" || !Array.isArray(data.values)) return { ...empty(data.message || data.error || `Twelve Data request failed with status ${response.status}.`, structureRange), twelveDataStatus: data.status || "unknown" };
+  const rawCandles = data.values || [];
+  const dailyLevels = buildStructureLevelsFromCandles(rawCandles, structureRange, profile);
+  const csaAreas = buildCsaAreas(dailyLevels, symbol, profile);
+  const directionalBias = calculateCsaDirectionalBias(dailyLevels, symbol, profile);
+  return { ok: dailyLevels.length > 0, error: dailyLevels.length > 0 ? "" : `No usable ${profile.sourceUnitPlural} were returned.`, dailyLevels, csaAreas, directionalBias, rawCandleCount: rawCandles.length, weekRange: structureRange, symbol, timezone, interval: profile.interval, profile };
+}
+
+function areaBrokenByCloseLater(area, levels = [], symbol = "") {
+  if (!area || !Array.isArray(levels)) return false;
+  const level = Number(area.price), tol = getCleanBreakTolerance(symbol);
+  if (!Number.isFinite(level)) return false;
+  const laterPeriods = levels.filter((item) => String(item.date || "") > String(area.date || ""));
+  if (area.type === "supply" || area.type === "resistance") return laterPeriods.some((item) => Number(item.close) > level + tol);
+  if (area.type === "demand" || area.type === "support") return laterPeriods.some((item) => Number(item.close) < level - tol);
+  return false;
+}
+
+function filterValidAreas(areaList = [], levels = [], symbol = "") { return areaList.filter((area) => !areaBrokenByCloseLater(area, levels, symbol)); }
+function filterBrokenAreas(areaList = [], levels = [], symbol = "") { return areaList.filter((area) => areaBrokenByCloseLater(area, levels, symbol)); }
+function splitAreas(areas = []) { return { resistanceAreas: areas.filter((a) => a.type === "resistance"), supportAreas: areas.filter((a) => a.type === "support"), supplyAreas: areas.filter((a) => a.type === "supply"), demandAreas: areas.filter((a) => a.type === "demand") }; }
+function areaLabel(area) { const period = area?.day || area?.period || area?.date || "Unknown period"; return `${period} ${area?.type || "area"} around ${area?.priceText || formatPrice(Number(area?.price))}`; }
+
+function describeFailedArea(area) {
+  const label = areaLabel(area);
+  if (area.type === "support") return `${label} failed because price later closed below it.`;
+  if (area.type === "demand") return `${label} failed because price later closed below demand.`;
+  if (area.type === "resistance") return `${label} failed because price later closed above it.`;
+  if (area.type === "supply") return `${label} failed because price later closed above supply.`;
+  return `${label} failed because price closed through it.`;
+}
+
+function buildFailedAreas({ supportAreas = [], resistanceAreas = [], supplyAreas = [], demandAreas = [], levels = [], symbol = "" }) {
+  const mapArea = (area, failedType, mistakeLabel, newRole) => ({ ...area, failedType, mistakeLabel, newRole, explanation: describeFailedArea(area) });
+  return [
+    ...filterBrokenAreas(supportAreas, levels, symbol).map((area) => mapArea(area, "failed_support", "Failed support area", "Can become resistance if retested from below")),
+    ...filterBrokenAreas(demandAreas, levels, symbol).map((area) => mapArea(area, "failed_demand", "Failed demand area", "Invalid as demand until reclaimed")),
+    ...filterBrokenAreas(resistanceAreas, levels, symbol).map((area) => mapArea(area, "failed_resistance", "Failed resistance area", "Can become support if retested from above")),
+    ...filterBrokenAreas(supplyAreas, levels, symbol).map((area) => mapArea(area, "failed_supply", "Failed supply area", "Invalid as supply until price loses it again")),
+  ].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || String(a.failedType || "").localeCompare(String(b.failedType || "")));
+}
+
+function listAreas(areaList = [], label = "area", max = 3) {
+  if (!Array.isArray(areaList) || !areaList.length) return "- None identified.";
+  return [...areaList].sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))).slice(0, max).map((area) => `- ${area.day} ${label}: ${area.priceText}`).join("\n");
+}
+
+function listFailedAreas(failedAreas = [], max = 6) {
+  if (!Array.isArray(failedAreas) || !failedAreas.length) return "- None detected.";
+  return failedAreas.slice(0, max).map((area) => `- ${area.mistakeLabel}: ${area.explanation}`).join("\n");
+}
+
+function simpleFailedAreaTitle(area) {
+  const type = String(area?.type || "area").toLowerCase();
+  if (type === "support") return "Failed support area";
+  if (type === "demand") return "Failed demand area";
+  if (type === "resistance") return "Failed resistance area";
+  if (type === "supply") return "Failed supply area";
+  return "Failed CSA area";
+}
+
+function buildFrameworkMistakeHub({ failedAreas = [], hasConfirmedTrigger = false, rejectedContext = null, mixedBias = false, marketOk = true, entryAccuracyScore = 0, riskManagementScore = 0 }) {
+  const items = [];
+  const add = (title, tag) => { if (title && !items.some((item) => item.title.toLowerCase() === String(title).toLowerCase())) items.push(makeSimpleMistake(title, tag)); };
+  if (!marketOk) add("Market data unavailable", "DATA ISSUE");
+  if (!hasConfirmedTrigger) add("No visible trigger", "REVIEW");
+  if (rejectedContext && !hasConfirmedTrigger) add("Context only, no trigger", "DISCIPLINE");
+  if (mixedBias) add("Unclear structure", "STRUCTURAL");
+  failedAreas.slice(0, 4).forEach((area) => add(simpleFailedAreaTitle(area), "STRUCTURAL"));
+  if (Number(entryAccuracyScore) > 0 && Number(entryAccuracyScore) < 50) add("Entry evidence weak", "WARNING");
+  if (Number(riskManagementScore) > 0 && Number(riskManagementScore) < 55) add("Risk evidence unclear", "REVIEW");
+  if (!items.length) add("No major mistake detected", "REVIEW");
+  return items.slice(0, 5);
+}
+
+async function detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument = "", selectedTimeframe = "", selectedDateText = "", analysisType = "post-trade" }) {
+  const fallback = (reason) => ({ ok: false, isTradingChart: false, chartValidityReason: reason, hasUsablePriceData: false, visibleCandleCount: 0, chartDataQuality: "unclear", selectedDateVisible: false, insufficientDataReason: reason, detectedInstrument: null, detectedTimeframe: null, latestVisibleDate: null, dateConfidence: "low", visibleTrigger: null, rejectedTriggerContext: null, triggerDirection: null, triggerConfidence: "low", notes: reason, raw: "" });
+  if (!process.env.OPENAI_API_KEY) return fallback("OPENAI_API_KEY is missing.");
+
+  try {
+    const response = await openai.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
+        { role: "system", content: CHART_DETECTION_PROMPT },
+        { role: "user", content: [
+          { type: "input_text", text: `Inspect this uploaded chart image.\nSelected instrument: ${submittedInstrument || "not provided"}\nSelected timeframe: ${selectedTimeframe || "not provided"}\nSelected chart/trade date: ${selectedDateText || "not provided"}\nAnalysis type: ${analysisType || "post-trade"}\nReturn only JSON.` },
+          { type: "input_image", image_url: `data:${mimeType};base64,${imageBase64}` },
+        ]},
+      ],
+      max_output_tokens: 700,
     });
 
-    if (openList) {
-      bodyHtml += "</ul>";
-    }
+    const parsed = extractJsonObject(response.output_text || "");
+    if (!parsed) return fallback("Chart validation did not return usable JSON.");
+    const isTradingChart = parsed?.isTradingChart === true;
+    const rawTrigger = parsed?.visibleTrigger || null;
+    const triggerConfidence = parsed?.triggerConfidence || "low";
+    const cleanTrigger = sanitizeVisibleTrigger(rawTrigger, triggerConfidence);
+    const visibleCandleCount = Number.isFinite(Number(parsed?.visibleCandleCount)) ? Number(parsed.visibleCandleCount) : 0;
+    const quality = isTradingChart ? parsed?.chartDataQuality || "usable" : "unclear";
 
-    return (
-      '<div class="csa-ai-section">' +
-        (section.heading ? '<div class="csa-ai-heading">' + escapeHtml(section.heading) + "</div>" : "") +
-        '<div class="csa-ai-body">' + bodyHtml + "</div>" +
-      "</div>"
-    );
-  }).join("");
-}
-
-function itemToText(item) {
-  if (item === null || item === undefined) return "";
-
-  if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
-    return String(item);
-  }
-
-  if (Array.isArray(item)) {
-    return item.map(itemToText).filter(Boolean).join(" — ");
-  }
-
-  if (typeof item === "object") {
-    return (
-      item.summary ||
-      item.text ||
-      item.title ||
-      item.detail ||
-      item.explanation ||
-      item.correction ||
-      item.mistakeLabel ||
-      JSON.stringify(item)
-    );
-  }
-
-  return String(item);
-} function renderList(container, items) {
-  if (!items || !items.length) {
-    container.innerHTML = "<li>No specific item returned.</li>";
-    return;
-  }
-
-  container.innerHTML = items
-    .slice(0, 7)
-    .map(function (item) {
-      return "<li>" + escapeHtml(itemToText(item)) + "</li>";
-    })
-    .join("");
-} function renderMistakes(items) {
-  if (!items || !items.length) {
-    mistakeList.innerHTML =
-      '<div class="csa-mistake-item"><span>▴</span><span>No major mistake detected from the response.</span><span class="csa-risk-tag">Review</span></div>';
-    return;
-  }
-
-  mistakeList.innerHTML = items
-    .slice(0, 7)
-    .map(function (item, index) {
-      var title = "";
-      var detail = "";
-      var tag = "Review";
-
-      if (item && typeof item === "object") {
-        title = item.title || item.mistakeLabel || item.failedType || "Trading mistake";
-        detail = item.detail || item.explanation || item.correction || "";
-        tag = item.severity || item.tag || item.risk || "Review";
-      } else {
-        title = String(item);
-      }
-
-      var text = detail ? title + " — " + detail : title;
-
-      return (
-        '<div class="csa-mistake-item"><span>▴</span><span>' +
-        escapeHtml(text) +
-        '</span><span class="csa-risk-tag">' +
-        escapeHtml(String(tag)) +
-        "</span></div>"
-      );
-    })
-    .join("");
-} function fileToBase64(file) { return new Promise(function (resolve, reject) { var reader = new FileReader(); reader.onload = function () { resolve(reader.result); }; reader.onerror = function () { reject(new Error("Could not read the uploaded chart image.")); }; reader.readAsDataURL(file); }); } function unwrap(data) {
-  if (!data) return {};
-
-  if (typeof data === "string") {
-    try {
-      return JSON.parse(data);
-    } catch (e) {
-      return { summary: data };
-    }
-  }
-
-  if (typeof data !== "object") {
-    return {};
-  }
-
-  // Important:
-  // Do NOT unwrap data.analysis when it is just a text report.
-  // The backend returns useful dashboard fields beside analysis.
-  // Unwrapping data.analysis was removing strengths, weaknesses,
-  // setupQuality, entryAccuracy, riskManagement, and mistake data.
-  var keys = Object.keys(data);
-
-  if (keys.length === 1 && data.analysis && typeof data.analysis === "object") {
-    return unwrap(data.analysis);
-  }
-
-  if (keys.length === 1 && data.result && typeof data.result === "object") {
-    return unwrap(data.result);
-  }
-
-  if (keys.length === 1 && data.feedback && typeof data.feedback === "object") {
-    return unwrap(data.feedback);
-  }
-
-  return data;
-} function normalizeScore(value) { var n = numberOrZero(value); if (n <= 10) n = n * 10; return Math.max(0, Math.min(100, Math.round(n))); } function numberOrZero(value) { var n = Number(value); if (Number.isNaN(n)) return 0; return Math.max(0, Math.min(100, Math.round(n))); } function getGradeFromScore(score) { score = numberOrZero(score); if (score >= 90) return "A"; if (score >= 80) return "B+"; if (score >= 70) return "B"; if (score >= 60) return "C"; if (score >= 50) return "D"; return "F"; } function getContextClass(status) { var s = String(status).toLowerCase(); if (s.includes("mismatch")) return "bad"; if (s.includes("match") && !s.includes("mis")) return "good"; return "warn"; } function setLoadingState(isLoading) {
-  var overlay = ensureLoadingOverlay();
-
-  analyzeBtn.disabled = isLoading;
-  analyzeOverlayBtn.disabled = isLoading;
-  resetBtn.disabled = isLoading;
-  chartFile.disabled = isLoading;
-
-  analyzeBtn.textContent = isLoading ? "Analyzing chart... please wait" : "Run AI Diagnostics ⊙";
-  analyzeOverlayBtn.textContent = isLoading ? "Analyzing chart... please wait" : "Run AI Diagnostics ⊙";
-
-  if (chartCard) {
-    if (isLoading) chartCard.classList.add("csa-is-analyzing");
-    else chartCard.classList.remove("csa-is-analyzing");
-  }
-
-  if (overlay) overlay.style.display = isLoading ? "flex" : "none";
-
-  if (statusBox) {
-    if (isLoading) statusBox.classList.add("csa-status-running");
-    else statusBox.classList.remove("csa-status-running");
-  }
-
-  if (isLoading) {
-    setStatus("AI diagnostics is running. Please wait while the chart is being reviewed...");
+    return {
+      ok: true,
+      isTradingChart,
+      chartValidityReason: parsed?.chartValidityReason || (isTradingChart ? "The uploaded image appears to be a valid trading chart." : "The uploaded image does not appear to be a valid financial trading chart."),
+      hasUsablePriceData: isTradingChart ? parsed?.hasUsablePriceData !== false : false,
+      visibleCandleCount,
+      chartDataQuality: quality,
+      selectedDateVisible: isTradingChart ? parsed?.selectedDateVisible === true : false,
+      insufficientDataReason: parsed?.insufficientDataReason || (!isTradingChart ? "The uploaded image is not a financial trading chart." : null),
+      detectedInstrument: isTradingChart ? parsed?.detectedInstrument || null : null,
+      detectedTimeframe: isTradingChart ? parsed?.detectedTimeframe || null : null,
+      latestVisibleDate: isTradingChart ? parsed?.latestVisibleDate || null : null,
+      dateConfidence: isTradingChart ? parsed?.dateConfidence || "low" : "low",
+      visibleTrigger: isTradingChart ? cleanTrigger : null,
+      rejectedTriggerContext: isTradingChart && rawTrigger && !cleanTrigger ? rawTrigger : null,
+      triggerDirection: isTradingChart && cleanTrigger ? parsed?.triggerDirection || null : null,
+      triggerConfidence: isTradingChart && cleanTrigger ? triggerConfidence : "low",
+      notes: parsed?.notes || "",
+      raw: response.output_text || "",
+    };
+  } catch (error) {
+    console.error("Chart detection error:", error);
+    return fallback(`Chart validation failed: ${error.message}`);
   }
 }
 
-function showError(message) { errorBox.textContent = message; errorBox.style.display = "block"; } function hideError() { errorBox.textContent = ""; errorBox.style.display = "none"; } function setStatus(message) { if (!message) { statusBox.style.display = "none"; statusBox.textContent = ""; return; } statusBox.textContent = message; statusBox.style.display = "block"; } function escapeHtml(value) { return String(value) .replace(/&/g, "&amp;") .replace(/</g, "&lt;") .replace(/>/g, "&gt;") .replace(/"/g, "&quot;") .replace(/'/g, "&#039;"); } })(); </script> </div>
+function isUploadedChartDataUsable(chartDetection, selectedDateText = "") {
+  if (!chartDetection?.isTradingChart) return false;
+  const quality = String(chartDetection.chartDataQuality || "").toLowerCase();
+  if (["blank", "insufficient"].includes(quality)) return false;
+  if (chartDetection.hasUsablePriceData === false && quality === "unclear") return false;
+  const candles = Number(chartDetection.visibleCandleCount || 0);
+  if (Number.isFinite(candles) && candles > 0 && candles < 15) return false;
+  return true;
+}
+
+function getDaysBetweenDates(earlierDate, laterDate) {
+  if (!earlierDate || !laterDate) return null;
+  const earlier = Date.UTC(earlierDate.getUTCFullYear(), earlierDate.getUTCMonth(), earlierDate.getUTCDate());
+  const later = Date.UTC(laterDate.getUTCFullYear(), laterDate.getUTCMonth(), laterDate.getUTCDate());
+  const diff = Math.round((later - earlier) / 86400000);
+  return Number.isFinite(diff) ? diff : null;
+}
+
+function getAllowedFutureDateGapDays(timeframe = "") {
+  const tf = comparableTimeframe(timeframe);
+  if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) return 3;
+  if (tf === "H4") return 10;
+  if (tf === "D1") return 45;
+  if (tf === "W1") return 120;
+  if (tf === "MN") return 400;
+  return 3;
+}
+
+function getSelectedDateMismatch(chartDetection, selectedDate, timeframe = "") {
+  if (!selectedDate || !chartDetection?.latestVisibleDate) return { hasMismatch: false };
+  const latestVisibleDate = parseISODateOnly(chartDetection.latestVisibleDate);
+  if (!latestVisibleDate) return { hasMismatch: false };
+  const daysAfterLatestVisible = getDaysBetweenDates(latestVisibleDate, selectedDate);
+  const allowedGapDays = getAllowedFutureDateGapDays(timeframe);
+  const confidence = String(chartDetection.dateConfidence || "low").toLowerCase();
+  const hasMismatch = ["high", "medium"].includes(confidence) && Number.isFinite(daysAfterLatestVisible) && daysAfterLatestVisible > allowedGapDays;
+  return { hasMismatch, selectedDateText: formatDateOnly(selectedDate), latestVisibleDateText: formatDateOnly(latestVisibleDate), daysAfterLatestVisible, allowedGapDays, dateConfidence: confidence || "low", reason: hasMismatch ? `Selected date is ${daysAfterLatestVisible} day(s) after the latest visible chart date, beyond the allowed ${allowedGapDays} day(s).` : "Selected date is not clearly beyond the latest visible chart date." };
+}
+
+function isUsableChartDateDetection(detection) {
+  if (!detection || !detection.latestVisibleDate) return false;
+  if (!parseISODateOnly(detection.latestVisibleDate)) return false;
+  const confidence = String(detection.dateConfidence || "").toLowerCase();
+  return confidence === "high" || confidence === "medium";
+}
+
+function chooseFinalChartDate({ selectedDate, detection }) {
+  const detectedDate = isUsableChartDateDetection(detection) ? parseISODateOnly(detection.latestVisibleDate) : null;
+  if (selectedDate) return { finalDate: selectedDate, finalDateText: formatDateOnly(selectedDate), selectedDateText: formatDateOnly(selectedDate), detectedDateText: detectedDate ? formatDateOnly(detectedDate) : null, source: "user-selected-date", reason: "User-selected chart/trade date was used." };
+  if (detectedDate) return { finalDate: detectedDate, finalDateText: formatDateOnly(detectedDate), selectedDateText: null, detectedDateText: formatDateOnly(detectedDate), source: "chart-detected-date", reason: "No user-selected date was provided, so the chart-detected latest visible date was used." };
+  return { finalDate: null, finalDateText: "Not provided", selectedDateText: null, detectedDateText: null, source: "missing-date", reason: "No usable date was available." };
+}
+
+
+function buildCsaFrameworkSummaryForVision(marketReference = {}) {
+  const profile = marketReference?.profile || {};
+  const levels = Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [];
+  const areas = Array.isArray(marketReference?.csaAreas) ? marketReference.csaAreas : [];
+  const bias = marketReference?.directionalBias || {};
+
+  const levelLines = levels.slice(0, 12).map((level) => {
+    const label = level.periodLabel || level.day || level.key || level.date;
+    return `- ${label}: open ${formatPrice(level.open)}, high ${formatPrice(level.high)}, low ${formatPrice(level.low)}, close ${formatPrice(level.close)}`;
+  });
+
+  const areaLines = areas.slice(0, 20).map((area) => {
+    const userType =
+      area.type === "resistance" || area.type === "supply"
+        ? "possible selling area"
+        : "possible buying area";
+    return `- ${area.day || area.period || area.date}: ${userType} around ${area.priceText || formatPrice(area.price)}`;
+  });
+
+  return [
+    `Internal structure source: ${profile.structureLabel || "Not available"}`,
+    `Reviewed range: ${marketReference?.weekRange ? `${marketReference.weekRange.startDate} to ${marketReference.weekRange.endDate}` : "Not available"}`,
+    `Bigger-picture direction: ${bias.bias || "Not available"} (${bias.confidence || "low"} confidence)`,
+    `Plain-language direction note: ${bias.higherTimeframeView || bias.reason || "Not available"}`,
+    "",
+    "Key highs/lows/closes:",
+    levelLines.length ? levelLines.join("\n") : "- No levels available.",
+    "",
+    "Important support/resistance areas, stated in simple language:",
+    areaLines.length ? areaLines.join("\n") : "- No areas available.",
+  ].join("\n");
+}
+
+function visualFallback(reason) {
+  return { ok: false, frameworkMatch: "not reviewed", visualChartStyle: "not reviewed", csaLevelVisibility: "not reviewed", chartSpecificStrengths: [], chartSpecificWeaknesses: [reason], simpleMistakeHub: [], setupQualityScore: null, entryAccuracyScore: null, riskManagementScore: null, visualSummary: reason, chartMarkupAssessment: "", entryEvidence: "", riskEvidence: "", raw: "" };
+}
+
+function isBadVisualReview(parsed) {
+  const text = [parsed?.visualSummary, parsed?.chartMarkupAssessment, parsed?.entryEvidence, parsed?.riskEvidence, ...(Array.isArray(parsed?.chartSpecificWeaknesses) ? parsed.chartSpecificWeaknesses : [])].join(" ").toLowerCase();
+  return text.includes("insufficient chart data") || text.includes("uploaded image appears to be a trading chart, but") || text.includes("not enough visible price data");
+}
+
+
+async function compareUploadedChartWithCsaFramework({ imageBase64, mimeType, marketReference, chartDetection, submittedInstrument = "", timeframe = "", analysisType = "post-trade", submittedNotes = "" }) {
+  if (!process.env.OPENAI_API_KEY) return visualFallback("OPENAI_API_KEY is missing.");
+  if (!marketReference?.ok) return visualFallback("Market structure was unavailable, so visual comparison could not be completed.");
+  if (!imageBase64) return visualFallback("Uploaded chart image was not available for visual comparison.");
+
+  const prompt = `
+You are CSA Coach's beginner-friendly trade review assistant.
+Return ONLY valid JSON. Do not use markdown.
+
+Your job:
+- Review the uploaded chart using the internal support/resistance framework below.
+- The user is likely a beginner. Use very simple trading language.
+- The backend can use the internal method, but user-facing fields must NOT say "CSA", "framework", "daily high/low logic", "supply/demand classification", or other internal method words.
+- Do not mention trendlines, channels, Fibonacci, indicators, or moving averages. They are outside this review. Ignore them unless they hide price.
+- Explain only what matters to a beginner:
+  1. Is the bigger picture bullish, bearish, or ranging?
+  2. What is the selected ${timeframe} chart doing right now?
+  3. Should the trader wait, buy, sell, or avoid chasing?
+  4. Where exactly should price return before a better setup forms? Always include support/resistance and the price level.
+  5. Is there a clear entry confirmation?
+  6. Is stop loss/target visible enough to judge?
+- The internal range-position check may use the first key high/low like a Fibonacci/range-position guide, but user-facing wording should say it simply: "price is in the upper/middle/lower part of the range."
+- CSA is mainly a trend-trading strategy. If there is no clean trend yet, do not force a buy or sell. Give both sides: buy at support if it holds, or sell at resistance if it rejects.
+- Never write incomplete advice like "wait for price to drop back" without saying the exact support/resistance area and price.
+- Keep all user-facing answers short, plain, and useful.
+- Two different-looking charts must receive different strengths, weaknesses, mistake hub items, scores, and short-term chart direction.
+- Do not invent entries, stop loss, targets, or mistakes if they are not visible.
+- If no entry/SL/TP is visible, say "No visible entry, stop loss, or target to judge."
+- If the bigger-picture view and uploaded chart timeframe disagree, state both clearly.
+  Example: "The bigger picture is slightly bearish, but the ${timeframe} chart is pushing up short-term."
+- Do not give financial advice or guaranteed predictions. This is only chart feedback.
+
+Internal support/resistance framework:
+${buildCsaFrameworkSummaryForVision(marketReference)}
+
+Selected context:
+- Instrument: ${submittedInstrument}
+- Timeframe uploaded/selected: ${timeframe}
+- Mode: ${analysisType}
+- User notes: ${submittedNotes || "None"}
+
+Initial image validation:
+- Detected instrument: ${chartDetection?.detectedInstrument || "not detected"}
+- Detected timeframe: ${chartDetection?.detectedTimeframe || "not detected"}
+- Latest visible date: ${chartDetection?.latestVisibleDate || "not detected"}
+- Detected trigger: ${chartDetection?.visibleTrigger || "none confirmed"}
+
+Return exactly this JSON shape:
+{
+  "frameworkMatch": "strong | partial | weak | not enough evidence",
+  "visualChartStyle": "clear support/resistance | clean price action | marked chart | unclear",
+  "csaLevelVisibility": "clear | partial | not marked | unclear",
+  "shortTermDirection": "bullish | bearish | range-bound | range-bound with bullish pressure | range-bound with bearish pressure | unclear",
+  "quickVerdict": "one very simple sentence saying wait, avoid chasing, or setup looks acceptable",
+  "plainMarketDirection": "one simple sentence combining bigger-picture direction and ${timeframe} chart direction",
+  "whatThisMeans": "one simple sentence explaining what the trader should understand from the chart",
+  "timeframeSummary": "one simple sentence describing what the uploaded ${timeframe} chart is doing",
+  "bestAreaToWatch": "one simple sentence saying exactly where price should return before a better setup, including support/resistance and price level",
+  "visualSummary": "2 short beginner-friendly sentences. Mention bigger-picture direction and uploaded timeframe direction if different.",
+  "chartMarkupAssessment": "simple comment about whether the important support/resistance areas are clear; do not mention trendlines/channels/indicators",
+  "entryEvidence": "what entry evidence is visible, or 'No visible entry evidence'",
+  "riskEvidence": "what SL/TP/risk evidence is visible, or 'No visible entry, stop loss, or target to judge'",
+  "mainWarning": "one simple warning the trader should remember",
+  "coachVerdict": "one short final verdict in beginner language",
+  "chartSpecificStrengths": ["simple strength visible on this chart"],
+  "chartSpecificWeaknesses": ["simple weakness visible on this chart"],
+  "simpleMistakeHub": [
+    { "title": "short mistake title", "tag": "HIGH RISK | WARNING | STRUCTURAL | MATH FLAW | DISCIPLINE | REVIEW" }
+  ],
+  "setupQualityScore": 50,
+  "entryAccuracyScore": 50,
+  "riskManagementScore": 50
+}`;
+
+  try {
+    const response = await openai.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
+        { role: "system", content: prompt },
+        { role: "user", content: [
+          { type: "input_text", text: "Review this uploaded chart in simple beginner trader language using the internal support/resistance framework. Return only the required JSON." },
+          { type: "input_image", image_url: `data:${mimeType};base64,${imageBase64}` },
+        ]},
+      ],
+      max_output_tokens: 1300,
+    });
+
+    const parsed = extractJsonObject(response.output_text || "");
+    if (!parsed || isBadVisualReview(parsed)) return visualFallback("Visual comparison was inconclusive, so market-structure fallback was used.");
+
+    return {
+      ok: true,
+      frameworkMatch: parsed.frameworkMatch || "not enough evidence",
+      visualChartStyle: parsed.visualChartStyle || "unclear",
+      csaLevelVisibility: parsed.csaLevelVisibility || "unclear",
+      shortTermDirection: parsed.shortTermDirection || "unclear",
+      quickVerdict: String(parsed.quickVerdict || "").trim(),
+      plainMarketDirection: String(parsed.plainMarketDirection || "").trim(),
+      whatThisMeans: String(parsed.whatThisMeans || "").trim(),
+      timeframeSummary: String(parsed.timeframeSummary || "").trim(),
+      bestAreaToWatch: String(parsed.bestAreaToWatch || "").trim(),
+      mainWarning: String(parsed.mainWarning || "").trim(),
+      coachVerdict: String(parsed.coachVerdict || "").trim(),
+      chartSpecificStrengths: normalizeArrayOfStrings(parsed.chartSpecificStrengths, []),
+      chartSpecificWeaknesses: normalizeArrayOfStrings(parsed.chartSpecificWeaknesses, []),
+      simpleMistakeHub: normalizeVisualMistakeItems(parsed.simpleMistakeHub),
+      setupQualityScore: Number.isFinite(Number(parsed.setupQualityScore)) ? clampScore(Number(parsed.setupQualityScore)) : null,
+      entryAccuracyScore: Number.isFinite(Number(parsed.entryAccuracyScore)) ? clampScore(Number(parsed.entryAccuracyScore)) : null,
+      riskManagementScore: Number.isFinite(Number(parsed.riskManagementScore)) ? clampScore(Number(parsed.riskManagementScore)) : null,
+      visualSummary: String(parsed.visualSummary || "").trim(),
+      chartMarkupAssessment: String(parsed.chartMarkupAssessment || "").trim(),
+      entryEvidence: String(parsed.entryEvidence || "").trim(),
+      riskEvidence: String(parsed.riskEvidence || "").trim(),
+      raw: response.output_text || "",
+    };
+  } catch (error) {
+    console.error("Visual trade review error:", error);
+    return visualFallback(`Visual trade review failed: ${error.message}`);
+  }
+}
+
+function shouldUseVisualScore(score, marketOk) {
+  const n = Number(score);
+  if (!Number.isFinite(n)) return false;
+  if (marketOk && n < 20) return false;
+  return true;
+}
+
+
+function buildDashboardFeedback({ marketReference, chartDetection, visualReview = null, submittedInstrument, timeframe, selectedDateText, detectedDateText, setupScore = 0 }) {
+  const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
+  const levels = marketReference?.dailyLevels || [];
+  const areas = marketReference?.csaAreas || [];
+  const bias = marketReference?.directionalBias || calculateCsaDirectionalBias([], marketReference?.symbol || submittedInstrument, profile);
+  const symbol = marketReference?.symbol || submittedInstrument;
+  const { resistanceAreas, supportAreas, supplyAreas, demandAreas } = splitAreas(areas);
+  const failedAreas = buildFailedAreas({ supportAreas, resistanceAreas, supplyAreas, demandAreas, levels, symbol });
+  const hasConfirmedTrigger = Boolean(chartDetection?.visibleTrigger);
+  const rejectedContext = chartDetection?.rejectedTriggerContext || null;
+  const mixedBias = String(bias?.biasCode || "").toLowerCase().includes("range") || String(bias?.bias || "").toLowerCase().includes("range");
+  const marketOk = Boolean(marketReference?.ok);
+  const visualOk = Boolean(visualReview?.ok);
+
+  const frameworkStrengths = [];
+  const frameworkWeaknesses = [];
+
+  if (marketOk) {
+    frameworkStrengths.push(`Bigger-picture direction checked using the main highs, lows, and closes.`);
+    frameworkStrengths.push(`Main view: ${bias.bias}.`);
+  } else {
+    frameworkWeaknesses.push(marketReference?.error || "Market data unavailable.");
+  }
+
+  if (chartDetection?.hasUsablePriceData) frameworkStrengths.push("Uploaded chart has enough visible price action to review.");
+  if (!hasConfirmedTrigger) frameworkWeaknesses.push("No clear entry confirmation was detected on the uploaded chart.");
+  failedAreas.forEach((area) => frameworkWeaknesses.push(area.explanation));
+  if (mixedBias) frameworkWeaknesses.push("The bigger-picture view is not a clean trend, so middle-of-range trades need caution.");
+
+  const visualStrengths = visualOk ? normalizeArrayOfStrings(visualReview.chartSpecificStrengths, []) : [];
+  const visualWeaknesses = visualOk ? normalizeArrayOfStrings(visualReview.chartSpecificWeaknesses, []) : [];
+  const strengths = [...visualStrengths, ...frameworkStrengths].filter(Boolean);
+  const weaknesses = [...visualWeaknesses, ...frameworkWeaknesses].filter(Boolean);
+
+  const baseSetupQualityScore = clampScore((setupScore || 0) * 10 - failedAreas.length * 8 - (mixedBias ? 8 : 0) + (marketOk ? 5 : -20));
+  const baseEntryAccuracyScore = clampScore(65 + (hasConfirmedTrigger ? 15 : -10) - failedAreas.length * 10 - (mixedBias ? 5 : 0));
+  const baseRiskManagementScore = clampScore(70 - failedAreas.length * 8 - (mixedBias ? 5 : 0));
+
+  const setupQualityScore = visualOk && shouldUseVisualScore(visualReview.setupQualityScore, marketOk) ? clampScore(visualReview.setupQualityScore) : baseSetupQualityScore;
+  const entryAccuracyScore = visualOk && shouldUseVisualScore(visualReview.entryAccuracyScore, marketOk) ? clampScore(visualReview.entryAccuracyScore) : baseEntryAccuracyScore;
+  const riskManagementScore = visualOk && shouldUseVisualScore(visualReview.riskManagementScore, marketOk) ? clampScore(visualReview.riskManagementScore) : baseRiskManagementScore;
+
+  const contextCheck = {
+    selectedInstrument: submittedInstrument || "Not provided",
+    selectedTimeframe: timeframe || "Not provided",
+    detectedInstrument: chartDetection?.detectedInstrument || "Not detected",
+    detectedTimeframe: chartDetection?.detectedTimeframe || "Not detected",
+    selectedDate: selectedDateText || "Not provided",
+    detectedLatestVisibleDate: detectedDateText || chartDetection?.latestVisibleDate || "Not detected",
+    status: marketOk ? "Reviewed" : "Review limited",
+    structureUsed:
+      profile.structureMode === "daily-in-week"
+        ? "This week's key highs, lows, and closes"
+        : profile.structureMode === "weekly-in-month"
+        ? "This month's key weekly highs and lows"
+        : profile.structureMode === "monthly-in-year"
+        ? "This year's key monthly highs and lows"
+        : "Higher-timeframe key highs and lows",
+    rangeUsed: marketReference?.weekRange ? `${marketReference.weekRange.startDate} to ${marketReference.weekRange.endDate}` : "Not available",
+    chartValidation: chartDetection?.isTradingChart ? "Valid trading chart" : "Invalid or unverified chart",
+    chartDataQuality: chartDetection?.chartDataQuality || "unclear",
+    visibleCandleCount: chartDetection?.visibleCandleCount || 0,
+    biggerPictureView: bias.bias || "Not available",
+    selectedTimeframeView: visualReview?.shortTermDirection || "Not reviewed",
+    visualFrameworkMatch: visualReview?.frameworkMatch || "Not reviewed",
+    visualChartStyle: visualReview?.visualChartStyle || "Not reviewed",
+    csaLevelVisibility: visualReview?.csaLevelVisibility || "Not reviewed",
+  };
+
+  const visualMistakes = visualOk ? normalizeVisualMistakeItems(visualReview.simpleMistakeHub) : [];
+  const frameworkMistakes = buildFrameworkMistakeHub({
+    failedAreas,
+    hasConfirmedTrigger,
+    rejectedContext,
+    mixedBias,
+    marketOk,
+    entryAccuracyScore: baseEntryAccuracyScore,
+    riskManagementScore: baseRiskManagementScore,
+  });
+  const aiMistakeDetectionHub = visualMistakes.length ? visualMistakes : frameworkMistakes;
+
+  const setupQuality = {
+    score: setupQualityScore,
+    label: scoreLabel(setupQualityScore),
+    summary: visualOk && visualReview.visualSummary ? visualReview.visualSummary : "Setup quality is based on the bigger-picture direction, key areas, and what is visible on the uploaded chart.",
+  };
+  const entryAccuracy = {
+    score: entryAccuracyScore,
+    label: scoreLabel(entryAccuracyScore),
+    summary: visualOk && visualReview.entryEvidence ? visualReview.entryEvidence : "Entry accuracy depends on whether there is clear confirmation around a key area.",
+  };
+  const riskManagement = {
+    score: riskManagementScore,
+    label: scoreLabel(riskManagementScore),
+    summary: visualOk && visualReview.riskEvidence ? visualReview.riskEvidence : "Risk score checks whether stop loss and target placement are visible and logical.",
+  };
+
+  return {
+    strengths: strengths.length ? strengths.slice(0, 7) : ["Trade review completed."],
+    weaknesses: weaknesses.length ? weaknesses.slice(0, 7) : ["No major weakness detected from the available chart information."],
+    mistakes: aiMistakeDetectionHub,
+    aiMistakeDetectionHub,
+    mistakeDetectionHub: aiMistakeDetectionHub,
+    mistakeHub: aiMistakeDetectionHub,
+    failedAreas,
+    visualReview,
+    contextCheck,
+    chartContextCheck: contextCheck,
+    setupQuality,
+    setupQualityScore,
+    entryAccuracy,
+    entryAccuracyScore,
+    riskManagement,
+    riskManagementScore,
+    scores: { setupQuality: setupQualityScore, entryAccuracy: entryAccuracyScore, riskManagement: riskManagementScore },
+    dashboard: {},
+    dashboardCards: {},
+  };
+}
+
+function buildDashboardAliases(dashboardFeedback = {}) {
+  const contextCheck = dashboardFeedback.contextCheck || dashboardFeedback.chartContextCheck || {};
+  const setupQuality = dashboardFeedback.setupQuality || { score: 0, label: "Unavailable", summary: "Setup quality was not calculated." };
+  const entryAccuracy = dashboardFeedback.entryAccuracy || { score: 0, label: "Unavailable", summary: "Entry accuracy was not calculated." };
+  const riskManagement = dashboardFeedback.riskManagement || { score: 0, label: "Unavailable", summary: "Risk management was not calculated." };
+  const strengths = Array.isArray(dashboardFeedback.strengths) && dashboardFeedback.strengths.length ? dashboardFeedback.strengths : ["CSA Coach completed the review."];
+  const weaknesses = Array.isArray(dashboardFeedback.weaknesses) && dashboardFeedback.weaknesses.length ? dashboardFeedback.weaknesses : ["No major weakness detected."];
+  const aiMistakeDetectionHub = Array.isArray(dashboardFeedback.aiMistakeDetectionHub) && dashboardFeedback.aiMistakeDetectionHub.length ? dashboardFeedback.aiMistakeDetectionHub : [makeSimpleMistake("No major mistake detected", "REVIEW")];
+  const failedAreas = Array.isArray(dashboardFeedback.failedAreas) ? dashboardFeedback.failedAreas : [];
+  return {
+    strengths, weaknesses,
+    chartContextCheck: contextCheck, contextCheck, chartContext: contextCheck, chartContextStatus: contextCheck.status || "Not available",
+    selectedContext: { instrument: contextCheck.selectedInstrument || "Not provided", timeframe: contextCheck.selectedTimeframe || "Not provided", date: contextCheck.selectedDate || "Not provided" },
+    detectedContext: { instrument: contextCheck.detectedInstrument || "Not detected", timeframe: contextCheck.detectedTimeframe || "Not detected", latestVisibleDate: contextCheck.detectedLatestVisibleDate || "Not detected" },
+    setupQuality, setupQualityScore: setupQuality.score, setupQualityLabel: setupQuality.label, setupQualitySummary: setupQuality.summary,
+    entryAccuracy, entryAccuracyScore: entryAccuracy.score, entryAccuracyLabel: entryAccuracy.label, entryAccuracySummary: entryAccuracy.summary,
+    riskManagement, riskManagementScore: riskManagement.score, riskManagementLabel: riskManagement.label, riskManagementSummary: riskManagement.summary,
+    aiMistakeDetectionHub, mistakeDetectionHub: aiMistakeDetectionHub, mistakeHub: aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub,
+    failedAreas,
+    dashboard: { strengths, weaknesses, chartContextCheck: contextCheck, contextCheck, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub, failedAreas },
+    dashboardCards: { strengths, weaknesses, chartContextCheck: contextCheck, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, failedAreas },
+  };
+}
+
+function buildSimpleStructureBreakdown(levels = [], normalizedSymbol = "") {
+  if (!levels.length) return "- No structure data available.";
+  return levels.map((period, index) => {
+    const label = period.periodLabel || period.day || period.key;
+    if (index === 0) return `${label}:\n- High ${formatPrice(period.high)} = first resistance.\n- Low ${formatPrice(period.low)} = first support.`;
+    const previous = levels[index - 1];
+    const highComparison = compareHighWithTolerance(period.high, previous.high, normalizedSymbol);
+    const lowComparison = compareLowWithTolerance(period.low, previous.low, normalizedSymbol);
+    return `${label}:\n- ${highComparison.cleanBreak ? "High broke previous high = resistance." : "High failed to break previous high = supply."}\n- ${lowComparison.cleanBreak ? "Low broke previous low = support." : "Low held/retested previous low = demand."}`;
+  }).join("\n\n");
+}
+
+
+
+function getFirstAnchorLabel(profile = getSupportedCsaTimeframeProfile("H1")) {
+  if (profile.structureMode === "daily-in-week") return "Monday";
+  if (profile.structureMode === "weekly-in-month") return "the first week";
+  if (profile.structureMode === "monthly-in-year") return "the first month";
+  if (profile.structureMode === "quarterly-in-year") return "the first quarter";
+  if (profile.structureMode === "yearly-in-multi-year") return "the first year";
+  return "the first key range";
+}
+
+function getInitialRangeAreas(levels = [], profile = getSupportedCsaTimeframeProfile("H1")) {
+  const first = Array.isArray(levels) && levels.length ? levels[0] : null;
+  const label = first?.periodLabel || first?.day || getFirstAnchorLabel(profile);
+  return {
+    label,
+    support: first && Number.isFinite(Number(first.low)) ? Number(first.low) : null,
+    resistance: first && Number.isFinite(Number(first.high)) ? Number(first.high) : null,
+  };
+}
+
+function getInitialRangeStatus(levels = [], symbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
+  const initial = getInitialRangeAreas(levels, profile);
+  const tolerance = getCleanBreakTolerance(symbol);
+  const support = Number(initial.support);
+  const resistance = Number(initial.resistance);
+
+  const status = {
+    ...initial,
+    supportText: formatPrice(support),
+    resistanceText: formatPrice(resistance),
+    hasInitialRange: Number.isFinite(support) && Number.isFinite(resistance),
+    wickAboveHigh: false,
+    wickBelowLow: false,
+    closeAboveHigh: false,
+    closeBelowLow: false,
+    isStillInsideInitialRange: false,
+    breakoutDirection: "none",
+    rangeMessage: "",
+  };
+
+  if (!status.hasInitialRange) {
+    status.rangeMessage = "The first key support/resistance range is not available.";
+    return status;
+  }
+
+  // If only the first period exists, nothing after it has broken the range yet.
+  if (!Array.isArray(levels) || levels.length < 2) {
+    status.isStillInsideInitialRange = true;
+    status.rangeMessage = `${initial.label} resistance around ${status.resistanceText} and ${initial.label} support around ${status.supportText} are the only active areas for now.`;
+    return status;
+  }
+
+  const laterLevels = levels.slice(1);
+
+  // Wicks are recorded, but a trend breakout is only accepted after a close beyond the first range.
+  // This prevents smaller internal levels from replacing Monday high/low too early.
+  status.wickAboveHigh = laterLevels.some((item) => Number(item.high) > resistance + tolerance);
+  status.wickBelowLow = laterLevels.some((item) => Number(item.low) < support - tolerance);
+  status.closeAboveHigh = laterLevels.some((item) => Number(item.close) > resistance + tolerance);
+  status.closeBelowLow = laterLevels.some((item) => Number(item.close) < support - tolerance);
+  status.isStillInsideInitialRange = !status.closeAboveHigh && !status.closeBelowLow;
+
+  if (status.closeAboveHigh) status.breakoutDirection = "up";
+  if (status.closeBelowLow) status.breakoutDirection = status.breakoutDirection === "up" ? "both" : "down";
+
+  status.rangeMessage = status.isStillInsideInitialRange
+    ? `Price has not closed above ${initial.label} high around ${status.resistanceText} or below ${initial.label} low around ${status.supportText} yet. For now, those remain the only main rejection areas.`
+    : status.breakoutDirection === "up"
+    ? `Price has closed above ${initial.label} resistance around ${status.resistanceText}. The better trend setup is to wait for a pullback/retest of that broken resistance as support.`
+    : status.breakoutDirection === "down"
+    ? `Price has closed below ${initial.label} support around ${status.supportText}. The better trend setup is to wait for a pullback/retest of that broken support as resistance.`
+    : `Price has moved outside ${initial.label}'s range. Wait for a clear retest before judging the next setup.`;
+
+  return status;
+}
+
+function getNearestAreaForDirection({ areas = [], levels = [], symbol = "", direction = "buy", currentPrice = null, profile = getSupportedCsaTimeframeProfile("H1") }) {
+  const initial = getInitialRangeAreas(levels, profile);
+  const tolerance = getCleanBreakTolerance(symbol);
+  const price = Number(currentPrice);
+  const validAreas = areas.filter((area) => !areaBrokenByCloseLater(area, levels, symbol));
+
+  if (direction === "buy") {
+    const buyAreas = validAreas
+      .filter((area) => area.type === "support" || area.type === "demand")
+      .filter((area) => !Number.isFinite(price) || Number(area.price) <= price + tolerance)
+      .sort((a, b) => Math.abs(Number(a.price) - price) - Math.abs(Number(b.price) - price));
+
+    if (buyAreas.length) {
+      const area = buyAreas[0];
+      return { label: area.day || area.period || initial.label, type: "support", price: Number(area.price), priceText: area.priceText || formatPrice(area.price) };
+    }
+
+    return { label: initial.label, type: "support", price: initial.support, priceText: formatPrice(initial.support) };
+  }
+
+  const sellAreas = validAreas
+    .filter((area) => area.type === "resistance" || area.type === "supply")
+    .filter((area) => !Number.isFinite(price) || Number(area.price) >= price - tolerance)
+    .sort((a, b) => Math.abs(Number(a.price) - price) - Math.abs(Number(b.price) - price));
+
+  if (sellAreas.length) {
+    const area = sellAreas[0];
+    return { label: area.day || area.period || initial.label, type: "resistance", price: Number(area.price), priceText: area.priceText || formatPrice(area.price) };
+  }
+
+  return { label: initial.label, type: "resistance", price: initial.resistance, priceText: formatPrice(initial.resistance) };
+}
+
+function getBiasGroup(biasCode = "") {
+  const code = String(biasCode || "").toLowerCase();
+  if (code === "bullish" || code === "slightly_bullish") return "bullish";
+  if (code === "bearish" || code === "slightly_bearish") return "bearish";
+  if (code === "range_bullish") return "range_bullish";
+  if (code === "range_bearish") return "range_bearish";
+  return "range";
+}
+
+function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "", profile = getSupportedCsaTimeframeProfile("H1") }) {
+  const currentPrice = Number(bias.presentPrice);
+  const biasGroup = getBiasGroup(bias.biasCode);
+  const initialStatus = getInitialRangeStatus(levels, symbol, profile);
+  const initial = getInitialRangeAreas(levels, profile);
+
+  // Core CSA trend-trading rule:
+  // Until the first key high/low closes broken, do not use smaller internal levels
+  // as the main entry areas. The active areas remain the first high and first low.
+  // For H1/M15/M30/M5/M1 this means Monday high = resistance and Monday low = support.
+  const useInitialRangeOnly = initialStatus.hasInitialRange && initialStatus.isStillInsideInitialRange;
+
+  const buyArea = useInitialRangeOnly
+    ? { label: initial.label, type: "support", price: initial.support, priceText: formatPrice(initial.support) }
+    : getNearestAreaForDirection({ areas, levels, symbol, direction: "buy", currentPrice, profile });
+
+  const sellArea = useInitialRangeOnly
+    ? { label: initial.label, type: "resistance", price: initial.resistance, priceText: formatPrice(initial.resistance) }
+    : getNearestAreaForDirection({ areas, levels, symbol, direction: "sell", currentPrice, profile });
+
+  const initialSupportText = initialStatus.supportText || formatPrice(initial.support);
+  const initialResistanceText = initialStatus.resistanceText || formatPrice(initial.resistance);
+  const buyPriceText = buyArea.priceText || formatPrice(buyArea.price);
+  const sellPriceText = sellArea.priceText || formatPrice(sellArea.price);
+
+  let quickVerdict = "Wait for price to reach a clear area before taking action.";
+  let whatThisMeans = "The safest plan is to wait for price to reach support or resistance, then look for a clear reaction.";
+  let bestAreaToWatch = `Buy only if price drops to support around ${initialSupportText} and holds. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
+  let mainWarning = "Do not trade in the middle of the range. Wait for price to reach a clear support or resistance area first.";
+  let coachVerdict = "This is a wait setup until price reaches one of the key areas and shows a clear reaction.";
+  let preferredTrendSetup = "The preferred trend-trading setup is breakout, pullback, and retest.";
+
+  if (useInitialRangeOnly) {
+    quickVerdict = `Wait. Price is still inside ${initial.label}'s range.`;
+    whatThisMeans = `${initialStatus.rangeMessage} This is not the preferred trend-trading setup yet.`;
+    bestAreaToWatch = `For now, the only main areas are ${initial.label} support around ${initialSupportText} and ${initial.label} resistance around ${initialResistanceText}. A buy is only a possible rejection from support; a sell is only a possible rejection from resistance.`;
+    mainWarning = `Do not use smaller internal levels as the main entry area yet. Wait for a close above ${initialResistanceText} or below ${initialSupportText}, then wait for a pullback/retest.`;
+    coachVerdict = `Not recommended as a trend trade yet. Price needs to close above ${initial.label}'s high around ${initialResistanceText} or close below ${initial.label}'s low around ${initialSupportText} before the cleaner trend setup forms.`;
+    preferredTrendSetup = `Preferred setup: close above ${initialResistanceText} then retest for buys, or close below ${initialSupportText} then retest for sells. Until then, only possible rejection trades exist at those two levels.`;
+  } else if (biasGroup === "bullish") {
+    quickVerdict = `Bullish plan: wait for price to pull back to support around ${buyPriceText} before considering a buy.`;
+    whatThisMeans = `The better buy idea is not to chase price now, but to wait for price to drop back to support around ${buyPriceText} and hold.`;
+    bestAreaToWatch = `For a buy, wait for price to drop back to support around ${buyPriceText} and then show a clear bullish candle or strong rejection from that area.`;
+    mainWarning = `Do not buy in the middle. Wait for support around ${buyPriceText} or a fresh breakout-and-hold before considering a buy.`;
+    coachVerdict = `The cleaner plan is to look for buys only after price holds support around ${buyPriceText}.`;
+  } else if (biasGroup === "bearish") {
+    quickVerdict = `Bearish plan: wait for price to rise back to resistance around ${sellPriceText} before considering a sell.`;
+    whatThisMeans = `The better sell idea is not to chase price now, but to wait for price to pull back up to resistance around ${sellPriceText} and reject.`;
+    bestAreaToWatch = `For a sell, wait for price to rise back to resistance around ${sellPriceText} and then show a clear bearish candle or strong rejection from that area.`;
+    mainWarning = `Do not sell after price has already dropped. Wait for resistance around ${sellPriceText} or a fresh breakdown-and-hold before considering a sell.`;
+    coachVerdict = `The cleaner plan is to look for sells only after price rejects resistance around ${sellPriceText}.`;
+  } else if (biasGroup === "range_bullish") {
+    quickVerdict = `No clean trend yet, but buyers have pressure. Buy only if price drops to support around ${initialSupportText} and holds.`;
+    whatThisMeans = `Price is still inside the main range, so support around ${initialSupportText} and resistance around ${initialResistanceText} are the key areas for now.`;
+    bestAreaToWatch = `Buy only if price drops to support around ${initialSupportText} and holds. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
+    mainWarning = `The market has not fully opened up yet. Do not chase; wait for support around ${initialSupportText} or resistance around ${initialResistanceText}.`;
+    coachVerdict = `For now, treat this as a range with bullish pressure until price clearly closes above ${initialResistanceText} or below ${initialSupportText}.`;
+  } else if (biasGroup === "range_bearish") {
+    quickVerdict = `No clean trend yet, but sellers have pressure. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
+    whatThisMeans = `Price is still inside the main range, so support around ${initialSupportText} and resistance around ${initialResistanceText} are the key areas for now.`;
+    bestAreaToWatch = `Buy only if price drops to support around ${initialSupportText} and holds. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
+    mainWarning = `The market has not fully opened up yet. Do not chase; wait for support around ${initialSupportText} or resistance around ${initialResistanceText}.`;
+    coachVerdict = `For now, treat this as a range with bearish pressure until price clearly closes below ${initialSupportText} or above ${initialResistanceText}.`;
+  }
+
+  return {
+    biasGroup,
+    useInitialRangeOnly,
+    initialRangeStatus: initialStatus,
+    initialSupport: initial.support,
+    initialResistance: initial.resistance,
+    initialSupportText,
+    initialResistanceText,
+    buyArea,
+    sellArea,
+    quickVerdict,
+    whatThisMeans,
+    bestAreaToWatch,
+    mainWarning,
+    coachVerdict,
+    preferredTrendSetup,
+  };
+}
+
+function buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, visualReview = null, submittedInstrument, normalizedSymbol, timeframe }) {
+  const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
+
+  if (!marketReference || !marketReference.ok) {
+    return `COACH VERDICT
+
+Quick Verdict:
+- I could not review this chart properly because the market data was not available.
+
+Market Direction:
+- Not enough data to judge the bigger-picture direction.
+
+What This Means:
+- Check that the selected instrument, timeframe, and date are correct, then run the review again.
+
+Overall Setup Score:
+- 0/10`;
+  }
+
+  const levels = marketReference.dailyLevels || [];
+  const areas = marketReference.csaAreas || [];
+  const bias = marketReference.directionalBias || calculateCsaDirectionalBias(levels, normalizedSymbol, profile);
+  const { resistanceAreas, supportAreas, supplyAreas, demandAreas } = splitAreas(areas);
+  const failedAreas = buildFailedAreas({ supportAreas, resistanceAreas, supplyAreas, demandAreas, levels, symbol: normalizedSymbol });
+  const trendPlan = buildBeginnerTrendPlan({ levels, areas, bias, symbol: normalizedSymbol, profile });
+
+  const overallScore =
+    Number.isFinite(Number(visualReview?.setupQualityScore)) && Number(visualReview.setupQualityScore) >= 20
+      ? Math.max(1, Math.round(Number(visualReview.setupQualityScore) / 10))
+      : failedAreas.length
+      ? 5
+      : String(bias.biasCode || "").includes("range")
+      ? 6
+      : 7;
+
+  const directionSummary = visualReview?.plainMarketDirection
+    ? visualReview.plainMarketDirection
+    : visualReview?.shortTermDirection && visualReview.shortTermDirection !== "unclear"
+    ? `The bigger picture is ${String(bias.bias || "").toLowerCase()}, while the ${timeframe} chart is ${visualReview.shortTermDirection}.`
+    : `The bigger picture is ${String(bias.bias || "").toLowerCase()}. The ${timeframe} chart direction is not clear enough to judge.`;
+
+  const quickVerdict = trendPlan.quickVerdict;
+
+  const whatThisMeans = trendPlan.whatThisMeans;
+
+  const bestAreaToWatch = trendPlan.bestAreaToWatch;
+
+  const mainWarning =
+    failedAreas.length
+      ? "One or more key areas failed to hold, so do not keep trusting them without a fresh confirmation."
+      : trendPlan.mainWarning;
+
+  const coachVerdict = trendPlan.coachVerdict;
+
+  const supportText = listAreas([...supportAreas, ...demandAreas], "support area", 3);
+  const resistanceText = listAreas([...resistanceAreas, ...supplyAreas], "resistance area", 3);
+
+  return `COACH VERDICT
+
+Quick Verdict:
+- ${quickVerdict}
+
+Market Direction:
+- ${directionSummary}
+
+What This Means:
+- ${whatThisMeans}
+
+Best Area To Watch:
+- ${bestAreaToWatch}
+
+Preferred Trend Setup:
+- ${trendPlan.preferredTrendSetup || "The preferred trend setup is breakout, pullback, and retest."}
+
+Entry Confirmation:
+- ${visualReview?.entryEvidence || (chartDetection?.visibleTrigger ? `A possible confirmation is visible: ${chartDetection.visibleTrigger}` : "No clear entry confirmation is visible yet.")}
+
+Stop Loss And Target:
+- ${visualReview?.riskEvidence || "No visible entry, stop loss, or target to judge. A good trade idea should show where the risk is and where the target is."}
+
+Main Warning:
+- ${mainWarning}
+
+Coach Verdict:
+- ${coachVerdict}
+
+Overall Setup Score:
+- ${overallScore}/10
+
+READ_MORE_DETAILS:
+
+Bigger Picture:
+- ${bias.higherTimeframeView || bias.reason}
+- Range position guide: ${bias.rangePositionNote || "Not available."}
+
+Trend Trading Plan:
+- Main support to watch: ${trendPlan.initialSupportText}
+- Main resistance to watch: ${trendPlan.initialResistanceText}
+- Buy plan: wait for price to drop to support around ${trendPlan.initialSupportText} and hold before considering a buy.
+- Sell plan: wait for price to rise to resistance around ${trendPlan.initialResistanceText} and reject before considering a sell.
+
+Uploaded Chart:
+- ${visualReview?.visualSummary || "The uploaded chart was reviewed using the main support and resistance areas."}
+- ${visualReview?.timeframeSummary || "Short-term direction was not clear enough to judge."}
+
+Key Areas To Watch:
+Support areas:
+${supportText}
+
+Resistance areas:
+${resistanceText}
+
+Trade Management:
+- If already in a trade, protect the position when price reaches the first trouble area.
+- If price does not move away cleanly from entry, reduce risk or wait for a better setup.
+
+Review Details:
+- Selected instrument: ${submittedInstrument}
+- Selected timeframe: ${timeframe}
+- Final date used: ${dateDecision?.finalDateText || "Not provided"}
+- Latest visible chart date: ${chartDetection?.latestVisibleDate || "Not detected"}
+- Chart data quality: ${chartDetection?.chartDataQuality || "unclear"}
+- Reviewed high: ${formatPrice(bias.periodHigh)}
+- Reviewed low: ${formatPrice(bias.periodLow)}
+- Higher closes: ${bias.risingCloses ?? "N/A"}
+- Lower closes: ${bias.fallingCloses ?? "N/A"}
+- Direction confidence: ${bias.confidence}
+
+Failed Areas:
+${listFailedAreas(failedAreas)}
+
+Technical Structure Summary:
+${buildSimpleStructureBreakdown(levels, normalizedSymbol)}`;
+}
+
+function buildInvalidChartAnalysis({ submittedInstrument, timeframe, chartDetection }) {
+  return `Invalid Chart Upload\n\nSelected:\n- Instrument: ${submittedInstrument || "Not provided"}\n- Timeframe: ${timeframe || "Not provided"}\n\nReason: ${chartDetection?.chartValidityReason || "The uploaded image could not be verified as a trading chart."}`;
+}
+function buildInsufficientChartDataAnalysis({ submittedInstrument, timeframe, selectedDateText, chartDetection }) {
+  return `Insufficient Chart Data\n\nThe uploaded image appears to be a trading chart, but it does not show enough usable visible price data for CSA Coach to review the setup.\n\nSelected:\n- Instrument: ${submittedInstrument || "Not provided"}\n- Timeframe: ${timeframe || "Not provided"}\n- Selected chart/trade date: ${selectedDateText || "Not provided"}\n\nAI image check:\n- Chart data quality: ${chartDetection?.chartDataQuality || "unclear"}\n- Visible candle count: ${chartDetection?.visibleCandleCount ?? "Not detected"}\n- Reason: ${chartDetection?.insufficientDataReason || "The chart does not show enough usable price movement."}`;
+}
+function buildDateMismatchAnalysis({ selectedDateText, chartDetection, dateMismatch }) {
+  return `Selected Date Not Visible On Chart\n\nSelected date: ${selectedDateText || "Not provided"}\nLatest visible chart date: ${dateMismatch?.latestVisibleDateText || chartDetection?.latestVisibleDate || "Not detected"}\nReason: ${dateMismatch?.reason || "Selected date was not confirmed on the uploaded chart."}\n\nUpload a chart where the selected chart/trade date is visible, or change the selected date.`;
+}
+function buildInstrumentMismatchAnalysis({ selectedInstrument, detectedInstrument, selectedTimeframe, detectedTimeframe }) {
+  return `Chart Context Mismatch\n\nSelected Instrument:\n${selectedInstrument || "Not provided"}\n\nDetected Chart Instrument:\n${detectedInstrument || "Not detected"}\n\nSelected Timeframe:\n${selectedTimeframe || "Not provided"}\n\nDetected Chart Timeframe:\n${detectedTimeframe || "Not detected"}`;
+}
+function buildTimeframeMismatchAnalysis({ selectedInstrument, detectedInstrument, selectedTimeframe, detectedTimeframe }) {
+  return `Chart Timeframe Mismatch\n\nSelected Instrument:\n${selectedInstrument || "Not provided"}\n\nDetected Chart Instrument:\n${detectedInstrument || "Not detected"}\n\nSelected Timeframe:\n${selectedTimeframe || "Not provided"}\n\nDetected Chart Timeframe:\n${detectedTimeframe || "Not detected"}`;
+}
+
+function buildStoppedDashboard({ errorType, error, submittedInstrument, timeframe, chartDetection, selectedTimeframeProfile }) {
+  return buildDashboardAliases({
+    strengths: ["Chart context validation was completed before the review was stopped."],
+    weaknesses: [error, chartDetection?.insufficientDataReason || chartDetection?.chartValidityReason || "Analysis stopped."],
+    contextCheck: { selectedInstrument: submittedInstrument || "Not provided", selectedTimeframe: timeframe || "Not provided", detectedInstrument: chartDetection?.detectedInstrument || "Not detected", detectedTimeframe: chartDetection?.detectedTimeframe || "Not detected", detectedLatestVisibleDate: chartDetection?.latestVisibleDate || "Not detected", status: "Analysis stopped", structureUsed: selectedTimeframeProfile?.structureLabel || "Not available", chartValidation: chartDetection?.isTradingChart ? "Valid trading chart" : "Invalid or unverified chart", chartDataQuality: chartDetection?.chartDataQuality || "unclear", visibleCandleCount: chartDetection?.visibleCandleCount || 0, visualFrameworkMatch: "Not reviewed", visualChartStyle: "Not reviewed", csaLevelVisibility: "Not reviewed" },
+    setupQuality: { score: 0, label: "Stopped", summary: error },
+    entryAccuracy: { score: 0, label: "Stopped", summary: error },
+    riskManagement: { score: 0, label: "Stopped", summary: error },
+    aiMistakeDetectionHub: [makeSimpleMistake(errorType, "HIGH RISK")],
+    failedAreas: [],
+  });
+}
+
+function stoppedResponse({ res, errorType, error, analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile }) {
+  const stoppedDashboard = buildStoppedDashboard({ errorType, error, submittedInstrument, timeframe, chartDetection, selectedTimeframeProfile });
+  return res.status(200).json({
+    success: false, errorType, error, analysis, summary: analysis, selectedPair: submittedInstrument, selectedTimeframe: timeframe,
+    detectedPair: chartDetection?.detectedInstrument || "Not detected", detectedTimeframe: chartDetection?.detectedTimeframe || "Not detected", detectedLatestVisibleDate: chartDetection?.latestVisibleDate || "Not detected",
+    contextStatus: "Analysis stopped before market-data-backed CSA feedback was generated.", grade: "--", confidence: 0, structureScore: 0, executionScore: 0, riskScore: 0,
+    ...stoppedDashboard,
+    coachAdvice: [analysis], journalTags: [errorType, "analysis-stopped"], chartDetection, visualReview: null,
+    marketReference: { ok: false, error, symbol: normalizedSymbol, timezone, interval: normalizeTimeframe(timeframe), rawCandleCount: 0, weekRange: null, dailyLevels: [], csaAreas: [], directionalBias: calculateCsaDirectionalBias([], normalizedSymbol, selectedTimeframeProfile), profile: selectedTimeframeProfile },
+  });
+}
+
+app.get("/", (req, res) => res.json({ status: "ok", message: "CSA Coach backend is running" }));
+app.get("/health", (req, res) => res.json({ ok: true, service: "csa-coach-backend", time: new Date().toISOString() }));
+
+app.get("/test-twelve", async (req, res) => {
+  try {
+    const symbol = normalizeSymbol(req.query.symbol || "GBP/USD");
+    const timeframe = req.query.timeframe || "H1";
+    const date = req.query.date || "2026-07-15";
+    const timezone = req.query.timezone || "UTC";
+    const analysisType = normalizeAnalysisType(req.query.analysisType || "post-trade");
+    const chartDate = parseISODateOnly(date);
+    if (!chartDate) return res.status(400).json({ ok: false, error: "Invalid date. Use YYYY-MM-DD format." });
+    const result = await fetchTwelveDataStructureLevels({ symbol, chartDate, timeframe, timezone, analysisType });
+    return res.json(result);
+  } catch (error) {
+    console.error("test-twelve error:", error);
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) return res.status(500).json({ success: false, error: "OPENAI_API_KEY is missing on the server." });
+    if (!req.file) return res.status(400).json({ success: false, error: "No chart image uploaded." });
+
+    const { timeframe = "Not provided", instrument = "", pair = "", selectedPair = "", analysisType = "post-trade", notes = "", userNotes = "", chartDate = "", tradeDate = "", timezone = "UTC" } = req.body;
+    const submittedInstrument = instrument || pair || selectedPair || "Not provided";
+    const submittedNotes = notes || userNotes || "";
+    const normalizedSymbol = normalizeSymbol(submittedInstrument);
+    const mode = normalizeAnalysisType(analysisType);
+    const selectedTimeframeProfile = getSupportedCsaTimeframeProfile(timeframe);
+    const imageBase64 = req.file.buffer.toString("base64");
+    const mimeType = req.file.mimetype || "image/png";
+    const selectedDate = parseISODateOnly(chartDate || tradeDate);
+
+    const chartDetection = await detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument, selectedTimeframe: timeframe, selectedDateText: chartDate || tradeDate || "", analysisType: mode });
+
+    if (!chartDetection.isTradingChart) {
+      const analysis = buildInvalidChartAnalysis({ submittedInstrument, timeframe, chartDetection });
+      return stoppedResponse({ res, errorType: "invalid_chart_image", error: "Uploaded image is not a valid trading chart.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
+    }
+
+    if (!isUploadedChartDataUsable(chartDetection, chartDate || tradeDate || "")) {
+      const analysis = buildInsufficientChartDataAnalysis({ submittedInstrument, timeframe, selectedDateText: chartDate || tradeDate || "", chartDetection });
+      return stoppedResponse({ res, errorType: "insufficient_chart_data", error: "Uploaded chart does not have enough visible price data for review.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
+    }
+
+    const dateMismatch = getSelectedDateMismatch(chartDetection, selectedDate, timeframe);
+    if (dateMismatch.hasMismatch) {
+      const analysis = buildDateMismatchAnalysis({ selectedDateText: chartDate || tradeDate || "", chartDetection, dateMismatch });
+      return stoppedResponse({ res, errorType: "selected_date_not_visible", error: "Selected chart/trade date is not visible or reasonably covered by the uploaded chart.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
+    }
+
+    const instrumentMismatch = hasStrongInstrumentMismatch({ selectedInstrument: normalizedSymbol || submittedInstrument, detectedInstrument: chartDetection.detectedInstrument });
+    if (instrumentMismatch) {
+      const analysis = buildInstrumentMismatchAnalysis({ selectedInstrument: submittedInstrument, detectedInstrument: chartDetection.detectedInstrument, selectedTimeframe: timeframe, detectedTimeframe: chartDetection.detectedTimeframe });
+      return stoppedResponse({ res, errorType: "instrument_mismatch", error: "Selected instrument does not match uploaded chart.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
+    }
+
+    const timeframeMismatch = hasStrongTimeframeMismatch({ selectedTimeframe: timeframe, detectedTimeframe: chartDetection.detectedTimeframe });
+    if (timeframeMismatch) {
+      const analysis = buildTimeframeMismatchAnalysis({ selectedInstrument: submittedInstrument, detectedInstrument: chartDetection.detectedInstrument, selectedTimeframe: timeframe, detectedTimeframe: chartDetection.detectedTimeframe });
+      return stoppedResponse({ res, errorType: "timeframe_mismatch", error: "Selected timeframe does not match uploaded chart timeframe.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
+    }
+
+    const dateDecision = chooseFinalChartDate({ selectedDate, detection: chartDetection, analysisType: mode });
+    const marketReference = await fetchTwelveDataStructureLevels({ symbol: normalizedSymbol, chartDate: dateDecision.finalDate, timeframe, timezone: timezone || "UTC", analysisType: mode });
+    const visualReview = await compareUploadedChartWithCsaFramework({ imageBase64, mimeType, marketReference, chartDetection, submittedInstrument, timeframe, analysisType: mode, submittedNotes });
+    const analysis = buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, visualReview, submittedInstrument, normalizedSymbol, timeframe });
+    const bias = marketReference.directionalBias || calculateCsaDirectionalBias([], normalizedSymbol, selectedTimeframeProfile);
+    const setupScoreMatch = String(analysis).match(/Overall Setup Score:\s*\n- (\d+)\/10/i);
+    const setupScore = setupScoreMatch ? Number(setupScoreMatch[1]) : 0;
+
+    const dashboardFeedback = buildDashboardFeedback({ marketReference, chartDetection, visualReview, submittedInstrument, timeframe, selectedDateText: chartDate || tradeDate || "Not provided", detectedDateText: chartDetection.latestVisibleDate || "Not detected", setupScore });
+    const dashboardAliases = buildDashboardAliases(dashboardFeedback);
+    const structureLabel = marketReference.profile?.structureLabel || selectedTimeframeProfile.structureLabel || "CSA structure levels";
+
+    return res.json({
+      success: true,
+      analysis,
+      summary: analysis,
+      selectedPair: submittedInstrument,
+      selectedTimeframe: timeframe,
+      selectedDate: chartDate || tradeDate || "Not provided",
+      analysisType: mode,
+      detectedPair: chartDetection.detectedInstrument || normalizedSymbol || "Not available",
+      detectedTimeframe: chartDetection.detectedTimeframe || timeframe,
+      detectedLatestVisibleDate: chartDetection.latestVisibleDate || "Not detected",
+      finalDateUsed: dateDecision.finalDateText,
+      dateDecision,
+      csaDirectionalBias: bias,
+      contextStatus: marketReference.ok ? `Market-data-backed CSA setup review completed using ${structureLabel} and visual chart comparison.` : `Setup review completed without market data: ${marketReference.error}`,
+      grade: dashboardFeedback.setupQualityScore >= 85 ? "A" : dashboardFeedback.setupQualityScore >= 75 ? "B" : dashboardFeedback.setupQualityScore >= 60 ? "C" : dashboardFeedback.setupQualityScore >= 40 ? "D" : "F",
+      confidence: dashboardFeedback.setupQualityScore,
+      structureScore: dashboardFeedback.scores.setupQuality,
+      executionScore: dashboardFeedback.scores.entryAccuracy,
+      riskScore: dashboardFeedback.scores.riskManagement,
+      ...dashboardAliases,
+      coachAdvice: [analysis],
+      journalTags: ["setup review", "directional bias", "entry area", "visual csa comparison", "uploaded chart comparison", "risk reward", marketReference.profile?.selectedTimeframe || selectedTimeframeProfile.selectedTimeframe, marketReference.profile?.structureMode || selectedTimeframeProfile.structureMode, marketReference.ok ? "market-data-backed" : "vision-only fallback", visualReview?.frameworkMatch || "visual-not-reviewed", bias.biasCode || "bias-unavailable"],
+      visualReview,
+      chartDetection,
+      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, weekRange: marketReference.weekRange, dailyLevels: marketReference.dailyLevels, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
+    });
+  } catch (error) {
+    console.error("CSA Coach analyze error:", error);
+    return res.status(500).json({ success: false, error: "Something went wrong while analyzing the chart.", details: error.message });
+  }
+});
+
+process.on("uncaughtException", (error) => console.error("Uncaught exception:", error));
+process.on("unhandledRejection", (reason) => console.error("Unhandled rejection:", reason));
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, "0.0.0.0", () => console.log(`CSA Coach backend running on port ${PORT}`));
