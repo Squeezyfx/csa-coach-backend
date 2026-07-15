@@ -1158,7 +1158,7 @@ function getInitialRangeStatus(levels = [], symbol = "", profile = getSupportedC
   if (status.closeBelowLow) status.breakoutDirection = status.breakoutDirection === "up" ? "both" : "down";
 
   status.rangeMessage = status.isStillInsideInitialRange
-    ? `${initial.label} high around ${status.resistanceText} and ${initial.label} low around ${status.supportText} have not closed broken yet. For now, those remain the only main rejection areas.`
+    ? `Price has not closed above ${initial.label} high around ${status.resistanceText} or below ${initial.label} low around ${status.supportText} yet. For now, those remain the only main rejection areas.`
     : status.breakoutDirection === "up"
     ? `Price has closed above ${initial.label} resistance around ${status.resistanceText}. The better trend setup is to wait for a pullback/retest of that broken resistance as support.`
     : status.breakoutDirection === "down"
