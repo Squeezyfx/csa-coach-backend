@@ -827,7 +827,9 @@ Your job:
   4. Where exactly should price return before a better setup forms? Always include support/resistance and the price level.
   5. Is there a clear entry confirmation?
   6. Is stop loss/target visible enough to judge?
-- The internal range-position check may use the first key high/low like a Fibonacci/range-position guide, but user-facing wording should say it simply: "price is in the upper/middle/lower part of the range."
+- The internal range-position check may use the first key high/low as a deep-pullback guide, but user-facing wording should stay simple.
+- Do not mention Fibonacci, retracement percentages, 61.8, 50%, or technical confluence in user-facing feedback.
+- When there are two possible entry areas, explain which one is better in beginner language: the closer area may be possible but may offer poor reward, while the deeper pullback area may be better because it gives price more room to move.
 - CSA is mainly a trend-trading strategy. If there is no clean trend yet, do not force a buy or sell. Give both sides: buy at support if it holds, or sell at resistance if it rejects.
 - Never write incomplete advice like "wait for price to drop back" without saying the exact support/resistance area and price.
 - Keep all user-facing answers short, plain, and useful.
@@ -1168,34 +1170,179 @@ function getInitialRangeStatus(levels = [], symbol = "", profile = getSupportedC
   return status;
 }
 
-function getNearestAreaForDirection({ areas = [], levels = [], symbol = "", direction = "buy", currentPrice = null, profile = getSupportedCsaTimeframeProfile("H1") }) {
-  const initial = getInitialRangeAreas(levels, profile);
-  const tolerance = getCleanBreakTolerance(symbol);
-  const price = Number(currentPrice);
-  const validAreas = areas.filter((area) => !areaBrokenByCloseLater(area, levels, symbol));
 
-  if (direction === "buy") {
-    const buyAreas = validAreas
-      .filter((area) => area.type === "support" || area.type === "demand")
-      .filter((area) => !Number.isFinite(price) || Number(area.price) <= price + tolerance)
-      .sort((a, b) => Math.abs(Number(a.price) - price) - Math.abs(Number(b.price) - price));
+function getPeriodExtremes(levels = [], symbol = "") {
+  const highs = Array.isArray(levels) ? levels.map((item) => Number(item.high)).filter(Number.isFinite) : [];
+  const lows = Array.isArray(levels) ? levels.map((item) => Number(item.low)).filter(Number.isFinite) : [];
+  const high = highs.length ? Math.max(...highs) : null;
+  const low = lows.length ? Math.min(...lows) : null;
+  const range = Number.isFinite(high) && Number.isFinite(low)
+    ? Math.max(Math.abs(high - low), getCleanBreakTolerance(symbol))
+    : getCleanBreakTolerance(symbol);
+  return { high, low, range };
+}
 
-    if (buyAreas.length) {
-      const area = buyAreas[0];
-      return { label: area.day || area.period || initial.label, type: "support", price: Number(area.price), priceText: area.priceText || formatPrice(area.price) };
-    }
+function isAreaBrokenIntoOppositeRole(area, levels = [], symbol = "") {
+  return Boolean(area && areaBrokenByCloseLater(area, levels, symbol));
+}
 
-    return { label: initial.label, type: "support", price: initial.support, priceText: formatPrice(initial.support) };
+function entryRoleForArea(area, direction = "sell", levels = [], symbol = "") {
+  const type = String(area?.type || "").toLowerCase();
+  const broken = isAreaBrokenIntoOppositeRole(area, levels, symbol);
+
+  if (direction === "sell") {
+    if (type === "resistance" || type === "supply") return { usable: !broken, role: "resistance", flip: false };
+    if ((type === "support" || type === "demand") && broken) return { usable: true, role: "resistance", flip: true };
+    return { usable: false, role: "resistance", flip: false };
   }
 
-  const sellAreas = validAreas
-    .filter((area) => area.type === "resistance" || area.type === "supply")
-    .filter((area) => !Number.isFinite(price) || Number(area.price) >= price - tolerance)
-    .sort((a, b) => Math.abs(Number(a.price) - price) - Math.abs(Number(b.price) - price));
+  if (type === "support" || type === "demand") return { usable: !broken, role: "support", flip: false };
+  if ((type === "resistance" || type === "supply") && broken) return { usable: true, role: "support", flip: true };
+  return { usable: false, role: "support", flip: false };
+}
 
-  if (sellAreas.length) {
-    const area = sellAreas[0];
-    return { label: area.day || area.period || initial.label, type: "resistance", price: Number(area.price), priceText: area.priceText || formatPrice(area.price) };
+function buildEntryCandidate(area, { direction = "sell", levels = [], symbol = "", currentPrice = null }) {
+  const price = Number(area?.price);
+  const current = Number(currentPrice);
+  if (!Number.isFinite(price)) return null;
+
+  const tolerance = getCleanBreakTolerance(symbol);
+  if (Number.isFinite(current)) {
+    if (direction === "sell" && price < current - tolerance) return null;
+    if (direction === "buy" && price > current + tolerance) return null;
+  }
+
+  const roleInfo = entryRoleForArea(area, direction, levels, symbol);
+  if (!roleInfo.usable) return null;
+
+  const extremes = getPeriodExtremes(levels, symbol);
+  const range = extremes.range || getCleanBreakTolerance(symbol);
+  const distanceFromCurrent = Number.isFinite(current) ? Math.abs(price - current) : null;
+  const distancePercent = Number.isFinite(distanceFromCurrent) ? distanceFromCurrent / range : 0.25;
+  const levelPosition = Number.isFinite(extremes.high) && Number.isFinite(extremes.low)
+    ? (price - extremes.low) / range
+    : null;
+
+  let score = 0;
+  if (roleInfo.flip) score += 3;
+  if (distancePercent >= 0.12) score += 2;
+  if (distancePercent >= 0.22) score += 1;
+  if (distancePercent < 0.08) score -= 3;
+
+  // Internal deep-pullback guide only. Do not expose this as Fibonacci or percentages to users.
+  if (Number.isFinite(levelPosition)) {
+    if (direction === "sell") {
+      if (levelPosition >= 0.50 && levelPosition <= 0.82) score += 3;
+      else if (levelPosition >= 0.38 && levelPosition < 0.50) score += 1;
+      else if (levelPosition < 0.25) score -= 2;
+    } else {
+      if (levelPosition >= 0.18 && levelPosition <= 0.50) score += 3;
+      else if (levelPosition > 0.50 && levelPosition <= 0.62) score += 1;
+      else if (levelPosition > 0.75) score -= 2;
+    }
+  }
+
+  return {
+    label: area.day || area.period || area.date || "key area",
+    originalType: area.type,
+    type: roleInfo.role,
+    price,
+    priceText: area.priceText || formatPrice(price),
+    isFlipArea: roleInfo.flip,
+    distanceFromCurrent,
+    distancePercent,
+    levelPosition,
+    score,
+    sourceArea: area,
+  };
+}
+
+function getRankedEntryAreas({ areas = [], levels = [], symbol = "", direction = "sell", currentPrice = null, profile = getSupportedCsaTimeframeProfile("H1") }) {
+  const candidates = [];
+  const seen = new Set();
+
+  for (const area of areas) {
+    const candidate = buildEntryCandidate(area, { direction, levels, symbol, currentPrice });
+    if (!candidate) continue;
+    const key = `${candidate.type}-${candidate.priceText}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(candidate);
+  }
+
+  const initial = getInitialRangeAreas(levels, profile);
+  if (direction === "sell" && Number.isFinite(Number(initial.resistance))) {
+    candidates.push({
+      label: initial.label,
+      originalType: "resistance",
+      type: "resistance",
+      price: Number(initial.resistance),
+      priceText: formatPrice(initial.resistance),
+      isFlipArea: false,
+      distanceFromCurrent: Number.isFinite(Number(currentPrice)) ? Math.abs(Number(initial.resistance) - Number(currentPrice)) : null,
+      distancePercent: 0.2,
+      levelPosition: null,
+      score: 1,
+      sourceArea: null,
+    });
+  }
+
+  if (direction === "buy" && Number.isFinite(Number(initial.support))) {
+    candidates.push({
+      label: initial.label,
+      originalType: "support",
+      type: "support",
+      price: Number(initial.support),
+      priceText: formatPrice(initial.support),
+      isFlipArea: false,
+      distanceFromCurrent: Number.isFinite(Number(currentPrice)) ? Math.abs(Number(initial.support) - Number(currentPrice)) : null,
+      distancePercent: 0.2,
+      levelPosition: null,
+      score: 1,
+      sourceArea: null,
+    });
+  }
+
+  return candidates
+    .filter((candidate) => Number.isFinite(Number(candidate.price)))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      const ad = Number.isFinite(a.distanceFromCurrent) ? a.distanceFromCurrent : Infinity;
+      const bd = Number.isFinite(b.distanceFromCurrent) ? b.distanceFromCurrent : Infinity;
+      return ad - bd;
+    });
+}
+
+function getNearestCandidate(candidates = [], currentPrice = null) {
+  const current = Number(currentPrice);
+  if (!Number.isFinite(current) || !Array.isArray(candidates) || !candidates.length) return null;
+  return [...candidates].sort((a, b) => Math.abs(Number(a.price) - current) - Math.abs(Number(b.price) - current))[0] || null;
+}
+
+function isMeaningfullyDifferentArea(a, b, symbol = "") {
+  if (!a || !b) return false;
+  const tolerance = getCleanBreakTolerance(symbol) * 2;
+  return Math.abs(Number(a.price) - Number(b.price)) > tolerance;
+}
+
+function formatAreaComparison({ direction = "sell", nearestArea = null, betterArea = null, symbol = "" }) {
+  if (!nearestArea || !betterArea || !isMeaningfullyDifferentArea(nearestArea, betterArea, symbol)) return "";
+  const action = direction === "sell" ? "sell" : "buy";
+  const role = direction === "sell" ? "resistance" : "support";
+  const roomText = direction === "sell" ? "more room to fall" : "more room to rise";
+  const rejectText = direction === "sell" ? "rejects from there" : "holds from there";
+  const nearText = nearestArea.priceText || formatPrice(nearestArea.price);
+  const betterText = betterArea.priceText || formatPrice(betterArea.price);
+  return `${role[0].toUpperCase() + role.slice(1)} around ${nearText} is a possible ${action} area, but it is very close to current price, so the reward may be limited. A better ${action} area is around ${betterText} because it gives price ${roomText} if it ${rejectText}.`;
+}
+
+function getNearestAreaForDirection({ areas = [], levels = [], symbol = "", direction = "buy", currentPrice = null, profile = getSupportedCsaTimeframeProfile("H1") }) {
+  const initial = getInitialRangeAreas(levels, profile);
+  const ranked = getRankedEntryAreas({ areas, levels, symbol, direction, currentPrice, profile });
+  if (ranked.length) return ranked[0];
+
+  if (direction === "buy") {
+    return { label: initial.label, type: "support", price: initial.support, priceText: formatPrice(initial.support) };
   }
 
   return { label: initial.label, type: "resistance", price: initial.resistance, priceText: formatPrice(initial.resistance) };
@@ -1222,13 +1369,21 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
   // For H1/M15/M30/M5/M1 this means Monday high = resistance and Monday low = support.
   const useInitialRangeOnly = initialStatus.hasInitialRange && initialStatus.isStillInsideInitialRange;
 
+  const buyCandidates = useInitialRangeOnly ? [] : getRankedEntryAreas({ areas, levels, symbol, direction: "buy", currentPrice, profile });
+  const sellCandidates = useInitialRangeOnly ? [] : getRankedEntryAreas({ areas, levels, symbol, direction: "sell", currentPrice, profile });
+
   const buyArea = useInitialRangeOnly
     ? { label: initial.label, type: "support", price: initial.support, priceText: formatPrice(initial.support) }
-    : getNearestAreaForDirection({ areas, levels, symbol, direction: "buy", currentPrice, profile });
+    : (buyCandidates[0] || getNearestAreaForDirection({ areas, levels, symbol, direction: "buy", currentPrice, profile }));
 
   const sellArea = useInitialRangeOnly
     ? { label: initial.label, type: "resistance", price: initial.resistance, priceText: formatPrice(initial.resistance) }
-    : getNearestAreaForDirection({ areas, levels, symbol, direction: "sell", currentPrice, profile });
+    : (sellCandidates[0] || getNearestAreaForDirection({ areas, levels, symbol, direction: "sell", currentPrice, profile }));
+
+  const nearestBuyArea = getNearestCandidate(buyCandidates, currentPrice);
+  const nearestSellArea = getNearestCandidate(sellCandidates, currentPrice);
+  const buyAreaComparison = formatAreaComparison({ direction: "buy", nearestArea: nearestBuyArea, betterArea: buyArea, symbol });
+  const sellAreaComparison = formatAreaComparison({ direction: "sell", nearestArea: nearestSellArea, betterArea: sellArea, symbol });
 
   const initialSupportText = initialStatus.supportText || formatPrice(initial.support);
   const initialResistanceText = initialStatus.resistanceText || formatPrice(initial.resistance);
@@ -1252,15 +1407,15 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
   } else if (biasGroup === "bullish") {
     quickVerdict = `Bullish plan: wait for price to pull back to support around ${buyPriceText} before considering a buy.`;
     whatThisMeans = `The better buy idea is not to chase price now, but to wait for price to drop back to support around ${buyPriceText} and hold.`;
-    bestAreaToWatch = `For a buy, wait for price to drop back to support around ${buyPriceText} and then show a clear bullish candle or strong rejection from that area.`;
-    mainWarning = `Do not buy in the middle. Wait for support around ${buyPriceText} or a fresh breakout-and-hold before considering a buy.`;
-    coachVerdict = `The cleaner plan is to look for buys only after price holds support around ${buyPriceText}.`;
+    bestAreaToWatch = buyAreaComparison || `For a buy, wait for price to drop back to support around ${buyPriceText} and then show a clear bullish candle or strong rejection from that area.`;
+    mainWarning = `Do not buy in the middle. Wait for the better support area around ${buyPriceText} or a fresh breakout-and-hold before considering a buy.`;
+    coachVerdict = `The cleaner plan is to look for buys only after price holds the better support area around ${buyPriceText}.`;
   } else if (biasGroup === "bearish") {
     quickVerdict = `Bearish plan: wait for price to rise back to resistance around ${sellPriceText} before considering a sell.`;
     whatThisMeans = `The better sell idea is not to chase price now, but to wait for price to pull back up to resistance around ${sellPriceText} and reject.`;
-    bestAreaToWatch = `For a sell, wait for price to rise back to resistance around ${sellPriceText} and then show a clear bearish candle or strong rejection from that area.`;
-    mainWarning = `Do not sell after price has already dropped. Wait for resistance around ${sellPriceText} or a fresh breakdown-and-hold before considering a sell.`;
-    coachVerdict = `The cleaner plan is to look for sells only after price rejects resistance around ${sellPriceText}.`;
+    bestAreaToWatch = sellAreaComparison || `For a sell, wait for price to rise back to resistance around ${sellPriceText} and then show a clear bearish candle or strong rejection from that area.`;
+    mainWarning = `Do not sell after price has already dropped. Wait for the better resistance area around ${sellPriceText} or a fresh breakdown-and-hold before considering a sell.`;
+    coachVerdict = `The cleaner plan is to look for sells only after price rejects the better resistance area around ${sellPriceText}.`;
   } else if (biasGroup === "range_bullish") {
     quickVerdict = `No clean trend yet, but buyers have pressure. Buy only if price drops to support around ${initialSupportText} and holds.`;
     whatThisMeans = `Price is still inside the main range, so support around ${initialSupportText} and resistance around ${initialResistanceText} are the key areas for now.`;
@@ -1285,6 +1440,10 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
     initialResistanceText,
     buyArea,
     sellArea,
+    nearestBuyArea,
+    nearestSellArea,
+    buyAreaComparison,
+    sellAreaComparison,
     quickVerdict,
     whatThisMeans,
     bestAreaToWatch,
@@ -1387,13 +1546,15 @@ READ_MORE_DETAILS:
 
 Bigger Picture:
 - ${bias.higherTimeframeView || bias.reason}
-- Range position guide: ${bias.rangePositionNote || "Not available."}
+- Pullback quality note: ${bias.rangePositionNote || "Not available."}
 
 Trend Trading Plan:
 - Main support to watch: ${trendPlan.initialSupportText}
 - Main resistance to watch: ${trendPlan.initialResistanceText}
-- Buy plan: wait for price to drop to support around ${trendPlan.initialSupportText} and hold before considering a buy.
-- Sell plan: wait for price to rise to resistance around ${trendPlan.initialResistanceText} and reject before considering a sell.
+- Buy plan: wait for price to drop to the better support area around ${(trendPlan.buyArea?.priceText || trendPlan.initialSupportText)} and hold before considering a buy.
+- Sell plan: wait for price to rise to the better resistance area around ${(trendPlan.sellArea?.priceText || trendPlan.initialResistanceText)} and reject before considering a sell.${trendPlan.sellAreaComparison ? `
+- Sell area comparison: ${trendPlan.sellAreaComparison}` : ""}${trendPlan.buyAreaComparison ? `
+- Buy area comparison: ${trendPlan.buyAreaComparison}` : ""}
 
 Uploaded Chart:
 - ${visualReview?.visualSummary || "The uploaded chart was reviewed using the main support and resistance areas."}
