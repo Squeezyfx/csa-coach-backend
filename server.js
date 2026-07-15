@@ -888,11 +888,6 @@ Your job:
 - Never write incomplete advice like "wait for price to drop back" without saying the exact support/resistance area and price.
 - Keep all user-facing answers short, plain, and useful.
 - Two different-looking charts must receive different strengths, weaknesses, mistake hub items, scores, and short-term chart direction.
-- Strengths and weaknesses must compare the uploaded chart/trade idea against the internal support/resistance rules.
-- Strengths must only describe what the trader/chart setup did well, such as watching the correct side, waiting near a better area, keeping the chart readable, marking a useful area, or avoiding a bad chase.
-- Weaknesses must only describe what the trader/chart setup missed, did poorly, marked unclearly, or failed to show, such as missing key levels, no fresh entry confirmation, selling too close to support, buying too close to resistance, no stop loss/target, poor reward, or unclear trade plan.
-- Do NOT list backend/system checks as strengths or weaknesses. Avoid phrases like "bigger-picture direction checked", "uploaded chart has enough visible price action", or "market data was reviewed" in strengths/weaknesses.
-- Keep strengths and weaknesses 90% beginner-friendly. Use simple words like "better sell area", "too close to support", "no clear entry signal", and "price needs to pull back first".
 - Do not invent entries, stop loss, targets, or mistakes if they are not visible.
 - If no entry/SL/TP is visible, say "No visible entry, stop loss, or target to judge."
 - If the bigger-picture view and uploaded chart timeframe disagree, state both clearly.
@@ -931,8 +926,8 @@ Return exactly this JSON shape:
   "riskEvidence": "what SL/TP/risk evidence is visible, or 'No visible entry, stop loss, or target to judge'",
   "mainWarning": "one simple warning the trader should remember",
   "coachVerdict": "one short final verdict in beginner language",
-  "chartSpecificStrengths": ["one simple thing the trader/chart setup did well compared with the internal support/resistance rules"],
-  "chartSpecificWeaknesses": ["one simple thing the trader/chart setup missed or did poorly compared with the internal support/resistance rules"],
+  "chartSpecificStrengths": ["simple strength visible on this chart"],
+  "chartSpecificWeaknesses": ["simple weakness visible on this chart"],
   "simpleMistakeHub": [
     { "title": "short mistake title", "tag": "HIGH RISK | WARNING | STRUCTURAL | MATH FLAW | DISCIPLINE | REVIEW" }
   ],
@@ -995,94 +990,6 @@ function shouldUseVisualScore(score, marketOk) {
   return true;
 }
 
-function pushUniqueText(list, text) {
-  const clean = String(text || "").trim();
-  if (!clean) return;
-  const normalized = clean.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  if (!normalized) return;
-  const alreadyExists = list.some((item) => String(item || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() === normalized);
-  if (!alreadyExists) list.push(clean);
-}
-
-function mentionsSystemCheck(text = "") {
-  const lower = String(text || "").toLowerCase();
-  return [
-    "bigger-picture direction checked",
-    "main view:",
-    "uploaded chart has enough visible price action",
-    "market data",
-    "review completed",
-    "chart context validation was completed",
-    "selected pair and timeframe matched",
-    "valid trading chart",
-    "visible price action to review",
-  ].some((phrase) => lower.includes(phrase));
-}
-
-function sanitizeTraderFeedbackItems(items = []) {
-  return normalizeArrayOfStrings(items, [])
-    .map((item) => String(item || "").trim())
-    .filter((item) => item && !mentionsSystemCheck(item))
-    .slice(0, 5);
-}
-
-function buildCsaComparisonFeedback({ visualReview = null, bias = {}, hasConfirmedTrigger = false, failedAreas = [], mixedBias = false, marketOk = true }) {
-  const strengths = [];
-  const weaknesses = [];
-  const shortTermDirection = String(visualReview?.shortTermDirection || "").toLowerCase();
-  const biasCode = String(bias?.biasCode || "").toLowerCase();
-  const csaLevelVisibility = String(visualReview?.csaLevelVisibility || "").toLowerCase();
-  const entryEvidence = String(visualReview?.entryEvidence || "").toLowerCase();
-  const riskEvidence = String(visualReview?.riskEvidence || "").toLowerCase();
-
-  if (!marketOk) {
-    pushUniqueText(weaknesses, "The chart could not be fully compared with the key support and resistance rules because market data was unavailable.");
-    return { strengths, weaknesses };
-  }
-
-  if (["clear", "partial"].includes(csaLevelVisibility)) {
-    pushUniqueText(strengths, "The important support and resistance areas are visible enough to compare the setup.");
-  } else {
-    pushUniqueText(weaknesses, "The key support and resistance areas are not marked clearly, so the trade plan is harder to judge.");
-  }
-
-  if ((biasCode.includes("bear") && shortTermDirection.includes("bear")) || (biasCode.includes("bull") && shortTermDirection.includes("bull"))) {
-    pushUniqueText(strengths, "The trade idea is not fighting the current pressure shown by the chart.");
-  }
-
-  if (hasConfirmedTrigger) {
-    pushUniqueText(strengths, "There is some visible price confirmation instead of a completely random entry.");
-  } else {
-    pushUniqueText(weaknesses, "No fresh entry confirmation is visible yet around the better support or resistance area.");
-  }
-
-  if (riskEvidence.includes("no visible") || riskEvidence.includes("not visible") || riskEvidence.includes("cannot") || !riskEvidence) {
-    pushUniqueText(weaknesses, "Stop loss and target are not shown, so the risk and reward cannot be judged properly.");
-  }
-
-  if (mixedBias) {
-    pushUniqueText(weaknesses, "The chart is not showing a clean trend-trading location yet, so middle-of-range entries need caution.");
-  }
-
-  failedAreas.slice(0, 2).forEach((area) => {
-    const price = area?.priceText || formatPrice(area?.price);
-    if (area?.type === "support" || area?.type === "demand") {
-      pushUniqueText(weaknesses, `Previous support around ${price} has already failed, so it should not be treated as a fresh buy area without a clear recovery.`);
-    } else if (area?.type === "resistance" || area?.type === "supply") {
-      pushUniqueText(weaknesses, `Previous resistance around ${price} has already failed, so it should not be treated as a fresh sell area without a clear rejection.`);
-    }
-  });
-
-  if (!strengths.length) {
-    pushUniqueText(strengths, "The chart is readable enough to compare the trade idea with the key support and resistance areas.");
-  }
-  if (!weaknesses.length) {
-    pushUniqueText(weaknesses, "No major chart/trade weakness was visible, but the trader should still wait for confirmation at the key area.");
-  }
-
-  return { strengths, weaknesses };
-}
-
 
 function buildDashboardFeedback({ marketReference, chartDetection, visualReview = null, submittedInstrument, timeframe, selectedDateText, detectedDateText, setupScore = 0 }) {
   const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
@@ -1098,21 +1005,25 @@ function buildDashboardFeedback({ marketReference, chartDetection, visualReview 
   const marketOk = Boolean(marketReference?.ok);
   const visualOk = Boolean(visualReview?.ok);
 
-  const comparisonFeedback = buildCsaComparisonFeedback({
-    visualReview,
-    bias,
-    hasConfirmedTrigger,
-    failedAreas,
-    mixedBias,
-    marketOk,
-  });
+  const frameworkStrengths = [];
+  const frameworkWeaknesses = [];
 
-  const visualStrengths = visualOk ? sanitizeTraderFeedbackItems(visualReview.chartSpecificStrengths) : [];
-  const visualWeaknesses = visualOk ? sanitizeTraderFeedbackItems(visualReview.chartSpecificWeaknesses) : [];
-  const strengths = [];
-  const weaknesses = [];
-  [...visualStrengths, ...comparisonFeedback.strengths].forEach((item) => pushUniqueText(strengths, item));
-  [...visualWeaknesses, ...comparisonFeedback.weaknesses].forEach((item) => pushUniqueText(weaknesses, item));
+  if (marketOk) {
+    frameworkStrengths.push(`Bigger-picture direction checked using the main highs, lows, and closes.`);
+    frameworkStrengths.push(`Main view: ${bias.bias}.`);
+  } else {
+    frameworkWeaknesses.push(marketReference?.error || "Market data unavailable.");
+  }
+
+  if (chartDetection?.hasUsablePriceData) frameworkStrengths.push("Uploaded chart has enough visible price action to review.");
+  if (!hasConfirmedTrigger) frameworkWeaknesses.push("No clear entry confirmation was detected on the uploaded chart.");
+  failedAreas.forEach((area) => frameworkWeaknesses.push(area.explanation));
+  if (mixedBias) frameworkWeaknesses.push("The bigger-picture view is not a clean trend, so middle-of-range trades need caution.");
+
+  const visualStrengths = visualOk ? normalizeArrayOfStrings(visualReview.chartSpecificStrengths, []) : [];
+  const visualWeaknesses = visualOk ? normalizeArrayOfStrings(visualReview.chartSpecificWeaknesses, []) : [];
+  const strengths = [...visualStrengths, ...frameworkStrengths].filter(Boolean);
+  const weaknesses = [...visualWeaknesses, ...frameworkWeaknesses].filter(Boolean);
 
   const baseSetupQualityScore = clampScore((setupScore || 0) * 10 - failedAreas.length * 8 - (mixedBias ? 8 : 0) + (marketOk ? 5 : -20));
   const baseEntryAccuracyScore = clampScore(65 + (hasConfirmedTrigger ? 15 : -10) - failedAreas.length * 10 - (mixedBias ? 5 : 0));
@@ -1181,8 +1092,8 @@ function buildDashboardFeedback({ marketReference, chartDetection, visualReview 
   };
 
   return {
-    strengths: strengths.length ? strengths.slice(0, 7) : ["The chart is readable enough to compare the trade idea with the key support and resistance areas."],
-    weaknesses: weaknesses.length ? weaknesses.slice(0, 7) : ["No major chart/trade weakness was visible, but the trader should still wait for confirmation at the key area."],
+    strengths: strengths.length ? strengths.slice(0, 7) : ["Trade review completed."],
+    weaknesses: weaknesses.length ? weaknesses.slice(0, 7) : ["No major weakness detected from the available chart information."],
     mistakes: aiMistakeDetectionHub,
     aiMistakeDetectionHub,
     mistakeDetectionHub: aiMistakeDetectionHub,
@@ -1197,7 +1108,7 @@ function buildDashboardFeedback({ marketReference, chartDetection, visualReview 
     entryAccuracyScore,
     riskManagement,
     riskManagementScore,
-    scores: { chartContext: contextCheck.chartContextScore, setupQuality: setupQualityScore, entryAccuracy: entryAccuracyScore, riskManagement: riskManagementScore },
+    scores: { setupQuality: setupQualityScore, entryAccuracy: entryAccuracyScore, riskManagement: riskManagementScore },
     dashboard: {},
     dashboardCards: {},
   };
@@ -1205,10 +1116,6 @@ function buildDashboardFeedback({ marketReference, chartDetection, visualReview 
 
 function buildDashboardAliases(dashboardFeedback = {}) {
   const contextCheck = dashboardFeedback.contextCheck || dashboardFeedback.chartContextCheck || {};
-  const chartContextCheck = contextCheck.chartContextCheck || contextCheck;
-  const chartContextScore = Number.isFinite(Number(contextCheck.chartContextScore)) ? Number(contextCheck.chartContextScore) : 0;
-  const chartContextLabel = contextCheck.chartContextLabel || contextCheck.status || "Not available";
-  const chartContextSummary = contextCheck.chartContextSummary || "Chart context check was not calculated.";
   const setupQuality = dashboardFeedback.setupQuality || { score: 0, label: "Unavailable", summary: "Setup quality was not calculated." };
   const entryAccuracy = dashboardFeedback.entryAccuracy || { score: 0, label: "Unavailable", summary: "Entry accuracy was not calculated." };
   const riskManagement = dashboardFeedback.riskManagement || { score: 0, label: "Unavailable", summary: "Risk management was not calculated." };
@@ -1219,7 +1126,6 @@ function buildDashboardAliases(dashboardFeedback = {}) {
   return {
     strengths, weaknesses,
     chartContextCheck: contextCheck, contextCheck, chartContext: contextCheck, chartContextStatus: contextCheck.status || "Not available",
-    chartContextScore, chartContextLabel, chartContextSummary,
     selectedContext: { instrument: contextCheck.selectedInstrument || "Not provided", timeframe: contextCheck.selectedTimeframe || "Not provided", date: contextCheck.selectedDate || "Not provided" },
     detectedContext: { instrument: contextCheck.detectedInstrument || "Not detected", timeframe: contextCheck.detectedTimeframe || "Not detected", latestVisibleDate: contextCheck.detectedLatestVisibleDate || "Not detected" },
     setupQuality, setupQualityScore: setupQuality.score, setupQualityLabel: setupQuality.label, setupQualitySummary: setupQuality.summary,
@@ -1228,8 +1134,8 @@ function buildDashboardAliases(dashboardFeedback = {}) {
     chartContextScore: Number(contextCheck.chartContextScore ?? (contextCheck.status === "Reviewed" ? 100 : 0)), chartContextLabel: contextCheck.chartContextLabel || (contextCheck.status === "Reviewed" ? "Verified" : "Not verified"), chartContextSummary: contextCheck.chartContextSummary || "Checks whether the selected pair/timeframe matches the uploaded chart before analysis.",
     aiMistakeDetectionHub, mistakeDetectionHub: aiMistakeDetectionHub, mistakeHub: aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub,
     failedAreas,
-    dashboard: { strengths, weaknesses, chartContextCheck: contextCheck, contextCheck, chartContextScore, chartContextLabel, chartContextSummary, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub, failedAreas },
-    dashboardCards: { strengths, weaknesses, chartContextCheck: contextCheck, chartContextScore, chartContextLabel, chartContextSummary, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, failedAreas },
+    dashboard: { strengths, weaknesses, chartContextCheck: contextCheck, contextCheck, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub, failedAreas },
+    dashboardCards: { strengths, weaknesses, chartContextCheck: contextCheck, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, failedAreas },
   };
 }
 
@@ -1891,6 +1797,58 @@ app.get("/test-twelve", async (req, res) => {
     console.error("test-twelve error:", error);
     return res.status(500).json({ ok: false, error: error.message });
   }
+});
+
+
+app.get("/sample-analysis", (req, res) => {
+  return res.json({
+    success: true,
+    isSample: true,
+    selectedPair: "GBPUSD",
+    selectedTimeframe: "H1",
+    selectedDate: "2026-07-09",
+    analysisType: "post-trade",
+    detectedPair: "GBPUSD",
+    detectedTimeframe: "H1",
+    detectedLatestVisibleDate: "2026-07-09",
+    contextStatus: "Sample chart context verified for demonstration.",
+    grade: "B+",
+    confidence: 82,
+    structureScore: 86,
+    executionScore: 74,
+    riskScore: 78,
+    chartContextScore: 100,
+    chartContextLabel: "Verified sample",
+    chartContextSummary: "The sample instrument and timeframe match the demonstration chart.",
+    strengths: [
+      "The chart is reviewed around clearly defined CSA support and resistance areas.",
+      "Price respected the lower support area before moving toward resistance.",
+      "The trader avoided chasing price in the middle of the range."
+    ],
+    weaknesses: [
+      "No fresh entry confirmation is visible at the current resistance area.",
+      "A new entry here would offer limited room before nearby resistance.",
+      "Stop loss and target placement still need to be confirmed before execution."
+    ],
+    mistakes: [
+      { title: "Entering before confirmation", severity: "High" },
+      { title: "Trading too close to resistance", severity: "Review" },
+      { title: "Risk plan not confirmed", severity: "Review" }
+    ],
+    summary: "COACH VERDICT:\nWAIT. Price has reached a resistance area after a bullish move, but there is no fresh confirmed trigger yet.\n\nWHAT THE CHART DOES WELL:\n- Support and resistance areas are clear.\n- The move from support toward resistance is easy to judge.\n\nMAIN RISK:\n- Entering now could mean buying directly into resistance or selling without confirmation.\n\nNEXT ACTION:\nWait for either a clean break-and-hold above resistance followed by a retest, or a clear bearish rejection before considering the next setup.\n\nREAD_MORE_DETAILS:\nThis sample is designed to demonstrate the dashboard experience. It is not live market analysis and should not be treated as a trade signal.",
+    analysis: "COACH VERDICT:\nWAIT. Price is at resistance without a fresh confirmed trigger.",
+    setupQuality: { score: 86, label: "Good", summary: "The structure and location are clear." },
+    entryAccuracy: { score: 74, label: "Fair", summary: "The next entry still needs confirmation." },
+    riskManagement: { score: 78, label: "Good", summary: "Risk can be planned, but SL and target are not confirmed." },
+    chartContext: { score: 100, label: "Verified sample", summary: "Sample context is internally matched." },
+    mistakePattern: [
+      { title: "Entering before confirmation", severity: "High" },
+      { title: "Trading too close to resistance", severity: "Review" },
+      { title: "Risk plan not confirmed", severity: "Review" }
+    ],
+    todaysLesson: "Do not force an entry simply because price has reached an important area. Wait for confirmation.",
+    riskComment: "A valid setup still requires a clear invalidation point and enough room to the next target."
+  });
 });
 
 app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
