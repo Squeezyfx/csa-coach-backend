@@ -830,6 +830,9 @@ Your job:
 - The internal range-position check may use the first key high/low as a deep-pullback guide, but user-facing wording should stay simple.
 - Do not mention Fibonacci, retracement percentages, 61.8, 50%, or technical confluence in user-facing feedback.
 - When there are two possible entry areas, explain which one is better in beginner language: the closer area may be possible but may offer poor reward, while the deeper pullback area may be better because it gives price more room to move.
+- Entry confirmation must match the trade direction: for a sell setup, wait for price to approach resistance and reject; for a buy setup, wait for price to approach support and hold.
+- A failed support/resistance area should be explained under market structure or best area to watch, not as the main warning.
+- Main warning should focus on the trader's mistake to avoid: chasing price, selling too close to support, buying too close to resistance, entering without confirmation, or poor reward-to-risk.
 - CSA is mainly a trend-trading strategy. If there is no clean trend yet, do not force a buy or sell. Give both sides: buy at support if it holds, or sell at resistance if it rejects.
 - Never write incomplete advice like "wait for price to drop back" without saying the exact support/resistance area and price.
 - Keep all user-facing answers short, plain, and useful.
@@ -1453,6 +1456,38 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
   };
 }
 
+
+function buildEntryConfirmationText({ trendPlan = {}, chartDetection = null, visualReview = null }) {
+  const hasVisibleTrigger = Boolean(chartDetection?.visibleTrigger);
+  if (hasVisibleTrigger) {
+    return `A possible confirmation is visible: ${chartDetection.visibleTrigger}`;
+  }
+
+  const biasGroup = String(trendPlan?.biasGroup || "").toLowerCase();
+  const sellPriceText = trendPlan?.sellArea?.priceText || trendPlan?.initialResistanceText || "the resistance area";
+  const buyPriceText = trendPlan?.buyArea?.priceText || trendPlan?.initialSupportText || "the support area";
+
+  // Do not let the visual model say "wait for support" during a sell-focused setup
+  // or "wait for resistance" during a buy-focused setup. Entry confirmation should
+  // match the active trade idea.
+  if (biasGroup === "bearish" || biasGroup === "range_bearish") {
+    return `No visible sell confirmation yet. A better sell setup would be if price pulls back toward resistance around ${sellPriceText} and rejects from there.`;
+  }
+
+  if (biasGroup === "bullish" || biasGroup === "range_bullish") {
+    return `No visible buy confirmation yet. A better buy setup would be if price pulls back toward support around ${buyPriceText} and holds from there.`;
+  }
+
+  if (trendPlan?.useInitialRangeOnly) {
+    return `No clear entry confirmation is visible yet. Wait for price to reach ${trendPlan.initialSupportText || buyPriceText} support or ${trendPlan.initialResistanceText || sellPriceText} resistance and show a clear reaction.`;
+  }
+
+  const visualText = String(visualReview?.entryEvidence || "").trim();
+  if (visualText && !/support first|resistance first/i.test(visualText)) return visualText;
+
+  return "No clear entry confirmation is visible yet. Wait for price to reach a clear support or resistance area first.";
+}
+
 function buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, visualReview = null, submittedInstrument, normalizedSymbol, timeframe }) {
   const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
 
@@ -1500,10 +1535,17 @@ Overall Setup Score:
 
   const bestAreaToWatch = trendPlan.bestAreaToWatch;
 
-  const mainWarning =
-    failedAreas.length
-      ? "One or more key areas failed to hold, so do not keep trusting them without a fresh confirmation."
-      : trendPlan.mainWarning;
+  const entryConfirmation = buildEntryConfirmationText({
+    trendPlan,
+    chartDetection,
+    visualReview,
+  });
+
+  // Failed support/resistance areas are structure information, not the main warning.
+  // The main warning should focus on the mistake to avoid, such as chasing price
+  // after a big move, selling too close to support, buying too close to resistance,
+  // or entering without confirmation.
+  const mainWarning = trendPlan.mainWarning;
 
   const coachVerdict = trendPlan.coachVerdict;
 
@@ -1528,7 +1570,7 @@ Preferred Trend Setup:
 - ${trendPlan.preferredTrendSetup || "The preferred trend setup is breakout, pullback, and retest."}
 
 Entry Confirmation:
-- ${visualReview?.entryEvidence || (chartDetection?.visibleTrigger ? `A possible confirmation is visible: ${chartDetection.visibleTrigger}` : "No clear entry confirmation is visible yet.")}
+- ${entryConfirmation}
 
 Stop Loss And Target:
 - ${visualReview?.riskEvidence || "No visible entry, stop loss, or target to judge. A good trade idea should show where the risk is and where the target is."}
