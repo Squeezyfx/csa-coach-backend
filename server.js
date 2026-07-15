@@ -27,6 +27,10 @@ Invalid/insufficient images:
 - charts with fewer than about 15 visible candles/bars/points
 
 Important:
+- Take your time to inspect the top-left chart header, chart title, symbol label, and timeframe label before returning JSON.
+- Do NOT copy the selected instrument or selected timeframe from the user input unless the same instrument/timeframe is clearly visible on the uploaded chart image.
+- If the uploaded chart instrument is not clearly readable, set detectedInstrument=null. Do not guess.
+- If the uploaded chart timeframe is not clearly readable, set detectedTimeframe=null. Do not guess.
 - Be practical. If a chart clearly has visible price movement, do not mark it insufficient just because the exact selected date is hard to read.
 - If the selected date is clearly far after the latest visible chart date, set selectedDateVisible=false and provide latestVisibleDate.
 - If the date axis is hard to read, set dateConfidence="low" instead of blocking the chart.
@@ -136,6 +140,52 @@ function hasStrongTimeframeMismatch({ selectedTimeframe, detectedTimeframe }) {
   const detected = comparableTimeframe(detectedTimeframe);
   if (!selected || !detected) return false;
   return selected !== detected;
+}
+
+function isDetectedInstrumentUsable(detectedInstrument = "") {
+  const detected = comparableInstrument(detectedInstrument);
+  return Boolean(detected && detected.length >= 6);
+}
+
+function isDetectedTimeframeUsable(detectedTimeframe = "") {
+  const detected = comparableTimeframe(detectedTimeframe);
+  return Boolean(detected && ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"].includes(detected));
+}
+
+function getChartContextVerificationProblem({ chartDetection, submittedInstrument, timeframe }) {
+  if (!submittedInstrument || submittedInstrument === "Not provided") {
+    return { hasProblem: true, errorType: "selected_instrument_missing", error: "Please select the chart instrument before running diagnostics." };
+  }
+  if (!timeframe || timeframe === "Not provided") {
+    return { hasProblem: true, errorType: "selected_timeframe_missing", error: "Please select the chart timeframe before running diagnostics." };
+  }
+
+  const instrumentOk = isDetectedInstrumentUsable(chartDetection?.detectedInstrument);
+  const timeframeOk = isDetectedTimeframeUsable(chartDetection?.detectedTimeframe);
+
+  if (!instrumentOk && !timeframeOk) {
+    return {
+      hasProblem: true,
+      errorType: "chart_context_unverified",
+      error: "The uploaded chart instrument and timeframe could not be clearly verified from the image.",
+    };
+  }
+  if (!instrumentOk) {
+    return {
+      hasProblem: true,
+      errorType: "chart_instrument_unverified",
+      error: "The uploaded chart instrument could not be clearly verified from the image.",
+    };
+  }
+  if (!timeframeOk) {
+    return {
+      hasProblem: true,
+      errorType: "chart_timeframe_unverified",
+      error: "The uploaded chart timeframe could not be clearly verified from the image.",
+    };
+  }
+
+  return { hasProblem: false };
 }
 
 function parseISODateOnly(value) {
@@ -663,7 +713,7 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
 
   try {
     const response = await openai.responses.create({
-      model: "gpt-4.1-mini",
+      model: "gpt-4.1",
       input: [
         { role: "system", content: CHART_DETECTION_PROMPT },
         { role: "user", content: [
@@ -1008,6 +1058,9 @@ function buildDashboardFeedback({ marketReference, chartDetection, visualReview 
     visualFrameworkMatch: visualReview?.frameworkMatch || "Not reviewed",
     visualChartStyle: visualReview?.visualChartStyle || "Not reviewed",
     csaLevelVisibility: visualReview?.csaLevelVisibility || "Not reviewed",
+    chartContextScore: 100,
+    chartContextLabel: "Verified",
+    chartContextSummary: "Selected pair and timeframe matched the uploaded chart before analysis continued.",
   };
 
   const visualMistakes = visualOk ? normalizeVisualMistakeItems(visualReview.simpleMistakeHub) : [];
@@ -1078,6 +1131,7 @@ function buildDashboardAliases(dashboardFeedback = {}) {
     setupQuality, setupQualityScore: setupQuality.score, setupQualityLabel: setupQuality.label, setupQualitySummary: setupQuality.summary,
     entryAccuracy, entryAccuracyScore: entryAccuracy.score, entryAccuracyLabel: entryAccuracy.label, entryAccuracySummary: entryAccuracy.summary,
     riskManagement, riskManagementScore: riskManagement.score, riskManagementLabel: riskManagement.label, riskManagementSummary: riskManagement.summary,
+    chartContextScore: Number(contextCheck.chartContextScore ?? (contextCheck.status === "Reviewed" ? 100 : 0)), chartContextLabel: contextCheck.chartContextLabel || (contextCheck.status === "Reviewed" ? "Verified" : "Not verified"), chartContextSummary: contextCheck.chartContextSummary || "Checks whether the selected pair/timeframe matches the uploaded chart before analysis.",
     aiMistakeDetectionHub, mistakeDetectionHub: aiMistakeDetectionHub, mistakeHub: aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub,
     failedAreas,
     dashboard: { strengths, weaknesses, chartContextCheck: contextCheck, contextCheck, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub, failedAreas },
@@ -1683,11 +1737,28 @@ function buildTimeframeMismatchAnalysis({ selectedInstrument, detectedInstrument
   return `Chart Timeframe Mismatch\n\nSelected Instrument:\n${selectedInstrument || "Not provided"}\n\nDetected Chart Instrument:\n${detectedInstrument || "Not detected"}\n\nSelected Timeframe:\n${selectedTimeframe || "Not provided"}\n\nDetected Chart Timeframe:\n${detectedTimeframe || "Not detected"}`;
 }
 
+
+function buildUnverifiedChartContextAnalysis({ selectedInstrument, detectedInstrument, selectedTimeframe, detectedTimeframe, error }) {
+  return `Chart Context Could Not Be Verified
+
+${error || "The uploaded chart context could not be clearly verified."}
+
+Selected:
+- Instrument: ${selectedInstrument || "Not provided"}
+- Timeframe: ${selectedTimeframe || "Not provided"}
+
+Detected from uploaded chart:
+- Instrument: ${detectedInstrument || "Not detected"}
+- Timeframe: ${detectedTimeframe || "Not detected"}
+
+Please upload a clearer chart where the instrument and timeframe are visible, or correct the selected pair/timeframe before running diagnostics again.`;
+}
+
 function buildStoppedDashboard({ errorType, error, submittedInstrument, timeframe, chartDetection, selectedTimeframeProfile }) {
   return buildDashboardAliases({
     strengths: ["Chart context validation was completed before the review was stopped."],
     weaknesses: [error, chartDetection?.insufficientDataReason || chartDetection?.chartValidityReason || "Analysis stopped."],
-    contextCheck: { selectedInstrument: submittedInstrument || "Not provided", selectedTimeframe: timeframe || "Not provided", detectedInstrument: chartDetection?.detectedInstrument || "Not detected", detectedTimeframe: chartDetection?.detectedTimeframe || "Not detected", detectedLatestVisibleDate: chartDetection?.latestVisibleDate || "Not detected", status: "Analysis stopped", structureUsed: selectedTimeframeProfile?.structureLabel || "Not available", chartValidation: chartDetection?.isTradingChart ? "Valid trading chart" : "Invalid or unverified chart", chartDataQuality: chartDetection?.chartDataQuality || "unclear", visibleCandleCount: chartDetection?.visibleCandleCount || 0, visualFrameworkMatch: "Not reviewed", visualChartStyle: "Not reviewed", csaLevelVisibility: "Not reviewed" },
+    contextCheck: { selectedInstrument: submittedInstrument || "Not provided", selectedTimeframe: timeframe || "Not provided", detectedInstrument: chartDetection?.detectedInstrument || "Not detected", detectedTimeframe: chartDetection?.detectedTimeframe || "Not detected", detectedLatestVisibleDate: chartDetection?.latestVisibleDate || "Not detected", status: "Analysis stopped", structureUsed: selectedTimeframeProfile?.structureLabel || "Not available", chartValidation: chartDetection?.isTradingChart ? "Valid trading chart" : "Invalid or unverified chart", chartDataQuality: chartDetection?.chartDataQuality || "unclear", visibleCandleCount: chartDetection?.visibleCandleCount || 0, chartContextScore: 0, chartContextLabel: "Not verified", chartContextSummary: error, visualFrameworkMatch: "Not reviewed", visualChartStyle: "Not reviewed", csaLevelVisibility: "Not reviewed" },
     setupQuality: { score: 0, label: "Stopped", summary: error },
     entryAccuracy: { score: 0, label: "Stopped", summary: error },
     riskManagement: { score: 0, label: "Stopped", summary: error },
@@ -1701,7 +1772,7 @@ function stoppedResponse({ res, errorType, error, analysis, submittedInstrument,
   return res.status(200).json({
     success: false, errorType, error, analysis, summary: analysis, selectedPair: submittedInstrument, selectedTimeframe: timeframe,
     detectedPair: chartDetection?.detectedInstrument || "Not detected", detectedTimeframe: chartDetection?.detectedTimeframe || "Not detected", detectedLatestVisibleDate: chartDetection?.latestVisibleDate || "Not detected",
-    contextStatus: "Analysis stopped before market-data-backed CSA feedback was generated.", grade: "--", confidence: 0, structureScore: 0, executionScore: 0, riskScore: 0,
+    contextStatus: "Analysis stopped before market-data-backed CSA feedback was generated.", grade: "--", confidence: 0, structureScore: 0, executionScore: 0, riskScore: 0, chartContextScore: 0, chartContextLabel: "Not verified", chartContextSummary: error,
     ...stoppedDashboard,
     coachAdvice: [analysis], journalTags: [errorType, "analysis-stopped"], chartDetection, visualReview: null,
     marketReference: { ok: false, error, symbol: normalizedSymbol, timezone, interval: normalizeTimeframe(timeframe), rawCandleCount: 0, weekRange: null, dailyLevels: [], csaAreas: [], directionalBias: calculateCsaDirectionalBias([], normalizedSymbol, selectedTimeframeProfile), profile: selectedTimeframeProfile },
@@ -1761,6 +1832,29 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       return stoppedResponse({ res, errorType: "selected_date_not_visible", error: "Selected chart/trade date is not visible or reasonably covered by the uploaded chart.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
 
+    const verificationProblem = getChartContextVerificationProblem({ chartDetection, submittedInstrument, timeframe });
+    if (verificationProblem.hasProblem) {
+      const analysis = buildUnverifiedChartContextAnalysis({
+        selectedInstrument: submittedInstrument,
+        detectedInstrument: chartDetection.detectedInstrument,
+        selectedTimeframe: timeframe,
+        detectedTimeframe: chartDetection.detectedTimeframe,
+        error: verificationProblem.error,
+      });
+      return stoppedResponse({
+        res,
+        errorType: verificationProblem.errorType,
+        error: verificationProblem.error,
+        analysis,
+        submittedInstrument,
+        timeframe,
+        chartDetection,
+        normalizedSymbol,
+        timezone,
+        selectedTimeframeProfile,
+      });
+    }
+
     const instrumentMismatch = hasStrongInstrumentMismatch({ selectedInstrument: normalizedSymbol || submittedInstrument, detectedInstrument: chartDetection.detectedInstrument });
     if (instrumentMismatch) {
       const analysis = buildInstrumentMismatchAnalysis({ selectedInstrument: submittedInstrument, detectedInstrument: chartDetection.detectedInstrument, selectedTimeframe: timeframe, detectedTimeframe: chartDetection.detectedTimeframe });
@@ -1805,6 +1899,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       structureScore: dashboardFeedback.scores.setupQuality,
       executionScore: dashboardFeedback.scores.entryAccuracy,
       riskScore: dashboardFeedback.scores.riskManagement,
+      chartContextScore: dashboardAliases.chartContextScore,
+      chartContextLabel: dashboardAliases.chartContextLabel,
+      chartContextSummary: dashboardAliases.chartContextSummary,
       ...dashboardAliases,
       coachAdvice: [analysis],
       journalTags: ["setup review", "directional bias", "entry area", "visual csa comparison", "uploaded chart comparison", "risk reward", marketReference.profile?.selectedTimeframe || selectedTimeframeProfile.selectedTimeframe, marketReference.profile?.structureMode || selectedTimeframeProfile.structureMode, marketReference.ok ? "market-data-backed" : "vision-only fallback", visualReview?.frameworkMatch || "visual-not-reviewed", bias.biasCode || "bias-unavailable"],
