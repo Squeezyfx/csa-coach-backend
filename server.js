@@ -831,6 +831,7 @@ Your job:
 - Do not mention Fibonacci, retracement percentages, 61.8, 50%, or technical confluence in user-facing feedback.
 - When there are two possible entry areas, explain which one is better in beginner language: the closer area may be possible but may offer poor reward, while the deeper pullback area may be better because it gives price more room to move.
 - Entry confirmation must match the trade direction: for a sell setup, wait for price to approach resistance and reject; for a buy setup, wait for price to approach support and hold.
+- Do not write awkward phrases like "hold below support" or "hold above resistance." If support is broken, call it "previous support" and explain that a better sell entry needs a pullback and rejection from that area. If resistance is broken, call it "previous resistance" and explain that a better buy entry needs a pullback and hold from that area.
 - A failed support/resistance area should be explained under market structure or best area to watch, not as the main warning.
 - Main warning should focus on the trader's mistake to avoid: chasing price, selling too close to support, buying too close to resistance, entering without confirmation, or poor reward-to-risk.
 - CSA is mainly a trend-trading strategy. If there is no clean trend yet, do not force a buy or sell. Give both sides: buy at support if it holds, or sell at resistance if it rejects.
@@ -1457,15 +1458,49 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
 }
 
 
-function buildEntryConfirmationText({ trendPlan = {}, chartDetection = null, visualReview = null }) {
-  const hasVisibleTrigger = Boolean(chartDetection?.visibleTrigger);
-  if (hasVisibleTrigger) {
-    return `A possible confirmation is visible: ${chartDetection.visibleTrigger}`;
+function extractPriceTextFromText(text = "") {
+  const matches = String(text).match(/\b\d+(?:\.\d+)?\b/g);
+  if (!matches || !matches.length) return "";
+  return matches[matches.length - 1];
+}
+
+function buildVisibleTriggerConfirmation({ trigger = "", trendPlan = {} }) {
+  const text = String(trigger || "").trim();
+  if (!text) return "";
+
+  const lower = text.toLowerCase();
+  const biasGroup = String(trendPlan?.biasGroup || "").toLowerCase();
+  const sellPriceText = extractPriceTextFromText(text) || trendPlan?.sellArea?.priceText || trendPlan?.initialResistanceText || "the resistance area";
+  const buyPriceText = extractPriceTextFromText(text) || trendPlan?.buyArea?.priceText || trendPlan?.initialSupportText || "the support area";
+
+  const isBearishBreak = /breakdown|break down|broke below|break below|closed below|close below|hold below|held below/.test(lower);
+  const isBullishBreak = /breakout|break out|broke above|break above|closed above|close above|hold above|held above/.test(lower);
+
+  // Do not describe a broken support as "hold below support" in user-facing text.
+  // Once support has broken and price stays below it, explain it as previous support
+  // and guide the trader to wait for a pullback/rejection instead of chasing.
+  if (isBearishBreak || (biasGroup.includes("bearish") && lower.includes("below") && lower.includes("support"))) {
+    return `No fresh sell confirmation is visible yet. Price has already broken below previous support around ${sellPriceText}, so the better sell confirmation would be a pullback toward that area and a rejection from it.`;
   }
 
+  // Same idea for bullish breaks: once resistance has broken and price stays above it,
+  // explain it as previous resistance and guide the trader to wait for a pullback/hold.
+  if (isBullishBreak || (biasGroup.includes("bullish") && lower.includes("above") && lower.includes("resistance"))) {
+    return `No fresh buy confirmation is visible yet. Price has already broken above previous resistance around ${buyPriceText}, so the better buy confirmation would be a pullback toward that area and a hold from it.`;
+  }
+
+  return `A possible confirmation is visible: ${text}`;
+}
+
+function buildEntryConfirmationText({ trendPlan = {}, chartDetection = null, visualReview = null }) {
   const biasGroup = String(trendPlan?.biasGroup || "").toLowerCase();
   const sellPriceText = trendPlan?.sellArea?.priceText || trendPlan?.initialResistanceText || "the resistance area";
   const buyPriceText = trendPlan?.buyArea?.priceText || trendPlan?.initialSupportText || "the support area";
+
+  const hasVisibleTrigger = Boolean(chartDetection?.visibleTrigger);
+  if (hasVisibleTrigger) {
+    return buildVisibleTriggerConfirmation({ trigger: chartDetection.visibleTrigger, trendPlan });
+  }
 
   // Do not let the visual model say "wait for support" during a sell-focused setup
   // or "wait for resistance" during a buy-focused setup. Entry confirmation should
@@ -1483,7 +1518,7 @@ function buildEntryConfirmationText({ trendPlan = {}, chartDetection = null, vis
   }
 
   const visualText = String(visualReview?.entryEvidence || "").trim();
-  if (visualText && !/support first|resistance first/i.test(visualText)) return visualText;
+  if (visualText && !/support first|resistance first|hold below support|below support/i.test(visualText)) return visualText;
 
   return "No clear entry confirmation is visible yet. Wait for price to reach a clear support or resistance area first.";
 }
