@@ -345,13 +345,23 @@ async function saveCompletedReview({
 const CHART_DETECTION_PROMPT = `
 You are CSA Coach's chart screenshot validator. Return ONLY valid JSON.
 
-A valid trading chart screenshot must show visible candles/bars/line movement, price scale, and time/date axis.
-A platform screenshot alone is not enough.
+A valid trading chart screenshot must show a clear, directly readable financial chart with visible candles/bars/line movement, a readable price scale, and a readable time/date axis.
+
+The trading chart must be the main subject of the uploaded image. Reject screenshots where the chart is only a small nested element inside another webpage, mobile screen, dashboard, social-media post, document, presentation, analytics page, or application screenshot.
 
 Invalid/insufficient images:
 - photos, logos, documents, rooms, screenshots with no financial chart
+- screenshots of webpages, dashboards, phones, documents, or applications where a small chart appears inside a larger interface
+- images where the actual chart occupies less than about 60% of the useful image area
+- images where candles, price scale, time axis, symbol, or timeframe are too small to read reliably
 - blank charts, loading charts, charts where no candle/line movement is visible
 - charts with fewer than about 15 visible candles/bars/points
+- heavily cropped, blurry, compressed, or zoomed-out screenshots that prevent reliable chart review
+
+Important decision rule:
+- A tiny chart inside a large screenshot is NOT a valid chart upload, even if some candles are technically visible.
+- Do not accept a nested chart merely because the user-selected instrument and timeframe were supplied.
+- When uncertain whether the chart itself is large and readable enough, mark isTradingChart=false.
 
 Important:
 - Take your time to inspect the top-left chart header, chart title, symbol label, and timeframe label before returning JSON.
@@ -375,6 +385,9 @@ Return exactly this JSON shape:
   "hasUsablePriceData": true,
   "visibleCandleCount": 80,
   "chartDataQuality": "usable",
+  "chartOccupancyPercent": 85,
+  "isNestedChart": false,
+  "isChartReadableAtCurrentSize": true,
   "selectedDateVisible": true,
   "insufficientDataReason": null,
   "detectedInstrument": "GBPUSD or null",
@@ -1035,7 +1048,7 @@ function buildFrameworkMistakeHub({ failedAreas = [], hasConfirmedTrigger = fals
 }
 
 async function detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument = "", selectedTimeframe = "", selectedDateText = "", analysisType = "post-trade" }) {
-  const fallback = (reason) => ({ ok: false, isTradingChart: false, chartValidityReason: reason, hasUsablePriceData: false, visibleCandleCount: 0, chartDataQuality: "unclear", selectedDateVisible: false, insufficientDataReason: reason, detectedInstrument: null, detectedTimeframe: null, latestVisibleDate: null, dateConfidence: "low", visibleTrigger: null, rejectedTriggerContext: null, triggerDirection: null, triggerConfidence: "low", notes: reason, raw: "" });
+  const fallback = (reason) => ({ ok: false, isTradingChart: false, chartValidityReason: reason, hasUsablePriceData: false, visibleCandleCount: 0, chartDataQuality: "unclear", chartOccupancyPercent: 0, isNestedChart: false, isChartReadableAtCurrentSize: false, selectedDateVisible: false, insufficientDataReason: reason, detectedInstrument: null, detectedTimeframe: null, latestVisibleDate: null, dateConfidence: "low", visibleTrigger: null, rejectedTriggerContext: null, triggerDirection: null, triggerConfidence: "low", notes: reason, raw: "" });
   if (!process.env.OPENAI_API_KEY) return fallback("OPENAI_API_KEY is missing.");
 
   try {
@@ -1067,6 +1080,11 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
       hasUsablePriceData: isTradingChart ? parsed?.hasUsablePriceData !== false : false,
       visibleCandleCount,
       chartDataQuality: quality,
+      chartOccupancyPercent: Number.isFinite(Number(parsed?.chartOccupancyPercent))
+        ? Math.max(0, Math.min(100, Number(parsed.chartOccupancyPercent)))
+        : 0,
+      isNestedChart: parsed?.isNestedChart === true,
+      isChartReadableAtCurrentSize: parsed?.isChartReadableAtCurrentSize === true,
       selectedDateVisible: isTradingChart ? parsed?.selectedDateVisible === true : false,
       insufficientDataReason: parsed?.insufficientDataReason || (!isTradingChart ? "The uploaded image is not a financial trading chart." : null),
       detectedInstrument: isTradingChart ? parsed?.detectedInstrument || null : null,
@@ -1088,11 +1106,21 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
 
 function isUploadedChartDataUsable(chartDetection, selectedDateText = "") {
   if (!chartDetection?.isTradingChart) return false;
+
   const quality = String(chartDetection.chartDataQuality || "").toLowerCase();
-  if (["blank", "insufficient"].includes(quality)) return false;
-  if (chartDetection.hasUsablePriceData === false && quality === "unclear") return false;
+  if (["blank", "insufficient", "unreadable", "nested"].includes(quality)) return false;
+
+  if (chartDetection.isNestedChart === true) return false;
+  if (chartDetection.isChartReadableAtCurrentSize === false) return false;
+
+  const occupancy = Number(chartDetection.chartOccupancyPercent || 0);
+  if (Number.isFinite(occupancy) && occupancy > 0 && occupancy < 60) return false;
+
+  if (chartDetection.hasUsablePriceData === false) return false;
+
   const candles = Number(chartDetection.visibleCandleCount || 0);
   if (Number.isFinite(candles) && candles > 0 && candles < 15) return false;
+
   return true;
 }
 
@@ -2049,7 +2077,19 @@ ${buildSimpleStructureBreakdown(levels, normalizedSymbol)}`;
 }
 
 function buildInvalidChartAnalysis({ submittedInstrument, timeframe, chartDetection }) {
-  return `Invalid Chart Upload\n\nSelected:\n- Instrument: ${submittedInstrument || "Not provided"}\n- Timeframe: ${timeframe || "Not provided"}\n\nReason: ${chartDetection?.chartValidityReason || "The uploaded image could not be verified as a trading chart."}`;
+  return `Upload The Chart Itself
+
+This image is not clear enough for a reliable CSA review.
+
+What to upload:
+- The trading chart should fill most of the image.
+- Candles or price movement must be clearly visible.
+- The price scale and time axis must be readable.
+- The instrument and timeframe should be visible.
+- Do not upload a screenshot of a webpage, phone screen, dashboard, document, or another app containing a small chart.
+
+Reason:
+${chartDetection?.chartValidityReason || chartDetection?.insufficientDataReason || "The uploaded image could not be verified as a clear trading chart."}`;
 }
 function buildInsufficientChartDataAnalysis({ submittedInstrument, timeframe, selectedDateText, chartDetection }) {
   return `Insufficient Chart Data\n\nThe uploaded image appears to be a trading chart, but it does not show enough usable visible price data for CSA Coach to review the setup.\n\nSelected:\n- Instrument: ${submittedInstrument || "Not provided"}\n- Timeframe: ${timeframe || "Not provided"}\n- Selected chart/trade date: ${selectedDateText || "Not provided"}\n\nAI image check:\n- Chart data quality: ${chartDetection?.chartDataQuality || "unclear"}\n- Visible candle count: ${chartDetection?.visibleCandleCount ?? "Not detected"}\n- Reason: ${chartDetection?.insufficientDataReason || "The chart does not show enough usable price movement."}`;
@@ -2097,7 +2137,17 @@ function buildStoppedDashboard({ errorType, error, submittedInstrument, timefram
 function stoppedResponse({ res, errorType, error, analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile }) {
   const stoppedDashboard = buildStoppedDashboard({ errorType, error, submittedInstrument, timeframe, chartDetection, selectedTimeframeProfile });
   return res.status(200).json({
-    success: false, errorType, error, analysis, summary: analysis, selectedPair: submittedInstrument, selectedTimeframe: timeframe,
+    success: false,
+    analysisStopped: true,
+    shouldSaveToJournal: false,
+    savedToJournal: false,
+    saveReason: "Invalid or insufficient chart uploads are not saved.",
+    errorType,
+    error,
+    analysis,
+    summary: analysis,
+    selectedPair: submittedInstrument,
+    selectedTimeframe: timeframe,
     detectedPair: chartDetection?.detectedInstrument || "Not detected", detectedTimeframe: chartDetection?.detectedTimeframe || "Not detected", detectedLatestVisibleDate: chartDetection?.latestVisibleDate || "Not detected",
     contextStatus: "Analysis stopped before market-data-backed CSA feedback was generated.", grade: "--", confidence: 0, structureScore: 0, executionScore: 0, riskScore: 0, chartContextScore: 0, chartContextLabel: "Not verified", chartContextSummary: error,
     ...stoppedDashboard,
