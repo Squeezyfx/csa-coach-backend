@@ -2,9 +2,14 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import OpenAI from "openai";
+import { createClient } from "@supabase/supabase-js";
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: true,
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 app.use(express.json({ limit: "25mb" }));
 
 const upload = multer({
@@ -12,8 +17,330 @@ const upload = multer({
   limits: { fileSize: 15 * 1024 * 1024 },
 });
 
+
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const SUPABASE_URL = process.env.SUPABASE_URL || "";
+const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || "";
+const supabaseAdmin =
+  SUPABASE_URL && SUPABASE_SECRET_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+          detectSessionInUrl: false,
+        },
+      })
+    : null;
+
 const TWELVE_DATA_BASE_URL = "https://api.twelvedata.com/time_series";
+
+function getBearerToken(req) {
+  const authorization = String(req.headers.authorization || "").trim();
+  if (!authorization.toLowerCase().startsWith("bearer ")) return "";
+  return authorization.slice(7).trim();
+}
+
+async function getRequestUser(req) {
+  const accessToken = getBearerToken(req);
+
+  // Keep the analysis endpoint backwards-compatible until the GoHighLevel
+  // frontend is updated to send its Supabase access token.
+  if (!accessToken) {
+    return { user: null, accessToken: "", authProvided: false };
+  }
+
+  if (!supabaseAdmin) {
+    const error = new Error("Supabase is not configured on the backend.");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const { data, error } = await supabaseAdmin.auth.getUser(accessToken);
+  if (error || !data?.user) {
+    const authError = new Error("Your login session is invalid or has expired. Please log in again.");
+    authError.statusCode = 401;
+    throw authError;
+  }
+
+  return { user: data.user, accessToken, authProvided: true };
+}
+
+function safeStorageFilename(filename = "chart.png") {
+  const cleaned = String(filename)
+    .replace(/[^a-zA-Z0-9._-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^\.+/, "")
+    .slice(-120);
+
+  return cleaned || "chart.png";
+}
+
+function normalizeMistakeTitle(value = "") {
+  return String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function compactRawAiResponse({
+  analysis,
+  chartDetection,
+  visualReview,
+  marketReference,
+  dashboardFeedback,
+  dateDecision,
+}) {
+  return {
+    analysis,
+    chartDetection,
+    visualReview,
+    dateDecision,
+    dashboard: {
+      strengths: dashboardFeedback?.strengths || [],
+      weaknesses: dashboardFeedback?.weaknesses || [],
+      mistakes: dashboardFeedback?.aiMistakeDetectionHub || [],
+      setupQuality: dashboardFeedback?.setupQuality || null,
+      entryAccuracy: dashboardFeedback?.entryAccuracy || null,
+      riskManagement: dashboardFeedback?.riskManagement || null,
+      contextCheck: dashboardFeedback?.contextCheck || null,
+    },
+    marketReference: {
+      ok: Boolean(marketReference?.ok),
+      error: marketReference?.error || "",
+      symbol: marketReference?.symbol || "",
+      timezone: marketReference?.timezone || "UTC",
+      interval: marketReference?.interval || "",
+      weekRange: marketReference?.weekRange || null,
+      directionalBias: marketReference?.directionalBias || null,
+      profile: marketReference?.profile || null,
+      csaAreas: Array.isArray(marketReference?.csaAreas)
+        ? marketReference.csaAreas.slice(0, 30)
+        : [],
+    },
+  };
+}
+
+async function saveCompletedReview({
+  user,
+  file,
+  submittedInstrument,
+  timeframe,
+  mode,
+  submittedNotes,
+  chartDateText,
+  analysis,
+  chartDetection,
+  visualReview,
+  marketReference,
+  dashboardFeedback,
+  dateDecision,
+}) {
+  if (!user) {
+    return {
+      savedToJournal: false,
+      saveReason: "No authenticated user access token was sent.",
+      reviewId: null,
+      chartImagePath: null,
+    };
+  }
+
+  if (!supabaseAdmin) {
+    throw new Error("Supabase backend variables are missing.");
+  }
+
+  const timestamp = Date.now();
+  const objectPath = `${user.id}/${timestamp}-${safeStorageFilename(file.originalname)}`;
+  let uploaded = false;
+  let reviewId = null;
+
+  try {
+    const uploadResult = await supabaseAdmin.storage
+      .from("chart-images")
+      .upload(objectPath, file.buffer, {
+        contentType: file.mimetype || "image/png",
+        cacheControl: "3600",
+        upsert: false,
+      });
+
+    if (uploadResult.error) throw uploadResult.error;
+    uploaded = true;
+
+    const setupScore = Number(dashboardFeedback?.setupQualityScore || 0);
+    const entryScore = Number(dashboardFeedback?.entryAccuracyScore || 0);
+    const riskScore = Number(dashboardFeedback?.riskManagementScore || 0);
+    const overallScore = Math.round((setupScore + entryScore + riskScore) / 3);
+
+    const directionalBias =
+      marketReference?.directionalBias?.bias ||
+      visualReview?.plainMarketDirection ||
+      "Not available";
+
+    const keyAreas = Array.isArray(marketReference?.csaAreas)
+      ? marketReference.csaAreas.slice(0, 30)
+      : [];
+
+    const rawAiResponse = compactRawAiResponse({
+      analysis,
+      chartDetection,
+      visualReview,
+      marketReference,
+      dashboardFeedback,
+      dateDecision,
+    });
+
+    const reviewInsert = await supabaseAdmin
+      .from("chart_reviews")
+      .insert({
+        user_id: user.id,
+        instrument: submittedInstrument,
+        timeframe,
+        review_type: mode === "pre-trade" ? "pre_trade" : "post_trade",
+        chart_image_path: objectPath,
+        user_notes: submittedNotes || null,
+        csa_directional_bias: directionalBias,
+        market_structure_summary:
+          visualReview?.visualSummary ||
+          marketReference?.directionalBias?.higherTimeframeView ||
+          null,
+        key_areas_of_interest: keyAreas,
+        overall_score: overallScore,
+        strategy_score: setupScore,
+        risk_management_score: riskScore,
+        trade_management_score: null,
+        execution_score: entryScore,
+        ai_summary: analysis,
+        correction_plan:
+          visualReview?.coachVerdict ||
+          visualReview?.mainWarning ||
+          dashboardFeedback?.setupQuality?.summary ||
+          null,
+        raw_ai_response: rawAiResponse,
+        trade_date: chartDateText || null,
+      })
+      .select("id")
+      .single();
+
+    if (reviewInsert.error) throw reviewInsert.error;
+    reviewId = reviewInsert.data.id;
+
+    const feedbackRows = [];
+
+    (dashboardFeedback?.strengths || []).forEach((feedbackText, index) => {
+      feedbackRows.push({
+        review_id: reviewId,
+        user_id: user.id,
+        feedback_type: "strength",
+        category: "Chart review",
+        feedback_text: String(feedbackText),
+        display_order: index,
+      });
+    });
+
+    (dashboardFeedback?.weaknesses || []).forEach((feedbackText, index) => {
+      feedbackRows.push({
+        review_id: reviewId,
+        user_id: user.id,
+        feedback_type: "weakness",
+        category: "Chart review",
+        feedback_text: String(feedbackText),
+        display_order: index,
+      });
+    });
+
+    if (feedbackRows.length) {
+      const feedbackInsert = await supabaseAdmin
+        .from("review_feedback")
+        .insert(feedbackRows);
+
+      if (feedbackInsert.error) throw feedbackInsert.error;
+    }
+
+    const usageInsert = await supabaseAdmin.from("usage_records").insert({
+      user_id: user.id,
+      review_id: reviewId,
+      action_type: "chart_review",
+    });
+
+    if (usageInsert.error) throw usageInsert.error;
+
+    const mistakeItems = Array.isArray(dashboardFeedback?.aiMistakeDetectionHub)
+      ? dashboardFeedback.aiMistakeDetectionHub
+      : [];
+
+    if (mistakeItems.length) {
+      const tagsResult = await supabaseAdmin
+        .from("mistake_tags")
+        .select("id, tag_name");
+
+      if (tagsResult.error) throw tagsResult.error;
+
+      const tagRows = tagsResult.data || [];
+      const reviewMistakes = [];
+
+      mistakeItems.forEach((item) => {
+        const title = String(item?.title || item || "").trim();
+        const normalizedTitle = normalizeMistakeTitle(title);
+        if (!normalizedTitle) return;
+
+        const matchedTag = tagRows.find((tag) => {
+          const normalizedTag = normalizeMistakeTitle(tag.tag_name);
+          return (
+            normalizedTag === normalizedTitle ||
+            normalizedTag.includes(normalizedTitle) ||
+            normalizedTitle.includes(normalizedTag)
+          );
+        });
+
+        if (!matchedTag) return;
+
+        if (
+          !reviewMistakes.some(
+            (row) => row.mistake_tag_id === matchedTag.id
+          )
+        ) {
+          reviewMistakes.push({
+            review_id: reviewId,
+            user_id: user.id,
+            mistake_tag_id: matchedTag.id,
+            coach_comment:
+              visualReview?.mainWarning ||
+              visualReview?.coachVerdict ||
+              null,
+          });
+        }
+      });
+
+      if (reviewMistakes.length) {
+        const mistakeInsert = await supabaseAdmin
+          .from("review_mistakes")
+          .insert(reviewMistakes);
+
+        if (mistakeInsert.error) throw mistakeInsert.error;
+      }
+    }
+
+    return {
+      savedToJournal: true,
+      saveReason: "Analysis and chart were saved successfully.",
+      reviewId,
+      chartImagePath: objectPath,
+    };
+  } catch (error) {
+    console.error("Supabase review save error:", error);
+
+    // Best-effort cleanup prevents incomplete journal entries.
+    if (reviewId) {
+      await supabaseAdmin.from("chart_reviews").delete().eq("id", reviewId);
+    }
+    if (uploaded) {
+      await supabaseAdmin.storage.from("chart-images").remove([objectPath]);
+    }
+
+    throw new Error(`The analysis completed, but saving to the journal failed: ${error.message}`);
+  }
+}
+
 
 const CHART_DETECTION_PROMPT = `
 You are CSA Coach's chart screenshot validator. Return ONLY valid JSON.
@@ -1853,6 +2180,8 @@ app.get("/sample-analysis", (req, res) => {
 
 app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
   try {
+    const requestAuth = await getRequestUser(req);
+
     if (!process.env.OPENAI_API_KEY) return res.status(500).json({ success: false, error: "OPENAI_API_KEY is missing on the server." });
     if (!req.file) return res.status(400).json({ success: false, error: "No chart image uploaded." });
 
@@ -1931,8 +2260,28 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const dashboardAliases = buildDashboardAliases(dashboardFeedback);
     const structureLabel = marketReference.profile?.structureLabel || selectedTimeframeProfile.structureLabel || "CSA structure levels";
 
+    const journalSave = await saveCompletedReview({
+      user: requestAuth.user,
+      file: req.file,
+      submittedInstrument,
+      timeframe,
+      mode,
+      submittedNotes,
+      chartDateText: chartDate || tradeDate || null,
+      analysis,
+      chartDetection,
+      visualReview,
+      marketReference,
+      dashboardFeedback,
+      dateDecision,
+    });
+
     return res.json({
       success: true,
+      savedToJournal: journalSave.savedToJournal,
+      saveReason: journalSave.saveReason,
+      reviewId: journalSave.reviewId,
+      chartImagePath: journalSave.chartImagePath,
       analysis,
       summary: analysis,
       selectedPair: submittedInstrument,
@@ -1963,7 +2312,15 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     });
   } catch (error) {
     console.error("CSA Coach analyze error:", error);
-    return res.status(500).json({ success: false, error: "Something went wrong while analyzing the chart.", details: error.message });
+    const statusCode = Number(error?.statusCode) || 500;
+    return res.status(statusCode).json({
+      success: false,
+      error:
+        statusCode === 401
+          ? error.message
+          : "Something went wrong while analyzing or saving the chart.",
+      details: error.message,
+    });
   }
 });
 
