@@ -2316,6 +2316,108 @@ function buildStoppedDashboard({ errorType, error, submittedInstrument, timefram
   });
 }
 
+
+function buildStarterCoachSummary({
+  bias,
+  dashboardFeedback,
+  visualReview,
+}) {
+  const strengths = (dashboardFeedback?.strengths || []).slice(0, 3);
+  const weaknesses = (dashboardFeedback?.weaknesses || []).slice(0, 3);
+  const directionalBias =
+    bias?.bias ||
+    visualReview?.plainMarketDirection ||
+    "Not available";
+
+  const correctionAction =
+    visualReview?.coachVerdict ||
+    visualReview?.mainWarning ||
+    dashboardFeedback?.setupQuality?.summary ||
+    "Review the setup against the CSA Framework before the next entry.";
+
+  return [
+    "COACH VERDICT:",
+    correctionAction,
+    "",
+    "DIRECTIONAL BIAS:",
+    String(directionalBias),
+    "",
+    "WHAT YOU DID WELL:",
+    ...(strengths.length ? strengths.map((item) => `- ${item}`) : ["- No clear strength was confirmed."]),
+    "",
+    "WHAT TO IMPROVE:",
+    ...(weaknesses.length ? weaknesses.map((item) => `- ${item}`) : ["- No specific weakness was confirmed."]),
+    "",
+    "NEXT ACTION:",
+    correctionAction,
+  ].join("\n");
+}
+
+function applyPlanToAnalysisResponse({
+  responseBody,
+  entitlement,
+  bias,
+  dashboardFeedback,
+  visualReview,
+}) {
+  if (entitlement?.effectivePlan !== "starter") {
+    return responseBody;
+  }
+
+  const starterSummary = buildStarterCoachSummary({
+    bias,
+    dashboardFeedback,
+    visualReview,
+  });
+
+  const strengths = (dashboardFeedback?.strengths || []).slice(0, 3);
+  const weaknesses = (dashboardFeedback?.weaknesses || []).slice(0, 3);
+
+  return {
+    ...responseBody,
+    analysis: starterSummary,
+    summary: starterSummary,
+    coachAdvice: [starterSummary],
+    strengths,
+    whatYouDidWell: strengths,
+    weaknesses,
+    whatCostYouProfit: weaknesses,
+    mistakes: [],
+    mistakeHub: [],
+    mistakeDetectionHub: [],
+    aiMistakeDetectionHub: [],
+    journalTags: ["starter-review", "directional-bias", "setup-score"],
+    visualReview: null,
+    marketReference: responseBody.marketReference
+      ? {
+          ok: responseBody.marketReference.ok,
+          error: responseBody.marketReference.error,
+          symbol: responseBody.marketReference.symbol,
+          timezone: responseBody.marketReference.timezone,
+          interval: responseBody.marketReference.interval,
+          directionalBias: responseBody.marketReference.directionalBias,
+          profile: responseBody.marketReference.profile
+            ? {
+                selectedTimeframe: responseBody.marketReference.profile.selectedTimeframe,
+                structureMode: responseBody.marketReference.profile.structureMode,
+                structureLabel: responseBody.marketReference.profile.structureLabel,
+              }
+            : null,
+        }
+      : null,
+    starterRestricted: true,
+    lockedFeatures: [
+      "fullAnalysis",
+      "mistakeDetectionHub",
+      "mistakeTracking",
+      "advancedDashboard",
+      "weeklyFocus",
+    ],
+    upgradeMessage:
+      "Upgrade to Pro for the full detailed analysis, mistake tracking, unlimited journal history, weekly focus, and advanced analytics.",
+  };
+}
+
 function stoppedResponse({ res, errorType, error, analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile }) {
   const stoppedDashboard = buildStoppedDashboard({ errorType, error, submittedInstrument, timeframe, chartDetection, selectedTimeframeProfile });
   return res.status(200).json({
@@ -2353,6 +2455,46 @@ app.get("/account-entitlements", async (req, res) => {
       success: false,
       error: error.message,
       errorType: error.errorType || "entitlement_lookup_failed",
+    });
+  }
+});
+
+app.get("/journal-reviews", async (req, res) => {
+  try {
+    const requestAuth = await getRequestUser(req);
+    const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
+
+    let query = supabaseAdmin
+      .from("chart_reviews")
+      .select("*")
+      .eq("user_id", requestAuth.user.id)
+      .order("created_at", { ascending: false });
+
+    if (Number(entitlement.journalLimit) > 0) {
+      query = query.limit(Number(entitlement.journalLimit));
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    return res.json({
+      success: true,
+      reviews: data || [],
+      entitlement,
+      visibleReviewLimit: entitlement.journalLimit,
+      olderReviewsPreserved:
+        entitlement.effectivePlan === "starter",
+    });
+  } catch (error) {
+    const statusCode = Number(error?.statusCode) || 500;
+    return res.status(statusCode).json({
+      success: false,
+      error:
+        [401, 403].includes(statusCode)
+          ? error.message
+          : "Your journal could not be loaded.",
+      errorType: error.errorType || "journal_load_failed",
+      details: error.message,
     });
   }
 });
@@ -2532,7 +2674,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       analysesRemaining: Math.max(0, entitlement.analysesRemaining - 1),
     };
 
-    return res.json({
+    const responseBody = {
       success: true,
       entitlement: updatedEntitlement,
       savedToJournal: journalSave.savedToJournal,
@@ -2567,6 +2709,16 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       chartDetection,
       marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, weekRange: marketReference.weekRange, dailyLevels: marketReference.dailyLevels, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
     });
+
+    return res.json(
+      applyPlanToAnalysisResponse({
+        responseBody,
+        entitlement: updatedEntitlement,
+        bias,
+        dashboardFeedback,
+        visualReview,
+      })
+    );
   } catch (error) {
     console.error("CSA Coach analyze error:", error);
     const statusCode = Number(error?.statusCode) || 500;
