@@ -35,6 +35,167 @@ const supabaseAdmin =
 
 const TWELVE_DATA_BASE_URL = "https://api.twelvedata.com/time_series";
 
+const PLAN_CONFIG = Object.freeze({
+  starter: Object.freeze({
+    code: "starter",
+    label: "Starter",
+    monthlyAnalyses: 7,
+    journalLimit: 5,
+    features: Object.freeze({
+      fullAnalysis: false,
+      mistakeTracking: false,
+      advancedDashboard: false,
+      weeklyReport: false,
+      multiChartComparison: false,
+      exportReports: false,
+    }),
+  }),
+  pro: Object.freeze({
+    code: "pro",
+    label: "Pro",
+    monthlyAnalyses: 40,
+    journalLimit: null,
+    features: Object.freeze({
+      fullAnalysis: true,
+      mistakeTracking: true,
+      advancedDashboard: true,
+      weeklyReport: true,
+      multiChartComparison: false,
+      exportReports: false,
+    }),
+  }),
+  elite: Object.freeze({
+    code: "elite",
+    label: "Elite",
+    monthlyAnalyses: 150,
+    journalLimit: null,
+    features: Object.freeze({
+      fullAnalysis: true,
+      mistakeTracking: true,
+      advancedDashboard: true,
+      weeklyReport: true,
+      multiChartComparison: true,
+      exportReports: true,
+    }),
+  }),
+});
+
+const ACTIVE_SUBSCRIPTION_STATUSES = new Set(["active", "trialing"]);
+
+function normalizePlanCode(value = "") {
+  const plan = String(value || "").trim().toLowerCase();
+  return PLAN_CONFIG[plan] ? plan : "starter";
+}
+
+function getCurrentUsageMonth() {
+  const now = new Date();
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-01`;
+}
+
+function isFutureDate(value) {
+  if (!value) return false;
+  const date = new Date(value);
+  return !Number.isNaN(date.getTime()) && date.getTime() > Date.now();
+}
+
+async function getUserPlanEntitlement(userId) {
+  if (!supabaseAdmin) {
+    const error = new Error("Supabase is not configured on the backend.");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from("profiles")
+    .select(`
+      id,
+      subscription_plan,
+      subscription_status,
+      plan_override,
+      plan_override_expires_at,
+      is_beta_tester,
+      beta_analysis_limit,
+      current_period_start,
+      current_period_end,
+      cancel_at_period_end
+    `)
+    .eq("id", userId)
+    .single();
+
+  if (profileError || !profile) {
+    const error = new Error("Your CSA Coach profile could not be found.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const basePlan = normalizePlanCode(profile.subscription_plan);
+  const subscriptionStatus = String(profile.subscription_status || "active").toLowerCase();
+
+  // Starter remains available without Stripe. Paid plans must be active/trialing.
+  const paidBasePlanActive =
+    basePlan === "starter" || ACTIVE_SUBSCRIPTION_STATUSES.has(subscriptionStatus);
+  const usableBasePlan = paidBasePlanActive ? basePlan : "starter";
+
+  const hasActiveBetaOverride =
+    profile.is_beta_tester === true &&
+    normalizePlanCode(profile.plan_override) === "elite" &&
+    isFutureDate(profile.plan_override_expires_at);
+
+  const effectivePlan = hasActiveBetaOverride ? "elite" : usableBasePlan;
+  const planConfig = PLAN_CONFIG[effectivePlan];
+
+  const { count, error: usageError } = await supabaseAdmin
+    .from("usage_records")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("action_type", "chart_review")
+    .eq("usage_month", getCurrentUsageMonth());
+
+  if (usageError) {
+    const error = new Error(`Unable to check monthly usage: ${usageError.message}`);
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const analysesUsed = Number(count || 0);
+  const configuredLimit =
+    hasActiveBetaOverride && Number(profile.beta_analysis_limit) > 0
+      ? Number(profile.beta_analysis_limit)
+      : planConfig.monthlyAnalyses;
+  const analysesRemaining = Math.max(0, configuredLimit - analysesUsed);
+
+  return {
+    basePlan,
+    effectivePlan,
+    planLabel: hasActiveBetaOverride ? "Elite Beta Tester" : planConfig.label,
+    subscriptionStatus,
+    isBetaTester: hasActiveBetaOverride,
+    betaAccessExpiresAt: hasActiveBetaOverride
+      ? profile.plan_override_expires_at
+      : null,
+    analysesUsed,
+    analysesLimit: configuredLimit,
+    analysesRemaining,
+    usageMonth: getCurrentUsageMonth(),
+    journalLimit: planConfig.journalLimit,
+    features: planConfig.features,
+    cancelAtPeriodEnd: profile.cancel_at_period_end === true,
+    currentPeriodStart: profile.current_period_start || null,
+    currentPeriodEnd: profile.current_period_end || null,
+  };
+}
+
+function assertAnalysisAllowed(entitlement) {
+  if (entitlement.analysesRemaining > 0) return;
+
+  const error = new Error(
+    `You have used all ${entitlement.analysesLimit} chart analyses available on your ${entitlement.planLabel} plan for this month.`
+  );
+  error.statusCode = 429;
+  error.errorType = "monthly_analysis_limit_reached";
+  throw error;
+}
+
 function getBearerToken(req) {
   const authorization = String(req.headers.authorization || "").trim();
   if (!authorization.toLowerCase().startsWith("bearer ")) return "";
@@ -44,10 +205,10 @@ function getBearerToken(req) {
 async function getRequestUser(req) {
   const accessToken = getBearerToken(req);
 
-  // Keep the analysis endpoint backwards-compatible until the GoHighLevel
-  // frontend is updated to send its Supabase access token.
   if (!accessToken) {
-    return { user: null, accessToken: "", authProvided: false };
+    const authError = new Error("Please log in before running a chart analysis.");
+    authError.statusCode = 401;
+    throw authError;
   }
 
   if (!supabaseAdmin) {
@@ -2159,6 +2320,22 @@ function stoppedResponse({ res, errorType, error, analysis, submittedInstrument,
 app.get("/", (req, res) => res.json({ status: "ok", message: "CSA Coach backend is running" }));
 app.get("/health", (req, res) => res.json({ ok: true, service: "csa-coach-backend", time: new Date().toISOString() }));
 
+
+app.get("/account-entitlements", async (req, res) => {
+  try {
+    const requestAuth = await getRequestUser(req);
+    const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
+    return res.json({ success: true, entitlement });
+  } catch (error) {
+    const statusCode = Number(error?.statusCode) || 500;
+    return res.status(statusCode).json({
+      success: false,
+      error: error.message,
+      errorType: error.errorType || "entitlement_lookup_failed",
+    });
+  }
+});
+
 app.get("/test-twelve", async (req, res) => {
   try {
     const symbol = normalizeSymbol(req.query.symbol || "GBP/USD");
@@ -2231,6 +2408,8 @@ app.get("/sample-analysis", (req, res) => {
 app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
   try {
     const requestAuth = await getRequestUser(req);
+    const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
+    assertAnalysisAllowed(entitlement);
 
     if (!process.env.OPENAI_API_KEY) return res.status(500).json({ success: false, error: "OPENAI_API_KEY is missing on the server." });
     if (!req.file) return res.status(400).json({ success: false, error: "No chart image uploaded." });
@@ -2326,8 +2505,15 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       dateDecision,
     });
 
+    const updatedEntitlement = {
+      ...entitlement,
+      analysesUsed: entitlement.analysesUsed + 1,
+      analysesRemaining: Math.max(0, entitlement.analysesRemaining - 1),
+    };
+
     return res.json({
       success: true,
+      entitlement: updatedEntitlement,
       savedToJournal: journalSave.savedToJournal,
       saveReason: journalSave.saveReason,
       reviewId: journalSave.reviewId,
@@ -2366,9 +2552,10 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     return res.status(statusCode).json({
       success: false,
       error:
-        statusCode === 401
+        [401, 403, 429].includes(statusCode)
           ? error.message
           : "Something went wrong while analyzing or saving the chart.",
+      errorType: error.errorType || null,
       details: error.message,
     });
   }
