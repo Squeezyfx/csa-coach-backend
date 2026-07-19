@@ -76,6 +76,7 @@ const PLAN_CONFIG = Object.freeze({
     label: "Starter",
     monthlyAnalyses: 7,
     journalLimit: 5,
+    strategyLimit: 0,
     features: Object.freeze({
       basicAnalysis: true,
       fullAnalysis: false,
@@ -97,6 +98,7 @@ const PLAN_CONFIG = Object.freeze({
     label: "Pro",
     monthlyAnalyses: 40,
     journalLimit: null,
+    strategyLimit: 1,
     features: Object.freeze({
       basicAnalysis: true,
       fullAnalysis: true,
@@ -118,6 +120,7 @@ const PLAN_CONFIG = Object.freeze({
     label: "Elite",
     monthlyAnalyses: 150,
     journalLimit: null,
+    strategyLimit: 5,
     features: Object.freeze({
       basicAnalysis: true,
       fullAnalysis: true,
@@ -235,6 +238,7 @@ async function getUserPlanEntitlement(userId) {
     analysesRemaining,
     usageMonth: getCurrentUsageMonth(),
     journalLimit: planConfig.journalLimit,
+    strategyLimit: planConfig.strategyLimit,
     features: planConfig.features,
     cancelAtPeriodEnd: profile.cancel_at_period_end === true,
     currentPeriodStart: profile.current_period_start || null,
@@ -285,6 +289,237 @@ async function getRequestUser(req) {
   return { user: data.user, accessToken, authProvided: true };
 }
 
+
+
+const STRATEGY_RULE_CATEGORIES = new Set([
+  "directional_bias",
+  "entry_location",
+  "entry_confirmation",
+  "stop_loss",
+  "take_profit",
+  "risk_management",
+  "trade_management",
+  "invalidation",
+  "no_trade_condition",
+  "other",
+]);
+
+const STRATEGY_RULE_IMPORTANCE = new Set(["required", "preferred", "optional"]);
+
+function cleanTextArray(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 30);
+}
+
+function cleanNullableNumber(value, min = 0, max = 100) {
+  if (value === "" || value === null || value === undefined) return null;
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return null;
+  return Math.max(min, Math.min(max, numberValue));
+}
+
+function sanitizeStrategyPayload(body = {}) {
+  const strategyName = String(body.strategyName || body.strategy_name || "").trim();
+
+  if (!strategyName) {
+    const error = new Error("Strategy name is required.");
+    error.statusCode = 400;
+    error.errorType = "strategy_name_required";
+    throw error;
+  }
+
+  return {
+    strategy_name: strategyName.slice(0, 120),
+    description: String(body.description || "").trim() || null,
+    markets: cleanTextArray(body.markets),
+    timeframes: cleanTextArray(body.timeframes),
+    trading_sessions: cleanTextArray(body.tradingSessions || body.trading_sessions),
+    directional_bias_rules: String(body.directionalBiasRules || body.directional_bias_rules || "").trim() || null,
+    entry_location_rules: String(body.entryLocationRules || body.entry_location_rules || "").trim() || null,
+    entry_confirmation_rules: String(body.entryConfirmationRules || body.entry_confirmation_rules || "").trim() || null,
+    stop_loss_rules: String(body.stopLossRules || body.stop_loss_rules || "").trim() || null,
+    take_profit_rules: String(body.takeProfitRules || body.take_profit_rules || "").trim() || null,
+    risk_rules: String(body.riskRules || body.risk_rules || "").trim() || null,
+    trade_management_rules: String(body.tradeManagementRules || body.trade_management_rules || "").trim() || null,
+    invalidation_rules: String(body.invalidationRules || body.invalidation_rules || "").trim() || null,
+    no_trade_conditions: String(body.noTradeConditions || body.no_trade_conditions || "").trim() || null,
+    additional_notes: String(body.additionalNotes || body.additional_notes || "").trim() || null,
+    minimum_risk_reward: cleanNullableNumber(body.minimumRiskReward ?? body.minimum_risk_reward, 0, 100),
+    risk_per_trade_percent: cleanNullableNumber(body.riskPerTradePercent ?? body.risk_per_trade_percent, 0, 100),
+    is_active: body.isActive === undefined && body.is_active === undefined
+      ? true
+      : Boolean(body.isActive ?? body.is_active),
+  };
+}
+
+function sanitizeStrategyRules(value) {
+  if (!Array.isArray(value)) return [];
+
+  return value.map((rule, index) => {
+    const category = String(rule?.category || rule?.ruleCategory || "").trim();
+    const ruleText = String(rule?.text || rule?.ruleText || "").trim();
+    const importance = String(rule?.importance || "required").trim().toLowerCase();
+
+    if (!STRATEGY_RULE_CATEGORIES.has(category) || !ruleText) return null;
+
+    return {
+      rule_category: category,
+      rule_text: ruleText.slice(0, 1000),
+      importance: STRATEGY_RULE_IMPORTANCE.has(importance) ? importance : "required",
+      display_order: Number.isFinite(Number(rule?.displayOrder)) ? Number(rule.displayOrder) : index,
+      is_active: rule?.isActive === undefined ? true : Boolean(rule.isActive),
+    };
+  }).filter(Boolean).slice(0, 100);
+}
+
+async function getOwnedStrategy(userId, strategyId) {
+  if (!strategyId) return null;
+
+  const result = await supabaseAdmin
+    .from("user_strategies")
+    .select(`
+      *,
+      strategy_rules (
+        id,
+        rule_category,
+        rule_text,
+        importance,
+        display_order,
+        is_active
+      )
+    `)
+    .eq("id", strategyId)
+    .eq("user_id", userId)
+    .eq("is_archived", false)
+    .maybeSingle();
+
+  if (result.error) throw result.error;
+  return result.data || null;
+}
+
+async function countUserStrategies(userId) {
+  const result = await supabaseAdmin
+    .from("user_strategies")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("is_archived", false);
+
+  if (result.error) throw result.error;
+  return Number(result.count || 0);
+}
+
+function strategySnapshot(strategy) {
+  if (!strategy) return null;
+
+  return {
+    id: strategy.id,
+    strategyName: strategy.strategy_name,
+    description: strategy.description || "",
+    markets: strategy.markets || [],
+    timeframes: strategy.timeframes || [],
+    tradingSessions: strategy.trading_sessions || [],
+    directionalBiasRules: strategy.directional_bias_rules || "",
+    entryLocationRules: strategy.entry_location_rules || "",
+    entryConfirmationRules: strategy.entry_confirmation_rules || "",
+    stopLossRules: strategy.stop_loss_rules || "",
+    takeProfitRules: strategy.take_profit_rules || "",
+    riskRules: strategy.risk_rules || "",
+    tradeManagementRules: strategy.trade_management_rules || "",
+    invalidationRules: strategy.invalidation_rules || "",
+    noTradeConditions: strategy.no_trade_conditions || "",
+    additionalNotes: strategy.additional_notes || "",
+    minimumRiskReward: strategy.minimum_risk_reward,
+    riskPerTradePercent: strategy.risk_per_trade_percent,
+    version: strategy.version || 1,
+    rules: (strategy.strategy_rules || [])
+      .filter((rule) => rule.is_active !== false)
+      .sort((a, b) => Number(a.display_order || 0) - Number(b.display_order || 0))
+      .map((rule) => ({
+        category: rule.rule_category,
+        text: rule.rule_text,
+        importance: rule.importance,
+        displayOrder: rule.display_order,
+      })),
+  };
+}
+
+function normalizeAnalysisFramework(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["personal", "personal_strategy", "strategy"].includes(normalized)
+    ? "personal_strategy"
+    : "csa";
+}
+
+async function resolveSelectedStrategy({ userId, entitlement, analysisFramework, strategyId }) {
+  const framework = normalizeAnalysisFramework(analysisFramework);
+
+  if (framework === "csa") {
+    return { analysisFramework: "csa", strategy: null, snapshot: null };
+  }
+
+  if (Number(entitlement?.strategyLimit || 0) < 1) {
+    const error = new Error("Personal strategies are available on the Pro and Elite plans.");
+    error.statusCode = 403;
+    error.errorType = "personal_strategy_not_available";
+    throw error;
+  }
+
+  const strategy = await getOwnedStrategy(userId, strategyId);
+
+  if (!strategy || strategy.is_active === false) {
+    const error = new Error("The selected personal strategy could not be found or is inactive.");
+    error.statusCode = 404;
+    error.errorType = "strategy_not_found";
+    throw error;
+  }
+
+  return {
+    analysisFramework: "personal_strategy",
+    strategy,
+    snapshot: strategySnapshot(strategy),
+  };
+}
+
+function buildPersonalStrategyPrompt(snapshot) {
+  if (!snapshot) return "";
+
+  const structuredRules = (snapshot.rules || []).length
+    ? snapshot.rules.map((rule, index) =>
+        `${index + 1}. [${rule.importance}] ${rule.category}: ${rule.text}`
+      ).join("\n")
+    : "No structured rules were added.";
+
+  return `
+PERSONAL STRATEGY SELECTED
+
+Strategy name: ${snapshot.strategyName}
+Description: ${snapshot.description || "Not provided"}
+Markets: ${(snapshot.markets || []).join(", ") || "Not restricted"}
+Timeframes: ${(snapshot.timeframes || []).join(", ") || "Not restricted"}
+Trading sessions: ${(snapshot.tradingSessions || []).join(", ") || "Not restricted"}
+Directional-bias rules: ${snapshot.directionalBiasRules || "Not provided"}
+Entry-location rules: ${snapshot.entryLocationRules || "Not provided"}
+Entry-confirmation rules: ${snapshot.entryConfirmationRules || "Not provided"}
+Stop-loss rules: ${snapshot.stopLossRules || "Not provided"}
+Take-profit rules: ${snapshot.takeProfitRules || "Not provided"}
+Risk rules: ${snapshot.riskRules || "Not provided"}
+Trade-management rules: ${snapshot.tradeManagementRules || "Not provided"}
+Invalidation rules: ${snapshot.invalidationRules || "Not provided"}
+No-trade conditions: ${snapshot.noTradeConditions || "Not provided"}
+Minimum risk-to-reward: ${snapshot.minimumRiskReward ?? "Not provided"}
+Risk per trade: ${snapshot.riskPerTradePercent ?? "Not provided"}%
+Additional notes: ${snapshot.additionalNotes || "None"}
+
+Structured rules:
+${structuredRules}
+
+When reviewing the chart:
+- Compare visible evidence against this strategy.
+- Do not replace the user's rules with generic trading advice.
+- If a rule cannot be checked from the chart or notes, mark it as missing information.
+- Required rule failures must reduce the strategy match score more heavily.
+`;
+}
 
 function requireStripeConfigured() {
   if (
@@ -598,6 +833,9 @@ function compactRawAiResponse({
   marketReference,
   dashboardFeedback,
   dateDecision,
+  analysisFramework = "csa",
+  selectedStrategy = null,
+  personalStrategySnapshot = null,
 }) {
   return {
     analysis,
@@ -725,6 +963,43 @@ async function saveCompletedReview({
           null,
         raw_ai_response: rawAiResponse,
         trade_date: chartDateText || null,
+        analysis_framework: analysisFramework,
+        strategy_id:
+          analysisFramework === "personal_strategy"
+            ? selectedStrategy?.id || null
+            : null,
+        strategy_name_snapshot:
+          analysisFramework === "personal_strategy"
+            ? personalStrategySnapshot?.strategyName || null
+            : null,
+        strategy_version:
+          analysisFramework === "personal_strategy"
+            ? personalStrategySnapshot?.version || 1
+            : null,
+        strategy_snapshot:
+          analysisFramework === "personal_strategy"
+            ? personalStrategySnapshot
+            : null,
+        strategy_match_score:
+          analysisFramework === "personal_strategy"
+            ? visualReview?.strategyMatchScore ?? null
+            : null,
+        strategy_rules_followed:
+          analysisFramework === "personal_strategy"
+            ? visualReview?.strategyRulesFollowed || []
+            : [],
+        strategy_rules_violated:
+          analysisFramework === "personal_strategy"
+            ? visualReview?.strategyRulesViolated || []
+            : [],
+        strategy_missing_information:
+          analysisFramework === "personal_strategy"
+            ? visualReview?.strategyMissingInformation || []
+            : [],
+        strategy_verdict:
+          analysisFramework === "personal_strategy"
+            ? visualReview?.strategyVerdict || null
+            : null,
       })
       .select("id")
       .single();
@@ -1719,7 +1994,18 @@ function isBadVisualReview(parsed) {
 }
 
 
-async function compareUploadedChartWithCsaFramework({ imageBase64, mimeType, marketReference, chartDetection, submittedInstrument = "", timeframe = "", analysisType = "post-trade", submittedNotes = "" }) {
+async function compareUploadedChartWithCsaFramework({
+  imageBase64,
+  mimeType,
+  marketReference,
+  chartDetection,
+  submittedInstrument = "",
+  timeframe = "",
+  analysisType = "post-trade",
+  submittedNotes = "",
+  analysisFramework = "csa",
+  personalStrategySnapshot = null,
+}) {
   if (!process.env.OPENAI_API_KEY) return visualFallback("OPENAI_API_KEY is missing.");
   if (!marketReference?.ok) return visualFallback("Market structure was unavailable, so visual comparison could not be completed.");
   if (!imageBase64) return visualFallback("Uploaded chart image was not available for visual comparison.");
@@ -1766,6 +2052,8 @@ Selected context:
 - Mode: ${analysisType}
 - User notes: ${submittedNotes || "None"}
 
+${analysisFramework === "personal_strategy" ? buildPersonalStrategyPrompt(personalStrategySnapshot) : ""}
+
 Initial image validation:
 - Detected instrument: ${chartDetection?.detectedInstrument || "not detected"}
 - Detected timeframe: ${chartDetection?.detectedTimeframe || "not detected"}
@@ -1796,7 +2084,12 @@ Return exactly this JSON shape:
   ],
   "setupQualityScore": 50,
   "entryAccuracyScore": 50,
-  "riskManagementScore": 50
+  "riskManagementScore": 50,
+  "strategyMatchScore": 0,
+  "strategyRulesFollowed": ["short rule followed"],
+  "strategyRulesViolated": ["short rule violated"],
+  "strategyMissingInformation": ["missing information"],
+  "strategyVerdict": "Valid strategy setup | Partially follows strategy | Does not follow strategy | Not enough evidence"
 }`;
 
   try {
@@ -1834,6 +2127,26 @@ Return exactly this JSON shape:
       setupQualityScore: Number.isFinite(Number(parsed.setupQualityScore)) ? clampScore(Number(parsed.setupQualityScore)) : null,
       entryAccuracyScore: Number.isFinite(Number(parsed.entryAccuracyScore)) ? clampScore(Number(parsed.entryAccuracyScore)) : null,
       riskManagementScore: Number.isFinite(Number(parsed.riskManagementScore)) ? clampScore(Number(parsed.riskManagementScore)) : null,
+      strategyMatchScore:
+        analysisFramework === "personal_strategy" && Number.isFinite(Number(parsed.strategyMatchScore))
+          ? clampScore(Number(parsed.strategyMatchScore))
+          : null,
+      strategyRulesFollowed:
+        analysisFramework === "personal_strategy"
+          ? normalizeArrayOfStrings(parsed.strategyRulesFollowed, [])
+          : [],
+      strategyRulesViolated:
+        analysisFramework === "personal_strategy"
+          ? normalizeArrayOfStrings(parsed.strategyRulesViolated, [])
+          : [],
+      strategyMissingInformation:
+        analysisFramework === "personal_strategy"
+          ? normalizeArrayOfStrings(parsed.strategyMissingInformation, [])
+          : [],
+      strategyVerdict:
+        analysisFramework === "personal_strategy"
+          ? String(parsed.strategyVerdict || "Not enough evidence").trim()
+          : null,
       visualSummary: String(parsed.visualSummary || "").trim(),
       chartMarkupAssessment: String(parsed.chartMarkupAssessment || "").trim(),
       entryEvidence: String(parsed.entryEvidence || "").trim(),
@@ -2786,6 +3099,238 @@ app.get("/account-entitlements", async (req, res) => {
 });
 
 
+
+app.get("/strategies", async (req, res) => {
+  try {
+    const requestAuth = await getRequestUser(req);
+    const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
+
+    const result = await supabaseAdmin
+      .from("user_strategies")
+      .select(`
+        *,
+        strategy_rules (
+          id,
+          rule_category,
+          rule_text,
+          importance,
+          display_order,
+          is_active
+        )
+      `)
+      .eq("user_id", requestAuth.user.id)
+      .eq("is_archived", false)
+      .order("created_at", { ascending: false });
+
+    if (result.error) throw result.error;
+
+    return res.json({
+      success: true,
+      strategyLimit: entitlement.strategyLimit,
+      strategyCount: (result.data || []).length,
+      strategies: result.data || [],
+    });
+  } catch (error) {
+    return res.status(Number(error?.statusCode) || 500).json({
+      success: false,
+      error: error.message,
+      errorType: error.errorType || "strategy_list_failed",
+    });
+  }
+});
+
+app.get("/strategies/:id", async (req, res) => {
+  try {
+    const requestAuth = await getRequestUser(req);
+    const strategy = await getOwnedStrategy(requestAuth.user.id, req.params.id);
+
+    if (!strategy) {
+      return res.status(404).json({
+        success: false,
+        error: "Strategy not found.",
+        errorType: "strategy_not_found",
+      });
+    }
+
+    return res.json({
+      success: true,
+      strategy,
+      strategySnapshot: strategySnapshot(strategy),
+    });
+  } catch (error) {
+    return res.status(Number(error?.statusCode) || 500).json({
+      success: false,
+      error: error.message,
+      errorType: error.errorType || "strategy_lookup_failed",
+    });
+  }
+});
+
+app.post("/strategies", async (req, res) => {
+  try {
+    const requestAuth = await getRequestUser(req);
+    const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
+    const strategyLimit = Number(entitlement.strategyLimit || 0);
+
+    if (strategyLimit < 1) {
+      return res.status(403).json({
+        success: false,
+        error: "Personal strategies are available on Pro and Elite.",
+        errorType: "personal_strategy_not_available",
+      });
+    }
+
+    const currentCount = await countUserStrategies(requestAuth.user.id);
+    if (currentCount >= strategyLimit) {
+      return res.status(403).json({
+        success: false,
+        error:
+          entitlement.effectivePlan === "pro"
+            ? "The Pro plan allows one personal strategy."
+            : `Your plan allows up to ${strategyLimit} personal strategies.`,
+        errorType: "strategy_limit_reached",
+      });
+    }
+
+    const payload = sanitizeStrategyPayload(req.body);
+    const rules = sanitizeStrategyRules(req.body?.rules);
+
+    const inserted = await supabaseAdmin
+      .from("user_strategies")
+      .insert({ user_id: requestAuth.user.id, ...payload })
+      .select("*")
+      .single();
+
+    if (inserted.error) throw inserted.error;
+
+    if (rules.length) {
+      const rulesInsert = await supabaseAdmin
+        .from("strategy_rules")
+        .insert(rules.map((rule) => ({
+          ...rule,
+          strategy_id: inserted.data.id,
+          user_id: requestAuth.user.id,
+        })));
+
+      if (rulesInsert.error) {
+        await supabaseAdmin.from("user_strategies").delete().eq("id", inserted.data.id);
+        throw rulesInsert.error;
+      }
+    }
+
+    const strategy = await getOwnedStrategy(requestAuth.user.id, inserted.data.id);
+
+    return res.status(201).json({
+      success: true,
+      strategy,
+      strategyCount: currentCount + 1,
+      strategyLimit,
+    });
+  } catch (error) {
+    const duplicate = error?.code === "23505";
+    return res.status(duplicate ? 409 : Number(error?.statusCode) || 500).json({
+      success: false,
+      error: duplicate ? "You already have a strategy with this name." : error.message,
+      errorType: duplicate ? "duplicate_strategy_name" : error.errorType || "strategy_create_failed",
+    });
+  }
+});
+
+app.put("/strategies/:id", async (req, res) => {
+  try {
+    const requestAuth = await getRequestUser(req);
+    const existing = await getOwnedStrategy(requestAuth.user.id, req.params.id);
+
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: "Strategy not found.",
+        errorType: "strategy_not_found",
+      });
+    }
+
+    const payload = sanitizeStrategyPayload(req.body);
+    const rules = sanitizeStrategyRules(req.body?.rules);
+
+    const updated = await supabaseAdmin
+      .from("user_strategies")
+      .update({
+        ...payload,
+        version: Number(existing.version || 1) + 1,
+      })
+      .eq("id", existing.id)
+      .eq("user_id", requestAuth.user.id)
+      .select("*")
+      .single();
+
+    if (updated.error) throw updated.error;
+
+    if (Array.isArray(req.body?.rules)) {
+      const deleted = await supabaseAdmin
+        .from("strategy_rules")
+        .delete()
+        .eq("strategy_id", existing.id)
+        .eq("user_id", requestAuth.user.id);
+
+      if (deleted.error) throw deleted.error;
+
+      if (rules.length) {
+        const insertedRules = await supabaseAdmin
+          .from("strategy_rules")
+          .insert(rules.map((rule) => ({
+            ...rule,
+            strategy_id: existing.id,
+            user_id: requestAuth.user.id,
+          })));
+
+        if (insertedRules.error) throw insertedRules.error;
+      }
+    }
+
+    const strategy = await getOwnedStrategy(requestAuth.user.id, existing.id);
+    return res.json({ success: true, strategy });
+  } catch (error) {
+    const duplicate = error?.code === "23505";
+    return res.status(duplicate ? 409 : Number(error?.statusCode) || 500).json({
+      success: false,
+      error: duplicate ? "You already have a strategy with this name." : error.message,
+      errorType: duplicate ? "duplicate_strategy_name" : error.errorType || "strategy_update_failed",
+    });
+  }
+});
+
+app.delete("/strategies/:id", async (req, res) => {
+  try {
+    const requestAuth = await getRequestUser(req);
+    const strategy = await getOwnedStrategy(requestAuth.user.id, req.params.id);
+
+    if (!strategy) {
+      return res.status(404).json({
+        success: false,
+        error: "Strategy not found.",
+        errorType: "strategy_not_found",
+      });
+    }
+
+    const archived = await supabaseAdmin
+      .from("user_strategies")
+      .update({ is_active: false, is_archived: true })
+      .eq("id", strategy.id)
+      .eq("user_id", requestAuth.user.id);
+
+    if (archived.error) throw archived.error;
+
+    return res.json({ success: true, deletedStrategyId: strategy.id });
+  } catch (error) {
+    return res.status(Number(error?.statusCode) || 500).json({
+      success: false,
+      error: error.message,
+      errorType: error.errorType || "strategy_delete_failed",
+    });
+  }
+});
+
+
 app.post("/create-checkout-session", async (req, res) => {
   try {
     requireStripeConfigured();
@@ -3110,12 +3655,31 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     if (!process.env.OPENAI_API_KEY) return res.status(500).json({ success: false, error: "OPENAI_API_KEY is missing on the server." });
     if (!req.file) return res.status(400).json({ success: false, error: "No chart image uploaded." });
 
-    const { timeframe = "Not provided", instrument = "", pair = "", selectedPair = "", analysisType = "post-trade", notes = "", userNotes = "", chartDate = "", tradeDate = "", timezone = "UTC" } = req.body;
+    const {
+      timeframe = "Not provided",
+      instrument = "",
+      pair = "",
+      selectedPair = "",
+      analysisType = "post-trade",
+      notes = "",
+      userNotes = "",
+      chartDate = "",
+      tradeDate = "",
+      timezone = "UTC",
+      analysisFramework = "csa",
+      strategyId = "",
+    } = req.body;
     const submittedInstrument = instrument || pair || selectedPair || "Not provided";
     const submittedNotes = notes || userNotes || "";
     const normalizedSymbol = normalizeSymbol(submittedInstrument);
     const mode = normalizeAnalysisType(analysisType);
     const selectedTimeframeProfile = getSupportedCsaTimeframeProfile(timeframe);
+    const selectedStrategy = await resolveSelectedStrategy({
+      userId: requestAuth.user.id,
+      entitlement,
+      analysisFramework,
+      strategyId,
+    });
     const imageBase64 = req.file.buffer.toString("base64");
     const mimeType = req.file.mimetype || "image/png";
     const selectedDate = parseISODateOnly(chartDate || tradeDate);
@@ -3175,8 +3739,58 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
 
     const dateDecision = chooseFinalChartDate({ selectedDate, detection: chartDetection, analysisType: mode });
     const marketReference = await fetchTwelveDataStructureLevels({ symbol: normalizedSymbol, chartDate: dateDecision.finalDate, timeframe, timezone: timezone || "UTC", analysisType: mode });
-    const visualReview = await compareUploadedChartWithCsaFramework({ imageBase64, mimeType, marketReference, chartDetection, submittedInstrument, timeframe, analysisType: mode, submittedNotes });
-    const analysis = buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, visualReview, submittedInstrument, normalizedSymbol, timeframe });
+    const visualReview = await compareUploadedChartWithCsaFramework({
+      imageBase64,
+      mimeType,
+      marketReference,
+      chartDetection,
+      submittedInstrument,
+      timeframe,
+      analysisType: mode,
+      submittedNotes,
+      analysisFramework: selectedStrategy.analysisFramework,
+      personalStrategySnapshot: selectedStrategy.snapshot,
+    });
+    const baseAnalysis = buildDeterministicCsaAnalysis({
+      marketReference,
+      dateDecision,
+      chartDetection,
+      visualReview,
+      submittedInstrument,
+      normalizedSymbol,
+      timeframe,
+    });
+
+    const analysis =
+      selectedStrategy.analysisFramework === "personal_strategy"
+        ? `${baseAnalysis}
+
+PERSONAL STRATEGY REVIEW
+
+Strategy:
+- ${selectedStrategy.snapshot.strategyName}
+
+Strategy Match Score:
+- ${visualReview?.strategyMatchScore ?? "Not enough evidence"}%
+
+Strategy Verdict:
+- ${visualReview?.strategyVerdict || "Not enough evidence"}
+
+Rules Followed:
+${(visualReview?.strategyRulesFollowed || []).length
+  ? visualReview.strategyRulesFollowed.map((item) => `- ${item}`).join("\n")
+  : "- No rule was clearly confirmed."}
+
+Rules Violated:
+${(visualReview?.strategyRulesViolated || []).length
+  ? visualReview.strategyRulesViolated.map((item) => `- ${item}`).join("\n")
+  : "- No clear rule violation was confirmed."}
+
+Missing Information:
+${(visualReview?.strategyMissingInformation || []).length
+  ? visualReview.strategyMissingInformation.map((item) => `- ${item}`).join("\n")
+  : "- Nothing important was missing."}`
+        : baseAnalysis;
     const bias = marketReference.directionalBias || calculateCsaDirectionalBias([], normalizedSymbol, selectedTimeframeProfile);
     const setupScoreMatch = String(analysis).match(/Overall Setup Score:\s*\n- (\d+)\/10/i);
     const setupScore = setupScoreMatch ? Number(setupScoreMatch[1]) : 0;
@@ -3199,6 +3813,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       marketReference,
       dashboardFeedback,
       dateDecision,
+      analysisFramework: selectedStrategy.analysisFramework,
+      selectedStrategy: selectedStrategy.strategy,
+      personalStrategySnapshot: selectedStrategy.snapshot,
     });
 
     const updatedEntitlement = {
@@ -3220,6 +3837,25 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       selectedTimeframe: timeframe,
       selectedDate: chartDate || tradeDate || "Not provided",
       analysisType: mode,
+      analysisFramework: selectedStrategy.analysisFramework,
+      selectedStrategy:
+        selectedStrategy.analysisFramework === "personal_strategy"
+          ? {
+              id: selectedStrategy.strategy.id,
+              name: selectedStrategy.strategy.strategy_name,
+              version: selectedStrategy.strategy.version || 1,
+            }
+          : null,
+      strategyAssessment:
+        selectedStrategy.analysisFramework === "personal_strategy"
+          ? {
+              strategyMatchScore: visualReview?.strategyMatchScore ?? null,
+              rulesFollowed: visualReview?.strategyRulesFollowed || [],
+              rulesViolated: visualReview?.strategyRulesViolated || [],
+              missingInformation: visualReview?.strategyMissingInformation || [],
+              verdict: visualReview?.strategyVerdict || null,
+            }
+          : null,
       detectedPair: chartDetection.detectedInstrument || normalizedSymbol || "Not available",
       detectedTimeframe: chartDetection.detectedTimeframe || timeframe,
       detectedLatestVisibleDate: chartDetection.latestVisibleDate || "Not detected",
