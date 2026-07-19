@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import OpenAI from "openai";
+import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 
 const app = express();
@@ -10,7 +11,6 @@ app.use(cors({
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
-app.use(express.json({ limit: "25mb" }));
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -32,6 +32,18 @@ const supabaseAdmin =
         },
       })
     : null;
+
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
+const STRIPE_PRO_PRICE_ID = process.env.STRIPE_PRO_PRICE_ID || "";
+const STRIPE_ELITE_PRICE_ID = process.env.STRIPE_ELITE_PRICE_ID || "";
+const FRONTEND_URL = String(
+  process.env.FRONTEND_URL || "https://training.csaforex.com/version2web"
+).replace(/\/$/, "");
+
+const stripe = STRIPE_SECRET_KEY
+  ? new Stripe(STRIPE_SECRET_KEY)
+  : null;
 
 const TWELVE_DATA_BASE_URL = "https://api.twelvedata.com/time_series";
 
@@ -138,7 +150,8 @@ async function getUserPlanEntitlement(userId) {
       beta_analysis_limit,
       current_period_start,
       current_period_end,
-      cancel_at_period_end
+      cancel_at_period_end,
+      trial_used
     `)
     .eq("id", userId)
     .single();
@@ -203,6 +216,7 @@ async function getUserPlanEntitlement(userId) {
     cancelAtPeriodEnd: profile.cancel_at_period_end === true,
     currentPeriodStart: profile.current_period_start || null,
     currentPeriodEnd: profile.current_period_end || null,
+    trialUsed: profile.trial_used === true,
   };
 }
 
@@ -247,6 +261,295 @@ async function getRequestUser(req) {
 
   return { user: data.user, accessToken, authProvided: true };
 }
+
+
+function requireStripeConfigured() {
+  if (
+    !stripe ||
+    !STRIPE_PRO_PRICE_ID ||
+    !STRIPE_ELITE_PRICE_ID ||
+    !FRONTEND_URL
+  ) {
+    const error = new Error("Stripe billing is not fully configured.");
+    error.statusCode = 500;
+    throw error;
+  }
+}
+
+function mapPriceIdToPlan(priceId = "") {
+  if (priceId === STRIPE_PRO_PRICE_ID) return "pro";
+  if (priceId === STRIPE_ELITE_PRICE_ID) return "elite";
+  return "starter";
+}
+
+function stripeTimestampToIso(value) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) && numberValue > 0
+    ? new Date(numberValue * 1000).toISOString()
+    : null;
+}
+
+function mapStripeStatus(status = "") {
+  const normalized = String(status || "").toLowerCase();
+
+  if (normalized === "active") return "active";
+  if (normalized === "trialing") return "trialing";
+  if (["past_due", "unpaid", "paused"].includes(normalized)) return "past_due";
+  if (["incomplete", "incomplete_expired"].includes(normalized)) return "incomplete";
+  if (["canceled", "cancelled"].includes(normalized)) return "cancelled";
+
+  return "incomplete";
+}
+
+async function findProfileForStripeObject({
+  userId = "",
+  customerId = "",
+  subscriptionId = "",
+}) {
+  if (!supabaseAdmin) return null;
+
+  if (userId) {
+    const direct = await supabaseAdmin
+      .from("profiles")
+      .select("*")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (!direct.error && direct.data) return direct.data;
+  }
+
+  if (subscriptionId) {
+    const bySubscription = await supabaseAdmin
+      .from("profiles")
+      .select("*")
+      .eq("stripe_subscription_id", subscriptionId)
+      .maybeSingle();
+
+    if (!bySubscription.error && bySubscription.data) return bySubscription.data;
+  }
+
+  if (customerId) {
+    const byCustomer = await supabaseAdmin
+      .from("profiles")
+      .select("*")
+      .eq("stripe_customer_id", customerId)
+      .maybeSingle();
+
+    if (!byCustomer.error && byCustomer.data) return byCustomer.data;
+  }
+
+  return null;
+}
+
+async function logStripeEventBestEffort({
+  eventId,
+  userId,
+  customerId,
+  subscriptionId,
+}) {
+  if (!supabaseAdmin || !eventId || !userId) return;
+
+  try {
+    await supabaseAdmin.from("subscription_events").insert({
+      user_id: userId,
+      stripe_customer_id: customerId || null,
+      stripe_subscription_id: subscriptionId || null,
+      stripe_event_id: eventId,
+    });
+  } catch (error) {
+    console.warn("Stripe event logging skipped:", error?.message || error);
+  }
+}
+
+async function updateProfileFromStripeSubscription(subscription, eventId = "") {
+  if (!supabaseAdmin || !subscription) return null;
+
+  const customerId =
+    typeof subscription.customer === "string"
+      ? subscription.customer
+      : subscription.customer?.id || "";
+
+  const subscriptionId = subscription.id || "";
+  const metadataUserId =
+    subscription.metadata?.supabase_user_id ||
+    subscription.metadata?.user_id ||
+    "";
+
+  const profile = await findProfileForStripeObject({
+    userId: metadataUserId,
+    customerId,
+    subscriptionId,
+  });
+
+  if (!profile) {
+    console.warn("No Supabase profile matched Stripe subscription", subscriptionId);
+    return null;
+  }
+
+  const firstItem = subscription.items?.data?.[0] || null;
+  const priceId =
+    typeof firstItem?.price === "string"
+      ? firstItem.price
+      : firstItem?.price?.id || "";
+
+  const planCode =
+    mapPriceIdToPlan(priceId) !== "starter"
+      ? mapPriceIdToPlan(priceId)
+      : String(subscription.metadata?.plan_code || "starter").toLowerCase();
+
+  const mappedStatus = mapStripeStatus(subscription.status);
+  const subscriptionEnded = mappedStatus === "cancelled";
+
+  const periodStart =
+    subscription.current_period_start || firstItem?.current_period_start || null;
+  const periodEnd =
+    subscription.current_period_end || firstItem?.current_period_end || null;
+
+  const hadTrial =
+    Boolean(subscription.trial_start) ||
+    subscription.status === "trialing" ||
+    profile.trial_used === true;
+
+  const updates = subscriptionEnded
+    ? {
+        subscription_plan: "starter",
+        subscription_status: "cancelled",
+        stripe_customer_id: customerId || profile.stripe_customer_id || null,
+        stripe_subscription_id: null,
+        stripe_price_id: null,
+        current_period_start: null,
+        current_period_end: null,
+        cancel_at_period_end: false,
+        trial_used: hadTrial,
+      }
+    : {
+        subscription_plan: ["pro", "elite"].includes(planCode) ? planCode : "starter",
+        subscription_status: mappedStatus,
+        stripe_customer_id: customerId || profile.stripe_customer_id || null,
+        stripe_subscription_id: subscriptionId || null,
+        stripe_price_id: priceId || null,
+        current_period_start: stripeTimestampToIso(periodStart),
+        current_period_end: stripeTimestampToIso(periodEnd),
+        cancel_at_period_end: subscription.cancel_at_period_end === true,
+        trial_used: hadTrial,
+      };
+
+  const result = await supabaseAdmin
+    .from("profiles")
+    .update(updates)
+    .eq("id", profile.id)
+    .select("*")
+    .single();
+
+  if (result.error) throw result.error;
+
+  await logStripeEventBestEffort({
+    eventId,
+    userId: profile.id,
+    customerId,
+    subscriptionId,
+  });
+
+  return result.data;
+}
+
+async function markCustomerPastDue(customerId, eventId = "") {
+  if (!supabaseAdmin || !customerId) return;
+
+  const profile = await findProfileForStripeObject({ customerId });
+  if (!profile) return;
+
+  const result = await supabaseAdmin
+    .from("profiles")
+    .update({ subscription_status: "past_due" })
+    .eq("id", profile.id);
+
+  if (result.error) throw result.error;
+
+  await logStripeEventBestEffort({
+    eventId,
+    userId: profile.id,
+    customerId,
+    subscriptionId: profile.stripe_subscription_id || "",
+  });
+}
+
+async function handleStripeEvent(event) {
+  const object = event?.data?.object;
+
+  switch (event.type) {
+    case "checkout.session.completed": {
+      const subscriptionId =
+        typeof object.subscription === "string"
+          ? object.subscription
+          : object.subscription?.id || "";
+
+      if (subscriptionId && stripe) {
+        const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+          expand: ["items.data.price"],
+        });
+        await updateProfileFromStripeSubscription(subscription, event.id);
+      }
+      break;
+    }
+
+    case "customer.subscription.created":
+    case "customer.subscription.updated":
+    case "customer.subscription.deleted":
+      await updateProfileFromStripeSubscription(object, event.id);
+      break;
+
+    case "invoice.payment_failed": {
+      const customerId =
+        typeof object.customer === "string"
+          ? object.customer
+          : object.customer?.id || "";
+      await markCustomerPastDue(customerId, event.id);
+      break;
+    }
+
+    default:
+      break;
+  }
+}
+
+// Stripe must receive the unmodified raw request body for signature verification.
+app.post(
+  "/stripe-webhook",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    if (!stripe || !STRIPE_WEBHOOK_SECRET) {
+      return res.status(503).send("Stripe webhook is not configured.");
+    }
+
+    const signature = req.headers["stripe-signature"];
+
+    let event;
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        signature,
+        STRIPE_WEBHOOK_SECRET
+      );
+    } catch (error) {
+      console.error("Stripe webhook signature error:", error.message);
+      return res.status(400).send(`Webhook Error: ${error.message}`);
+    }
+
+    try {
+      await handleStripeEvent(event);
+      return res.json({ received: true });
+    } catch (error) {
+      console.error("Stripe webhook processing error:", error);
+      return res.status(500).json({
+        received: false,
+        error: "Webhook processing failed.",
+      });
+    }
+  }
+);
+
+app.use(express.json({ limit: "25mb" }));
 
 function safeStorageFilename(filename = "chart.png") {
   const cleaned = String(filename)
@@ -2455,6 +2758,213 @@ app.get("/account-entitlements", async (req, res) => {
       success: false,
       error: error.message,
       errorType: error.errorType || "entitlement_lookup_failed",
+    });
+  }
+});
+
+
+app.post("/create-checkout-session", async (req, res) => {
+  try {
+    requireStripeConfigured();
+
+    const requestAuth = await getRequestUser(req);
+    const requestedPlan = String(req.body?.plan || "").toLowerCase();
+
+    if (!["pro", "elite"].includes(requestedPlan)) {
+      return res.status(400).json({
+        success: false,
+        error: "Choose either the Pro or Elite plan.",
+        errorType: "invalid_plan",
+      });
+    }
+
+    const selectedPriceId =
+      requestedPlan === "pro"
+        ? STRIPE_PRO_PRICE_ID
+        : STRIPE_ELITE_PRICE_ID;
+
+    const profileResult = await supabaseAdmin
+      .from("profiles")
+      .select(`
+        id,
+        email,
+        full_name,
+        subscription_plan,
+        subscription_status,
+        stripe_customer_id,
+        stripe_subscription_id,
+        trial_used
+      `)
+      .eq("id", requestAuth.user.id)
+      .single();
+
+    if (profileResult.error || !profileResult.data) {
+      const error = new Error("Your CSA Coach profile could not be found.");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const profile = profileResult.data;
+
+    if (
+      profile.stripe_subscription_id &&
+      ["active", "trialing", "past_due", "incomplete"].includes(
+        String(profile.subscription_status || "").toLowerCase()
+      )
+    ) {
+      return res.status(409).json({
+        success: false,
+        error:
+          "You already have a Stripe subscription. Open Account settings to manage or change it.",
+        errorType: "subscription_already_exists",
+      });
+    }
+
+    let customerId = profile.stripe_customer_id || "";
+
+    if (customerId) {
+      const existingSubscriptions = await stripe.subscriptions.list({
+        customer: customerId,
+        status: "all",
+        limit: 10,
+      });
+
+      const blockingSubscription = existingSubscriptions.data.find((subscription) =>
+        ["active", "trialing", "past_due", "incomplete", "unpaid", "paused"].includes(
+          subscription.status
+        )
+      );
+
+      if (blockingSubscription) {
+        await updateProfileFromStripeSubscription(blockingSubscription);
+        return res.status(409).json({
+          success: false,
+          error:
+            "You already have a Stripe subscription. Open Account settings to manage it.",
+          errorType: "subscription_already_exists",
+        });
+      }
+    } else {
+      const customer = await stripe.customers.create({
+        email: requestAuth.user.email || profile.email || undefined,
+        name: profile.full_name || undefined,
+        metadata: {
+          supabase_user_id: requestAuth.user.id,
+        },
+      });
+
+      customerId = customer.id;
+
+      const customerUpdate = await supabaseAdmin
+        .from("profiles")
+        .update({ stripe_customer_id: customerId })
+        .eq("id", requestAuth.user.id);
+
+      if (customerUpdate.error) throw customerUpdate.error;
+    }
+
+    const trialEligible = profile.trial_used !== true;
+
+    const subscriptionData = {
+      metadata: {
+        supabase_user_id: requestAuth.user.id,
+        plan_code: requestedPlan,
+      },
+    };
+
+    if (trialEligible) {
+      subscriptionData.trial_period_days = 7;
+      subscriptionData.trial_settings = {
+        end_behavior: {
+          missing_payment_method: "cancel",
+        },
+      };
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      customer: customerId,
+      client_reference_id: requestAuth.user.id,
+      line_items: [
+        {
+          price: selectedPriceId,
+          quantity: 1,
+        },
+      ],
+      payment_method_collection: "always",
+      allow_promotion_codes: true,
+      success_url: `${FRONTEND_URL}?billing=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${FRONTEND_URL}?billing=cancelled`,
+      metadata: {
+        supabase_user_id: requestAuth.user.id,
+        plan_code: requestedPlan,
+        trial_eligible: trialEligible ? "true" : "false",
+      },
+      subscription_data: subscriptionData,
+    });
+
+    return res.json({
+      success: true,
+      url: session.url,
+      sessionId: session.id,
+      trialEligible,
+      trialDays: trialEligible ? 7 : 0,
+    });
+  } catch (error) {
+    const statusCode = Number(error?.statusCode) || 500;
+    console.error("Create checkout session error:", error);
+    return res.status(statusCode).json({
+      success: false,
+      error:
+        statusCode >= 500
+          ? "Stripe Checkout could not be started."
+          : error.message,
+      errorType: error.errorType || "checkout_session_failed",
+      details: error.message,
+    });
+  }
+});
+
+app.post("/create-billing-portal-session", async (req, res) => {
+  try {
+    requireStripeConfigured();
+
+    const requestAuth = await getRequestUser(req);
+
+    const profileResult = await supabaseAdmin
+      .from("profiles")
+      .select("stripe_customer_id")
+      .eq("id", requestAuth.user.id)
+      .single();
+
+    if (profileResult.error || !profileResult.data?.stripe_customer_id) {
+      return res.status(404).json({
+        success: false,
+        error: "No Stripe billing account is connected to this profile yet.",
+        errorType: "billing_customer_not_found",
+      });
+    }
+
+    const portalSession = await stripe.billingPortal.sessions.create({
+      customer: profileResult.data.stripe_customer_id,
+      return_url: FRONTEND_URL,
+    });
+
+    return res.json({
+      success: true,
+      url: portalSession.url,
+    });
+  } catch (error) {
+    const statusCode = Number(error?.statusCode) || 500;
+    console.error("Create billing portal error:", error);
+    return res.status(statusCode).json({
+      success: false,
+      error:
+        statusCode >= 500
+          ? "The billing portal could not be opened."
+          : error.message,
+      errorType: error.errorType || "billing_portal_failed",
+      details: error.message,
     });
   }
 });
