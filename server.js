@@ -37,9 +37,32 @@ const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
 const STRIPE_PRO_PRICE_ID = process.env.STRIPE_PRO_PRICE_ID || "";
 const STRIPE_ELITE_PRICE_ID = process.env.STRIPE_ELITE_PRICE_ID || "";
-const FRONTEND_URL = String(
-  process.env.FRONTEND_URL || "https://training.csaforex.com/version2web"
-).replace(/\/$/, "");
+function normalizePublicUrl(value, fallback) {
+  let raw = String(value || fallback || "").trim();
+
+  // Render values must contain only the URL, but recover safely if the
+  // variable name or wrapping quotes were accidentally included.
+  raw = raw.replace(/^FRONTEND_URL\s*=\s*/i, "").trim();
+  raw = raw.replace(/^["']|["']$/g, "").trim();
+  raw = raw.replace(/\/+$/, "");
+
+  try {
+    const parsed = new URL(raw);
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      throw new Error("Unsupported URL protocol.");
+    }
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    throw new Error(
+      "FRONTEND_URL is not valid. Enter only https://training.csaforex.com/version2web in Render."
+    );
+  }
+}
+
+const FRONTEND_URL = normalizePublicUrl(
+  process.env.FRONTEND_URL,
+  "https://training.csaforex.com/version2web"
+);
 
 const stripe = STRIPE_SECRET_KEY
   ? new Stripe(STRIPE_SECRET_KEY)
@@ -2916,7 +2939,7 @@ app.post("/create-checkout-session", async (req, res) => {
     return res.status(statusCode).json({
       success: false,
       error:
-        statusCode >= 500
+        process.env.NODE_ENV === "production" && statusCode >= 500
           ? "Stripe Checkout could not be started."
           : error.message,
       errorType: error.errorType || "checkout_session_failed",
