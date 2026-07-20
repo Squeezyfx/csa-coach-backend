@@ -3,6 +3,7 @@ import cors from "cors";
 import multer from "multer";
 import OpenAI from "openai";
 import Stripe from "stripe";
+import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
 const app = express();
@@ -3215,10 +3216,13 @@ app.get("/strategies/:id", async (req, res) => {
 });
 
 app.post("/strategies", async (req, res) => {
+  let stage = "authentication";
+
   try {
     const requestAuth = await getRequestUser(req);
+
+    stage = "entitlement";
     const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
-    const strategyDb = createUserScopedSupabase(requestAuth.accessToken);
     const strategyLimit = Number(entitlement.strategyLimit || 0);
 
     if (strategyLimit < 1) {
@@ -3229,7 +3233,28 @@ app.post("/strategies", async (req, res) => {
       });
     }
 
-    const currentCount = await countUserStrategies(requestAuth.user.id, strategyDb);
+    /*
+      Strategy ownership is checked manually below. The backend admin client is
+      intentionally used here because the server has already verified the
+      Supabase access token and user ID. This avoids RLS/session-header
+      inconsistencies while still preventing one user from writing for another.
+    */
+    stage = "count_existing_strategies";
+    const currentCountResult = await supabaseAdmin
+      .from("user_strategies")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", requestAuth.user.id)
+      .eq("is_archived", false);
+
+    if (currentCountResult.error) {
+      throw new Error(
+        currentCountResult.error.message ||
+        "The current strategy count could not be checked."
+      );
+    }
+
+    const currentCount = Number(currentCountResult.count || 0);
+
     if (currentCount >= strategyLimit) {
       return res.status(403).json({
         success: false,
@@ -3241,39 +3266,90 @@ app.post("/strategies", async (req, res) => {
       });
     }
 
+    stage = "validate_strategy";
     const payload = sanitizeStrategyPayload(req.body);
     const rules = sanitizeStrategyRules(req.body?.rules);
 
-    const inserted = await strategyDb
-      .from("user_strategies")
-      .insert({ user_id: requestAuth.user.id, ...payload })
-      .select("*")
-      .single();
+    stage = "insert_strategy";
+    const strategyId = crypto.randomUUID();
 
-    if (inserted.error) throw inserted.error;
+    const insertResult = await supabaseAdmin
+      .from("user_strategies")
+      .insert({
+        id: strategyId,
+        user_id: requestAuth.user.id,
+        ...payload,
+      });
+
+    if (insertResult.error) {
+      const dbError = new Error(
+        insertResult.error.message ||
+        "Supabase rejected the strategy insert."
+      );
+      dbError.code = insertResult.error.code;
+      dbError.details = insertResult.error.details;
+      dbError.hint = insertResult.error.hint;
+      throw dbError;
+    }
 
     let rulesWarning = null;
 
     if (rules.length) {
-      const rulesInsert = await strategyDb
+      stage = "insert_strategy_rules";
+      const rulesInsert = await supabaseAdmin
         .from("strategy_rules")
-        .insert(rules.map((rule) => ({
-          ...rule,
-          strategy_id: inserted.data.id,
-          user_id: requestAuth.user.id,
-        })));
+        .insert(
+          rules.map((rule) => ({
+            ...rule,
+            strategy_id: strategyId,
+            user_id: requestAuth.user.id,
+          }))
+        );
 
       if (rulesInsert.error) {
-        rulesWarning = rulesInsert.error.message;
-        console.warn("Strategy saved, but structured rules were skipped:", rulesWarning);
+        rulesWarning =
+          rulesInsert.error.message ||
+          "Structured rules could not be saved.";
+        console.warn(
+          "Strategy saved, but structured rules were skipped:",
+          rulesWarning
+        );
       }
     }
 
-    const strategy = await getOwnedStrategy(
-      requestAuth.user.id,
-      inserted.data.id,
-      strategyDb
-    );
+    stage = "load_saved_strategy";
+    const strategyResult = await supabaseAdmin
+      .from("user_strategies")
+      .select("*")
+      .eq("id", strategyId)
+      .eq("user_id", requestAuth.user.id)
+      .single();
+
+    if (strategyResult.error || !strategyResult.data) {
+      throw new Error(
+        strategyResult.error?.message ||
+        "The strategy was created but could not be loaded."
+      );
+    }
+
+    const ruleResult = await supabaseAdmin
+      .from("strategy_rules")
+      .select(`
+        id,
+        rule_category,
+        rule_text,
+        importance,
+        display_order,
+        is_active
+      `)
+      .eq("strategy_id", strategyId)
+      .eq("user_id", requestAuth.user.id)
+      .order("display_order", { ascending: true });
+
+    const strategy = {
+      ...strategyResult.data,
+      strategy_rules: ruleResult.error ? [] : (ruleResult.data || []),
+    };
 
     return res.status(201).json({
       success: true,
@@ -3283,21 +3359,31 @@ app.post("/strategies", async (req, res) => {
       warning: rulesWarning,
     });
   } catch (error) {
-    console.error(
-      "Strategy creation failed:",
-      JSON.stringify(serializeSupabaseError(error), null, 2)
-    );
     const duplicate = error?.code === "23505";
-    return res.status(duplicate ? 409 : Number(error?.statusCode) || 500).json({
-      success: false,
-      error: duplicate
-        ? "You already have a strategy with this name."
-        : (error?.message || "The strategy could not be saved."),
-      errorType: duplicate
-        ? "duplicate_strategy_name"
-        : error?.errorType || "strategy_create_failed",
-      details: serializeSupabaseError(error),
+
+    console.error("Strategy creation failed:", {
+      stage,
+      name: error?.name || null,
+      message: error?.message || null,
+      code: error?.code || null,
+      details: error?.details || null,
+      hint: error?.hint || null,
+      stack: error?.stack || null,
     });
+
+    return res
+      .status(duplicate ? 409 : Number(error?.statusCode) || 500)
+      .json({
+        success: false,
+        error: duplicate
+          ? "You already have a strategy with this name."
+          : error?.message ||
+            `The strategy could not be saved during ${stage}.`,
+        errorType: duplicate
+          ? "duplicate_strategy_name"
+          : error?.errorType || "strategy_create_failed",
+        stage,
+      });
   }
 });
 
