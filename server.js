@@ -289,6 +289,39 @@ async function getRequestUser(req) {
   return { user: data.user, accessToken, authProvided: true };
 }
 
+function createUserScopedSupabase(accessToken) {
+  if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) {
+    const error = new Error("Supabase is not configured on the backend.");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  return createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
+    global: {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+}
+
+function serializeSupabaseError(error) {
+  if (!error) return null;
+  return {
+    name: error.name || null,
+    message: error.message || null,
+    code: error.code || null,
+    details: error.details || null,
+    hint: error.hint || null,
+    status: error.status || null,
+  };
+}
+
 
 
 const STRATEGY_RULE_CATEGORIES = new Set([
@@ -372,10 +405,10 @@ function sanitizeStrategyRules(value) {
   }).filter(Boolean).slice(0, 100);
 }
 
-async function getOwnedStrategy(userId, strategyId) {
+async function getOwnedStrategy(userId, strategyId, db = supabaseAdmin) {
   if (!strategyId) return null;
 
-  const strategyResult = await supabaseAdmin
+  const strategyResult = await db
     .from("user_strategies")
     .select("*")
     .eq("id", strategyId)
@@ -386,7 +419,7 @@ async function getOwnedStrategy(userId, strategyId) {
   if (strategyResult.error) throw strategyResult.error;
   if (!strategyResult.data) return null;
 
-  const rulesResult = await supabaseAdmin
+  const rulesResult = await db
     .from("strategy_rules")
     .select(`
       id,
@@ -410,8 +443,8 @@ async function getOwnedStrategy(userId, strategyId) {
   };
 }
 
-async function countUserStrategies(userId) {
-  const result = await supabaseAdmin
+async function countUserStrategies(userId, db = supabaseAdmin) {
+  const result = await db
     .from("user_strategies")
     .select("id", { count: "exact", head: true })
     .eq("user_id", userId)
@@ -3117,8 +3150,9 @@ app.get("/strategies", async (req, res) => {
   try {
     const requestAuth = await getRequestUser(req);
     const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
+    const strategyDb = createUserScopedSupabase(requestAuth.accessToken);
 
-    const result = await supabaseAdmin
+    const result = await strategyDb
       .from("user_strategies")
       .select(`
         *,
@@ -3155,7 +3189,8 @@ app.get("/strategies", async (req, res) => {
 app.get("/strategies/:id", async (req, res) => {
   try {
     const requestAuth = await getRequestUser(req);
-    const strategy = await getOwnedStrategy(requestAuth.user.id, req.params.id);
+    const strategyDb = createUserScopedSupabase(requestAuth.accessToken);
+    const strategy = await getOwnedStrategy(requestAuth.user.id, req.params.id, strategyDb);
 
     if (!strategy) {
       return res.status(404).json({
@@ -3183,6 +3218,7 @@ app.post("/strategies", async (req, res) => {
   try {
     const requestAuth = await getRequestUser(req);
     const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
+    const strategyDb = createUserScopedSupabase(requestAuth.accessToken);
     const strategyLimit = Number(entitlement.strategyLimit || 0);
 
     if (strategyLimit < 1) {
@@ -3193,7 +3229,7 @@ app.post("/strategies", async (req, res) => {
       });
     }
 
-    const currentCount = await countUserStrategies(requestAuth.user.id);
+    const currentCount = await countUserStrategies(requestAuth.user.id, strategyDb);
     if (currentCount >= strategyLimit) {
       return res.status(403).json({
         success: false,
@@ -3208,7 +3244,7 @@ app.post("/strategies", async (req, res) => {
     const payload = sanitizeStrategyPayload(req.body);
     const rules = sanitizeStrategyRules(req.body?.rules);
 
-    const inserted = await supabaseAdmin
+    const inserted = await strategyDb
       .from("user_strategies")
       .insert({ user_id: requestAuth.user.id, ...payload })
       .select("*")
@@ -3219,7 +3255,7 @@ app.post("/strategies", async (req, res) => {
     let rulesWarning = null;
 
     if (rules.length) {
-      const rulesInsert = await supabaseAdmin
+      const rulesInsert = await strategyDb
         .from("strategy_rules")
         .insert(rules.map((rule) => ({
           ...rule,
@@ -3233,7 +3269,11 @@ app.post("/strategies", async (req, res) => {
       }
     }
 
-    const strategy = await getOwnedStrategy(requestAuth.user.id, inserted.data.id);
+    const strategy = await getOwnedStrategy(
+      requestAuth.user.id,
+      inserted.data.id,
+      strategyDb
+    );
 
     return res.status(201).json({
       success: true,
@@ -3243,7 +3283,10 @@ app.post("/strategies", async (req, res) => {
       warning: rulesWarning,
     });
   } catch (error) {
-    console.error("Strategy creation failed:", error);
+    console.error(
+      "Strategy creation failed:",
+      JSON.stringify(serializeSupabaseError(error), null, 2)
+    );
     const duplicate = error?.code === "23505";
     return res.status(duplicate ? 409 : Number(error?.statusCode) || 500).json({
       success: false,
@@ -3253,13 +3296,7 @@ app.post("/strategies", async (req, res) => {
       errorType: duplicate
         ? "duplicate_strategy_name"
         : error?.errorType || "strategy_create_failed",
-      details: process.env.NODE_ENV === "production"
-        ? undefined
-        : {
-            code: error?.code || null,
-            hint: error?.hint || null,
-            details: error?.details || null,
-          },
+      details: serializeSupabaseError(error),
     });
   }
 });
@@ -3267,7 +3304,12 @@ app.post("/strategies", async (req, res) => {
 app.put("/strategies/:id", async (req, res) => {
   try {
     const requestAuth = await getRequestUser(req);
-    const existing = await getOwnedStrategy(requestAuth.user.id, req.params.id);
+    const strategyDb = createUserScopedSupabase(requestAuth.accessToken);
+    const existing = await getOwnedStrategy(
+      requestAuth.user.id,
+      req.params.id,
+      strategyDb
+    );
 
     if (!existing) {
       return res.status(404).json({
@@ -3280,7 +3322,7 @@ app.put("/strategies/:id", async (req, res) => {
     const payload = sanitizeStrategyPayload(req.body);
     const rules = sanitizeStrategyRules(req.body?.rules);
 
-    const updated = await supabaseAdmin
+    const updated = await strategyDb
       .from("user_strategies")
       .update({
         ...payload,
@@ -3294,7 +3336,7 @@ app.put("/strategies/:id", async (req, res) => {
     if (updated.error) throw updated.error;
 
     if (Array.isArray(req.body?.rules)) {
-      const deleted = await supabaseAdmin
+      const deleted = await strategyDb
         .from("strategy_rules")
         .delete()
         .eq("strategy_id", existing.id)
@@ -3303,7 +3345,7 @@ app.put("/strategies/:id", async (req, res) => {
       if (deleted.error) throw deleted.error;
 
       if (rules.length) {
-        const insertedRules = await supabaseAdmin
+        const insertedRules = await strategyDb
           .from("strategy_rules")
           .insert(rules.map((rule) => ({
             ...rule,
@@ -3315,7 +3357,11 @@ app.put("/strategies/:id", async (req, res) => {
       }
     }
 
-    const strategy = await getOwnedStrategy(requestAuth.user.id, existing.id);
+    const strategy = await getOwnedStrategy(
+      requestAuth.user.id,
+      existing.id,
+      strategyDb
+    );
     return res.json({ success: true, strategy });
   } catch (error) {
     const duplicate = error?.code === "23505";
@@ -3330,7 +3376,12 @@ app.put("/strategies/:id", async (req, res) => {
 app.delete("/strategies/:id", async (req, res) => {
   try {
     const requestAuth = await getRequestUser(req);
-    const strategy = await getOwnedStrategy(requestAuth.user.id, req.params.id);
+    const strategyDb = createUserScopedSupabase(requestAuth.accessToken);
+    const strategy = await getOwnedStrategy(
+      requestAuth.user.id,
+      req.params.id,
+      strategyDb
+    );
 
     if (!strategy) {
       return res.status(404).json({
@@ -3340,7 +3391,7 @@ app.delete("/strategies/:id", async (req, res) => {
       });
     }
 
-    const archived = await supabaseAdmin
+    const archived = await strategyDb
       .from("user_strategies")
       .update({ is_active: false, is_archived: true })
       .eq("id", strategy.id)
