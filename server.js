@@ -2047,7 +2047,27 @@ function buildCsaFrameworkSummaryForVision(marketReference = {}) {
 }
 
 function visualFallback(reason) {
-  return { ok: false, frameworkMatch: "not reviewed", visualChartStyle: "not reviewed", csaLevelVisibility: "not reviewed", chartSpecificStrengths: [], chartSpecificWeaknesses: [reason], simpleMistakeHub: [], setupQualityScore: null, entryAccuracyScore: null, riskManagementScore: null, visualSummary: reason, chartMarkupAssessment: "", entryEvidence: "", riskEvidence: "", raw: "" };
+  return {
+    ok: false,
+    frameworkMatch: "not reviewed",
+    visualChartStyle: "not reviewed",
+    csaLevelVisibility: "not reviewed",
+    chartMarkingStatus: "unclear",
+    visibleMarkedLevels: [],
+    csaSimilarities: [],
+    csaDifferences: [],
+    chartSpecificStrengths: [],
+    chartSpecificWeaknesses: [reason],
+    simpleMistakeHub: [],
+    setupQualityScore: null,
+    entryAccuracyScore: null,
+    riskManagementScore: null,
+    visualSummary: reason,
+    chartMarkupAssessment: "",
+    entryEvidence: "",
+    riskEvidence: "",
+    raw: "",
+  };
 }
 
 function isBadVisualReview(parsed) {
@@ -2077,7 +2097,23 @@ You are CSA Coach's beginner-friendly trade review assistant.
 Return ONLY valid JSON. Do not use markdown.
 
 Your job:
-- Review the uploaded chart using the internal support/resistance framework below.
+- FIRST classify the uploaded chart as MARKED, UNMARKED, or UNCLEAR before giving any feedback.
+- Then review the uploaded chart using the internal support/resistance framework below.
+- The main purpose is to compare what is visibly marked on the uploaded chart with the internal support/resistance areas and identify similarities and differences.
+
+STRICT MARKED/UNMARKED RULE:
+- MARKED means the uploaded image clearly contains user-drawn support/resistance evidence such as horizontal lines, rectangles, shaded zones, or labels that identify trading levels.
+- UNMARKED means there is no clear user-drawn support/resistance evidence.
+- Do NOT treat grid lines, current-price lines, bid/ask lines, order lines, crosshair lines, chart borders, session separators, or AI/backend-calculated levels as user-marked support/resistance.
+- Before claiming that support or resistance is visible, describe the exact visible object that proves it.
+- If no such object can be identified, the chart MUST be classified as UNMARKED.
+- For an UNMARKED chart, explicitly say: "There is no visible evidence of user-marked support or resistance on this chart."
+- After that, explain the important areas calculated by the internal framework using simple wording such as: "However, the main areas to watch are support around X and resistance around Y."
+- Never list "support and resistance are clearly marked" as a strength on an unmarked chart.
+- For a MARKED chart, compare the visible user-marked areas with the internal areas:
+  - Similarities: where the user's marked area matches or closely overlaps the internal area.
+  - Differences: missing areas, inaccurate placement, levels that do not align, or key framework areas not marked.
+- If the chart is unclear, do not guess. Use UNCLEAR and state what cannot be verified.
 - The user is likely a beginner. Use very simple trading language.
 - The backend can use the internal method, but user-facing fields must NOT say "CSA", "framework", "daily high/low logic", "supply/demand classification", or other internal method words.
 - Do not mention trendlines, channels, Fibonacci, indicators, or moving averages. They are outside this review. Ignore them unless they hide price.
@@ -2125,8 +2161,18 @@ Initial image validation:
 Return exactly this JSON shape:
 {
   "frameworkMatch": "strong | partial | weak | not enough evidence",
-  "visualChartStyle": "clear support/resistance | clean price action | marked chart | unclear",
+  "visualChartStyle": "clear support/resistance | clean price action | marked chart | unmarked chart | unclear",
   "csaLevelVisibility": "clear | partial | not marked | unclear",
+  "chartMarkingStatus": "marked | unmarked | unclear",
+  "visibleMarkedLevels": [
+    {
+      "type": "support | resistance | zone | label",
+      "description": "exact visible object proving the chart is marked",
+      "approximatePrice": "price or null"
+    }
+  ],
+  "csaSimilarities": ["simple similarity between visible chart markings and internal areas"],
+  "csaDifferences": ["simple difference, missing area, or mismatch"],
   "shortTermDirection": "bullish | bearish | range-bound | range-bound with bullish pressure | range-bound with bearish pressure | unclear",
   "quickVerdict": "one very simple sentence saying wait, avoid chasing, or setup looks acceptable",
   "plainMarketDirection": "one simple sentence combining bigger-picture direction and ${timeframe} chart direction",
@@ -2164,7 +2210,7 @@ Return exactly this JSON shape:
           { type: "input_image", image_url: `data:${mimeType};base64,${imageBase64}` },
         ]},
       ],
-      max_output_tokens: 1300,
+      max_output_tokens: 1500,
     });
 
     const parsed = extractJsonObject(response.output_text || "");
@@ -2175,6 +2221,18 @@ Return exactly this JSON shape:
       frameworkMatch: parsed.frameworkMatch || "not enough evidence",
       visualChartStyle: parsed.visualChartStyle || "unclear",
       csaLevelVisibility: parsed.csaLevelVisibility || "unclear",
+      chartMarkingStatus: ["marked", "unmarked", "unclear"].includes(
+        String(parsed.chartMarkingStatus || "").toLowerCase()
+      )
+        ? String(parsed.chartMarkingStatus).toLowerCase()
+        : String(parsed.csaLevelVisibility || "").toLowerCase() === "not marked"
+        ? "unmarked"
+        : "unclear",
+      visibleMarkedLevels: Array.isArray(parsed.visibleMarkedLevels)
+        ? parsed.visibleMarkedLevels.slice(0, 12)
+        : [],
+      csaSimilarities: normalizeArrayOfStrings(parsed.csaSimilarities, []).slice(0, 8),
+      csaDifferences: normalizeArrayOfStrings(parsed.csaDifferences, []).slice(0, 8),
       shortTermDirection: parsed.shortTermDirection || "unclear",
       quickVerdict: String(parsed.quickVerdict || "").trim(),
       plainMarketDirection: String(parsed.plainMarketDirection || "").trim(),
@@ -2229,6 +2287,46 @@ function shouldUseVisualScore(score, marketOk) {
 }
 
 
+function getChartMarkingStatus(visualReview = null) {
+  const explicit = String(visualReview?.chartMarkingStatus || "").toLowerCase();
+  if (["marked", "unmarked", "unclear"].includes(explicit)) return explicit;
+
+  const visibility = String(visualReview?.csaLevelVisibility || "").toLowerCase();
+  const style = String(visualReview?.visualChartStyle || "").toLowerCase();
+
+  if (visibility === "not marked" || style.includes("unmarked")) return "unmarked";
+  if (
+    ["clear", "partial"].includes(visibility) ||
+    style.includes("marked chart") ||
+    style.includes("clear support")
+  ) {
+    return "marked";
+  }
+  return "unclear";
+}
+
+function isUnsupportedMarkedLevelClaim(text = "") {
+  const value = String(text || "").toLowerCase();
+  return (
+    /support.*(marked|drawn|visible|shown|clear)/i.test(value) ||
+    /resistance.*(marked|drawn|visible|shown|clear)/i.test(value) ||
+    /(marked|drawn|visible|shown|clear).*(support|resistance|level|zone)/i.test(value)
+  );
+}
+
+function removeDuplicateFeedback(items = []) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const normalized = String(item || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+    if (!normalized || seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
+  });
+}
+
 function buildDashboardFeedback({ marketReference, chartDetection, visualReview = null, submittedInstrument, timeframe, selectedDateText, detectedDateText, setupScore = 0 }) {
   const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
   const levels = marketReference?.dailyLevels || [];
@@ -2258,10 +2356,77 @@ function buildDashboardFeedback({ marketReference, chartDetection, visualReview 
   failedAreas.forEach((area) => frameworkWeaknesses.push(area.explanation));
   if (mixedBias) frameworkWeaknesses.push("The bigger-picture view is not a clean trend, so middle-of-range trades need caution.");
 
-  const visualStrengths = visualOk ? normalizeArrayOfStrings(visualReview.chartSpecificStrengths, []) : [];
-  const visualWeaknesses = visualOk ? normalizeArrayOfStrings(visualReview.chartSpecificWeaknesses, []) : [];
-  const strengths = [...visualStrengths, ...frameworkStrengths].filter(Boolean);
-  const weaknesses = [...visualWeaknesses, ...frameworkWeaknesses].filter(Boolean);
+  const chartMarkingStatus = getChartMarkingStatus(visualReview);
+
+  let visualStrengths = visualOk
+    ? normalizeArrayOfStrings(visualReview.chartSpecificStrengths, [])
+    : [];
+  let visualWeaknesses = visualOk
+    ? normalizeArrayOfStrings(visualReview.chartSpecificWeaknesses, [])
+    : [];
+
+  if (chartMarkingStatus === "unmarked") {
+    // Remove any hallucinated claim that support/resistance was visibly marked.
+    visualStrengths = visualStrengths.filter(
+      (item) => !isUnsupportedMarkedLevelClaim(item)
+    );
+
+    visualWeaknesses.unshift(
+      "There is no visible evidence of user-marked support or resistance on this chart."
+    );
+
+    const calculatedAreas = Array.isArray(marketReference?.csaAreas)
+      ? marketReference.csaAreas
+      : [];
+    const supportArea = calculatedAreas.find((area) =>
+      ["support", "demand"].includes(String(area?.type || "").toLowerCase())
+    );
+    const resistanceArea = calculatedAreas.find((area) =>
+      ["resistance", "supply"].includes(String(area?.type || "").toLowerCase())
+    );
+
+    if (supportArea || resistanceArea) {
+      visualWeaknesses.push(
+        `However, the framework areas to watch are ${
+          supportArea
+            ? `support around ${supportArea.priceText || formatPrice(supportArea.price)}`
+            : "support not available"
+        } and ${
+          resistanceArea
+            ? `resistance around ${resistanceArea.priceText || formatPrice(resistanceArea.price)}`
+            : "resistance not available"
+        }.`
+      );
+    }
+  }
+
+  if (chartMarkingStatus === "marked") {
+    const similarities = normalizeArrayOfStrings(
+      visualReview?.csaSimilarities,
+      []
+    );
+    const differences = normalizeArrayOfStrings(
+      visualReview?.csaDifferences,
+      []
+    );
+
+    similarities.forEach((item) =>
+      visualStrengths.push(`Framework similarity: ${item}`)
+    );
+    differences.forEach((item) =>
+      visualWeaknesses.push(`Framework difference: ${item}`)
+    );
+  }
+
+  const strengths = removeDuplicateFeedback([
+    ...visualStrengths,
+    ...frameworkStrengths,
+  ]).filter(Boolean);
+
+  const weaknesses = removeDuplicateFeedback([
+    ...visualWeaknesses,
+    ...frameworkWeaknesses,
+  ]).filter(Boolean);
 
   const baseSetupQualityScore = clampScore((setupScore || 0) * 10 - failedAreas.length * 8 - (mixedBias ? 8 : 0) + (marketOk ? 5 : -20));
   const baseEntryAccuracyScore = clampScore(65 + (hasConfirmedTrigger ? 15 : -10) - failedAreas.length * 10 - (mixedBias ? 5 : 0));
@@ -2296,6 +2461,10 @@ function buildDashboardFeedback({ marketReference, chartDetection, visualReview 
     visualFrameworkMatch: visualReview?.frameworkMatch || "Not reviewed",
     visualChartStyle: visualReview?.visualChartStyle || "Not reviewed",
     csaLevelVisibility: visualReview?.csaLevelVisibility || "Not reviewed",
+    chartMarkingStatus,
+    visibleMarkedLevels: visualReview?.visibleMarkedLevels || [],
+    csaSimilarities: visualReview?.csaSimilarities || [],
+    csaDifferences: visualReview?.csaDifferences || [],
     chartContextScore: 100,
     chartContextLabel: "Verified",
     chartContextSummary: "Selected pair and timeframe matched the uploaded chart before analysis continued.",
@@ -2815,6 +2984,40 @@ function buildEntryConfirmationText({ trendPlan = {}, chartDetection = null, vis
   return "No clear entry confirmation is visible yet. Wait for price to reach a clear support or resistance area first.";
 }
 
+function buildChartMarkingComparisonText({
+  visualReview,
+  trendPlan,
+}) {
+  const markingStatus = getChartMarkingStatus(visualReview);
+
+  if (markingStatus === "marked") {
+    const similarities = normalizeArrayOfStrings(
+      visualReview?.csaSimilarities,
+      []
+    ).slice(0, 2);
+    const differences = normalizeArrayOfStrings(
+      visualReview?.csaDifferences,
+      []
+    ).slice(0, 2);
+
+    const similarityText = similarities.length
+      ? `Similarities: ${similarities.join(" ")}`
+      : "No clear similarity with the framework areas was confirmed.";
+
+    const differenceText = differences.length
+      ? `Differences: ${differences.join(" ")}`
+      : "No major difference was confirmed from the visible markings.";
+
+    return `Marked chart. ${similarityText} ${differenceText}`;
+  }
+
+  if (markingStatus === "unmarked") {
+    return `Unmarked chart. There is no visible evidence of user-marked support or resistance on this chart. However, the framework areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}.`;
+  }
+
+  return `Chart markings are unclear. User-marked support and resistance could not be verified. The framework areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}.`;
+}
+
 function buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, visualReview = null, submittedInstrument, normalizedSymbol, timeframe }) {
   const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
 
@@ -2857,24 +3060,17 @@ Overall Setup Score:
     : `The bigger picture is ${String(bias.bias || "").toLowerCase()}. The ${timeframe} chart direction is not clear enough to judge.`;
 
   const quickVerdict = trendPlan.quickVerdict;
-
-  const whatThisMeans = trendPlan.whatThisMeans;
-
   const bestAreaToWatch = trendPlan.bestAreaToWatch;
-
   const entryConfirmation = buildEntryConfirmationText({
     trendPlan,
     chartDetection,
     visualReview,
   });
-
-  // Failed support/resistance areas are structure information, not the main warning.
-  // The main warning should focus on the mistake to avoid, such as chasing price
-  // after a big move, selling too close to support, buying too close to resistance,
-  // or entering without confirmation.
   const mainWarning = trendPlan.mainWarning;
-
-  const coachVerdict = trendPlan.coachVerdict;
+  const markingComparison = buildChartMarkingComparisonText({
+    visualReview,
+    trendPlan,
+  });
 
   const supportText = listAreas([...supportAreas, ...demandAreas], "support area", 3);
   const resistanceText = listAreas([...resistanceAreas, ...supplyAreas], "resistance area", 3);
@@ -2884,29 +3080,22 @@ Overall Setup Score:
 Quick Verdict:
 - ${quickVerdict}
 
+Chart Marking & Framework Comparison:
+- ${markingComparison}
+
 Market Direction:
 - ${directionSummary}
 
-What This Means:
-- ${whatThisMeans}
-
-Best Area To Watch:
+Key Areas & Trade Plan:
 - ${bestAreaToWatch}
+- Preferred setup: ${trendPlan.preferredTrendSetup || "Breakout, pullback, and retest."}
 
-Preferred Trend Setup:
-- ${trendPlan.preferredTrendSetup || "The preferred trend setup is breakout, pullback, and retest."}
-
-Entry Confirmation:
+Entry, Stop Loss & Target:
 - ${entryConfirmation}
-
-Stop Loss And Target:
-- ${visualReview?.riskEvidence || "No visible entry, stop loss, or target to judge. A good trade idea should show where the risk is and where the target is."}
+- ${visualReview?.riskEvidence || "No visible entry, stop loss, or target to judge."}
 
 Main Warning:
 - ${mainWarning}
-
-Coach Verdict:
-- ${coachVerdict}
 
 Overall Setup Score:
 - ${overallScore}/10
