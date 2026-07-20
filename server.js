@@ -2314,14 +2314,49 @@ function isUnsupportedMarkedLevelClaim(text = "") {
   );
 }
 
+function isDuplicateUnmarkedLevelComment(text = "") {
+  const value = String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+  if (!value) return false;
+
+  const mentionsLevels =
+    value.includes("support") ||
+    value.includes("resistance") ||
+    value.includes("level") ||
+    value.includes("zone");
+
+  const saysNotMarked =
+    value.includes("no visible evidence") ||
+    value.includes("not marked") ||
+    value.includes("no clear") ||
+    value.includes("not drawn") ||
+    value.includes("no line") ||
+    value.includes("no lines") ||
+    value.includes("missing");
+
+  return mentionsLevels && saysNotMarked;
+}
+
 function removeDuplicateFeedback(items = []) {
   const seen = new Set();
+  let hasUnmarkedLevelComment = false;
+
   return items.filter((item) => {
     const normalized = String(item || "")
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, " ")
       .trim();
+
     if (!normalized || seen.has(normalized)) return false;
+
+    if (isDuplicateUnmarkedLevelComment(item)) {
+      if (hasUnmarkedLevelComment) return false;
+      hasUnmarkedLevelComment = true;
+    }
+
     seen.add(normalized);
     return true;
   });
@@ -2369,6 +2404,12 @@ function buildDashboardFeedback({ marketReference, chartDetection, visualReview 
     // Remove any hallucinated claim that support/resistance was visibly marked.
     visualStrengths = visualStrengths.filter(
       (item) => !isUnsupportedMarkedLevelClaim(item)
+    );
+
+    // Remove repeated versions of the same "levels are not marked" weakness.
+    // Keep one consistent beginner-friendly sentence only.
+    visualWeaknesses = visualWeaknesses.filter(
+      (item) => !isDuplicateUnmarkedLevelComment(item)
     );
 
     visualWeaknesses.unshift(
