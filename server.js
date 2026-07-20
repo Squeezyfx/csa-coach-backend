@@ -886,6 +886,15 @@ function compactRawAiResponse({
 }) {
   return {
     analysis,
+    analysisFramework,
+    selectedStrategy: selectedStrategy
+      ? {
+          id: selectedStrategy.id,
+          name: selectedStrategy.strategy_name || null,
+          version: selectedStrategy.version || 1,
+        }
+      : null,
+    personalStrategySnapshot,
     chartDetection,
     visualReview,
     dateDecision,
@@ -928,6 +937,9 @@ async function saveCompletedReview({
   marketReference,
   dashboardFeedback,
   dateDecision,
+  analysisFramework = "csa",
+  selectedStrategy = null,
+  personalStrategySnapshot = null,
 }) {
   if (!user) {
     return {
@@ -980,6 +992,9 @@ async function saveCompletedReview({
       marketReference,
       dashboardFeedback,
       dateDecision,
+      analysisFramework,
+      selectedStrategy,
+      personalStrategySnapshot,
     });
 
     const reviewInsert = await supabaseAdmin
