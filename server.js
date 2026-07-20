@@ -8,7 +8,7 @@ import { createClient } from "@supabase/supabase-js";
 const app = express();
 app.use(cors({
   origin: true,
-  methods: ["GET", "POST", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
 
@@ -375,26 +375,39 @@ function sanitizeStrategyRules(value) {
 async function getOwnedStrategy(userId, strategyId) {
   if (!strategyId) return null;
 
-  const result = await supabaseAdmin
+  const strategyResult = await supabaseAdmin
     .from("user_strategies")
-    .select(`
-      *,
-      strategy_rules (
-        id,
-        rule_category,
-        rule_text,
-        importance,
-        display_order,
-        is_active
-      )
-    `)
+    .select("*")
     .eq("id", strategyId)
     .eq("user_id", userId)
     .eq("is_archived", false)
     .maybeSingle();
 
-  if (result.error) throw result.error;
-  return result.data || null;
+  if (strategyResult.error) throw strategyResult.error;
+  if (!strategyResult.data) return null;
+
+  const rulesResult = await supabaseAdmin
+    .from("strategy_rules")
+    .select(`
+      id,
+      rule_category,
+      rule_text,
+      importance,
+      display_order,
+      is_active
+    `)
+    .eq("strategy_id", strategyId)
+    .eq("user_id", userId)
+    .order("display_order", { ascending: true });
+
+  if (rulesResult.error) {
+    console.warn("Strategy rules could not be loaded:", rulesResult.error.message);
+  }
+
+  return {
+    ...strategyResult.data,
+    strategy_rules: rulesResult.error ? [] : (rulesResult.data || []),
+  };
 }
 
 async function countUserStrategies(userId) {
@@ -3203,6 +3216,8 @@ app.post("/strategies", async (req, res) => {
 
     if (inserted.error) throw inserted.error;
 
+    let rulesWarning = null;
+
     if (rules.length) {
       const rulesInsert = await supabaseAdmin
         .from("strategy_rules")
@@ -3213,8 +3228,8 @@ app.post("/strategies", async (req, res) => {
         })));
 
       if (rulesInsert.error) {
-        await supabaseAdmin.from("user_strategies").delete().eq("id", inserted.data.id);
-        throw rulesInsert.error;
+        rulesWarning = rulesInsert.error.message;
+        console.warn("Strategy saved, but structured rules were skipped:", rulesWarning);
       }
     }
 
@@ -3225,13 +3240,26 @@ app.post("/strategies", async (req, res) => {
       strategy,
       strategyCount: currentCount + 1,
       strategyLimit,
+      warning: rulesWarning,
     });
   } catch (error) {
+    console.error("Strategy creation failed:", error);
     const duplicate = error?.code === "23505";
     return res.status(duplicate ? 409 : Number(error?.statusCode) || 500).json({
       success: false,
-      error: duplicate ? "You already have a strategy with this name." : error.message,
-      errorType: duplicate ? "duplicate_strategy_name" : error.errorType || "strategy_create_failed",
+      error: duplicate
+        ? "You already have a strategy with this name."
+        : (error?.message || "The strategy could not be saved."),
+      errorType: duplicate
+        ? "duplicate_strategy_name"
+        : error?.errorType || "strategy_create_failed",
+      details: process.env.NODE_ENV === "production"
+        ? undefined
+        : {
+            code: error?.code || null,
+            hint: error?.hint || null,
+            details: error?.details || null,
+          },
     });
   }
 });
