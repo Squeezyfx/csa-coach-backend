@@ -3240,20 +3240,26 @@ app.post("/strategies", async (req, res) => {
       inconsistencies while still preventing one user from writing for another.
     */
     stage = "count_existing_strategies";
-    const currentCountResult = await supabaseAdmin
+    const currentStrategiesResult = await supabaseAdmin
       .from("user_strategies")
-      .select("id", { count: "exact", head: true })
+      .select("id")
       .eq("user_id", requestAuth.user.id)
       .eq("is_archived", false);
 
-    if (currentCountResult.error) {
-      throw new Error(
-        currentCountResult.error.message ||
+    if (currentStrategiesResult.error) {
+      const countError = new Error(
+        currentStrategiesResult.error.message ||
         "The current strategy count could not be checked."
       );
+      countError.code = currentStrategiesResult.error.code;
+      countError.details = currentStrategiesResult.error.details;
+      countError.hint = currentStrategiesResult.error.hint;
+      throw countError;
     }
 
-    const currentCount = Number(currentCountResult.count || 0);
+    const currentCount = Array.isArray(currentStrategiesResult.data)
+      ? currentStrategiesResult.data.length
+      : 0;
 
     if (currentCount >= strategyLimit) {
       return res.status(403).json({
