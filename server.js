@@ -2629,6 +2629,8 @@ function buildDashboardFeedback({
       detectedInstrument: chartDetection?.detectedInstrument || null,
       detectedTimeframe: chartDetection?.detectedTimeframe || null,
       detectedDate: detectedDateText || null,
+      detectedLatestVisibleDate:
+        detectedDateText || chartDetection?.latestVisibleDate || null,
       chartMarkingStatus,
       csaLevelVisibility:
         visualReview?.csaLevelVisibility || "Not reviewed",
@@ -2636,8 +2638,40 @@ function buildDashboardFeedback({
       csaSimilarities: visualReview?.csaSimilarities || [],
       csaDifferences: visualReview?.csaDifferences || [],
       chartContextScore: 100,
-      status: "Chart verified",
+      chartContextLabel: "Verified",
+      chartContextSummary:
+        "The selected instrument and timeframe were checked against the uploaded chart.",
+      status: "Reviewed",
     },
+
+    // Backward-compatible fields used by the response builder and dashboard.
+    chartContextCheck: {
+      selectedInstrument: submittedInstrument,
+      selectedTimeframe: timeframe,
+      selectedDate: selectedDateText,
+      detectedInstrument: chartDetection?.detectedInstrument || null,
+      detectedTimeframe: chartDetection?.detectedTimeframe || null,
+      detectedDate: detectedDateText || null,
+      detectedLatestVisibleDate:
+        detectedDateText || chartDetection?.latestVisibleDate || null,
+      chartMarkingStatus,
+      csaLevelVisibility:
+        visualReview?.csaLevelVisibility || "Not reviewed",
+      visibleMarkedLevels: visualReview?.visibleMarkedLevels || [],
+      csaSimilarities: visualReview?.csaSimilarities || [],
+      csaDifferences: visualReview?.csaDifferences || [],
+      chartContextScore: 100,
+      chartContextLabel: "Verified",
+      chartContextSummary:
+        "The selected instrument and timeframe were checked against the uploaded chart.",
+      status: "Reviewed",
+    },
+    scores: {
+      setupQuality: setupQualityScore,
+      entryAccuracy: entryAccuracyScore,
+      riskManagement: riskManagementScore,
+    },
+    failedAreas: [],
   };
 }
 
