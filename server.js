@@ -2134,9 +2134,21 @@ STRICT MARKED/UNMARKED RULE:
 - CSA is mainly a trend-trading strategy. If there is no clean trend yet, do not force a buy or sell. Give both sides: buy at support if it holds, or sell at resistance if it rejects.
 - Never write incomplete advice like "wait for price to drop back" without saying the exact support/resistance area and price.
 - Keep all user-facing answers short, plain, and useful.
+- Return no more than 4 major strengths and no more than 4 major weaknesses.
+- Each comment must contain one separate point only.
+- Do not repeat the same idea using different wording.
+- "No clear entry confirmation" means no valid entry trigger is visible.
+- "Stop loss and target are not shown" is a separate risk-management issue.
+- Do not write "no visible entry, stop loss, or target" as one combined weakness.
+- A sideways, mixed, or unclear trend is market context, not automatically a weakness.
+- Only call a middle-of-range entry a weakness when a visible or user-described entry was actually taken there.
+- Internal level events such as "Monday resistance failed" or "Tuesday support broke" are market facts, not weaknesses.
+- Framework support and resistance prices are guidance, not weaknesses.
+- Use simple wording that a completely new trader can understand.
+- Use the same wording for the same visible condition each time.
 - Two different-looking charts must receive different strengths, weaknesses, mistake hub items, scores, and short-term chart direction.
 - Do not invent entries, stop loss, targets, or mistakes if they are not visible.
-- If no entry/SL/TP is visible, say "No visible entry, stop loss, or target to judge."
+- If stop loss or target is not visible, say "Stop loss and target are not shown, so the trade risk cannot be judged."
 - If the bigger-picture view and uploaded chart timeframe disagree, state both clearly.
   Example: "The bigger picture is slightly bearish, but the ${timeframe} chart is pushing up short-term."
 - Do not give financial advice or guaranteed predictions. This is only chart feedback.
@@ -2182,7 +2194,7 @@ Return exactly this JSON shape:
   "visualSummary": "2 short beginner-friendly sentences. Mention bigger-picture direction and uploaded timeframe direction if different.",
   "chartMarkupAssessment": "simple comment about whether the important support/resistance areas are clear; do not mention trendlines/channels/indicators",
   "entryEvidence": "what entry evidence is visible, or 'No visible entry evidence'",
-  "riskEvidence": "what SL/TP/risk evidence is visible, or 'No visible entry, stop loss, or target to judge'",
+  "riskEvidence": "what stop-loss, target, or risk evidence is visible, or 'Stop loss and target are not shown, so the trade risk cannot be judged.'",
   "mainWarning": "one simple warning the trader should remember",
   "coachVerdict": "one short final verdict in beginner language",
   "chartSpecificStrengths": ["simple strength visible on this chart"],
@@ -2314,553 +2326,319 @@ function isUnsupportedMarkedLevelClaim(text = "") {
   );
 }
 
-function isDuplicateUnmarkedLevelComment(text = "") {
-  const value = String(text || "")
+function normalizeFeedbackText(text = "") {
+  return String(text || "")
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^a-z0-9.]+/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
+}
 
+function feedbackCategory(text = "") {
+  const value = normalizeFeedbackText(text);
+
+  if (
+    /(no visible evidence|not marked|not drawn|no clear).*(support|resistance|level|zone)/.test(value) ||
+    /(support|resistance|level|zone).*(not marked|not drawn|no clear|missing)/.test(value)
+  ) return "levels_not_marked";
+
+  if (
+    /(no clear|not detected|missing).*(confirmation|trigger)/.test(value) ||
+    /(confirmation|trigger).*(not clear|not visible|missing)/.test(value)
+  ) return "entry_confirmation_missing";
+
+  if (
+    /(no visible|missing|not shown|cannot judge).*(stop loss|target|take profit|risk)/.test(value) ||
+    /(stop loss|target|take profit|risk).*(not visible|missing|not shown|cannot be judged)/.test(value)
+  ) return "risk_plan_missing";
+
+  if (
+    value.includes("entered in the middle of the range") ||
+    value.includes("entry was taken in the middle of the range") ||
+    value.includes("trade was taken in the middle of the range")
+  ) return "middle_range_entry";
+
+  if (
+    value.includes("chart") &&
+    (value.includes("unclear") || value.includes("too small") || value.includes("not readable"))
+  ) return "chart_quality";
+
+  return "";
+}
+
+function isFrameworkGuidanceNotWeakness(text = "") {
+  const value = normalizeFeedbackText(text);
+  return (
+    value.startsWith("however the framework areas") ||
+    value.includes("framework areas to watch") ||
+    value.includes("areas to watch are support") ||
+    value.includes("main areas to watch are support")
+  );
+}
+
+function isMarketStructureFactNotWeakness(text = "") {
+  const value = normalizeFeedbackText(text);
+  const mentionsPeriod =
+    /\b(monday|tuesday|wednesday|thursday|friday|week|month|quarter)\b/.test(value);
+  const describesLevelEvent =
+    value.includes("resistance failed") ||
+    value.includes("support failed") ||
+    value.includes("price later closed above") ||
+    value.includes("price later closed below") ||
+    value.includes("broke resistance") ||
+    value.includes("broke support") ||
+    value.includes("converted to support") ||
+    value.includes("converted to resistance");
+  return mentionsPeriod && describesLevelEvent;
+}
+
+function isActualWeakness(text = "") {
+  const value = normalizeFeedbackText(text);
   if (!value) return false;
+  if (isFrameworkGuidanceNotWeakness(value)) return false;
+  if (isMarketStructureFactNotWeakness(value)) return false;
+  if (feedbackCategory(value)) return true;
 
-  const mentionsLevels =
-    value.includes("support") ||
-    value.includes("resistance") ||
-    value.includes("level") ||
-    value.includes("zone");
-
-  const saysNotMarked =
-    value.includes("no visible evidence") ||
-    value.includes("not marked") ||
-    value.includes("no clear") ||
-    value.includes("not drawn") ||
-    value.includes("no line") ||
-    value.includes("no lines") ||
-    value.includes("missing");
-
-  return mentionsLevels && saysNotMarked;
+  return (
+    value.includes("chasing") ||
+    value.includes("too close to support") ||
+    value.includes("too close to resistance") ||
+    value.includes("poor risk") ||
+    value.includes("risk is too") ||
+    value.includes("entry is late") ||
+    value.includes("setup is unclear") ||
+    value.includes("trade plan is unclear") ||
+    value.includes("against the bigger picture") ||
+    value.includes("does not match")
+  );
 }
 
-function removeDuplicateFeedback(items = []) {
-  const seen = new Set();
-  let hasUnmarkedLevelComment = false;
+function simpleBeginnerFeedback(text = "") {
+  let value = String(text || "").trim();
+  if (!value) return "";
 
-  return items.filter((item) => {
-    const normalized = String(item || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, " ")
-      .trim();
+  value = value
+    .replace(/\bconfluence\b/gi, "supporting evidence")
+    .replace(/\binvalidation\b/gi, "the point where the setup is no longer valid")
+    .replace(/\bdirectional bias\b/gi, "market direction")
+    .replace(/\bmarket structure\b/gi, "price movement")
+    .replace(/\brisk-to-reward\b/gi, "risk compared with possible reward");
 
-    if (!normalized || seen.has(normalized)) return false;
-
-    if (isDuplicateUnmarkedLevelComment(item)) {
-      if (hasUnmarkedLevelComment) return false;
-      hasUnmarkedLevelComment = true;
-    }
-
-    seen.add(normalized);
-    return true;
-  });
+  const sentences = value.match(/[^.!?]+[.!?]?/g) || [value];
+  return sentences.slice(0, 2).join(" ").trim();
 }
 
-function buildDashboardFeedback({ marketReference, chartDetection, visualReview = null, submittedInstrument, timeframe, selectedDateText, detectedDateText, setupScore = 0 }) {
-  const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
-  const levels = marketReference?.dailyLevels || [];
-  const areas = marketReference?.csaAreas || [];
-  const bias = marketReference?.directionalBias || calculateCsaDirectionalBias([], marketReference?.symbol || submittedInstrument, profile);
-  const symbol = marketReference?.symbol || submittedInstrument;
-  const { resistanceAreas, supportAreas, supplyAreas, demandAreas } = splitAreas(areas);
-  const failedAreas = buildFailedAreas({ supportAreas, resistanceAreas, supplyAreas, demandAreas, levels, symbol });
-  const hasConfirmedTrigger = Boolean(chartDetection?.visibleTrigger);
-  const rejectedContext = chartDetection?.rejectedTriggerContext || null;
-  const mixedBias = String(bias?.biasCode || "").toLowerCase().includes("range") || String(bias?.bias || "").toLowerCase().includes("range");
+function removeDuplicateFeedback(items = [], limit = 4) {
+  const seenExact = new Set();
+  const seenCategories = new Set();
+  const result = [];
+
+  for (const originalItem of items) {
+    const item = simpleBeginnerFeedback(originalItem);
+    const normalized = normalizeFeedbackText(item);
+    if (!normalized || seenExact.has(normalized)) continue;
+
+    const category = feedbackCategory(item);
+    if (category && seenCategories.has(category)) continue;
+
+    seenExact.add(normalized);
+    if (category) seenCategories.add(category);
+    result.push(item);
+
+    if (result.length >= limit) break;
+  }
+
+  return result;
+}
+
+function buildDashboardFeedback({
+  marketReference,
+  chartDetection,
+  visualReview = null,
+  submittedInstrument,
+  timeframe,
+  selectedDateText,
+  detectedDateText,
+  setupScore = 0,
+}) {
+  const profile =
+    marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
+  const bias =
+    marketReference?.directionalBias ||
+    calculateCsaDirectionalBias(
+      [],
+      marketReference?.symbol || submittedInstrument,
+      profile
+    );
+
   const marketOk = Boolean(marketReference?.ok);
   const visualOk = Boolean(visualReview?.ok);
+  const hasConfirmedTrigger = Boolean(chartDetection?.visibleTrigger);
+  const chartMarkingStatus = getChartMarkingStatus(visualReview);
 
   const frameworkStrengths = [];
   const frameworkWeaknesses = [];
 
-  if (marketOk) {
-    frameworkStrengths.push(`Bigger-picture direction checked using the main highs, lows, and closes.`);
-    frameworkStrengths.push(`Main view: ${bias.bias}.`);
-  } else {
-    frameworkWeaknesses.push(marketReference?.error || "Market data unavailable.");
+  if (chartDetection?.hasUsablePriceData) {
+    frameworkStrengths.push(
+      "The chart is clear enough to review the recent price movement."
+    );
   }
 
-  if (chartDetection?.hasUsablePriceData) frameworkStrengths.push("Uploaded chart has enough visible price action to review.");
-  if (!hasConfirmedTrigger) frameworkWeaknesses.push("No clear entry confirmation was detected on the uploaded chart.");
-  failedAreas.forEach((area) => frameworkWeaknesses.push(area.explanation));
-  if (mixedBias) frameworkWeaknesses.push("The bigger-picture view is not a clean trend, so middle-of-range trades need caution.");
+  if (
+    isDetectedInstrumentUsable(chartDetection?.detectedInstrument) &&
+    isDetectedTimeframeUsable(chartDetection?.detectedTimeframe)
+  ) {
+    frameworkStrengths.push(
+      "The instrument and timeframe are visible and match the selected chart details."
+    );
+  }
 
-  const chartMarkingStatus = getChartMarkingStatus(visualReview);
+  if (marketOk) {
+    frameworkStrengths.push(
+      `The bigger-picture market direction was checked. Current view: ${bias.bias}.`
+    );
+  }
+
+  if (!hasConfirmedTrigger) {
+    frameworkWeaknesses.push(
+      "No clear entry confirmation is visible on the chart."
+    );
+  }
+
+  const riskEvidence = String(visualReview?.riskEvidence || "").trim();
+  const riskEvidenceLower = riskEvidence.toLowerCase();
+  const hasVisibleRiskPlan =
+    riskEvidence &&
+    !riskEvidenceLower.includes("not shown") &&
+    !riskEvidenceLower.includes("not visible") &&
+    !riskEvidenceLower.includes("cannot be judged") &&
+    !riskEvidenceLower.includes("no visible");
+
+  if (!hasVisibleRiskPlan) {
+    frameworkWeaknesses.push(
+      "Stop loss and target are not shown, so the trade risk cannot be judged."
+    );
+  }
 
   let visualStrengths = visualOk
     ? normalizeArrayOfStrings(visualReview.chartSpecificStrengths, [])
     : [];
+
   let visualWeaknesses = visualOk
     ? normalizeArrayOfStrings(visualReview.chartSpecificWeaknesses, [])
     : [];
 
   if (chartMarkingStatus === "unmarked") {
-    // Remove any hallucinated claim that support/resistance was visibly marked.
     visualStrengths = visualStrengths.filter(
       (item) => !isUnsupportedMarkedLevelClaim(item)
     );
 
-    // Remove repeated versions of the same "levels are not marked" weakness.
-    // Keep one consistent beginner-friendly sentence only.
     visualWeaknesses = visualWeaknesses.filter(
-      (item) => !isDuplicateUnmarkedLevelComment(item)
+      (item) => feedbackCategory(item) !== "levels_not_marked"
     );
 
     visualWeaknesses.unshift(
       "There is no visible evidence of user-marked support or resistance on this chart."
     );
-
-    const calculatedAreas = Array.isArray(marketReference?.csaAreas)
-      ? marketReference.csaAreas
-      : [];
-    const supportArea = calculatedAreas.find((area) =>
-      ["support", "demand"].includes(String(area?.type || "").toLowerCase())
-    );
-    const resistanceArea = calculatedAreas.find((area) =>
-      ["resistance", "supply"].includes(String(area?.type || "").toLowerCase())
-    );
-
-    if (supportArea || resistanceArea) {
-      visualWeaknesses.push(
-        `However, the framework areas to watch are ${
-          supportArea
-            ? `support around ${supportArea.priceText || formatPrice(supportArea.price)}`
-            : "support not available"
-        } and ${
-          resistanceArea
-            ? `resistance around ${resistanceArea.priceText || formatPrice(resistanceArea.price)}`
-            : "resistance not available"
-        }.`
-      );
-    }
   }
 
   if (chartMarkingStatus === "marked") {
-    const similarities = normalizeArrayOfStrings(
-      visualReview?.csaSimilarities,
-      []
-    );
-    const differences = normalizeArrayOfStrings(
-      visualReview?.csaDifferences,
-      []
-    );
+    normalizeArrayOfStrings(visualReview?.csaSimilarities, [])
+      .slice(0, 2)
+      .forEach((item) =>
+        visualStrengths.push(`Framework similarity: ${item}`)
+      );
 
-    similarities.forEach((item) =>
-      visualStrengths.push(`Framework similarity: ${item}`)
-    );
-    differences.forEach((item) =>
-      visualWeaknesses.push(`Framework difference: ${item}`)
-    );
+    normalizeArrayOfStrings(visualReview?.csaDifferences, [])
+      .slice(0, 2)
+      .forEach((item) =>
+        visualWeaknesses.push(`Framework difference: ${item}`)
+      );
   }
 
-  const strengths = removeDuplicateFeedback([
-    ...visualStrengths,
-    ...frameworkStrengths,
-  ]).filter(Boolean);
+  const strengths = removeDuplicateFeedback(
+    [...frameworkStrengths, ...visualStrengths],
+    4
+  );
 
-  const weaknesses = removeDuplicateFeedback([
-    ...visualWeaknesses,
-    ...frameworkWeaknesses,
-  ]).filter(Boolean);
+  const weaknesses = removeDuplicateFeedback(
+    [
+      ...visualWeaknesses.filter(isActualWeakness),
+      ...frameworkWeaknesses.filter(isActualWeakness),
+    ],
+    4
+  );
 
-  const baseSetupQualityScore = clampScore((setupScore || 0) * 10 - failedAreas.length * 8 - (mixedBias ? 8 : 0) + (marketOk ? 5 : -20));
-  const baseEntryAccuracyScore = clampScore(65 + (hasConfirmedTrigger ? 15 : -10) - failedAreas.length * 10 - (mixedBias ? 5 : 0));
-  const baseRiskManagementScore = clampScore(70 - failedAreas.length * 8 - (mixedBias ? 5 : 0));
+  const setupQualityScore = clampScore(
+    Number.isFinite(Number(visualReview?.setupQualityScore))
+      ? visualReview.setupQualityScore
+      : setupScore
+  );
 
-  const setupQualityScore = visualOk && shouldUseVisualScore(visualReview.setupQualityScore, marketOk) ? clampScore(visualReview.setupQualityScore) : baseSetupQualityScore;
-  const entryAccuracyScore = visualOk && shouldUseVisualScore(visualReview.entryAccuracyScore, marketOk) ? clampScore(visualReview.entryAccuracyScore) : baseEntryAccuracyScore;
-  const riskManagementScore = visualOk && shouldUseVisualScore(visualReview.riskManagementScore, marketOk) ? clampScore(visualReview.riskManagementScore) : baseRiskManagementScore;
+  const entryAccuracyScore = clampScore(
+    Number.isFinite(Number(visualReview?.entryAccuracyScore))
+      ? visualReview.entryAccuracyScore
+      : hasConfirmedTrigger
+      ? 60
+      : 30
+  );
 
-  const contextCheck = {
-    selectedInstrument: submittedInstrument || "Not provided",
-    selectedTimeframe: timeframe || "Not provided",
-    detectedInstrument: chartDetection?.detectedInstrument || "Not detected",
-    detectedTimeframe: chartDetection?.detectedTimeframe || "Not detected",
-    selectedDate: selectedDateText || "Not provided",
-    detectedLatestVisibleDate: detectedDateText || chartDetection?.latestVisibleDate || "Not detected",
-    status: marketOk ? "Reviewed" : "Review limited",
-    structureUsed:
-      profile.structureMode === "daily-in-week"
-        ? "This week's key highs, lows, and closes"
-        : profile.structureMode === "weekly-in-month"
-        ? "This month's key weekly highs and lows"
-        : profile.structureMode === "monthly-in-year"
-        ? "This year's key monthly highs and lows"
-        : "Higher-timeframe key highs and lows",
-    rangeUsed: marketReference?.weekRange ? `${marketReference.weekRange.startDate} to ${marketReference.weekRange.endDate}` : "Not available",
-    chartValidation: chartDetection?.isTradingChart ? "Valid trading chart" : "Invalid or unverified chart",
-    chartDataQuality: chartDetection?.chartDataQuality || "unclear",
-    visibleCandleCount: chartDetection?.visibleCandleCount || 0,
-    biggerPictureView: bias.bias || "Not available",
-    selectedTimeframeView: visualReview?.shortTermDirection || "Not reviewed",
-    visualFrameworkMatch: visualReview?.frameworkMatch || "Not reviewed",
-    visualChartStyle: visualReview?.visualChartStyle || "Not reviewed",
-    csaLevelVisibility: visualReview?.csaLevelVisibility || "Not reviewed",
-    chartMarkingStatus,
-    visibleMarkedLevels: visualReview?.visibleMarkedLevels || [],
-    csaSimilarities: visualReview?.csaSimilarities || [],
-    csaDifferences: visualReview?.csaDifferences || [],
-    chartContextScore: 100,
-    chartContextLabel: "Verified",
-    chartContextSummary: "Selected pair and timeframe matched the uploaded chart before analysis continued.",
-  };
-
-  const visualMistakes = visualOk ? normalizeVisualMistakeItems(visualReview.simpleMistakeHub) : [];
-  const frameworkMistakes = buildFrameworkMistakeHub({
-    failedAreas,
-    hasConfirmedTrigger,
-    rejectedContext,
-    mixedBias,
-    marketOk,
-    entryAccuracyScore: baseEntryAccuracyScore,
-    riskManagementScore: baseRiskManagementScore,
-  });
-  const aiMistakeDetectionHub = visualMistakes.length ? visualMistakes : frameworkMistakes;
-
-  const setupQuality = {
-    score: setupQualityScore,
-    label: scoreLabel(setupQualityScore),
-    summary: visualOk && visualReview.visualSummary ? visualReview.visualSummary : "Setup quality is based on the bigger-picture direction, key areas, and what is visible on the uploaded chart.",
-  };
-  const entryAccuracy = {
-    score: entryAccuracyScore,
-    label: scoreLabel(entryAccuracyScore),
-    summary: visualOk && visualReview.entryEvidence ? visualReview.entryEvidence : "Entry accuracy depends on whether there is clear confirmation around a key area.",
-  };
-  const riskManagement = {
-    score: riskManagementScore,
-    label: scoreLabel(riskManagementScore),
-    summary: visualOk && visualReview.riskEvidence ? visualReview.riskEvidence : "Risk score checks whether stop loss and target placement are visible and logical.",
-  };
+  const riskManagementScore = clampScore(
+    Number.isFinite(Number(visualReview?.riskManagementScore))
+      ? visualReview.riskManagementScore
+      : hasVisibleRiskPlan
+      ? 60
+      : 30
+  );
 
   return {
-    strengths: strengths.length ? strengths.slice(0, 7) : ["Trade review completed."],
-    weaknesses: weaknesses.length ? weaknesses.slice(0, 7) : ["No major weakness detected from the available chart information."],
-    mistakes: aiMistakeDetectionHub,
-    aiMistakeDetectionHub,
-    mistakeDetectionHub: aiMistakeDetectionHub,
-    mistakeHub: aiMistakeDetectionHub,
-    failedAreas,
-    visualReview,
-    contextCheck,
-    chartContextCheck: contextCheck,
-    setupQuality,
+    strengths,
+    weaknesses,
+    aiMistakeDetectionHub: normalizeVisualMistakeItems(
+      visualReview?.simpleMistakeHub || []
+    ).slice(0, 4),
     setupQualityScore,
-    entryAccuracy,
     entryAccuracyScore,
-    riskManagement,
     riskManagementScore,
-    scores: { setupQuality: setupQualityScore, entryAccuracy: entryAccuracyScore, riskManagement: riskManagementScore },
-    dashboard: {},
-    dashboardCards: {},
+    setupQuality: {
+      score: setupQualityScore,
+      label: scoreLabel(setupQualityScore),
+      summary:
+        visualReview?.visualSummary ||
+        "The setup was checked against the CSA framework.",
+    },
+    entryAccuracy: {
+      score: entryAccuracyScore,
+      label: scoreLabel(entryAccuracyScore),
+      summary: hasConfirmedTrigger
+        ? `Visible confirmation: ${chartDetection.visibleTrigger}.`
+        : "No clear entry confirmation is visible on the chart.",
+    },
+    riskManagement: {
+      score: riskManagementScore,
+      label: scoreLabel(riskManagementScore),
+      summary: hasVisibleRiskPlan
+        ? riskEvidence
+        : "Stop loss and target are not shown, so the trade risk cannot be judged.",
+    },
+    contextCheck: {
+      selectedInstrument: submittedInstrument,
+      selectedTimeframe: timeframe,
+      selectedDate: selectedDateText,
+      detectedInstrument: chartDetection?.detectedInstrument || null,
+      detectedTimeframe: chartDetection?.detectedTimeframe || null,
+      detectedDate: detectedDateText || null,
+      chartMarkingStatus,
+      csaLevelVisibility:
+        visualReview?.csaLevelVisibility || "Not reviewed",
+      visibleMarkedLevels: visualReview?.visibleMarkedLevels || [],
+      csaSimilarities: visualReview?.csaSimilarities || [],
+      csaDifferences: visualReview?.csaDifferences || [],
+      chartContextScore: 100,
+      status: "Chart verified",
+    },
   };
-}
-
-function buildDashboardAliases(dashboardFeedback = {}) {
-  const contextCheck = dashboardFeedback.contextCheck || dashboardFeedback.chartContextCheck || {};
-  const setupQuality = dashboardFeedback.setupQuality || { score: 0, label: "Unavailable", summary: "Setup quality was not calculated." };
-  const entryAccuracy = dashboardFeedback.entryAccuracy || { score: 0, label: "Unavailable", summary: "Entry accuracy was not calculated." };
-  const riskManagement = dashboardFeedback.riskManagement || { score: 0, label: "Unavailable", summary: "Risk management was not calculated." };
-  const strengths = Array.isArray(dashboardFeedback.strengths) && dashboardFeedback.strengths.length ? dashboardFeedback.strengths : ["CSA Coach completed the review."];
-  const weaknesses = Array.isArray(dashboardFeedback.weaknesses) && dashboardFeedback.weaknesses.length ? dashboardFeedback.weaknesses : ["No major weakness detected."];
-  const aiMistakeDetectionHub = Array.isArray(dashboardFeedback.aiMistakeDetectionHub) && dashboardFeedback.aiMistakeDetectionHub.length ? dashboardFeedback.aiMistakeDetectionHub : [makeSimpleMistake("No major mistake detected", "REVIEW")];
-  const failedAreas = Array.isArray(dashboardFeedback.failedAreas) ? dashboardFeedback.failedAreas : [];
-  return {
-    strengths, weaknesses,
-    chartContextCheck: contextCheck, contextCheck, chartContext: contextCheck, chartContextStatus: contextCheck.status || "Not available",
-    selectedContext: { instrument: contextCheck.selectedInstrument || "Not provided", timeframe: contextCheck.selectedTimeframe || "Not provided", date: contextCheck.selectedDate || "Not provided" },
-    detectedContext: { instrument: contextCheck.detectedInstrument || "Not detected", timeframe: contextCheck.detectedTimeframe || "Not detected", latestVisibleDate: contextCheck.detectedLatestVisibleDate || "Not detected" },
-    setupQuality, setupQualityScore: setupQuality.score, setupQualityLabel: setupQuality.label, setupQualitySummary: setupQuality.summary,
-    entryAccuracy, entryAccuracyScore: entryAccuracy.score, entryAccuracyLabel: entryAccuracy.label, entryAccuracySummary: entryAccuracy.summary,
-    riskManagement, riskManagementScore: riskManagement.score, riskManagementLabel: riskManagement.label, riskManagementSummary: riskManagement.summary,
-    chartContextScore: Number(contextCheck.chartContextScore ?? (contextCheck.status === "Reviewed" ? 100 : 0)), chartContextLabel: contextCheck.chartContextLabel || (contextCheck.status === "Reviewed" ? "Verified" : "Not verified"), chartContextSummary: contextCheck.chartContextSummary || "Checks whether the selected pair/timeframe matches the uploaded chart before analysis.",
-    aiMistakeDetectionHub, mistakeDetectionHub: aiMistakeDetectionHub, mistakeHub: aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub,
-    failedAreas,
-    dashboard: { strengths, weaknesses, chartContextCheck: contextCheck, contextCheck, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub, failedAreas },
-    dashboardCards: { strengths, weaknesses, chartContextCheck: contextCheck, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, failedAreas },
-  };
-}
-
-function buildSimpleStructureBreakdown(levels = [], normalizedSymbol = "") {
-  if (!levels.length) return "- No structure data available.";
-  return levels.map((period, index) => {
-    const label = period.periodLabel || period.day || period.key;
-    if (index === 0) return `${label}:\n- High ${formatPrice(period.high)} = first resistance.\n- Low ${formatPrice(period.low)} = first support.`;
-    const previous = levels[index - 1];
-    const highComparison = compareHighWithTolerance(period.high, previous.high, normalizedSymbol);
-    const lowComparison = compareLowWithTolerance(period.low, previous.low, normalizedSymbol);
-    return `${label}:\n- ${highComparison.cleanBreak ? "High broke previous high = resistance." : "High failed to break previous high = supply."}\n- ${lowComparison.cleanBreak ? "Low broke previous low = support." : "Low held/retested previous low = demand."}`;
-  }).join("\n\n");
-}
-
-
-
-function getFirstAnchorLabel(profile = getSupportedCsaTimeframeProfile("H1")) {
-  if (profile.structureMode === "daily-in-week") return "Monday";
-  if (profile.structureMode === "weekly-in-month") return "the first week";
-  if (profile.structureMode === "monthly-in-year") return "the first month";
-  if (profile.structureMode === "quarterly-in-year") return "the first quarter";
-  if (profile.structureMode === "yearly-in-multi-year") return "the first year";
-  return "the first key range";
-}
-
-function getInitialRangeAreas(levels = [], profile = getSupportedCsaTimeframeProfile("H1")) {
-  const first = Array.isArray(levels) && levels.length ? levels[0] : null;
-  const label = first?.periodLabel || first?.day || getFirstAnchorLabel(profile);
-  return {
-    label,
-    support: first && Number.isFinite(Number(first.low)) ? Number(first.low) : null,
-    resistance: first && Number.isFinite(Number(first.high)) ? Number(first.high) : null,
-  };
-}
-
-function getInitialRangeStatus(levels = [], symbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
-  const initial = getInitialRangeAreas(levels, profile);
-  const tolerance = getCleanBreakTolerance(symbol);
-  const support = Number(initial.support);
-  const resistance = Number(initial.resistance);
-
-  const status = {
-    ...initial,
-    supportText: formatPrice(support),
-    resistanceText: formatPrice(resistance),
-    hasInitialRange: Number.isFinite(support) && Number.isFinite(resistance),
-    wickAboveHigh: false,
-    wickBelowLow: false,
-    closeAboveHigh: false,
-    closeBelowLow: false,
-    isStillInsideInitialRange: false,
-    breakoutDirection: "none",
-    rangeMessage: "",
-  };
-
-  if (!status.hasInitialRange) {
-    status.rangeMessage = "The first key support/resistance range is not available.";
-    return status;
-  }
-
-  // If only the first period exists, nothing after it has broken the range yet.
-  if (!Array.isArray(levels) || levels.length < 2) {
-    status.isStillInsideInitialRange = true;
-    status.rangeMessage = `${initial.label} resistance around ${status.resistanceText} and ${initial.label} support around ${status.supportText} are the only active areas for now.`;
-    return status;
-  }
-
-  const laterLevels = levels.slice(1);
-
-  // Wicks are recorded, but a trend breakout is only accepted after a close beyond the first range.
-  // This prevents smaller internal levels from replacing Monday high/low too early.
-  status.wickAboveHigh = laterLevels.some((item) => Number(item.high) > resistance + tolerance);
-  status.wickBelowLow = laterLevels.some((item) => Number(item.low) < support - tolerance);
-  status.closeAboveHigh = laterLevels.some((item) => Number(item.close) > resistance + tolerance);
-  status.closeBelowLow = laterLevels.some((item) => Number(item.close) < support - tolerance);
-  status.isStillInsideInitialRange = !status.closeAboveHigh && !status.closeBelowLow;
-
-  if (status.closeAboveHigh) status.breakoutDirection = "up";
-  if (status.closeBelowLow) status.breakoutDirection = status.breakoutDirection === "up" ? "both" : "down";
-
-  status.rangeMessage = status.isStillInsideInitialRange
-    ? `Price has not closed above ${initial.label} high around ${status.resistanceText} or below ${initial.label} low around ${status.supportText} yet. For now, those remain the only main rejection areas.`
-    : status.breakoutDirection === "up"
-    ? `Price has closed above ${initial.label} resistance around ${status.resistanceText}. The better trend setup is to wait for a pullback/retest of that broken resistance as support.`
-    : status.breakoutDirection === "down"
-    ? `Price has closed below ${initial.label} support around ${status.supportText}. The better trend setup is to wait for a pullback/retest of that broken support as resistance.`
-    : `Price has moved outside ${initial.label}'s range. Wait for a clear retest before judging the next setup.`;
-
-  return status;
-}
-
-
-function getPeriodExtremes(levels = [], symbol = "") {
-  const highs = Array.isArray(levels) ? levels.map((item) => Number(item.high)).filter(Number.isFinite) : [];
-  const lows = Array.isArray(levels) ? levels.map((item) => Number(item.low)).filter(Number.isFinite) : [];
-  const high = highs.length ? Math.max(...highs) : null;
-  const low = lows.length ? Math.min(...lows) : null;
-  const range = Number.isFinite(high) && Number.isFinite(low)
-    ? Math.max(Math.abs(high - low), getCleanBreakTolerance(symbol))
-    : getCleanBreakTolerance(symbol);
-  return { high, low, range };
-}
-
-function isAreaBrokenIntoOppositeRole(area, levels = [], symbol = "") {
-  return Boolean(area && areaBrokenByCloseLater(area, levels, symbol));
-}
-
-function entryRoleForArea(area, direction = "sell", levels = [], symbol = "") {
-  const type = String(area?.type || "").toLowerCase();
-  const broken = isAreaBrokenIntoOppositeRole(area, levels, symbol);
-
-  if (direction === "sell") {
-    if (type === "resistance" || type === "supply") return { usable: !broken, role: "resistance", flip: false };
-    if ((type === "support" || type === "demand") && broken) return { usable: true, role: "resistance", flip: true };
-    return { usable: false, role: "resistance", flip: false };
-  }
-
-  if (type === "support" || type === "demand") return { usable: !broken, role: "support", flip: false };
-  if ((type === "resistance" || type === "supply") && broken) return { usable: true, role: "support", flip: true };
-  return { usable: false, role: "support", flip: false };
-}
-
-function buildEntryCandidate(area, { direction = "sell", levels = [], symbol = "", currentPrice = null }) {
-  const price = Number(area?.price);
-  const current = Number(currentPrice);
-  if (!Number.isFinite(price)) return null;
-
-  const tolerance = getCleanBreakTolerance(symbol);
-  if (Number.isFinite(current)) {
-    if (direction === "sell" && price < current - tolerance) return null;
-    if (direction === "buy" && price > current + tolerance) return null;
-  }
-
-  const roleInfo = entryRoleForArea(area, direction, levels, symbol);
-  if (!roleInfo.usable) return null;
-
-  const extremes = getPeriodExtremes(levels, symbol);
-  const range = extremes.range || getCleanBreakTolerance(symbol);
-  const distanceFromCurrent = Number.isFinite(current) ? Math.abs(price - current) : null;
-  const distancePercent = Number.isFinite(distanceFromCurrent) ? distanceFromCurrent / range : 0.25;
-  const levelPosition = Number.isFinite(extremes.high) && Number.isFinite(extremes.low)
-    ? (price - extremes.low) / range
-    : null;
-
-  let score = 0;
-  if (roleInfo.flip) score += 3;
-  if (distancePercent >= 0.12) score += 2;
-  if (distancePercent >= 0.22) score += 1;
-  if (distancePercent < 0.08) score -= 3;
-
-  // Internal deep-pullback guide only. Do not expose this as Fibonacci or percentages to users.
-  if (Number.isFinite(levelPosition)) {
-    if (direction === "sell") {
-      if (levelPosition >= 0.50 && levelPosition <= 0.82) score += 3;
-      else if (levelPosition >= 0.38 && levelPosition < 0.50) score += 1;
-      else if (levelPosition < 0.25) score -= 2;
-    } else {
-      if (levelPosition >= 0.18 && levelPosition <= 0.50) score += 3;
-      else if (levelPosition > 0.50 && levelPosition <= 0.62) score += 1;
-      else if (levelPosition > 0.75) score -= 2;
-    }
-  }
-
-  return {
-    label: area.day || area.period || area.date || "key area",
-    originalType: area.type,
-    type: roleInfo.role,
-    price,
-    priceText: area.priceText || formatPrice(price),
-    isFlipArea: roleInfo.flip,
-    distanceFromCurrent,
-    distancePercent,
-    levelPosition,
-    score,
-    sourceArea: area,
-  };
-}
-
-function getRankedEntryAreas({ areas = [], levels = [], symbol = "", direction = "sell", currentPrice = null, profile = getSupportedCsaTimeframeProfile("H1") }) {
-  const candidates = [];
-  const seen = new Set();
-
-  for (const area of areas) {
-    const candidate = buildEntryCandidate(area, { direction, levels, symbol, currentPrice });
-    if (!candidate) continue;
-    const key = `${candidate.type}-${candidate.priceText}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    candidates.push(candidate);
-  }
-
-  const initial = getInitialRangeAreas(levels, profile);
-  if (direction === "sell" && Number.isFinite(Number(initial.resistance))) {
-    candidates.push({
-      label: initial.label,
-      originalType: "resistance",
-      type: "resistance",
-      price: Number(initial.resistance),
-      priceText: formatPrice(initial.resistance),
-      isFlipArea: false,
-      distanceFromCurrent: Number.isFinite(Number(currentPrice)) ? Math.abs(Number(initial.resistance) - Number(currentPrice)) : null,
-      distancePercent: 0.2,
-      levelPosition: null,
-      score: 1,
-      sourceArea: null,
-    });
-  }
-
-  if (direction === "buy" && Number.isFinite(Number(initial.support))) {
-    candidates.push({
-      label: initial.label,
-      originalType: "support",
-      type: "support",
-      price: Number(initial.support),
-      priceText: formatPrice(initial.support),
-      isFlipArea: false,
-      distanceFromCurrent: Number.isFinite(Number(currentPrice)) ? Math.abs(Number(initial.support) - Number(currentPrice)) : null,
-      distancePercent: 0.2,
-      levelPosition: null,
-      score: 1,
-      sourceArea: null,
-    });
-  }
-
-  return candidates
-    .filter((candidate) => Number.isFinite(Number(candidate.price)))
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      const ad = Number.isFinite(a.distanceFromCurrent) ? a.distanceFromCurrent : Infinity;
-      const bd = Number.isFinite(b.distanceFromCurrent) ? b.distanceFromCurrent : Infinity;
-      return ad - bd;
-    });
-}
-
-function getNearestCandidate(candidates = [], currentPrice = null) {
-  const current = Number(currentPrice);
-  if (!Number.isFinite(current) || !Array.isArray(candidates) || !candidates.length) return null;
-  return [...candidates].sort((a, b) => Math.abs(Number(a.price) - current) - Math.abs(Number(b.price) - current))[0] || null;
-}
-
-function isMeaningfullyDifferentArea(a, b, symbol = "") {
-  if (!a || !b) return false;
-  const tolerance = getCleanBreakTolerance(symbol) * 2;
-  return Math.abs(Number(a.price) - Number(b.price)) > tolerance;
-}
-
-function formatAreaComparison({ direction = "sell", nearestArea = null, betterArea = null, symbol = "" }) {
-  if (!nearestArea || !betterArea || !isMeaningfullyDifferentArea(nearestArea, betterArea, symbol)) return "";
-  const action = direction === "sell" ? "sell" : "buy";
-  const role = direction === "sell" ? "resistance" : "support";
-  const roomText = direction === "sell" ? "more room to fall" : "more room to rise";
-  const rejectText = direction === "sell" ? "rejects from there" : "holds from there";
-  const nearText = nearestArea.priceText || formatPrice(nearestArea.price);
-  const betterText = betterArea.priceText || formatPrice(betterArea.price);
-  return `${role[0].toUpperCase() + role.slice(1)} around ${nearText} is a possible ${action} area, but it is very close to current price, so the reward may be limited. A better ${action} area is around ${betterText} because it gives price ${roomText} if it ${rejectText}.`;
-}
-
-function getNearestAreaForDirection({ areas = [], levels = [], symbol = "", direction = "buy", currentPrice = null, profile = getSupportedCsaTimeframeProfile("H1") }) {
-  const initial = getInitialRangeAreas(levels, profile);
-  const ranked = getRankedEntryAreas({ areas, levels, symbol, direction, currentPrice, profile });
-  if (ranked.length) return ranked[0];
-
-  if (direction === "buy") {
-    return { label: initial.label, type: "support", price: initial.support, priceText: formatPrice(initial.support) };
-  }
-
-  return { label: initial.label, type: "resistance", price: initial.resistance, priceText: formatPrice(initial.resistance) };
-}
-
-function getBiasGroup(biasCode = "") {
-  const code = String(biasCode || "").toLowerCase();
-  if (code === "bullish" || code === "slightly_bullish") return "bullish";
-  if (code === "bearish" || code === "slightly_bearish") return "bearish";
-  if (code === "range_bullish") return "range_bullish";
-  if (code === "range_bearish") return "range_bearish";
-  return "range";
 }
 
 function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "", profile = getSupportedCsaTimeframeProfile("H1") }) {
@@ -3133,7 +2911,7 @@ Key Areas & Trade Plan:
 
 Entry, Stop Loss & Target:
 - ${entryConfirmation}
-- ${visualReview?.riskEvidence || "No visible entry, stop loss, or target to judge."}
+- ${visualReview?.riskEvidence || "Stop loss and target are not shown, so the trade risk cannot be judged."}
 
 Main Warning:
 - ${mainWarning}
