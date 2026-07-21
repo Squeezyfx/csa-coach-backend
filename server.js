@@ -2135,15 +2135,27 @@ STRICT MARKED/UNMARKED RULE:
 - Never write incomplete advice like "wait for price to drop back" without saying the exact support/resistance area and price.
 - Keep all user-facing answers short, plain, and useful.
 - Return no more than 4 major strengths and no more than 4 major weaknesses.
+- Structure strengths and weaknesses consistently around these beginner-friendly trade areas, in this priority order:
+  1. Trade direction: whether the buy or sell agrees with the visible bigger-picture direction.
+  2. Entry area: whether the entry is near suitable support for a buy or resistance for a sell.
+  3. Entry confirmation: whether a valid trigger is visible before entry.
+  4. Risk and trade plan: stop loss, target, reward compared with risk, position risk when supplied, and post-entry management.
+- Select only the most relevant visible points. Do not force a comment for every category.
+- Strengths must describe something the trader actually did well or something clearly shown in the trade plan.
+- Weaknesses must describe something the trader did poorly, omitted, or should improve.
+- Chart readability, instrument detection, timeframe detection, and the fact that market direction was checked are validation results, not trading strengths.
+- Never use the words "CSA", "framework", "framework similarity", "framework difference", or "internal method" in strengths or weaknesses.
+- Describe direction naturally, for example: "The buy trade followed the bullish market direction."
+- Describe matching marked levels naturally, for example: "The entry was taken near a clearly marked support area."
 - Each comment must contain one separate point only.
 - Do not repeat the same idea using different wording.
 - "No clear entry confirmation" means no valid entry trigger is visible.
 - "Stop loss and target are not shown" is a separate risk-management issue.
 - Do not write "no visible entry, stop loss, or target" as one combined weakness.
 - A sideways, mixed, or unclear trend is market context, not automatically a weakness.
-- Only call a middle-of-range entry a weakness when a visible or user-described entry was actually taken there.
+- Only call a middle-of-range or late entry a weakness when a visible or user-described entry was actually taken there.
 - Internal level events such as "Monday resistance failed" or "Tuesday support broke" are market facts, not weaknesses.
-- Framework support and resistance prices are guidance, not weaknesses.
+- Support and resistance prices supplied by the analysis are guidance, not weaknesses.
 - Use simple wording that a completely new trader can understand.
 - Use the same wording for the same visible condition each time.
 - Two different-looking charts must receive different strengths, weaknesses, mistake hub items, scores, and short-term chart direction.
@@ -2476,33 +2488,36 @@ function buildDashboardFeedback({
   const hasConfirmedTrigger = Boolean(chartDetection?.visibleTrigger);
   const chartMarkingStatus = getChartMarkingStatus(visualReview);
 
-  const frameworkStrengths = [];
-  const frameworkWeaknesses = [];
+  const tradeStrengths = [];
+  const tradeWeaknesses = [];
 
-  if (chartDetection?.hasUsablePriceData) {
-    frameworkStrengths.push(
-      "The chart is clear enough to review the recent price movement."
-    );
-  }
+  const visualStrengths = visualOk
+    ? normalizeArrayOfStrings(visualReview.chartSpecificStrengths, [])
+    : [];
 
-  if (
-    isDetectedInstrumentUsable(chartDetection?.detectedInstrument) &&
-    isDetectedTimeframeUsable(chartDetection?.detectedTimeframe)
-  ) {
-    frameworkStrengths.push(
-      "The instrument and timeframe are visible and match the selected chart details."
-    );
-  }
+  let visualWeaknesses = visualOk
+    ? normalizeArrayOfStrings(visualReview.chartSpecificWeaknesses, [])
+    : [];
 
-  if (marketOk) {
-    frameworkStrengths.push(
-      `The bigger-picture market direction was checked. Current view: ${bias.bias}.`
-    );
-  }
+  // Strengths and weaknesses must evaluate the trade itself, not image-validation checks.
+  // The vision prompt supplies chart-specific comments about direction, entry area,
+  // entry confirmation, risk, target, and trade management.
+  tradeStrengths.push(
+    ...visualStrengths.filter((item) => {
+      const text = String(item || "").toLowerCase();
+      return !(
+        text.includes("chart is clear enough") ||
+        text.includes("instrument and timeframe") ||
+        text.includes("market direction was checked") ||
+        text.includes("csa") ||
+        text.includes("framework")
+      );
+    })
+  );
 
   if (!hasConfirmedTrigger) {
-    frameworkWeaknesses.push(
-      "No clear entry confirmation is visible on the chart."
+    tradeWeaknesses.push(
+      "No clear entry confirmation is visible before the trade was taken."
     );
   }
 
@@ -2516,57 +2531,47 @@ function buildDashboardFeedback({
     !riskEvidenceLower.includes("no visible");
 
   if (!hasVisibleRiskPlan) {
-    frameworkWeaknesses.push(
+    tradeWeaknesses.push(
       "Stop loss and target are not shown, so the trade risk cannot be judged."
     );
   }
 
-  let visualStrengths = visualOk
-    ? normalizeArrayOfStrings(visualReview.chartSpecificStrengths, [])
-    : [];
-
-  let visualWeaknesses = visualOk
-    ? normalizeArrayOfStrings(visualReview.chartSpecificWeaknesses, [])
-    : [];
-
   if (chartMarkingStatus === "unmarked") {
-    visualStrengths = visualStrengths.filter(
-      (item) => !isUnsupportedMarkedLevelClaim(item)
-    );
-
     visualWeaknesses = visualWeaknesses.filter(
       (item) => feedbackCategory(item) !== "levels_not_marked"
     );
 
-    visualWeaknesses.unshift(
-      "There is no visible evidence of user-marked support or resistance on this chart."
-    );
+    // Missing markings matter only when they prevent the entry area from being judged.
+    // Do not automatically treat every clean/unmarked chart as a poor trade.
+    const entryEvidenceText = String(visualReview?.entryEvidence || "").trim().toLowerCase();
+    const hasVisibleOrDescribedEntry =
+      Boolean(entryEvidenceText) &&
+      entryEvidenceText !== "no visible entry evidence" &&
+      !entryEvidenceText.includes("no visible entry");
+
+    if (hasVisibleOrDescribedEntry) {
+      visualWeaknesses.unshift(
+        "The entry area is not clearly marked, so it is difficult to confirm whether the trade was taken from support or resistance."
+      );
+    }
   }
 
-  if (chartMarkingStatus === "marked") {
-    normalizeArrayOfStrings(visualReview?.csaSimilarities, [])
-      .slice(0, 2)
-      .forEach((item) =>
-        visualStrengths.push(`Framework similarity: ${item}`)
+  const cleanVisualWeaknesses = visualWeaknesses
+    .filter(isActualWeakness)
+    .filter((item) => {
+      const text = String(item || "").toLowerCase();
+      return !(
+        text.includes("csa") ||
+        text.includes("framework similarity") ||
+        text.includes("framework difference") ||
+        text.startsWith("framework")
       );
+    });
 
-    normalizeArrayOfStrings(visualReview?.csaDifferences, [])
-      .slice(0, 2)
-      .forEach((item) =>
-        visualWeaknesses.push(`Framework difference: ${item}`)
-      );
-  }
-
-  const strengths = removeDuplicateFeedback(
-    [...frameworkStrengths, ...visualStrengths],
-    4
-  );
+  const strengths = removeDuplicateFeedback(tradeStrengths, 4);
 
   const weaknesses = removeDuplicateFeedback(
-    [
-      ...visualWeaknesses.filter(isActualWeakness),
-      ...frameworkWeaknesses.filter(isActualWeakness),
-    ],
+    [...cleanVisualWeaknesses, ...tradeWeaknesses.filter(isActualWeakness)],
     4
   );
 
