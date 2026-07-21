@@ -2663,6 +2663,71 @@ function getBiasGroup(biasCode = "") {
   return "range";
 }
 
+function getInitialRangeStatus({
+  currentPrice,
+  initialSupport,
+  initialResistance,
+  symbol = "",
+}) {
+  const price = Number(currentPrice);
+  const support = Number(initialSupport);
+  const resistance = Number(initialResistance);
+  const tolerance = getCleanBreakTolerance(symbol);
+
+  if (
+    !Number.isFinite(price) ||
+    !Number.isFinite(support) ||
+    !Number.isFinite(resistance)
+  ) {
+    return {
+      code: "unavailable",
+      label: "Initial range status unavailable",
+      position: "unknown",
+    };
+  }
+
+  if (price > resistance + tolerance) {
+    return {
+      code: "above_resistance",
+      label: "Price is above the initial resistance.",
+      position: "above",
+    };
+  }
+
+  if (price < support - tolerance) {
+    return {
+      code: "below_support",
+      label: "Price is below the initial support.",
+      position: "below",
+    };
+  }
+
+  const range = Math.max(resistance - support, tolerance);
+  const positionPercent = ((price - support) / range) * 100;
+
+  if (positionPercent >= 66.67) {
+    return {
+      code: "upper_range",
+      label: "Price is in the upper part of the initial range.",
+      position: "upper",
+    };
+  }
+
+  if (positionPercent <= 33.33) {
+    return {
+      code: "lower_range",
+      label: "Price is in the lower part of the initial range.",
+      position: "lower",
+    };
+  }
+
+  return {
+    code: "middle_range",
+    label: "Price is near the middle of the initial range.",
+    position: "middle",
+  };
+}
+
 function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "", profile = getSupportedCsaTimeframeProfile("H1") }) {
   const currentPrice = Number(bias.presentPrice);
   const biasGroup = getBiasGroup(bias.biasCode);
