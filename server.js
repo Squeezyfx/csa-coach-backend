@@ -2054,8 +2054,10 @@ function visualFallback(reason) {
     csaLevelVisibility: "not reviewed",
     chartMarkingStatus: "unclear",
     visibleMarkedLevels: [],
+    visibleHorizontalLines: [],
     csaSimilarities: [],
     csaDifferences: [],
+    csaAnchorMatch: "not_checked",
     chartSpecificStrengths: [],
     chartSpecificWeaknesses: [reason],
     simpleMistakeHub: [],
@@ -2102,6 +2104,11 @@ Your job:
 - The main purpose is to compare what is visibly marked on the uploaded chart with the internal support/resistance areas and identify similarities and differences.
 
 STRICT MARKED/UNMARKED RULE:
+- For M1, M5, M15, M30, and H1 charts, the internal method starts with Monday's high as resistance and Monday's low as support.
+- On those timeframes, any clear horizontal lines near the calculated Monday high and Monday low must be treated as possible framework markings and compared with those prices before classifying the chart.
+- A visible blue, red, green, orange, or other coloured horizontal line must not be ignored merely because it is unlabelled.
+- If two visible horizontal lines align with Monday's high and Monday's low within normal chart-reading tolerance, classify the chart as MARKED and record that match as a strength.
+- Only treat a horizontal line as a current-price, bid/ask, or order line when its platform label or position clearly proves that purpose and it does not align with the calculated Monday high or low.
 - MARKED means the uploaded image clearly contains user-drawn support/resistance evidence such as horizontal lines, rectangles, shaded zones, or labels that identify trading levels.
 - UNMARKED means there is no clear user-drawn support/resistance evidence.
 - Do NOT treat grid lines, current-price lines, bid/ask lines, order lines, crosshair lines, chart borders, session separators, or AI/backend-calculated levels as user-marked support/resistance.
@@ -2163,6 +2170,7 @@ ${buildCsaFrameworkSummaryForVision(marketReference)}
 Selected context:
 - Instrument: ${submittedInstrument}
 - Timeframe uploaded/selected: ${timeframe}
+- If this timeframe is M1 through H1, compare visible horizontal lines specifically with Monday's calculated high and low before deciding marked or unmarked.
 - Mode: ${analysisType}
 - User notes: ${submittedNotes || "None"}
 
@@ -2185,6 +2193,14 @@ Return exactly this JSON shape:
       "type": "support | resistance | zone | label",
       "description": "exact visible object proving the chart is marked",
       "approximatePrice": "price or null"
+    }
+  ],
+  "visibleHorizontalLines": [
+    {
+      "colour": "blue | red | green | orange | other",
+      "description": "every clearly visible horizontal line, even if its purpose is uncertain",
+      "approximatePrice": "price or null",
+      "platformLabel": "visible line label or null"
     }
   ],
   "csaSimilarities": ["simple similarity between visible chart markings and internal areas"],
@@ -2249,6 +2265,9 @@ Return exactly this JSON shape:
       visibleMarkedLevels: Array.isArray(parsed.visibleMarkedLevels)
         ? parsed.visibleMarkedLevels.slice(0, 12)
         : [],
+      visibleHorizontalLines: Array.isArray(parsed.visibleHorizontalLines)
+        ? parsed.visibleHorizontalLines.slice(0, 12)
+        : [],
       csaSimilarities: normalizeArrayOfStrings(parsed.csaSimilarities, []).slice(0, 8),
       csaDifferences: normalizeArrayOfStrings(parsed.csaDifferences, []).slice(0, 8),
       shortTermDirection: parsed.shortTermDirection || "unclear",
@@ -2312,6 +2331,209 @@ function shouldUseVisualScore(score, marketOk) {
   return true;
 }
 
+
+function isIntradayCsaTimeframe(timeframe = "") {
+  return ["M1", "M5", "M15", "M30", "H1"].includes(
+    comparableTimeframe(timeframe)
+  );
+}
+
+function parseApproximateMarkedPrice(value) {
+  if (value === null || value === undefined) return null;
+
+  const cleaned = String(value)
+    .replace(/,/g, "")
+    .match(/-?\d+(?:\.\d+)?/);
+
+  if (!cleaned) return null;
+  const numberValue = Number(cleaned[0]);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function getMondayCsaAnchorLevels(marketReference = null) {
+  const areas = Array.isArray(marketReference?.csaAreas)
+    ? marketReference.csaAreas
+    : [];
+
+  if (!areas.length) {
+    return { support: null, resistance: null };
+  }
+
+  const mondayAreas = areas.filter((area) =>
+    String(area?.day || area?.period || "")
+      .toLowerCase()
+      .includes("monday")
+  );
+
+  const source = mondayAreas.length >= 2 ? mondayAreas : areas.slice(0, 2);
+
+  return {
+    resistance:
+      source.find(
+        (area) => String(area?.type || "").toLowerCase() === "resistance"
+      ) || null,
+    support:
+      source.find(
+        (area) => String(area?.type || "").toLowerCase() === "support"
+      ) || null,
+  };
+}
+
+function getVisibleHorizontalLineCandidates(visualReview = null) {
+  const raw = [
+    ...(Array.isArray(visualReview?.visibleHorizontalLines)
+      ? visualReview.visibleHorizontalLines
+      : []),
+    ...(Array.isArray(visualReview?.visibleMarkedLevels)
+      ? visualReview.visibleMarkedLevels
+      : []),
+  ];
+
+  const seen = new Set();
+
+  return raw
+    .map((item) => {
+      const price = parseApproximateMarkedPrice(item?.approximatePrice);
+      const description = String(item?.description || "").trim();
+      const colour = String(item?.colour || "").trim();
+      const platformLabel = String(item?.platformLabel || "").trim();
+      const key = `${price ?? "null"}|${description.toLowerCase()}|${colour.toLowerCase()}`;
+
+      if (seen.has(key)) return null;
+      seen.add(key);
+
+      return {
+        price,
+        description,
+        colour,
+        platformLabel,
+      };
+    })
+    .filter(Boolean);
+}
+
+function resolveIntradayCsaChartMarking({
+  visualReview = null,
+  marketReference = null,
+  timeframe = "",
+  symbol = "",
+}) {
+  const baseStatus = getChartMarkingStatus(visualReview);
+
+  if (!isIntradayCsaTimeframe(timeframe) || !marketReference?.ok) {
+    return {
+      ...visualReview,
+      chartMarkingStatus: baseStatus,
+      csaAnchorMatch: "not_checked",
+    };
+  }
+
+  const anchors = getMondayCsaAnchorLevels(marketReference);
+  const mondayHigh = Number(anchors.resistance?.price);
+  const mondayLow = Number(anchors.support?.price);
+
+  if (!Number.isFinite(mondayHigh) || !Number.isFinite(mondayLow)) {
+    return {
+      ...visualReview,
+      chartMarkingStatus: baseStatus,
+      csaAnchorMatch: "not_available",
+    };
+  }
+
+  const candidates = getVisibleHorizontalLineCandidates(visualReview);
+  const tolerance = getCleanBreakTolerance(symbol || marketReference?.symbol) * 4;
+
+  const resistanceMatch = candidates.find(
+    (line) =>
+      Number.isFinite(line.price) &&
+      Math.abs(line.price - mondayHigh) <= tolerance
+  );
+
+  const supportMatch = candidates.find(
+    (line) =>
+      Number.isFinite(line.price) &&
+      Math.abs(line.price - mondayLow) <= tolerance
+  );
+
+  const similarities = normalizeArrayOfStrings(
+    visualReview?.csaSimilarities,
+    []
+  ).filter(
+    (item) =>
+      !/no visible evidence|not marked|could not be verified/i.test(item)
+  );
+
+  const differences = normalizeArrayOfStrings(
+    visualReview?.csaDifferences,
+    []
+  ).filter(
+    (item) =>
+      !/no visible evidence|not marked|could not be verified/i.test(item)
+  );
+
+  const strengths = normalizeArrayOfStrings(
+    visualReview?.chartSpecificStrengths,
+    []
+  ).filter((item) => !isUnsupportedMarkedLevelClaim(item));
+
+  const weaknesses = normalizeArrayOfStrings(
+    visualReview?.chartSpecificWeaknesses,
+    []
+  ).filter(
+    (item) =>
+      feedbackCategory(item) !== "levels_not_marked" &&
+      !/no visible evidence of user-marked support or resistance/i.test(item)
+  );
+
+  if (resistanceMatch && supportMatch) {
+    const matchText =
+      `Monday's high around ${formatPrice(mondayHigh)} is marked as resistance, ` +
+      `and Monday's low around ${formatPrice(mondayLow)} is marked as support.`;
+
+    return {
+      ...visualReview,
+      chartMarkingStatus: "marked",
+      csaLevelVisibility: "clear",
+      visualChartStyle: "marked chart",
+      csaAnchorMatch: "full",
+      csaSimilarities: [matchText, ...similarities].slice(0, 8),
+      csaDifferences: differences,
+      chartSpecificStrengths: [
+        "Monday's high and low are marked correctly as resistance and support.",
+        ...strengths,
+      ].slice(0, 4),
+      chartSpecificWeaknesses: weaknesses.slice(0, 4),
+    };
+  }
+
+  if (resistanceMatch || supportMatch) {
+    const matchedText = resistanceMatch
+      ? `Monday's high around ${formatPrice(mondayHigh)} is marked as resistance.`
+      : `Monday's low around ${formatPrice(mondayLow)} is marked as support.`;
+
+    const missingText = resistanceMatch
+      ? `Monday's low around ${formatPrice(mondayLow)} was not clearly matched by a visible support line.`
+      : `Monday's high around ${formatPrice(mondayHigh)} was not clearly matched by a visible resistance line.`;
+
+    return {
+      ...visualReview,
+      chartMarkingStatus: "marked",
+      csaLevelVisibility: "partial",
+      visualChartStyle: "marked chart",
+      csaAnchorMatch: "partial",
+      csaSimilarities: [matchedText, ...similarities].slice(0, 8),
+      csaDifferences: [missingText, ...differences].slice(0, 8),
+      chartSpecificStrengths: [matchedText, ...strengths].slice(0, 4),
+      chartSpecificWeaknesses: [missingText, ...weaknesses].slice(0, 4),
+    };
+  }
+
+  return {
+    ...visualReview,
+    chartMarkingStatus: baseStatus,
+    csaAnchorMatch: "none",
+  };
+}
 
 function getChartMarkingStatus(visualReview = null) {
   const explicit = String(visualReview?.chartMarkingStatus || "").toLowerCase();
@@ -2639,13 +2861,13 @@ function buildDashboardFeedback({
     normalizeArrayOfStrings(visualReview?.csaSimilarities, [])
       .slice(0, 2)
       .forEach((item) =>
-        visualStrengths.push(`Framework similarity: ${item}`)
+        visualStrengths.push(item)
       );
 
     normalizeArrayOfStrings(visualReview?.csaDifferences, [])
       .slice(0, 2)
       .forEach((item) =>
-        visualWeaknesses.push(`Framework difference: ${item}`)
+        visualWeaknesses.push(item)
       );
   }
 
@@ -2731,6 +2953,7 @@ function buildDashboardFeedback({
       tradeVisibility,
       tradeVisibilityReason:
         visualReview?.tradeVisibilityReason || "",
+      csaAnchorMatch: visualReview?.csaAnchorMatch || "not_checked",
       csaLevelVisibility:
         visualReview?.csaLevelVisibility || "Not reviewed",
       visibleMarkedLevels: visualReview?.visibleMarkedLevels || [],
@@ -2757,6 +2980,7 @@ function buildDashboardFeedback({
       tradeVisibility,
       tradeVisibilityReason:
         visualReview?.tradeVisibilityReason || "",
+      csaAnchorMatch: visualReview?.csaAnchorMatch || "not_checked",
       csaLevelVisibility:
         visualReview?.csaLevelVisibility || "Not reviewed",
       visibleMarkedLevels: visualReview?.visibleMarkedLevels || [],
@@ -4405,7 +4629,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
 
     const dateDecision = chooseFinalChartDate({ selectedDate, detection: chartDetection, analysisType: mode });
     const marketReference = await fetchTwelveDataStructureLevels({ symbol: normalizedSymbol, chartDate: dateDecision.finalDate, timeframe, timezone: timezone || "UTC", analysisType: mode });
-    const visualReview = await compareUploadedChartWithCsaFramework({
+    let visualReview = await compareUploadedChartWithCsaFramework({
       imageBase64,
       mimeType,
       marketReference,
@@ -4417,6 +4641,14 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       analysisFramework: selectedStrategy.analysisFramework,
       personalStrategySnapshot: selectedStrategy.snapshot,
     });
+
+    visualReview = resolveIntradayCsaChartMarking({
+      visualReview,
+      marketReference,
+      timeframe,
+      symbol: normalizedSymbol || submittedInstrument,
+    });
+
     const baseAnalysis = buildDeterministicCsaAnalysis({
       marketReference,
       dateDecision,
