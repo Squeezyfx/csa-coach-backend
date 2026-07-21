@@ -2763,6 +2763,220 @@ function getInitialRangeStatus(
   return status;
 }
 
+function buildDashboardAliases(dashboardFeedback = {}) {
+  const contextCheck = dashboardFeedback.contextCheck || dashboardFeedback.chartContextCheck || {};
+  const setupQuality = dashboardFeedback.setupQuality || { score: 0, label: "Unavailable", summary: "Setup quality was not calculated." };
+  const entryAccuracy = dashboardFeedback.entryAccuracy || { score: 0, label: "Unavailable", summary: "Entry accuracy was not calculated." };
+  const riskManagement = dashboardFeedback.riskManagement || { score: 0, label: "Unavailable", summary: "Risk management was not calculated." };
+  const strengths = Array.isArray(dashboardFeedback.strengths) && dashboardFeedback.strengths.length ? dashboardFeedback.strengths : ["CSA Coach completed the review."];
+  const weaknesses = Array.isArray(dashboardFeedback.weaknesses) && dashboardFeedback.weaknesses.length ? dashboardFeedback.weaknesses : ["No major weakness detected."];
+  const aiMistakeDetectionHub = Array.isArray(dashboardFeedback.aiMistakeDetectionHub) && dashboardFeedback.aiMistakeDetectionHub.length ? dashboardFeedback.aiMistakeDetectionHub : [makeSimpleMistake("No major mistake detected", "REVIEW")];
+  const failedAreas = Array.isArray(dashboardFeedback.failedAreas) ? dashboardFeedback.failedAreas : [];
+  return {
+    strengths, weaknesses,
+    chartContextCheck: contextCheck, contextCheck, chartContext: contextCheck, chartContextStatus: contextCheck.status || "Not available",
+    selectedContext: { instrument: contextCheck.selectedInstrument || "Not provided", timeframe: contextCheck.selectedTimeframe || "Not provided", date: contextCheck.selectedDate || "Not provided" },
+    detectedContext: { instrument: contextCheck.detectedInstrument || "Not detected", timeframe: contextCheck.detectedTimeframe || "Not detected", latestVisibleDate: contextCheck.detectedLatestVisibleDate || "Not detected" },
+    setupQuality, setupQualityScore: setupQuality.score, setupQualityLabel: setupQuality.label, setupQualitySummary: setupQuality.summary,
+    entryAccuracy, entryAccuracyScore: entryAccuracy.score, entryAccuracyLabel: entryAccuracy.label, entryAccuracySummary: entryAccuracy.summary,
+    riskManagement, riskManagementScore: riskManagement.score, riskManagementLabel: riskManagement.label, riskManagementSummary: riskManagement.summary,
+    chartContextScore: Number(contextCheck.chartContextScore ?? (contextCheck.status === "Reviewed" ? 100 : 0)), chartContextLabel: contextCheck.chartContextLabel || (contextCheck.status === "Reviewed" ? "Verified" : "Not verified"), chartContextSummary: contextCheck.chartContextSummary || "Checks whether the selected pair/timeframe matches the uploaded chart before analysis.",
+    aiMistakeDetectionHub, mistakeDetectionHub: aiMistakeDetectionHub, mistakeHub: aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub,
+    failedAreas,
+    dashboard: { strengths, weaknesses, chartContextCheck: contextCheck, contextCheck, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub, failedAreas },
+    dashboardCards: { strengths, weaknesses, chartContextCheck: contextCheck, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, failedAreas },
+  };
+}
+
+function buildSimpleStructureBreakdown(levels = [], normalizedSymbol = "") {
+  if (!levels.length) return "- No structure data available.";
+  return levels.map((period, index) => {
+    const label = period.periodLabel || period.day || period.key;
+    if (index === 0) return `${label}:\n- High ${formatPrice(period.high)} = first resistance.\n- Low ${formatPrice(period.low)} = first support.`;
+    const previous = levels[index - 1];
+    const highComparison = compareHighWithTolerance(period.high, previous.high, normalizedSymbol);
+    const lowComparison = compareLowWithTolerance(period.low, previous.low, normalizedSymbol);
+    return `${label}:\n- ${highComparison.cleanBreak ? "High broke previous high = resistance." : "High failed to break previous high = supply."}\n- ${lowComparison.cleanBreak ? "Low broke previous low = support." : "Low held/retested previous low = demand."}`;
+  }).join("\n\n");
+}
+
+function getPeriodExtremes(levels = [], symbol = "") {
+  const highs = Array.isArray(levels) ? levels.map((item) => Number(item.high)).filter(Number.isFinite) : [];
+  const lows = Array.isArray(levels) ? levels.map((item) => Number(item.low)).filter(Number.isFinite) : [];
+  const high = highs.length ? Math.max(...highs) : null;
+  const low = lows.length ? Math.min(...lows) : null;
+  const range = Number.isFinite(high) && Number.isFinite(low)
+    ? Math.max(Math.abs(high - low), getCleanBreakTolerance(symbol))
+    : getCleanBreakTolerance(symbol);
+  return { high, low, range };
+}
+
+function entryRoleForArea(area, direction = "sell", levels = [], symbol = "") {
+  const type = String(area?.type || "").toLowerCase();
+  const broken = isAreaBrokenIntoOppositeRole(area, levels, symbol);
+
+  if (direction === "sell") {
+    if (type === "resistance" || type === "supply") return { usable: !broken, role: "resistance", flip: false };
+    if ((type === "support" || type === "demand") && broken) return { usable: true, role: "resistance", flip: true };
+    return { usable: false, role: "resistance", flip: false };
+  }
+
+  if (type === "support" || type === "demand") return { usable: !broken, role: "support", flip: false };
+  if ((type === "resistance" || type === "supply") && broken) return { usable: true, role: "support", flip: true };
+  return { usable: false, role: "support", flip: false };
+}
+
+function isAreaBrokenIntoOppositeRole(area, levels = [], symbol = "") {
+  return Boolean(area && areaBrokenByCloseLater(area, levels, symbol));
+}
+
+function isMeaningfullyDifferentArea(a, b, symbol = "") {
+  if (!a || !b) return false;
+  const tolerance = getCleanBreakTolerance(symbol) * 2;
+  return Math.abs(Number(a.price) - Number(b.price)) > tolerance;
+}
+
+function buildEntryCandidate(area, { direction = "sell", levels = [], symbol = "", currentPrice = null }) {
+  const price = Number(area?.price);
+  const current = Number(currentPrice);
+  if (!Number.isFinite(price)) return null;
+
+  const tolerance = getCleanBreakTolerance(symbol);
+  if (Number.isFinite(current)) {
+    if (direction === "sell" && price < current - tolerance) return null;
+    if (direction === "buy" && price > current + tolerance) return null;
+  }
+
+  const roleInfo = entryRoleForArea(area, direction, levels, symbol);
+  if (!roleInfo.usable) return null;
+
+  const extremes = getPeriodExtremes(levels, symbol);
+  const range = extremes.range || getCleanBreakTolerance(symbol);
+  const distanceFromCurrent = Number.isFinite(current) ? Math.abs(price - current) : null;
+  const distancePercent = Number.isFinite(distanceFromCurrent) ? distanceFromCurrent / range : 0.25;
+  const levelPosition = Number.isFinite(extremes.high) && Number.isFinite(extremes.low)
+    ? (price - extremes.low) / range
+    : null;
+
+  let score = 0;
+  if (roleInfo.flip) score += 3;
+  if (distancePercent >= 0.12) score += 2;
+  if (distancePercent >= 0.22) score += 1;
+  if (distancePercent < 0.08) score -= 3;
+
+  // Internal deep-pullback guide only. Do not expose this as Fibonacci or percentages to users.
+  if (Number.isFinite(levelPosition)) {
+    if (direction === "sell") {
+      if (levelPosition >= 0.50 && levelPosition <= 0.82) score += 3;
+      else if (levelPosition >= 0.38 && levelPosition < 0.50) score += 1;
+      else if (levelPosition < 0.25) score -= 2;
+    } else {
+      if (levelPosition >= 0.18 && levelPosition <= 0.50) score += 3;
+      else if (levelPosition > 0.50 && levelPosition <= 0.62) score += 1;
+      else if (levelPosition > 0.75) score -= 2;
+    }
+  }
+
+  return {
+    label: area.day || area.period || area.date || "key area",
+    originalType: area.type,
+    type: roleInfo.role,
+    price,
+    priceText: area.priceText || formatPrice(price),
+    isFlipArea: roleInfo.flip,
+    distanceFromCurrent,
+    distancePercent,
+    levelPosition,
+    score,
+    sourceArea: area,
+  };
+}
+
+function getRankedEntryAreas({ areas = [], levels = [], symbol = "", direction = "sell", currentPrice = null, profile = getSupportedCsaTimeframeProfile("H1") }) {
+  const candidates = [];
+  const seen = new Set();
+
+  for (const area of areas) {
+    const candidate = buildEntryCandidate(area, { direction, levels, symbol, currentPrice });
+    if (!candidate) continue;
+    const key = `${candidate.type}-${candidate.priceText}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(candidate);
+  }
+
+  const initial = getInitialRangeAreas(levels, profile);
+  if (direction === "sell" && Number.isFinite(Number(initial.resistance))) {
+    candidates.push({
+      label: initial.label,
+      originalType: "resistance",
+      type: "resistance",
+      price: Number(initial.resistance),
+      priceText: formatPrice(initial.resistance),
+      isFlipArea: false,
+      distanceFromCurrent: Number.isFinite(Number(currentPrice)) ? Math.abs(Number(initial.resistance) - Number(currentPrice)) : null,
+      distancePercent: 0.2,
+      levelPosition: null,
+      score: 1,
+      sourceArea: null,
+    });
+  }
+
+  if (direction === "buy" && Number.isFinite(Number(initial.support))) {
+    candidates.push({
+      label: initial.label,
+      originalType: "support",
+      type: "support",
+      price: Number(initial.support),
+      priceText: formatPrice(initial.support),
+      isFlipArea: false,
+      distanceFromCurrent: Number.isFinite(Number(currentPrice)) ? Math.abs(Number(initial.support) - Number(currentPrice)) : null,
+      distancePercent: 0.2,
+      levelPosition: null,
+      score: 1,
+      sourceArea: null,
+    });
+  }
+
+  return candidates
+    .filter((candidate) => Number.isFinite(Number(candidate.price)))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      const ad = Number.isFinite(a.distanceFromCurrent) ? a.distanceFromCurrent : Infinity;
+      const bd = Number.isFinite(b.distanceFromCurrent) ? b.distanceFromCurrent : Infinity;
+      return ad - bd;
+    });
+}
+
+function getNearestCandidate(candidates = [], currentPrice = null) {
+  const current = Number(currentPrice);
+  if (!Number.isFinite(current) || !Array.isArray(candidates) || !candidates.length) return null;
+  return [...candidates].sort((a, b) => Math.abs(Number(a.price) - current) - Math.abs(Number(b.price) - current))[0] || null;
+}
+
+function formatAreaComparison({ direction = "sell", nearestArea = null, betterArea = null, symbol = "" }) {
+  if (!nearestArea || !betterArea || !isMeaningfullyDifferentArea(nearestArea, betterArea, symbol)) return "";
+  const action = direction === "sell" ? "sell" : "buy";
+  const role = direction === "sell" ? "resistance" : "support";
+  const roomText = direction === "sell" ? "more room to fall" : "more room to rise";
+  const rejectText = direction === "sell" ? "rejects from there" : "holds from there";
+  const nearText = nearestArea.priceText || formatPrice(nearestArea.price);
+  const betterText = betterArea.priceText || formatPrice(betterArea.price);
+  return `${role[0].toUpperCase() + role.slice(1)} around ${nearText} is a possible ${action} area, but it is very close to current price, so the reward may be limited. A better ${action} area is around ${betterText} because it gives price ${roomText} if it ${rejectText}.`;
+}
+
+function getNearestAreaForDirection({ areas = [], levels = [], symbol = "", direction = "buy", currentPrice = null, profile = getSupportedCsaTimeframeProfile("H1") }) {
+  const initial = getInitialRangeAreas(levels, profile);
+  const ranked = getRankedEntryAreas({ areas, levels, symbol, direction, currentPrice, profile });
+  if (ranked.length) return ranked[0];
+
+  if (direction === "buy") {
+    return { label: initial.label, type: "support", price: initial.support, priceText: formatPrice(initial.support) };
+  }
+
+  return { label: initial.label, type: "resistance", price: initial.resistance, priceText: formatPrice(initial.resistance) };
+}
+
 function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "", profile = getSupportedCsaTimeframeProfile("H1") }) {
   const currentPrice = Number(bias.presentPrice);
   const biasGroup = getBiasGroup(bias.biasCode);
