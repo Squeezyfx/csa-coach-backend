@@ -2641,6 +2641,28 @@ function buildDashboardFeedback({
   };
 }
 
+function getBiasGroup(biasCode = "") {
+  const code = String(biasCode || "").toLowerCase();
+
+  if (code === "bullish" || code === "slightly_bullish") {
+    return "bullish";
+  }
+
+  if (code === "bearish" || code === "slightly_bearish") {
+    return "bearish";
+  }
+
+  if (code === "range_bullish") {
+    return "range_bullish";
+  }
+
+  if (code === "range_bearish") {
+    return "range_bearish";
+  }
+
+  return "range";
+}
+
 function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "", profile = getSupportedCsaTimeframeProfile("H1") }) {
   const currentPrice = Number(bias.presentPrice);
   const biasGroup = getBiasGroup(bias.biasCode);
