@@ -2663,69 +2663,104 @@ function getBiasGroup(biasCode = "") {
   return "range";
 }
 
-function getInitialRangeStatus({
-  currentPrice,
-  initialSupport,
-  initialResistance,
-  symbol = "",
-}) {
-  const price = Number(currentPrice);
-  const support = Number(initialSupport);
-  const resistance = Number(initialResistance);
-  const tolerance = getCleanBreakTolerance(symbol);
+function getFirstAnchorLabel(profile = getSupportedCsaTimeframeProfile("H1")) {
+  if (profile.structureMode === "daily-in-week") return "Monday";
+  if (profile.structureMode === "weekly-in-month") return "the first week";
+  if (profile.structureMode === "monthly-in-year") return "the first month";
+  if (profile.structureMode === "quarterly-in-year") return "the first quarter";
+  if (profile.structureMode === "yearly-in-multi-year") return "the first year";
+  return "the first key range";
+}
 
-  if (
-    !Number.isFinite(price) ||
-    !Number.isFinite(support) ||
-    !Number.isFinite(resistance)
-  ) {
-    return {
-      code: "unavailable",
-      label: "Initial range status unavailable",
-      position: "unknown",
-    };
-  }
-
-  if (price > resistance + tolerance) {
-    return {
-      code: "above_resistance",
-      label: "Price is above the initial resistance.",
-      position: "above",
-    };
-  }
-
-  if (price < support - tolerance) {
-    return {
-      code: "below_support",
-      label: "Price is below the initial support.",
-      position: "below",
-    };
-  }
-
-  const range = Math.max(resistance - support, tolerance);
-  const positionPercent = ((price - support) / range) * 100;
-
-  if (positionPercent >= 66.67) {
-    return {
-      code: "upper_range",
-      label: "Price is in the upper part of the initial range.",
-      position: "upper",
-    };
-  }
-
-  if (positionPercent <= 33.33) {
-    return {
-      code: "lower_range",
-      label: "Price is in the lower part of the initial range.",
-      position: "lower",
-    };
-  }
+function getInitialRangeAreas(
+  levels = [],
+  profile = getSupportedCsaTimeframeProfile("H1")
+) {
+  const first = Array.isArray(levels) && levels.length ? levels[0] : null;
+  const label = first?.periodLabel || first?.day || getFirstAnchorLabel(profile);
 
   return {
-    code: "middle_range",
-    label: "Price is near the middle of the initial range.",
-    position: "middle",
+    label,
+    support:
+      first && Number.isFinite(Number(first.low))
+        ? Number(first.low)
+        : null,
+    resistance:
+      first && Number.isFinite(Number(first.high))
+        ? Number(first.high)
+        : null,
   };
+}
+
+function getInitialRangeStatus(
+  levels = [],
+  symbol = "",
+  profile = getSupportedCsaTimeframeProfile("H1")
+) {
+  const initial = getInitialRangeAreas(levels, profile);
+  const tolerance = getCleanBreakTolerance(symbol);
+  const support = Number(initial.support);
+  const resistance = Number(initial.resistance);
+
+  const status = {
+    ...initial,
+    supportText: formatPrice(support),
+    resistanceText: formatPrice(resistance),
+    hasInitialRange:
+      Number.isFinite(support) && Number.isFinite(resistance),
+    wickAboveHigh: false,
+    wickBelowLow: false,
+    closeAboveHigh: false,
+    closeBelowLow: false,
+    isStillInsideInitialRange: false,
+    breakoutDirection: "none",
+    rangeMessage: "",
+  };
+
+  if (!status.hasInitialRange) {
+    status.rangeMessage =
+      "The first key support/resistance range is not available.";
+    return status;
+  }
+
+  if (!Array.isArray(levels) || levels.length < 2) {
+    status.isStillInsideInitialRange = true;
+    status.rangeMessage = `${initial.label} resistance around ${status.resistanceText} and ${initial.label} support around ${status.supportText} are the only active areas for now.`;
+    return status;
+  }
+
+  const laterLevels = levels.slice(1);
+
+  status.wickAboveHigh = laterLevels.some(
+    (item) => Number(item.high) > resistance + tolerance
+  );
+  status.wickBelowLow = laterLevels.some(
+    (item) => Number(item.low) < support - tolerance
+  );
+  status.closeAboveHigh = laterLevels.some(
+    (item) => Number(item.close) > resistance + tolerance
+  );
+  status.closeBelowLow = laterLevels.some(
+    (item) => Number(item.close) < support - tolerance
+  );
+  status.isStillInsideInitialRange =
+    !status.closeAboveHigh && !status.closeBelowLow;
+
+  if (status.closeAboveHigh) status.breakoutDirection = "up";
+  if (status.closeBelowLow) {
+    status.breakoutDirection =
+      status.breakoutDirection === "up" ? "both" : "down";
+  }
+
+  status.rangeMessage = status.isStillInsideInitialRange
+    ? `Price has not closed above ${initial.label} high around ${status.resistanceText} or below ${initial.label} low around ${status.supportText} yet. For now, those remain the only main rejection areas.`
+    : status.breakoutDirection === "up"
+    ? `Price has closed above ${initial.label} resistance around ${status.resistanceText}. The better trend setup is to wait for a pullback/retest of that broken resistance as support.`
+    : status.breakoutDirection === "down"
+    ? `Price has closed below ${initial.label} support around ${status.supportText}. The better trend setup is to wait for a pullback/retest of that broken support as resistance.`
+    : `Price has moved outside ${initial.label}'s range. Wait for a clear retest before judging the next setup.`;
+
+  return status;
 }
 
 function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "", profile = getSupportedCsaTimeframeProfile("H1") }) {
