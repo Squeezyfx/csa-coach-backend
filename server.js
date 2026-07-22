@@ -2115,15 +2115,20 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
       ? parsed?.chartDataQuality || "usable"
       : "unclear";
 
-    const approvedAreas = buildApprovedMarketAreas(marketReference);
-    const safeUserText = (value) =>
-      removeWeekdayNamesFromUserText(
-        sanitizeUserFacingPriceText(
-          value,
-          approvedAreas,
-          marketReference?.symbol || submittedInstrument
-        )
-      );
+    console.log("Chart validation result:", {
+      modelMarkedValid,
+      rescuedByEvidence: !modelMarkedValid && readableChartEvidence,
+      isTradingChart,
+      visibleCandleCount,
+      occupancy,
+      hasUsablePriceData: parsed?.hasUsablePriceData,
+      isNestedChart: parsed?.isNestedChart,
+      isChartReadableAtCurrentSize:
+        parsed?.isChartReadableAtCurrentSize,
+      detectedInstrument: parsed?.detectedInstrument,
+      detectedTimeframe: parsed?.detectedTimeframe,
+      reason: parsed?.chartValidityReason,
+    });
 
     return {
       ok: true,
