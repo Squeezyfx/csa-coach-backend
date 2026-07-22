@@ -2120,6 +2120,8 @@ STRICT MARKED/UNMARKED RULE:
 - For a marked chart, explain the result in one very simple sentence.
 - Do not use the words "marked chart", "similarities", "differences", "framework comparison", "internal areas", "Monday's high", or "Monday's low" in user-facing feedback.
 - State visible levels simply, for example: "There is a resistance correctly marked around X and a support correctly marked around Y."
+- If a correctly marked support has already broken and price has held below it, explain that it should now act as resistance.
+- For a bearish Main Warning, name the next earlier support price that would need to break and hold. Do not write only "a fresh breakdown-and-hold" without the level.
 - Do not repeat the same pullback, rejection, or retest instruction under both Key Areas & Trade Plan and Entry Confirmation.
 - Entry Confirmation should only state whether a clear buy or sell confirmation is visible.
 - Do not add a separate Market Direction section when the Quick Verdict already states the bullish, bearish, or range plan.
@@ -3383,6 +3385,23 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
   const buyPriceText = buyArea.priceText || formatPrice(buyArea.price);
   const sellPriceText = sellArea.priceText || formatPrice(sellArea.price);
 
+  const lowerSupportCandidates = buyCandidates
+    .filter(
+      (candidate) =>
+        Number.isFinite(Number(candidate?.price)) &&
+        Number(candidate.price) < currentPrice
+    )
+    .sort(
+      (a, b) =>
+        Math.abs(currentPrice - Number(a.price)) -
+        Math.abs(currentPrice - Number(b.price))
+    );
+
+  const nextSupportArea = lowerSupportCandidates[0] || null;
+  const nextSupportText = nextSupportArea
+    ? nextSupportArea.priceText || formatPrice(nextSupportArea.price)
+    : null;
+
   let quickVerdict = "Wait for price to reach a clear area before taking action.";
   let whatThisMeans = "The safest plan is to wait for price to reach support or resistance, then look for a clear reaction.";
   let bestAreaToWatch = `Buy only if price drops to support around ${initialSupportText} and holds. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
@@ -3407,7 +3426,9 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
     quickVerdict = `Bearish plan: wait for price to rise back to resistance around ${sellPriceText} before considering a sell.`;
     whatThisMeans = `The better sell idea is not to chase price now, but to wait for price to pull back up to resistance around ${sellPriceText} and reject.`;
     bestAreaToWatch = sellAreaComparison || `For a sell, wait for price to rise back to resistance around ${sellPriceText} and then show a clear bearish candle or strong rejection from that area.`;
-    mainWarning = `Do not sell after price has already dropped. Wait for the better resistance area around ${sellPriceText} or a fresh breakdown-and-hold before considering a sell.`;
+    mainWarning = nextSupportText
+      ? `Do not sell after price has already dropped. Wait for the better resistance area around ${sellPriceText} or a fresh breakdown-and-hold of ${nextSupportText} support before considering a sell.`
+      : `Do not sell after price has already dropped. Wait for the better resistance area around ${sellPriceText} or a fresh breakdown-and-hold of the next support before considering a sell.`;
     coachVerdict = `The cleaner plan is to look for sells only after price rejects the better resistance area around ${sellPriceText}.`;
   } else if (biasGroup === "range_bullish") {
     quickVerdict = `No clean trend yet, but buyers have pressure. Buy only if price drops to support around ${initialSupportText} and holds.`;
@@ -3433,6 +3454,8 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
     initialResistanceText,
     buyArea,
     sellArea,
+    nextSupportArea,
+    nextSupportText,
     nearestBuyArea,
     nearestSellArea,
     buyAreaComparison,
@@ -3521,7 +3544,18 @@ function buildChartMarkingComparisonText({
     visualReview?.csaAnchorMatch || ""
   ).toLowerCase();
 
+  const initialStatus = trendPlan?.initialRangeStatus || {};
+  const supportHasFlipped =
+    initialStatus.breakoutDirection === "bearish" ||
+    initialStatus.supportBroken === true ||
+    initialStatus.supportCloseBroken === true ||
+    initialStatus.closeBelowSupport === true;
+
   if (anchorMatch === "full") {
+    if (supportHasFlipped) {
+      return `There is a resistance correctly marked around ${trendPlan.initialResistanceText}, and a support correctly marked around ${trendPlan.initialSupportText}, which has now broken and should act as resistance.`;
+    }
+
     return `There is a resistance correctly marked around ${trendPlan.initialResistanceText}, and a support correctly marked around ${trendPlan.initialSupportText}.`;
   }
 
@@ -3536,6 +3570,10 @@ function buildChartMarkingComparisonText({
     }
 
     if (/support/i.test(firstMatch || "")) {
+      if (supportHasFlipped) {
+        return `There is a support correctly marked around ${trendPlan.initialSupportText}, which has now broken and should act as resistance.`;
+      }
+
       return `There is a support correctly marked around ${trendPlan.initialSupportText}.`;
     }
 
