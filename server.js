@@ -2117,20 +2117,21 @@ STRICT MARKED/UNMARKED RULE:
 - For an UNMARKED chart, explicitly say: "There is no visible evidence of user-marked support or resistance on this chart."
 - After that, explain the important areas calculated by the internal framework using simple wording such as: "However, the main areas to watch are support around X and resistance around Y."
 - Never list "support and resistance are clearly marked" as a strength on an unmarked chart.
-- For a MARKED chart, compare the visible user-marked areas with the internal areas:
-  - Similarities: where the user's marked area matches or closely overlaps the internal area.
-  - Differences: missing areas, inaccurate placement, levels that do not align, or key framework areas not marked.
+- For a marked chart, explain the result in one very simple sentence.
+- Do not use the words "marked chart", "similarities", "differences", "framework comparison", or "internal areas" in user-facing feedback.
+- If the key high and low match the visible lines, simply say there is a resistance correctly marked at the resistance price and a support correctly marked at the support price.
+- When the Monday high and low match, do not also produce a contradictory mismatch comment.
+- Do not use support, resistance, supply, or demand created on the selected chart date when giving entry areas or a trade plan. Use only earlier completed days or periods.
 - If the chart is unclear, do not guess. Use UNCLEAR and state what cannot be verified.
 - The user is likely a beginner. Use very simple trading language.
 - The backend can use the internal method, but user-facing fields must NOT say "CSA", "framework", "daily high/low logic", "supply/demand classification", or other internal method words.
 - Do not mention trendlines, channels, Fibonacci, indicators, or moving averages. They are outside this review. Ignore them unless they hide price.
 - Explain only what matters to a beginner:
   1. Is the bigger picture bullish, bearish, or ranging?
-  2. What is the selected ${timeframe} chart doing right now?
-  3. Should the trader wait, buy, sell, or avoid chasing?
-  4. Where exactly should price return before a better setup forms? Always include support/resistance and the price level.
-  5. Is there a clear entry confirmation?
-  6. Is stop loss/target visible enough to judge?
+  2. Should the trader wait, buy, sell, or avoid chasing?
+  3. Where exactly should price return before a better setup forms? Always include support/resistance and the price level.
+  4. Is there a clear entry confirmation?
+  5. Is stop loss/target visible enough to judge?
 - The internal range-position check may use the first key high/low as a deep-pullback guide, but user-facing wording should stay simple.
 - Do not mention Fibonacci, retracement percentages, 61.8, 50%, or technical confluence in user-facing feedback.
 - When there are two possible entry areas, explain which one is better in beginner language: the closer area may be possible but may offer poor reward, while the deeper pullback area may be better because it gives price more room to move.
@@ -2499,7 +2500,7 @@ function resolveIntradayCsaChartMarking({
       csaSimilarities: [matchText, ...similarities].slice(0, 8),
       csaDifferences: differences,
       chartSpecificStrengths: [
-        "Monday's high and low are marked correctly as resistance and support.",
+        "The resistance and support levels are marked correctly.",
         ...strengths,
       ].slice(0, 4),
       chartSpecificWeaknesses: weaknesses.slice(0, 4),
@@ -2508,12 +2509,12 @@ function resolveIntradayCsaChartMarking({
 
   if (resistanceMatch || supportMatch) {
     const matchedText = resistanceMatch
-      ? `Monday's high around ${formatPrice(mondayHigh)} is marked as resistance.`
-      : `Monday's low around ${formatPrice(mondayLow)} is marked as support.`;
+      ? `There is a resistance correctly marked around ${formatPrice(mondayHigh)}.`
+      : `There is a support correctly marked around ${formatPrice(mondayLow)}.`;
 
     const missingText = resistanceMatch
-      ? `Monday's low around ${formatPrice(mondayLow)} was not clearly matched by a visible support line.`
-      : `Monday's high around ${formatPrice(mondayHigh)} was not clearly matched by a visible resistance line.`;
+      ? `A support line was not clearly matched around ${formatPrice(mondayLow)}.`
+      : `A resistance line was not clearly matched around ${formatPrice(mondayHigh)}.`;
 
     return {
       ...visualReview,
@@ -3337,6 +3338,15 @@ function getNearestAreaForDirection({ areas = [], levels = [], symbol = "", dire
   return { label: initial.label, type: "resistance", price: initial.resistance, priceText: formatPrice(initial.resistance) };
 }
 
+function excludeSameDayAreas(areas = [], selectedDateText = "") {
+  const selectedDate = String(selectedDateText || "").slice(0, 10);
+  if (!selectedDate) return Array.isArray(areas) ? areas : [];
+
+  return (Array.isArray(areas) ? areas : []).filter(
+    (area) => String(area?.date || "").slice(0, 10) !== selectedDate
+  );
+}
+
 function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "", profile = getSupportedCsaTimeframeProfile("H1") }) {
   const currentPrice = Number(bias.presentPrice);
   const biasGroup = getBiasGroup(bias.biasCode);
@@ -3504,33 +3514,52 @@ function buildChartMarkingComparisonText({
   trendPlan,
 }) {
   const markingStatus = getChartMarkingStatus(visualReview);
+  const anchorMatch = String(
+    visualReview?.csaAnchorMatch || ""
+  ).toLowerCase();
 
-  if (markingStatus === "marked") {
-    const similarities = normalizeArrayOfStrings(
+  if (anchorMatch === "full") {
+    const firstMatch = normalizeArrayOfStrings(
       visualReview?.csaSimilarities,
       []
-    ).slice(0, 2);
-    const differences = normalizeArrayOfStrings(
+    )[0];
+
+    return (
+      firstMatch ||
+      `There is a resistance correctly marked around ${trendPlan.initialResistanceText}, and a support correctly marked around ${trendPlan.initialSupportText}.`
+    );
+  }
+
+  if (anchorMatch === "partial") {
+    const firstMatch = normalizeArrayOfStrings(
+      visualReview?.csaSimilarities,
+      []
+    )[0];
+    const firstDifference = normalizeArrayOfStrings(
       visualReview?.csaDifferences,
       []
-    ).slice(0, 2);
+    )[0];
 
-    const similarityText = similarities.length
-      ? `Similarities: ${similarities.join(" ")}`
-      : "No clear similarity with the framework areas was confirmed.";
+    return [firstMatch, firstDifference].filter(Boolean).join(" ");
+  }
 
-    const differenceText = differences.length
-      ? `Differences: ${differences.join(" ")}`
-      : "No major difference was confirmed from the visible markings.";
+  if (markingStatus === "marked") {
+    const firstMatch = normalizeArrayOfStrings(
+      visualReview?.csaSimilarities,
+      []
+    )[0];
 
-    return `Marked chart. ${similarityText} ${differenceText}`;
+    return (
+      firstMatch ||
+      "Support and resistance lines are visible, but their exact prices could not be confirmed."
+    );
   }
 
   if (markingStatus === "unmarked") {
-    return `Unmarked chart. There is no visible evidence of user-marked support or resistance on this chart. However, the framework areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}.`;
+    return `No support or resistance lines are marked. The main areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}.`;
   }
 
-  return `Chart markings are unclear. User-marked support and resistance could not be verified. The framework areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}.`;
+  return `The chart lines could not be confirmed clearly. The main areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}.`;
 }
 
 function buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, visualReview = null, submittedInstrument, normalizedSymbol, timeframe }) {
@@ -3553,11 +3582,47 @@ Overall Setup Score:
   }
 
   const levels = marketReference.dailyLevels || [];
-  const areas = marketReference.csaAreas || [];
-  const bias = marketReference.directionalBias || calculateCsaDirectionalBias(levels, normalizedSymbol, profile);
-  const { resistanceAreas, supportAreas, supplyAreas, demandAreas } = splitAreas(areas);
-  const failedAreas = buildFailedAreas({ supportAreas, resistanceAreas, supplyAreas, demandAreas, levels, symbol: normalizedSymbol });
-  const trendPlan = buildBeginnerTrendPlan({ levels, areas, bias, symbol: normalizedSymbol, profile });
+  const allAreas = marketReference.csaAreas || [];
+  const selectedDateText =
+    dateDecision?.finalDateText ||
+    dateDecision?.selectedDateText ||
+    "";
+
+  // Do not use support/resistance or supply/demand created on the selected day.
+  // Only earlier completed periods may guide the current trade plan.
+  const areas = excludeSameDayAreas(allAreas, selectedDateText);
+
+  const bias =
+    marketReference.directionalBias ||
+    calculateCsaDirectionalBias(
+      levels,
+      normalizedSymbol,
+      profile
+    );
+
+  const {
+    resistanceAreas,
+    supportAreas,
+    supplyAreas,
+    demandAreas,
+  } = splitAreas(areas);
+
+  const failedAreas = buildFailedAreas({
+    supportAreas,
+    resistanceAreas,
+    supplyAreas,
+    demandAreas,
+    levels,
+    symbol: normalizedSymbol,
+  });
+
+  const trendPlan = buildBeginnerTrendPlan({
+    levels,
+    areas,
+    bias,
+    symbol: normalizedSymbol,
+    profile,
+  });
 
   const overallScore =
     Number.isFinite(Number(visualReview?.setupQualityScore)) && Number(visualReview.setupQualityScore) >= 20
@@ -3568,11 +3633,11 @@ Overall Setup Score:
       ? 6
       : 7;
 
-  const directionSummary = visualReview?.plainMarketDirection
-    ? visualReview.plainMarketDirection
-    : visualReview?.shortTermDirection && visualReview.shortTermDirection !== "unclear"
-    ? `The bigger picture is ${String(bias.bias || "").toLowerCase()}, while the ${timeframe} chart is ${visualReview.shortTermDirection}.`
-    : `The bigger picture is ${String(bias.bias || "").toLowerCase()}. The ${timeframe} chart direction is not clear enough to judge.`;
+  const directionSummary =
+    bias?.traderBias ||
+    `The bigger-picture direction is ${String(
+      bias?.bias || "unclear"
+    ).toLowerCase()}.`;
 
   const quickVerdict = trendPlan.quickVerdict;
   const bestAreaToWatch = trendPlan.bestAreaToWatch;
@@ -3595,7 +3660,7 @@ Overall Setup Score:
 Quick Verdict:
 - ${quickVerdict}
 
-Chart Marking & Framework Comparison:
+Chart Levels:
 - ${markingComparison}
 
 Market Direction:
