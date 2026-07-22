@@ -919,6 +919,7 @@ function compactRawAiResponse({
       csaAreas: Array.isArray(marketReference?.csaAreas)
         ? marketReference.csaAreas.slice(0, 30)
         : [],
+      approvedAreas: buildApprovedMarketAreas(marketReference),
     },
   };
 }
@@ -1606,6 +1607,138 @@ function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimefr
 }
 
 
+
+function buildApprovedMarketAreas(marketReference = null) {
+  const areas = Array.isArray(marketReference?.csaAreas)
+    ? marketReference.csaAreas
+    : [];
+
+  const seen = new Set();
+
+  return areas
+    .filter((area) => Number.isFinite(Number(area?.price)))
+    .map((area, index) => {
+      const price = Number(area.price);
+      const type = String(area.type || "").toLowerCase();
+      const key = `${type}:${price}`;
+
+      if (seen.has(key)) return null;
+      seen.add(key);
+
+      return {
+        id: `AREA_${index + 1}`,
+        type,
+        price,
+        priceText: area.priceText || formatPrice(price),
+        date: area.date || null,
+        source: "twelve_data",
+        confidence: "high",
+      };
+    })
+    .filter(Boolean);
+}
+
+function getApprovedPriceTolerance(symbol = "") {
+  const base = getCleanBreakTolerance(symbol);
+  const compact = comparableInstrument(symbol);
+
+  if (compact.includes("BTC")) return Math.max(base * 3, 50);
+  if (compact.includes("XAU")) return Math.max(base * 3, 0.6);
+  if (compact.includes("JPY")) return Math.max(base * 3, 0.06);
+  return Math.max(base * 3, 0.0006);
+}
+
+function isPriceApproved(price, approvedAreas = [], symbol = "") {
+  const value = Number(price);
+  if (!Number.isFinite(value)) return false;
+
+  const tolerance = getApprovedPriceTolerance(symbol);
+
+  return approvedAreas.some(
+    (area) =>
+      Number.isFinite(Number(area?.price)) &&
+      Math.abs(Number(area.price) - value) <= tolerance
+  );
+}
+
+function sanitizeUserFacingPriceText(
+  value,
+  approvedAreas = [],
+  symbol = "",
+  fallback = "the confirmed area"
+) {
+  const textValue = String(value || "").trim();
+  if (!textValue) return textValue;
+
+  return textValue.replace(
+    /\b\d{1,6}(?:\.\d{1,8})\b/g,
+    (match) => {
+      const numeric = Number(match);
+
+      // Keep non-price values such as scores, ratios, years, and counts.
+      if (!Number.isFinite(numeric)) return match;
+      if (/^\d{4}$/.test(match) && numeric >= 1900 && numeric <= 2200) return match;
+      if (numeric >= 0 && numeric <= 100 && !match.includes(".")) return match;
+
+      return isPriceApproved(numeric, approvedAreas, symbol)
+        ? match
+        : fallback;
+    }
+  );
+}
+
+function sanitizeVisualReviewMarketPrices({
+  visualReview = null,
+  marketReference = null,
+  symbol = "",
+}) {
+  if (!visualReview) return visualReview;
+
+  const approvedAreas = buildApprovedMarketAreas(marketReference);
+  const safeText = (value) =>
+    sanitizeUserFacingPriceText(value, approvedAreas, symbol);
+
+  return {
+    ...visualReview,
+    quickVerdict: safeText(visualReview.quickVerdict),
+    plainMarketDirection: safeText(visualReview.plainMarketDirection),
+    whatThisMeans: safeText(visualReview.whatThisMeans),
+    timeframeSummary: safeText(visualReview.timeframeSummary),
+    bestAreaToWatch: safeText(visualReview.bestAreaToWatch),
+    visualSummary: safeText(visualReview.visualSummary),
+    chartMarkupAssessment: safeText(visualReview.chartMarkupAssessment),
+    tradeVisibilityReason: safeText(visualReview.tradeVisibilityReason),
+    entryEvidence: safeText(visualReview.entryEvidence),
+    riskEvidence: safeText(visualReview.riskEvidence),
+    mainWarning: safeText(visualReview.mainWarning),
+    coachVerdict: safeText(visualReview.coachVerdict),
+    csaSimilarities: normalizeArrayOfStrings(
+      visualReview.csaSimilarities,
+      []
+    ).map(safeText),
+    csaDifferences: normalizeArrayOfStrings(
+      visualReview.csaDifferences,
+      []
+    ).map(safeText),
+    chartSpecificStrengths: normalizeArrayOfStrings(
+      visualReview.chartSpecificStrengths,
+      []
+    ).map(safeText),
+    chartSpecificWeaknesses: normalizeArrayOfStrings(
+      visualReview.chartSpecificWeaknesses,
+      []
+    ).map(safeText),
+  };
+}
+
+function removeWeekdayNamesFromUserText(value = "") {
+  return String(value || "")
+    .replace(/\bMonday(?:'s)?\b/gi, "the first key range")
+    .replace(/\b(?:Tuesday|Wednesday|Thursday|Friday)(?:'s)?\b/gi, "an earlier period")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
   if (!Array.isArray(levels) || levels.length < 2) {
     return {
@@ -1822,7 +1955,21 @@ async function fetchTwelveDataStructureLevels({ symbol, chartDate, timeframe = "
   const dailyLevels = buildStructureLevelsFromCandles(rawCandles, structureRange, profile);
   const csaAreas = buildCsaAreas(dailyLevels, symbol, profile);
   const directionalBias = calculateCsaDirectionalBias(dailyLevels, symbol, profile);
-  return { ok: dailyLevels.length > 0, error: dailyLevels.length > 0 ? "" : `No usable ${profile.sourceUnitPlural} were returned.`, dailyLevels, csaAreas, directionalBias, rawCandleCount: rawCandles.length, weekRange: structureRange, symbol, timezone, interval: profile.interval, profile };
+  const approvedAreas = buildApprovedMarketAreas({ csaAreas });
+  return {
+    ok: dailyLevels.length > 0,
+    error: dailyLevels.length > 0 ? "" : `No usable ${profile.sourceUnitPlural} were returned.`,
+    dailyLevels,
+    csaAreas,
+    approvedAreas,
+    directionalBias,
+    rawCandleCount: rawCandles.length,
+    weekRange: structureRange,
+    symbol,
+    timezone,
+    interval: profile.interval,
+    profile,
+  };
 }
 
 function areaBrokenByCloseLater(area, levels = [], symbol = "") {
@@ -1917,6 +2064,16 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
     const cleanTrigger = sanitizeVisibleTrigger(rawTrigger, triggerConfidence);
     const visibleCandleCount = Number.isFinite(Number(parsed?.visibleCandleCount)) ? Number(parsed.visibleCandleCount) : 0;
     const quality = isTradingChart ? parsed?.chartDataQuality || "usable" : "unclear";
+
+    const approvedAreas = buildApprovedMarketAreas(marketReference);
+    const safeUserText = (value) =>
+      removeWeekdayNamesFromUserText(
+        sanitizeUserFacingPriceText(
+          value,
+          approvedAreas,
+          marketReference?.symbol || submittedInstrument
+        )
+      );
 
     return {
       ok: true,
@@ -2178,6 +2335,15 @@ STRICT MARKED/UNMARKED RULE:
   Example: "The bigger picture is slightly bearish, but the ${timeframe} chart is pushing up short-term."
 - Do not give financial advice or guaranteed predictions. This is only chart feedback.
 
+VERIFIED PRICE RULE:
+- Twelve Data is the only approved source for exact market prices in user-facing feedback.
+- You may visually estimate a line price only inside approximatePrice for internal matching.
+- Never copy a visually estimated price into quickVerdict, plainMarketDirection, whatThisMeans, timeframeSummary, bestAreaToWatch, visualSummary, chartMarkupAssessment, entryEvidence, riskEvidence, mainWarning, coachVerdict, strengths, weaknesses, similarities, or differences.
+- In all user-facing text, use only an exact price from this approved list:
+${JSON.stringify(buildApprovedMarketAreas(marketReference), null, 2)}
+- If no approved price fits the point you are making, say "the confirmed support area", "the confirmed resistance area", "the supply area", or "the demand area" without inventing a number.
+- Never create, round, transpose, or substitute a price that is not in the approved list.
+
 Internal support/resistance framework:
 ${buildCsaFrameworkSummaryForVision(marketReference)}
 
@@ -2206,14 +2372,14 @@ Return exactly this JSON shape:
     {
       "type": "support | resistance | zone | label",
       "description": "exact visible object proving the chart is marked",
-      "approximatePrice": "price or null"
+      "approximatePrice": "internal visual estimate only; never repeat this value in user-facing text, or null"
     }
   ],
   "visibleHorizontalLines": [
     {
       "colour": "blue | red | green | orange | other",
       "description": "every clearly visible horizontal line, even if its purpose is uncertain",
-      "approximatePrice": "price or null",
+      "approximatePrice": "internal visual estimate only; never repeat this value in user-facing text, or null",
       "platformLabel": "visible line label or null"
     }
   ],
@@ -2282,18 +2448,18 @@ Return exactly this JSON shape:
       visibleHorizontalLines: Array.isArray(parsed.visibleHorizontalLines)
         ? parsed.visibleHorizontalLines.slice(0, 12)
         : [],
-      csaSimilarities: normalizeArrayOfStrings(parsed.csaSimilarities, []).slice(0, 8),
-      csaDifferences: normalizeArrayOfStrings(parsed.csaDifferences, []).slice(0, 8),
+      csaSimilarities: normalizeArrayOfStrings(parsed.csaSimilarities, []).map(safeUserText).slice(0, 8),
+      csaDifferences: normalizeArrayOfStrings(parsed.csaDifferences, []).map(safeUserText).slice(0, 8),
       shortTermDirection: parsed.shortTermDirection || "unclear",
-      quickVerdict: String(parsed.quickVerdict || "").trim(),
-      plainMarketDirection: String(parsed.plainMarketDirection || "").trim(),
-      whatThisMeans: String(parsed.whatThisMeans || "").trim(),
-      timeframeSummary: String(parsed.timeframeSummary || "").trim(),
-      bestAreaToWatch: String(parsed.bestAreaToWatch || "").trim(),
-      mainWarning: String(parsed.mainWarning || "").trim(),
-      coachVerdict: String(parsed.coachVerdict || "").trim(),
-      chartSpecificStrengths: normalizeArrayOfStrings(parsed.chartSpecificStrengths, []),
-      chartSpecificWeaknesses: normalizeArrayOfStrings(parsed.chartSpecificWeaknesses, []),
+      quickVerdict: safeUserText(parsed.quickVerdict),
+      plainMarketDirection: safeUserText(parsed.plainMarketDirection),
+      whatThisMeans: safeUserText(parsed.whatThisMeans),
+      timeframeSummary: safeUserText(parsed.timeframeSummary),
+      bestAreaToWatch: safeUserText(parsed.bestAreaToWatch),
+      mainWarning: safeUserText(parsed.mainWarning),
+      coachVerdict: safeUserText(parsed.coachVerdict),
+      chartSpecificStrengths: normalizeArrayOfStrings(parsed.chartSpecificStrengths, []).map(safeUserText),
+      chartSpecificWeaknesses: normalizeArrayOfStrings(parsed.chartSpecificWeaknesses, []).map(safeUserText),
       simpleMistakeHub: normalizeVisualMistakeItems(parsed.simpleMistakeHub),
       setupQualityScore: Number.isFinite(Number(parsed.setupQualityScore)) ? clampScore(Number(parsed.setupQualityScore)) : null,
       entryAccuracyScore: Number.isFinite(Number(parsed.entryAccuracyScore)) ? clampScore(Number(parsed.entryAccuracyScore)) : null,
@@ -2318,8 +2484,8 @@ Return exactly this JSON shape:
         analysisFramework === "personal_strategy"
           ? String(parsed.strategyVerdict || "Not enough evidence").trim()
           : null,
-      visualSummary: String(parsed.visualSummary || "").trim(),
-      chartMarkupAssessment: String(parsed.chartMarkupAssessment || "").trim(),
+      visualSummary: safeUserText(parsed.visualSummary),
+      chartMarkupAssessment: safeUserText(parsed.chartMarkupAssessment),
       tradeVisibility: ["visible", "not_visible", "unclear"].includes(
         String(parsed.tradeVisibility || "").toLowerCase()
       )
@@ -2328,8 +2494,8 @@ Return exactly this JSON shape:
       tradeVisibilityReason: String(
         parsed.tradeVisibilityReason || ""
       ).trim(),
-      entryEvidence: String(parsed.entryEvidence || "").trim(),
-      riskEvidence: String(parsed.riskEvidence || "").trim(),
+      entryEvidence: safeUserText(parsed.entryEvidence),
+      riskEvidence: safeUserText(parsed.riskEvidence),
       raw: response.output_text || "",
     };
   } catch (error) {
@@ -3372,16 +3538,59 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
   // For H1/M15/M30/M5/M1 this means Monday high = resistance and Monday low = support.
   const useInitialRangeOnly = initialStatus.hasInitialRange && initialStatus.isStillInsideInitialRange;
 
-  const buyCandidates = useInitialRangeOnly ? [] : getRankedEntryAreas({ areas, levels, symbol, direction: "buy", currentPrice, profile });
-  const sellCandidates = useInitialRangeOnly ? [] : getRankedEntryAreas({ areas, levels, symbol, direction: "sell", currentPrice, profile });
+  // Always rank every valid buying and selling area.
+  // The first range remains an important anchor, but it must not hide a later
+  // supply/demand area that offers the better entry location.
+  const buyCandidates = getRankedEntryAreas({
+    areas,
+    levels,
+    symbol,
+    direction: "buy",
+    currentPrice,
+    profile,
+  });
+  const sellCandidates = getRankedEntryAreas({
+    areas,
+    levels,
+    symbol,
+    direction: "sell",
+    currentPrice,
+    profile,
+  });
 
-  const buyArea = useInitialRangeOnly
-    ? { label: initial.label, type: "support", price: initial.support, priceText: formatPrice(initial.support) }
-    : (buyCandidates[0] || getNearestAreaForDirection({ areas, levels, symbol, direction: "buy", currentPrice, profile }));
+  const buyArea =
+    buyCandidates[0] ||
+    getNearestAreaForDirection({
+      areas,
+      levels,
+      symbol,
+      direction: "buy",
+      currentPrice,
+      profile,
+    }) ||
+    {
+      label: "the first key range",
+      type: "support",
+      price: initial.support,
+      priceText: formatPrice(initial.support),
+    };
 
-  const sellArea = useInitialRangeOnly
-    ? { label: initial.label, type: "resistance", price: initial.resistance, priceText: formatPrice(initial.resistance) }
-    : (sellCandidates[0] || getNearestAreaForDirection({ areas, levels, symbol, direction: "sell", currentPrice, profile }));
+  const sellArea =
+    sellCandidates[0] ||
+    getNearestAreaForDirection({
+      areas,
+      levels,
+      symbol,
+      direction: "sell",
+      currentPrice,
+      profile,
+    }) ||
+    {
+      label: "the first key range",
+      type: "resistance",
+      price: initial.resistance,
+      priceText: formatPrice(initial.resistance),
+    };
 
   const nearestBuyArea = getNearestCandidate(buyCandidates, currentPrice);
   const nearestSellArea = getNearestCandidate(sellCandidates, currentPrice);
@@ -3435,13 +3644,13 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
   let coachVerdict = "This is a wait setup until price reaches one of the key areas and shows a clear reaction.";
   let preferredTrendSetup = "The preferred trend-trading setup is breakout, pullback, and retest.";
 
-  if (useInitialRangeOnly) {
-    quickVerdict = `Wait. Price is still inside ${initial.label}'s range.`;
-    whatThisMeans = `${initialStatus.rangeMessage} This is not the preferred trend-trading setup yet.`;
-    bestAreaToWatch = `For now, the only main areas are ${initial.label} support around ${initialSupportText} and ${initial.label} resistance around ${initialResistanceText}. A buy is only a possible rejection from support; a sell is only a possible rejection from resistance.`;
-    mainWarning = `Do not use smaller internal levels as the main entry area yet. Wait for a close above ${initialResistanceText} or below ${initialSupportText}, then wait for a pullback/retest.`;
-    coachVerdict = `Not recommended as a trend trade yet. Price needs to close above ${initial.label}'s high around ${initialResistanceText} or close below ${initial.label}'s low around ${initialSupportText} before the cleaner trend setup forms.`;
-    preferredTrendSetup = `Preferred setup: close above ${initialResistanceText} then retest for buys, or close below ${initialSupportText} then retest for sells. Until then, only possible rejection trades exist at those two levels.`;
+  if (useInitialRangeOnly && biasGroup === "range") {
+    quickVerdict = "Wait. Price is still moving inside the main range.";
+    whatThisMeans = "The market has not produced a clean directional break, so entries should be taken only from a confirmed edge of the range.";
+    bestAreaToWatch = `The main buying area is around ${buyPriceText}, while the main selling area is around ${sellPriceText}. Wait for confirmation at either area.`;
+    mainWarning = "Do not enter in the middle of the range or chase price after it has already moved.";
+    coachVerdict = "This remains a wait setup until price reaches a confirmed buying or selling area.";
+    preferredTrendSetup = "Wait for price to reach a confirmed area and show a clear rejection or break-and-hold.";
   } else if (biasGroup === "bullish") {
     quickVerdict = `Bullish plan: wait for price to pull back to support around ${buyPriceText} before considering a buy.`;
     whatThisMeans = `The better buy idea is not to chase price now, but to wait for price to drop back to support around ${buyPriceText} and hold.`;
@@ -4941,6 +5150,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       symbol: normalizedSymbol || submittedInstrument,
     });
 
+    visualReview = sanitizeVisualReviewMarketPrices({
+      visualReview,
+      marketReference,
+      symbol: normalizedSymbol || submittedInstrument,
+    });
+
     const baseAnalysis = buildDeterministicCsaAnalysis({
       marketReference,
       dateDecision,
@@ -4951,9 +5166,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       timeframe,
     });
 
+    const cleanedBaseAnalysis = removeWeekdayNamesFromUserText(baseAnalysis);
+
     const analysis =
       selectedStrategy.analysisFramework === "personal_strategy"
-        ? `${baseAnalysis}
+        ? `${cleanedBaseAnalysis}
 
 PERSONAL STRATEGY REVIEW
 
@@ -4980,7 +5197,7 @@ Missing Information:
 ${(visualReview?.strategyMissingInformation || []).length
   ? visualReview.strategyMissingInformation.map((item) => `- ${item}`).join("\n")
   : "- Nothing important was missing."}`
-        : baseAnalysis;
+        : cleanedBaseAnalysis;
     const bias = marketReference.directionalBias || calculateCsaDirectionalBias([], normalizedSymbol, selectedTimeframeProfile);
     const setupScoreMatch = String(analysis).match(/Overall Setup Score:\s*\n- (\d+)\/10/i);
     const setupScore = setupScoreMatch ? Number(setupScoreMatch[1]) : 0;
