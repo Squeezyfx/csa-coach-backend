@@ -3957,10 +3957,17 @@ function buildStarterCoachSummary({
     );
   }
 
-  const finalStrengths = deduplicateFeedbackItems(
-    strengths,
-    3
-  );
+  const finalStrengths = Array.from(
+    new Map(
+      strengths
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+        .map((item) => [
+          normalizeFeedbackText(item),
+          item,
+        ])
+    ).values()
+  ).slice(0, 3);
 
   const weaknesses = normalizeArrayOfStrings(
     dashboardFeedback?.weaknesses,
