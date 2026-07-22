@@ -3546,10 +3546,9 @@ function buildChartMarkingComparisonText({
 
   const initialStatus = trendPlan?.initialRangeStatus || {};
   const supportHasFlipped =
-    initialStatus.breakoutDirection === "bearish" ||
-    initialStatus.supportBroken === true ||
-    initialStatus.supportCloseBroken === true ||
-    initialStatus.closeBelowSupport === true;
+    initialStatus.breakoutDirection === "down" ||
+    initialStatus.breakoutDirection === "both" ||
+    initialStatus.closeBelowLow === true;
 
   if (anchorMatch === "full") {
     if (supportHasFlipped) {
