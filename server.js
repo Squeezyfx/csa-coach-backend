@@ -2129,6 +2129,9 @@ STRICT MARKED/UNMARKED RULE:
 - Never write only "a fresh breakout-and-hold" or "a fresh breakdown-and-hold" without naming the level when one is available.
 - Do not repeat the same pullback, rejection, or retest instruction under both Key Areas & Trade Plan and Entry Confirmation.
 - Entry Confirmation should only state whether a clear buy or sell confirmation is visible.
+- Starter-plan Next Action must include the exact support or resistance price whenever market data provides one.
+- Do not say only "wait for support" or "wait for resistance"; say "support around X" or "resistance around X".
+- For unmarked charts, strengths should explain what useful chart information is still visible, such as enough price history to identify direction and key areas. Avoid vague statements such as only saying that the direction was checked.
 - Do not add a separate Market Direction section when the Quick Verdict already states the bullish, bearish, or range plan.
 - Do not use support, resistance, supply, or demand created on the selected chart date when giving entry areas or a trade plan. Use only earlier completed days or periods.
 - If the chart is unclear, do not guess. Use UNCLEAR and state what cannot be verified.
@@ -3870,163 +3873,173 @@ function buildStarterCoachSummary({
   bias,
   dashboardFeedback,
   visualReview,
+  marketReference,
 }) {
-  const strengths = (dashboardFeedback?.strengths || []).slice(0, 3);
-  const weaknesses = (dashboardFeedback?.weaknesses || []).slice(0, 3);
+  const levels = Array.isArray(marketReference?.dailyLevels)
+    ? marketReference.dailyLevels
+    : [];
+
+  const areas = Array.isArray(marketReference?.csaAreas)
+    ? marketReference.csaAreas
+    : [];
+
+  const profile =
+    marketReference?.profile ||
+    getSupportedCsaTimeframeProfile("H1");
+
+  const symbol =
+    marketReference?.symbol || "";
+
+  const trendPlan = buildBeginnerTrendPlan({
+    levels,
+    areas,
+    bias,
+    symbol,
+    profile,
+  });
+
+  const biasGroup = getBiasGroup(
+    bias?.biasCode || bias?.bias || ""
+  );
+
   const directionalBias =
     bias?.bias ||
     visualReview?.plainMarketDirection ||
     "Not available";
 
-  const correctionAction =
+  const originalStrengths = normalizeArrayOfStrings(
+    dashboardFeedback?.strengths,
+    []
+  );
+
+  const chartMarkingStatus = getChartMarkingStatus(visualReview);
+  const strengths = [];
+
+  const clearChartStrength = originalStrengths.find((item) =>
+    /clear enough|recent price movement|usable chart/i.test(item)
+  );
+
+  const contextStrength = originalStrengths.find((item) =>
+    /instrument and timeframe|match the selected chart/i.test(item)
+  );
+
+  if (clearChartStrength) {
+    strengths.push(
+      "The chart is clear enough to review the recent price movement."
+    );
+  }
+
+  if (contextStrength) {
+    strengths.push(
+      "The instrument and timeframe are visible and match the selected chart details."
+    );
+  }
+
+  if (chartMarkingStatus === "unmarked") {
+    strengths.push(
+      "The chart shows enough price history to identify the main support, resistance, and market direction even though the levels were not drawn."
+    );
+  } else {
+    const levelStrength = originalStrengths.find((item) =>
+      /support|resistance|level/i.test(item)
+    );
+
+    if (levelStrength) {
+      strengths.push(levelStrength);
+    }
+  }
+
+  if (strengths.length < 3) {
+    strengths.push(
+      `The bigger-picture direction is ${String(
+        directionalBias
+      ).toLowerCase()}.`
+    );
+  }
+
+  const finalStrengths = deduplicateFeedbackItems(
+    strengths,
+    3
+  );
+
+  const weaknesses = normalizeArrayOfStrings(
+    dashboardFeedback?.weaknesses,
+    []
+  ).slice(0, 3);
+
+  let correctionAction =
     visualReview?.coachVerdict ||
     visualReview?.mainWarning ||
     dashboardFeedback?.setupQuality?.summary ||
     "Review the setup against the CSA Framework before the next entry.";
+
+  if (
+    biasGroup === "bullish" ||
+    biasGroup === "range_bullish"
+  ) {
+    const supportText =
+      trendPlan?.buyAreaText ||
+      trendPlan?.initialResistanceText ||
+      trendPlan?.initialSupportText;
+
+    if (supportText && supportText !== "N/A") {
+      correctionAction =
+        `Wait for price to come closer to support around ${supportText} before thinking about buying.`;
+    }
+  } else if (
+    biasGroup === "bearish" ||
+    biasGroup === "range_bearish"
+  ) {
+    const resistanceText =
+      trendPlan?.sellAreaText ||
+      trendPlan?.initialSupportText ||
+      trendPlan?.initialResistanceText;
+
+    if (resistanceText && resistanceText !== "N/A") {
+      correctionAction =
+        `Wait for price to come closer to resistance around ${resistanceText} before thinking about selling.`;
+    }
+  } else {
+    const supportText =
+      trendPlan?.buyAreaText ||
+      trendPlan?.initialSupportText;
+
+    const resistanceText =
+      trendPlan?.sellAreaText ||
+      trendPlan?.initialResistanceText;
+
+    if (
+      supportText &&
+      resistanceText &&
+      supportText !== "N/A" &&
+      resistanceText !== "N/A"
+    ) {
+      correctionAction =
+        `Wait for price to move closer to support around ${supportText} or resistance around ${resistanceText} before considering a trade.`;
+    }
+  }
 
   return [
     "DIRECTIONAL BIAS:",
     String(directionalBias),
     "",
     "WHAT YOU DID WELL:",
-    ...(strengths.length ? strengths.map((item) => `- ${item}`) : ["- No clear strength was confirmed."]),
+    ...(
+      finalStrengths.length
+        ? finalStrengths.map((item) => `- ${item}`)
+        : ["- The chart contains enough information for a basic review."]
+    ),
     "",
     "WHAT TO IMPROVE:",
-    ...(weaknesses.length ? weaknesses.map((item) => `- ${item}`) : ["- No specific weakness was confirmed."]),
+    ...(
+      weaknesses.length
+        ? weaknesses.map((item) => `- ${item}`)
+        : ["- No specific weakness was confirmed."]
+    ),
     "",
     "NEXT ACTION:",
     correctionAction,
   ].join("\n");
-}
-
-function extractAnalysisSection(analysis = "", heading = "") {
-  const escapedHeading = String(heading)
-    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-  const pattern = new RegExp(
-    `(?:^|\\n)${escapedHeading}:\\s*\\n([\\s\\S]*?)(?=\\n[A-Z][A-Za-z, &]+:\\s*\\n|\\nREAD_MORE_DETAILS:|$)`,
-    "i"
-  );
-
-  const match = String(analysis || "").match(pattern);
-  return match ? match[1].trim() : "";
-}
-
-function cleanSectionLines(value = "") {
-  return String(value || "")
-    .split("\\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => line.replace(/^[-•]\\s*/, "").trim())
-    .filter(Boolean);
-}
-
-function buildPaidCoachSummary({
-  responseBody,
-  bias,
-  dashboardFeedback,
-  visualReview,
-}) {
-  const originalAnalysis = String(responseBody?.analysis || "");
-
-  const quickVerdictLines = cleanSectionLines(
-    extractAnalysisSection(originalAnalysis, "Quick Verdict")
-  );
-
-  const chartLevelLines = cleanSectionLines(
-    extractAnalysisSection(originalAnalysis, "Chart Levels")
-  );
-
-  const keyAreaLines = cleanSectionLines(
-    extractAnalysisSection(originalAnalysis, "Key Areas & Trade Plan")
-  );
-
-  const entryPlanLines = cleanSectionLines(
-    extractAnalysisSection(originalAnalysis, "Entry, Stop Loss & Target")
-  );
-
-  const warningLines = cleanSectionLines(
-    extractAnalysisSection(originalAnalysis, "Main Warning")
-  );
-
-  const scoreLines = cleanSectionLines(
-    extractAnalysisSection(originalAnalysis, "Overall Setup Score")
-  );
-
-  const strengths = (dashboardFeedback?.strengths || []).slice(0, 4);
-  const weaknesses = (dashboardFeedback?.weaknesses || []).slice(0, 4);
-
-  const directionText =
-    bias?.traderBias ||
-    bias?.bias ||
-    visualReview?.plainMarketDirection ||
-    "The market direction could not be confirmed clearly.";
-
-  const directionReason =
-    bias?.rangePositionNote ||
-    bias?.higherTimeframeView ||
-    bias?.reason ||
-    "";
-
-  const quickVerdict =
-    quickVerdictLines[0] ||
-    visualReview?.coachVerdict ||
-    dashboardFeedback?.setupQuality?.summary ||
-    "The setup was reviewed using the visible chart evidence.";
-
-  const nextAction =
-    entryPlanLines.length
-      ? entryPlanLines
-      : [
-          visualReview?.coachVerdict ||
-          visualReview?.mainWarning ||
-          dashboardFeedback?.setupQuality?.summary ||
-          "Wait for price to reach a clear area and show confirmation before entering."
-        ];
-
-  const scoreText =
-    scoreLines[0] ||
-    `${Math.max(
-      0,
-      Math.min(
-        10,
-        Math.round(Number(dashboardFeedback?.setupQualityScore || 0) / 10)
-      )
-    )}/10`;
-
-  const improvementItems = [
-    ...weaknesses,
-    ...warningLines.map((item) => `Main issue: ${item}`),
-  ].filter(Boolean);
-
-  const marketDirectionAndAreas = [
-    directionText,
-    directionReason,
-    ...chartLevelLines,
-    ...keyAreaLines,
-  ].filter(Boolean);
-
-  return [
-    "QUICK VERDICT:",
-    quickVerdict,
-    "",
-    "MARKET DIRECTION & KEY AREAS:",
-    ...marketDirectionAndAreas.map((item) => `- ${item}`),
-    "",
-    "WHAT YOU DID WELL:",
-    ...(strengths.length
-      ? strengths.map((item) => `- ${item}`)
-      : ["- No clear strength was confirmed from the chart or notes."]),
-    "",
-    "WHAT TO IMPROVE:",
-    ...(improvementItems.length
-      ? improvementItems.slice(0, 5).map((item) => `- ${item}`)
-      : ["- No specific weakness was confirmed from the available evidence."]),
-    "",
-    "YOUR NEXT ACTION & SETUP SCORE:",
-    ...nextAction.map((item) => `- ${item}`),
-    `- Overall Setup Score: ${scoreText}`,
-  ].join("\\n");
 }
 
 function applyPlanToAnalysisResponse({
@@ -4036,36 +4049,15 @@ function applyPlanToAnalysisResponse({
   dashboardFeedback,
   visualReview,
 }) {
-  const effectivePlan = normalizePlanCode(entitlement?.effectivePlan);
-
-  if (effectivePlan !== "starter") {
-    const paidSummary = buildPaidCoachSummary({
-      responseBody,
-      bias,
-      dashboardFeedback,
-      visualReview,
-    });
-
-    return {
-      ...responseBody,
-      analysis: paidSummary,
-      summary: paidSummary,
-      coachAdvice: [paidSummary],
-      paidReviewStructure: "five-section",
-      reviewSections: [
-        "QUICK VERDICT",
-        "MARKET DIRECTION & KEY AREAS",
-        "WHAT YOU DID WELL",
-        "WHAT TO IMPROVE",
-        "YOUR NEXT ACTION & SETUP SCORE",
-      ],
-    };
+  if (entitlement?.effectivePlan !== "starter") {
+    return responseBody;
   }
 
   const starterSummary = buildStarterCoachSummary({
     bias,
     dashboardFeedback,
     visualReview,
+    marketReference: responseBody?.marketReference || null,
   });
 
   const strengths = (dashboardFeedback?.strengths || []).slice(0, 3);
