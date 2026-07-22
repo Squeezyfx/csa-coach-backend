@@ -2120,8 +2120,12 @@ STRICT MARKED/UNMARKED RULE:
 - For a marked chart, explain the result in one very simple sentence.
 - Do not use the words "marked chart", "similarities", "differences", "framework comparison", "internal areas", "Monday's high", or "Monday's low" in user-facing feedback.
 - State visible levels simply, for example: "There is a resistance correctly marked around X and a support correctly marked around Y."
-- If a correctly marked support has already broken and price has held below it, explain that it should now act as resistance.
-- For a bearish Main Warning, name the next earlier support price that would need to break and hold. Do not write only "a fresh breakdown-and-hold" without the level.
+- Always check whether any correctly marked support or resistance has broken and held on the other side.
+- If resistance has broken and price has held above it, explain that it should now act as support.
+- If support has broken and price has held below it, explain that it should now act as resistance.
+- For a bullish Main Warning, name the next earlier resistance price that would need a fresh breakout-and-hold.
+- For a bearish Main Warning, name the next earlier support price that would need a fresh breakdown-and-hold.
+- Never write only "a fresh breakout-and-hold" or "a fresh breakdown-and-hold" without naming the level when one is available.
 - Do not repeat the same pullback, rejection, or retest instruction under both Key Areas & Trade Plan and Entry Confirmation.
 - Entry Confirmation should only state whether a clear buy or sell confirmation is visible.
 - Do not add a separate Market Direction section when the Quick Verdict already states the bullish, bearish, or range plan.
@@ -3402,6 +3406,24 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
     ? nextSupportArea.priceText || formatPrice(nextSupportArea.price)
     : null;
 
+  const higherResistanceCandidates = sellCandidates
+    .filter(
+      (candidate) =>
+        Number.isFinite(Number(candidate?.price)) &&
+        Number(candidate.price) > currentPrice
+    )
+    .sort(
+      (a, b) =>
+        Math.abs(Number(a.price) - currentPrice) -
+        Math.abs(Number(b.price) - currentPrice)
+    );
+
+  const nextResistanceArea = higherResistanceCandidates[0] || null;
+  const nextResistanceText = nextResistanceArea
+    ? nextResistanceArea.priceText ||
+      formatPrice(nextResistanceArea.price)
+    : null;
+
   let quickVerdict = "Wait for price to reach a clear area before taking action.";
   let whatThisMeans = "The safest plan is to wait for price to reach support or resistance, then look for a clear reaction.";
   let bestAreaToWatch = `Buy only if price drops to support around ${initialSupportText} and holds. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
@@ -3420,7 +3442,9 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
     quickVerdict = `Bullish plan: wait for price to pull back to support around ${buyPriceText} before considering a buy.`;
     whatThisMeans = `The better buy idea is not to chase price now, but to wait for price to drop back to support around ${buyPriceText} and hold.`;
     bestAreaToWatch = buyAreaComparison || `For a buy, wait for price to drop back to support around ${buyPriceText} and then show a clear bullish candle or strong rejection from that area.`;
-    mainWarning = `Do not buy in the middle. Wait for the better support area around ${buyPriceText} or a fresh breakout-and-hold before considering a buy.`;
+    mainWarning = nextResistanceText
+      ? `Do not buy in the middle. Wait for the better support area around ${buyPriceText} or a fresh breakout-and-hold of ${nextResistanceText} resistance before considering a buy.`
+      : `Do not buy in the middle. Wait for the better support area around ${buyPriceText} or a fresh breakout-and-hold of the next resistance before considering a buy.`;
     coachVerdict = `The cleaner plan is to look for buys only after price holds the better support area around ${buyPriceText}.`;
   } else if (biasGroup === "bearish") {
     quickVerdict = `Bearish plan: wait for price to rise back to resistance around ${sellPriceText} before considering a sell.`;
@@ -3456,6 +3480,8 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
     sellArea,
     nextSupportArea,
     nextSupportText,
+    nextResistanceArea,
+    nextResistanceText,
     nearestBuyArea,
     nearestSellArea,
     buyAreaComparison,
@@ -3550,7 +3576,20 @@ function buildChartMarkingComparisonText({
     initialStatus.breakoutDirection === "both" ||
     initialStatus.closeBelowLow === true;
 
+  const resistanceHasFlipped =
+    initialStatus.breakoutDirection === "up" ||
+    initialStatus.breakoutDirection === "both" ||
+    initialStatus.closeAboveHigh === true;
+
   if (anchorMatch === "full") {
+    if (resistanceHasFlipped && supportHasFlipped) {
+      return `There is a resistance correctly marked around ${trendPlan.initialResistanceText}, which has now broken and should act as support, and a support correctly marked around ${trendPlan.initialSupportText}, which has now broken and should act as resistance.`;
+    }
+
+    if (resistanceHasFlipped) {
+      return `There is a resistance correctly marked around ${trendPlan.initialResistanceText}, which has now broken and should act as support, and a support correctly marked around ${trendPlan.initialSupportText}.`;
+    }
+
     if (supportHasFlipped) {
       return `There is a resistance correctly marked around ${trendPlan.initialResistanceText}, and a support correctly marked around ${trendPlan.initialSupportText}, which has now broken and should act as resistance.`;
     }
@@ -3565,6 +3604,10 @@ function buildChartMarkingComparisonText({
     )[0];
 
     if (/resistance/i.test(firstMatch || "")) {
+      if (resistanceHasFlipped) {
+        return `There is a resistance correctly marked around ${trendPlan.initialResistanceText}, which has now broken and should act as support.`;
+      }
+
       return `There is a resistance correctly marked around ${trendPlan.initialResistanceText}.`;
     }
 
