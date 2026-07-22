@@ -3899,6 +3899,136 @@ function buildStarterCoachSummary({
   ].join("\n");
 }
 
+function extractAnalysisSection(analysis = "", heading = "") {
+  const escapedHeading = String(heading)
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const pattern = new RegExp(
+    `(?:^|\\n)${escapedHeading}:\\s*\\n([\\s\\S]*?)(?=\\n[A-Z][A-Za-z, &]+:\\s*\\n|\\nREAD_MORE_DETAILS:|$)`,
+    "i"
+  );
+
+  const match = String(analysis || "").match(pattern);
+  return match ? match[1].trim() : "";
+}
+
+function cleanSectionLines(value = "") {
+  return String(value || "")
+    .split("\\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^[-•]\\s*/, "").trim())
+    .filter(Boolean);
+}
+
+function buildPaidCoachSummary({
+  responseBody,
+  bias,
+  dashboardFeedback,
+  visualReview,
+}) {
+  const originalAnalysis = String(responseBody?.analysis || "");
+
+  const quickVerdictLines = cleanSectionLines(
+    extractAnalysisSection(originalAnalysis, "Quick Verdict")
+  );
+
+  const chartLevelLines = cleanSectionLines(
+    extractAnalysisSection(originalAnalysis, "Chart Levels")
+  );
+
+  const keyAreaLines = cleanSectionLines(
+    extractAnalysisSection(originalAnalysis, "Key Areas & Trade Plan")
+  );
+
+  const entryPlanLines = cleanSectionLines(
+    extractAnalysisSection(originalAnalysis, "Entry, Stop Loss & Target")
+  );
+
+  const warningLines = cleanSectionLines(
+    extractAnalysisSection(originalAnalysis, "Main Warning")
+  );
+
+  const scoreLines = cleanSectionLines(
+    extractAnalysisSection(originalAnalysis, "Overall Setup Score")
+  );
+
+  const strengths = (dashboardFeedback?.strengths || []).slice(0, 4);
+  const weaknesses = (dashboardFeedback?.weaknesses || []).slice(0, 4);
+
+  const directionText =
+    bias?.traderBias ||
+    bias?.bias ||
+    visualReview?.plainMarketDirection ||
+    "The market direction could not be confirmed clearly.";
+
+  const directionReason =
+    bias?.rangePositionNote ||
+    bias?.higherTimeframeView ||
+    bias?.reason ||
+    "";
+
+  const quickVerdict =
+    quickVerdictLines[0] ||
+    visualReview?.coachVerdict ||
+    dashboardFeedback?.setupQuality?.summary ||
+    "The setup was reviewed using the visible chart evidence.";
+
+  const nextAction =
+    entryPlanLines.length
+      ? entryPlanLines
+      : [
+          visualReview?.coachVerdict ||
+          visualReview?.mainWarning ||
+          dashboardFeedback?.setupQuality?.summary ||
+          "Wait for price to reach a clear area and show confirmation before entering."
+        ];
+
+  const scoreText =
+    scoreLines[0] ||
+    `${Math.max(
+      0,
+      Math.min(
+        10,
+        Math.round(Number(dashboardFeedback?.setupQualityScore || 0) / 10)
+      )
+    )}/10`;
+
+  const improvementItems = [
+    ...weaknesses,
+    ...warningLines.map((item) => `Main issue: ${item}`),
+  ].filter(Boolean);
+
+  const marketDirectionAndAreas = [
+    directionText,
+    directionReason,
+    ...chartLevelLines,
+    ...keyAreaLines,
+  ].filter(Boolean);
+
+  return [
+    "QUICK VERDICT:",
+    quickVerdict,
+    "",
+    "MARKET DIRECTION & KEY AREAS:",
+    ...marketDirectionAndAreas.map((item) => `- ${item}`),
+    "",
+    "WHAT YOU DID WELL:",
+    ...(strengths.length
+      ? strengths.map((item) => `- ${item}`)
+      : ["- No clear strength was confirmed from the chart or notes."]),
+    "",
+    "WHAT TO IMPROVE:",
+    ...(improvementItems.length
+      ? improvementItems.slice(0, 5).map((item) => `- ${item}`)
+      : ["- No specific weakness was confirmed from the available evidence."]),
+    "",
+    "YOUR NEXT ACTION & SETUP SCORE:",
+    ...nextAction.map((item) => `- ${item}`),
+    `- Overall Setup Score: ${scoreText}`,
+  ].join("\\n");
+}
+
 function applyPlanToAnalysisResponse({
   responseBody,
   entitlement,
@@ -3906,8 +4036,30 @@ function applyPlanToAnalysisResponse({
   dashboardFeedback,
   visualReview,
 }) {
-  if (entitlement?.effectivePlan !== "starter") {
-    return responseBody;
+  const effectivePlan = normalizePlanCode(entitlement?.effectivePlan);
+
+  if (effectivePlan !== "starter") {
+    const paidSummary = buildPaidCoachSummary({
+      responseBody,
+      bias,
+      dashboardFeedback,
+      visualReview,
+    });
+
+    return {
+      ...responseBody,
+      analysis: paidSummary,
+      summary: paidSummary,
+      coachAdvice: [paidSummary],
+      paidReviewStructure: "five-section",
+      reviewSections: [
+        "QUICK VERDICT",
+        "MARKET DIRECTION & KEY AREAS",
+        "WHAT YOU DID WELL",
+        "WHAT TO IMPROVE",
+        "YOUR NEXT ACTION & SETUP SCORE",
+      ],
+    };
   }
 
   const starterSummary = buildStarterCoachSummary({
