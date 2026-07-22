@@ -2118,9 +2118,11 @@ STRICT MARKED/UNMARKED RULE:
 - After that, explain the important areas calculated by the internal framework using simple wording such as: "However, the main areas to watch are support around X and resistance around Y."
 - Never list "support and resistance are clearly marked" as a strength on an unmarked chart.
 - For a marked chart, explain the result in one very simple sentence.
-- Do not use the words "marked chart", "similarities", "differences", "framework comparison", or "internal areas" in user-facing feedback.
-- If the key high and low match the visible lines, simply say there is a resistance correctly marked at the resistance price and a support correctly marked at the support price.
-- When the Monday high and low match, do not also produce a contradictory mismatch comment.
+- Do not use the words "marked chart", "similarities", "differences", "framework comparison", "internal areas", "Monday's high", or "Monday's low" in user-facing feedback.
+- State visible levels simply, for example: "There is a resistance correctly marked around X and a support correctly marked around Y."
+- Do not repeat the same pullback, rejection, or retest instruction under both Key Areas & Trade Plan and Entry Confirmation.
+- Entry Confirmation should only state whether a clear buy or sell confirmation is visible.
+- Do not add a separate Market Direction section when the Quick Verdict already states the bullish, bearish, or range plan.
 - Do not use support, resistance, supply, or demand created on the selected chart date when giving entry areas or a trade plan. Use only earlier completed days or periods.
 - If the chart is unclear, do not guess. Use UNCLEAR and state what cannot be verified.
 - The user is likely a beginner. Use very simple trading language.
@@ -2128,10 +2130,11 @@ STRICT MARKED/UNMARKED RULE:
 - Do not mention trendlines, channels, Fibonacci, indicators, or moving averages. They are outside this review. Ignore them unless they hide price.
 - Explain only what matters to a beginner:
   1. Is the bigger picture bullish, bearish, or ranging?
-  2. Should the trader wait, buy, sell, or avoid chasing?
-  3. Where exactly should price return before a better setup forms? Always include support/resistance and the price level.
-  4. Is there a clear entry confirmation?
-  5. Is stop loss/target visible enough to judge?
+  2. What is the selected ${timeframe} chart doing right now?
+  3. Should the trader wait, buy, sell, or avoid chasing?
+  4. Where exactly should price return before a better setup forms? Always include support/resistance and the price level.
+  5. Is there a clear entry confirmation?
+  6. Is stop loss/target visible enough to judge?
 - The internal range-position check may use the first key high/low as a deep-pullback guide, but user-facing wording should stay simple.
 - Do not mention Fibonacci, retracement percentages, 61.8, 50%, or technical confluence in user-facing feedback.
 - When there are two possible entry areas, explain which one is better in beginner language: the closer area may be possible but may offer poor reward, while the deeper pullback area may be better because it gives price more room to move.
@@ -2488,8 +2491,8 @@ function resolveIntradayCsaChartMarking({
 
   if (resistanceMatch && supportMatch) {
     const matchText =
-      `Monday's high around ${formatPrice(mondayHigh)} is marked as resistance, ` +
-      `and Monday's low around ${formatPrice(mondayLow)} is marked as support.`;
+      `There is a resistance correctly marked around ${formatPrice(mondayHigh)}, ` +
+      `and a support correctly marked around ${formatPrice(mondayLow)}.`;
 
     return {
       ...visualReview,
@@ -3492,21 +3495,21 @@ function buildEntryConfirmationText({ trendPlan = {}, chartDetection = null, vis
   // or "wait for resistance" during a buy-focused setup. Entry confirmation should
   // match the active trade idea.
   if (biasGroup === "bearish" || biasGroup === "range_bearish") {
-    return `No visible sell confirmation yet. A better sell setup would be if price pulls back toward resistance around ${sellPriceText} and rejects from there.`;
+    return "No clear sell confirmation is visible yet.";
   }
 
   if (biasGroup === "bullish" || biasGroup === "range_bullish") {
-    return `No visible buy confirmation yet. A better buy setup would be if price pulls back toward support around ${buyPriceText} and holds from there.`;
+    return "No clear buy confirmation is visible yet.";
   }
 
   if (trendPlan?.useInitialRangeOnly) {
-    return `No clear entry confirmation is visible yet. Wait for price to reach ${trendPlan.initialSupportText || buyPriceText} support or ${trendPlan.initialResistanceText || sellPriceText} resistance and show a clear reaction.`;
+    return "No clear entry confirmation is visible yet.";
   }
 
   const visualText = String(visualReview?.entryEvidence || "").trim();
   if (visualText && !/support first|resistance first|hold below support|below support/i.test(visualText)) return visualText;
 
-  return "No clear entry confirmation is visible yet. Wait for price to reach a clear support or resistance area first.";
+  return "No clear entry confirmation is visible yet.";
 }
 
 function buildChartMarkingComparisonText({
@@ -3519,15 +3522,7 @@ function buildChartMarkingComparisonText({
   ).toLowerCase();
 
   if (anchorMatch === "full") {
-    const firstMatch = normalizeArrayOfStrings(
-      visualReview?.csaSimilarities,
-      []
-    )[0];
-
-    return (
-      firstMatch ||
-      `There is a resistance correctly marked around ${trendPlan.initialResistanceText}, and a support correctly marked around ${trendPlan.initialSupportText}.`
-    );
+    return `There is a resistance correctly marked around ${trendPlan.initialResistanceText}, and a support correctly marked around ${trendPlan.initialSupportText}.`;
   }
 
   if (anchorMatch === "partial") {
@@ -3535,44 +3530,35 @@ function buildChartMarkingComparisonText({
       visualReview?.csaSimilarities,
       []
     )[0];
-    const firstDifference = normalizeArrayOfStrings(
-      visualReview?.csaDifferences,
-      []
-    )[0];
 
-    return [firstMatch, firstDifference].filter(Boolean).join(" ");
+    if (/resistance/i.test(firstMatch || "")) {
+      return `There is a resistance correctly marked around ${trendPlan.initialResistanceText}.`;
+    }
+
+    if (/support/i.test(firstMatch || "")) {
+      return `There is a support correctly marked around ${trendPlan.initialSupportText}.`;
+    }
+
+    return "One key level is marked correctly, but the other level could not be confirmed.";
   }
 
   if (markingStatus === "marked") {
-    const firstMatch = normalizeArrayOfStrings(
-      visualReview?.csaSimilarities,
-      []
-    )[0];
-
-    return (
-      firstMatch ||
-      "Support and resistance lines are visible, but their exact prices could not be confirmed."
-    );
+    return "Support and resistance lines are visible, but their exact prices could not be confirmed.";
   }
 
   if (markingStatus === "unmarked") {
     return `No support or resistance lines are marked. The main areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}.`;
   }
 
-  return `The chart lines could not be confirmed clearly. The main areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}.`;
+  return `The chart levels could not be confirmed clearly. The main areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}.`;
 }
 
 function buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, visualReview = null, submittedInstrument, normalizedSymbol, timeframe }) {
   const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
 
   if (!marketReference || !marketReference.ok) {
-    return `COACH VERDICT
-
-Quick Verdict:
+    return `Quick Verdict:
 - I could not review this chart properly because the market data was not available.
-
-Market Direction:
-- Not enough data to judge the bigger-picture direction.
 
 What This Means:
 - Check that the selected instrument, timeframe, and date are correct, then run the review again.
@@ -3588,8 +3574,7 @@ Overall Setup Score:
     dateDecision?.selectedDateText ||
     "";
 
-  // Do not use support/resistance or supply/demand created on the selected day.
-  // Only earlier completed periods may guide the current trade plan.
+  // Use only levels created before the selected date.
   const areas = excludeSameDayAreas(allAreas, selectedDateText);
 
   const bias =
@@ -3633,12 +3618,6 @@ Overall Setup Score:
       ? 6
       : 7;
 
-  const directionSummary =
-    bias?.traderBias ||
-    `The bigger-picture direction is ${String(
-      bias?.bias || "unclear"
-    ).toLowerCase()}.`;
-
   const quickVerdict = trendPlan.quickVerdict;
   const bestAreaToWatch = trendPlan.bestAreaToWatch;
   const entryConfirmation = buildEntryConfirmationText({
@@ -3655,16 +3634,11 @@ Overall Setup Score:
   const supportText = listAreas([...supportAreas, ...demandAreas], "support area", 3);
   const resistanceText = listAreas([...resistanceAreas, ...supplyAreas], "resistance area", 3);
 
-  return `COACH VERDICT
-
-Quick Verdict:
+  return `Quick Verdict:
 - ${quickVerdict}
 
 Chart Levels:
 - ${markingComparison}
-
-Market Direction:
-- ${directionSummary}
 
 Key Areas & Trade Plan:
 - ${bestAreaToWatch}
@@ -3806,9 +3780,6 @@ function buildStarterCoachSummary({
     "Review the setup against the CSA Framework before the next entry.";
 
   return [
-    "COACH VERDICT:",
-    correctionAction,
-    "",
     "DIRECTIONAL BIAS:",
     String(directionalBias),
     "",
@@ -4585,8 +4556,8 @@ app.get("/sample-analysis", (req, res) => {
       { title: "Trading too close to resistance", severity: "Review" },
       { title: "Risk plan not confirmed", severity: "Review" }
     ],
-    summary: "COACH VERDICT:\nWAIT. Price has reached a resistance area after a bullish move, but there is no fresh confirmed trigger yet.\n\nWHAT THE CHART DOES WELL:\n- Support and resistance areas are clear.\n- The move from support toward resistance is easy to judge.\n\nMAIN RISK:\n- Entering now could mean buying directly into resistance or selling without confirmation.\n\nNEXT ACTION:\nWait for either a clean break-and-hold above resistance followed by a retest, or a clear bearish rejection before considering the next setup.\n\nREAD_MORE_DETAILS:\nThis sample is designed to demonstrate the dashboard experience. It is not live market analysis and should not be treated as a trade signal.",
-    analysis: "COACH VERDICT:\nWAIT. Price is at resistance without a fresh confirmed trigger.",
+    summary: "WAIT. Price has reached a resistance area after a bullish move, but there is no fresh confirmed trigger yet.\n\nWHAT THE CHART DOES WELL:\n- Support and resistance areas are clear.\n- The move from support toward resistance is easy to judge.\n\nMAIN RISK:\n- Entering now could mean buying directly into resistance or selling without confirmation.\n\nNEXT ACTION:\nWait for either a clean break-and-hold above resistance followed by a retest, or a clear bearish rejection before considering the next setup.\n\nREAD_MORE_DETAILS:\nThis sample is designed to demonstrate the dashboard experience. It is not live market analysis and should not be treated as a trade signal.",
+    analysis: "WAIT. Price is at resistance without a fresh confirmed trigger.",
     setupQuality: { score: 86, label: "Good", summary: "The structure and location are clear." },
     entryAccuracy: { score: 74, label: "Fair", summary: "The next entry still needs confirmation." },
     riskManagement: { score: 78, label: "Good", summary: "Risk can be planned, but SL and target are not confirmed." },
