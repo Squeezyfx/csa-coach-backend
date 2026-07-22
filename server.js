@@ -1191,23 +1191,35 @@ async function saveCompletedReview({
 const CHART_DETECTION_PROMPT = `
 You are CSA Coach's chart screenshot validator. Return ONLY valid JSON.
 
-A valid trading chart screenshot must show a clear, directly readable financial chart with visible candles/bars/line movement, a readable price scale, and a readable time/date axis.
+Your job is to decide whether the uploaded image contains a usable financial trading chart.
 
-The trading chart must be the main subject of the uploaded image. Reject screenshots where the chart is only a small nested element inside another webpage, mobile screen, dashboard, social-media post, document, presentation, analytics page, or application screenshot.
+ACCEPT a chart when:
+- candles, bars, or clear price movement are visible;
+- a price scale is visible on the side;
+- a time/date axis is visible along the bottom;
+- the chart is the main subject of the uploaded image;
+- there are about 15 or more visible candles/bars/points.
 
-Invalid/insufficient images:
-- photos, logos, documents, rooms, screenshots with no financial chart
-- screenshots of webpages, dashboards, phones, documents, or applications where a small chart appears inside a larger interface
-- images where the actual chart occupies less than about 60% of the useful image area
-- images where candles, price scale, time axis, symbol, or timeframe are too small to read reliably
-- blank charts, loading charts, charts where no candle/line movement is visible
-- charts with fewer than about 15 visible candles/bars/points
-- heavily cropped, blurry, compressed, or zoomed-out screenshots that prevent reliable chart review
+Normal chart-platform content is allowed and must NOT cause rejection:
+- MetaTrader, TradingView, cTrader, broker-platform, or other chart headers;
+- toolbars, tabs, price labels, bid/ask lines, order lines, indicators, grids;
+- support/resistance lines, supply/demand zones, rectangles, trendlines, Fibonacci, arrows, text notes, or other chart drawings;
+- a small amount of surrounding platform interface;
+- a screenshot where the chart occupies roughly 35% or more of the useful image and is still clearly readable.
 
-Important decision rule:
-- A tiny chart inside a large screenshot is NOT a valid chart upload, even if some candles are technically visible.
-- Do not accept a nested chart merely because the user-selected instrument and timeframe were supplied.
-- When uncertain whether the chart itself is large and readable enough, mark isTradingChart=false.
+REJECT only when:
+- there is no financial trading chart;
+- the chart is a tiny secondary object inside a much larger webpage, phone screen, social post, document, presentation, or dashboard;
+- candles and price movement cannot be read;
+- the price scale or time axis is missing or unreadable;
+- the chart is blank, loading, heavily blurred, severely cropped, or has fewer than about 15 visible candles/bars/points.
+
+Important decision rules:
+- Do not reject a normal trading-platform screenshot simply because it contains borders, toolbars, indicators, drawings, or annotations.
+- Do not classify a full MetaTrader, TradingView, cTrader, or broker chart as a nested chart merely because platform controls are visible.
+- If the chart is clearly the main content and price movement, price scale, and time axis are readable, mark isTradingChart=true.
+- When uncertain but the chart is still clearly usable, prefer isTradingChart=true and use medium or low confidence for uncertain details.
+- Use isTradingChart=false only when the image is genuinely not usable as a trading chart.
 
 Important:
 - Take your time to inspect the top-left chart header, chart title, symbol label, and timeframe label before returning JSON.
@@ -1217,7 +1229,7 @@ Important:
 - Be practical. If a chart clearly has visible price movement, do not mark it insufficient just because the exact selected date is hard to read.
 - If the selected date is clearly far after the latest visible chart date, set selectedDateVisible=false and provide latestVisibleDate.
 - If the date axis is hard to read, set dateConfidence="low" instead of blocking the chart.
-- Only mark hasUsablePriceData=false when the chart is truly blank/unclear/cropped/loading or has almost no price movement.
+- Only mark hasUsablePriceData=false when the chart is truly blank, unreadable, severely cropped, loading, or has almost no price movement.
 - Do not comment on strategies such as trendlines, channels, indicators, Fibonacci, or moving averages in this step. This step only validates the chart and detects basic context.
 
 Entry trigger rule:
@@ -2058,12 +2070,50 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
 
     const parsed = extractJsonObject(response.output_text || "");
     if (!parsed) return fallback("Chart validation did not return usable JSON.");
-    const isTradingChart = parsed?.isTradingChart === true;
+    const visibleCandleCount = Number.isFinite(
+      Number(parsed?.visibleCandleCount)
+    )
+      ? Number(parsed.visibleCandleCount)
+      : 0;
+
+    const occupancy = Number.isFinite(
+      Number(parsed?.chartOccupancyPercent)
+    )
+      ? Math.max(
+          0,
+          Math.min(100, Number(parsed.chartOccupancyPercent))
+        )
+      : 0;
+
+    const modelMarkedValid =
+      parsed?.isTradingChart === true;
+
+    const readableChartEvidence =
+      visibleCandleCount >= 15 &&
+      parsed?.hasUsablePriceData !== false &&
+      parsed?.isChartReadableAtCurrentSize !== false &&
+      parsed?.isNestedChart !== true &&
+      (occupancy === 0 || occupancy >= 35);
+
+    /*
+     * Rescue normal trading-platform screenshots when the model is overly
+     * cautious but its own evidence says the chart is readable and usable.
+     */
+    const isTradingChart =
+      modelMarkedValid || readableChartEvidence;
+
     const rawTrigger = parsed?.visibleTrigger || null;
-    const triggerConfidence = parsed?.triggerConfidence || "low";
-    const cleanTrigger = sanitizeVisibleTrigger(rawTrigger, triggerConfidence);
-    const visibleCandleCount = Number.isFinite(Number(parsed?.visibleCandleCount)) ? Number(parsed.visibleCandleCount) : 0;
-    const quality = isTradingChart ? parsed?.chartDataQuality || "usable" : "unclear";
+    const triggerConfidence =
+      parsed?.triggerConfidence || "low";
+
+    const cleanTrigger = sanitizeVisibleTrigger(
+      rawTrigger,
+      triggerConfidence
+    );
+
+    const quality = isTradingChart
+      ? parsed?.chartDataQuality || "usable"
+      : "unclear";
 
     const approvedAreas = buildApprovedMarketAreas(marketReference);
     const safeUserText = (value) =>
@@ -2082,9 +2132,7 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
       hasUsablePriceData: isTradingChart ? parsed?.hasUsablePriceData !== false : false,
       visibleCandleCount,
       chartDataQuality: quality,
-      chartOccupancyPercent: Number.isFinite(Number(parsed?.chartOccupancyPercent))
-        ? Math.max(0, Math.min(100, Number(parsed.chartOccupancyPercent)))
-        : 0,
+      chartOccupancyPercent: occupancy,
       isNestedChart: parsed?.isNestedChart === true,
       isChartReadableAtCurrentSize: parsed?.isChartReadableAtCurrentSize === true,
       selectedDateVisible: isTradingChart ? parsed?.selectedDateVisible === true : false,
@@ -2116,7 +2164,13 @@ function isUploadedChartDataUsable(chartDetection, selectedDateText = "") {
   if (chartDetection.isChartReadableAtCurrentSize === false) return false;
 
   const occupancy = Number(chartDetection.chartOccupancyPercent || 0);
-  if (Number.isFinite(occupancy) && occupancy > 0 && occupancy < 60) return false;
+  if (
+    Number.isFinite(occupancy) &&
+    occupancy > 0 &&
+    occupancy < 35
+  ) {
+    return false;
+  }
 
   if (chartDetection.hasUsablePriceData === false) return false;
 
