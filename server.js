@@ -2120,7 +2120,8 @@ STRICT MARKED/UNMARKED RULE:
 - For a marked chart, explain the result in one very simple sentence.
 - Do not use the words "marked chart", "similarities", "differences", "framework comparison", "internal areas", "Monday's high", or "Monday's low" in user-facing feedback.
 - State visible levels simply, for example: "There is a resistance correctly marked around X and a support correctly marked around Y."
-- Always check whether any correctly marked support or resistance has broken and held on the other side.
+- Always check whether any support or resistance level has broken and held on the other side, whether the chart is marked, unmarked, or unclear.
+- Update the level's current role in Chart Levels instead of describing only its original role.
 - If resistance has broken and price has held above it, explain that it should now act as support.
 - If support has broken and price has held below it, explain that it should now act as resistance.
 - For a bullish Main Warning, name the next earlier resistance price that would need a fresh breakout-and-hold.
@@ -3627,7 +3628,31 @@ function buildChartMarkingComparisonText({
   }
 
   if (markingStatus === "unmarked") {
+    if (resistanceHasFlipped && supportHasFlipped) {
+      return `No support or resistance lines are marked. The main areas to watch are support around ${trendPlan.initialSupportText}, which has now broken and should act as resistance, and resistance around ${trendPlan.initialResistanceText}, which has now broken and should act as support.`;
+    }
+
+    if (resistanceHasFlipped) {
+      return `No support or resistance lines are marked. The main areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}, which has now broken and should act as support.`;
+    }
+
+    if (supportHasFlipped) {
+      return `No support or resistance lines are marked. The main areas to watch are support around ${trendPlan.initialSupportText}, which has now broken and should act as resistance, and resistance around ${trendPlan.initialResistanceText}.`;
+    }
+
     return `No support or resistance lines are marked. The main areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}.`;
+  }
+
+  if (resistanceHasFlipped && supportHasFlipped) {
+    return `The chart levels could not be confirmed clearly. The main areas to watch are support around ${trendPlan.initialSupportText}, which has now broken and should act as resistance, and resistance around ${trendPlan.initialResistanceText}, which has now broken and should act as support.`;
+  }
+
+  if (resistanceHasFlipped) {
+    return `The chart levels could not be confirmed clearly. The main areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}, which has now broken and should act as support.`;
+  }
+
+  if (supportHasFlipped) {
+    return `The chart levels could not be confirmed clearly. The main areas to watch are support around ${trendPlan.initialSupportText}, which has now broken and should act as resistance, and resistance around ${trendPlan.initialResistanceText}.`;
   }
 
   return `The chart levels could not be confirmed clearly. The main areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}.`;
