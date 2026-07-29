@@ -1740,10 +1740,6 @@ function sanitizeVisualReviewMarketPrices({
       visualReview.chartSpecificWeaknesses,
       []
     ).map(safeText),
-    preferredEntryArea: visualReview.preferredEntryArea || null,
-    convertedLevelAssessment: safeText(visualReview.convertedLevelAssessment),
-    firstTarget: safeText(visualReview.firstTarget),
-    recommendedStop: safeText(visualReview.recommendedStop),
   };
 }
 
@@ -2288,10 +2284,6 @@ function visualFallback(reason) {
     chartMarkupAssessment: "",
     entryEvidence: "",
     riskEvidence: "",
-    preferredEntryArea: null,
-    convertedLevelAssessment: "",
-    firstTarget: "",
-    recommendedStop: "",
     raw: "",
   };
 }
@@ -2502,10 +2494,6 @@ ${JSON.stringify(buildApprovedMarketAreas(marketReference), null, 2)}
 - You may use a clearly printed chart price when the visible label itself proves the number.
 - If neither an approved market price nor a clearly printed chart price is available, say "the confirmed support area", "the confirmed resistance area", "the supply area", or "the demand area" without inventing a number.
 - Never create, transpose, or silently substitute a price.
-- IMPORTANT: When the uploaded chart visibly marks a supply or demand rectangle/zone, return the zone boundaries in preferredEntryArea.low/high when those boundaries are clearly printed. Do not collapse the zone to the nearest Twelve Data point.
-- If the chart annotation explicitly describes a future retest, set status="not_reached" unless price has actually returned to the zone.
-- Do not write "exact sell level is not defined" or "exact buy level is not defined" when a valid zone is visible. A zone is sufficient.
-- For a bearish plan near support, do not introduce a buy scenario unless the chart itself clearly presents a valid bullish plan.
 
 Internal support/resistance framework:
 ${buildCsaFrameworkSummaryForVision(marketReference)}
@@ -2524,6 +2512,24 @@ Initial image validation:
 - Detected timeframe: ${chartDetection?.detectedTimeframe || "not detected"}
 - Latest visible date: ${chartDetection?.latestVisibleDate || "not detected"}
 - Detected trigger: ${chartDetection?.visibleTrigger || "none confirmed"}
+
+CSA ENTRY-ZONE RULES:
+- Supply and demand are zones, not single price points.
+- When a rectangle or shaded zone is visible, return zoneLow and zoneHigh when its boundaries are clearly readable.
+- Do not replace a visible supply/demand zone with the nearest single Twelve Data level.
+- For a bearish setup, prefer the nearest valid supply or converted-resistance zone above current price.
+- For a bullish setup, prefer the nearest valid demand or converted-support zone below current price.
+- State whether price has not reached, is approaching, is inside, has reacted from, or has moved away from the area.
+- A wick through a level that closes back on the original side is normally a false break.
+- A broken support/resistance level is only confirmed as converted after an opposite-side retest and hold/rejection.
+- Never say an exact entry price is required when the chart clearly shows a valid zone.
+- If price has not reached the planned area, say no trigger exists there yet.
+
+SCORING RULES:
+- A readable pre-trade or post-trade chart with no visible executed trade is still a plan review, not an automatic failure.
+- Correct direction and a sensible marked area must not receive 0 for setup quality.
+- Missing trigger lowers readiness but does not make entry accuracy 0.
+- Missing stop/target lowers risk management but does not make it 0.
 
 Return exactly this JSON shape:
 {
@@ -2553,20 +2559,18 @@ Return exactly this JSON shape:
   "plainMarketDirection": "one simple sentence combining bigger-picture direction and ${timeframe} chart direction",
   "whatThisMeans": "one simple sentence explaining what the trader should understand from the chart",
   "timeframeSummary": "one simple sentence describing what the uploaded ${timeframe} chart is doing",
-  "bestAreaToWatch": "one simple sentence saying where price should return before a better setup. Use a zone/range when the chart shows a supply or demand zone; do not reduce a visible zone to one exact price.",
+  "bestAreaToWatch": "one simple sentence saying where price should return before a better setup. Use a supply/demand ZONE when visible; do not force one exact price.",
   "preferredEntryArea": {
-    "direction": "buy | sell | neutral",
-    "areaType": "support | resistance | supply | demand | converted support | converted resistance | none",
-    "low": "clearly printed lower boundary as a number or null",
-    "high": "clearly printed upper boundary as a number or null",
-    "singlePrice": "clearly printed single level as a number or null",
-    "status": "not_reached | approaching | inside | reacted | moved_away | unclear",
+    "direction": "buy | sell | none",
+    "areaType": "support | resistance | demand | supply | converted support | converted resistance | none",
+    "zoneLow": "exact lower boundary only when clearly printed on chart or approved market data; otherwise null",
+    "zoneHigh": "exact upper boundary only when clearly printed on chart or approved market data; otherwise null",
+    "zoneText": "beginner-friendly area description, preferably a range when the chart shows a zone",
+    "priceStatus": "not reached | approaching | inside | reacted | moved away | unclear",
     "triggerPresent": false,
-    "description": "brief beginner-friendly explanation of why this is the preferred area"
+    "triggerDescription": "visible trigger or null"
   },
-  "convertedLevelAssessment": "brief statement distinguishing broken, potential conversion, confirmed conversion, false break, or none",
-  "firstTarget": "next opposing support/resistance using an approved or clearly printed price, or a simple area description",
-  "recommendedStop": "one simple invalidation-based stop approach, or state that a stop cannot yet be assessed",
+  "convertedLevelAssessment": "brief beginner-friendly statement about any broken level and whether an opposite-side retest confirmed conversion, or null",
   "visualSummary": "2 short beginner-friendly sentences. Mention bigger-picture direction and uploaded timeframe direction if different.",
   "chartMarkupAssessment": "simple comment about whether the important support/resistance areas are clear; do not mention trendlines/channels/indicators",
   "tradeVisibility": "visible | not_visible | unclear",
@@ -2632,25 +2636,28 @@ Return exactly this JSON shape:
       whatThisMeans: safeUserText(parsed.whatThisMeans),
       timeframeSummary: safeUserText(parsed.timeframeSummary),
       bestAreaToWatch: safeUserText(parsed.bestAreaToWatch),
+      preferredEntryArea:
+        parsed.preferredEntryArea && typeof parsed.preferredEntryArea === "object"
+          ? {
+              direction: String(parsed.preferredEntryArea.direction || "none").toLowerCase(),
+              areaType: String(parsed.preferredEntryArea.areaType || "none").toLowerCase(),
+              zoneLow: Number.isFinite(Number(parsed.preferredEntryArea.zoneLow))
+                ? Number(parsed.preferredEntryArea.zoneLow)
+                : null,
+              zoneHigh: Number.isFinite(Number(parsed.preferredEntryArea.zoneHigh))
+                ? Number(parsed.preferredEntryArea.zoneHigh)
+                : null,
+              zoneText: safeUserText(parsed.preferredEntryArea.zoneText),
+              priceStatus: String(parsed.preferredEntryArea.priceStatus || "unclear").toLowerCase(),
+              triggerPresent: parsed.preferredEntryArea.triggerPresent === true,
+              triggerDescription: safeUserText(parsed.preferredEntryArea.triggerDescription),
+            }
+          : null,
+      convertedLevelAssessment: safeUserText(parsed.convertedLevelAssessment),
       mainWarning: safeUserText(parsed.mainWarning),
       coachVerdict: safeUserText(parsed.coachVerdict),
       chartSpecificStrengths: normalizeArrayOfStrings(parsed.chartSpecificStrengths, []).map(safeUserText),
       chartSpecificWeaknesses: normalizeArrayOfStrings(parsed.chartSpecificWeaknesses, []).map(safeUserText),
-      preferredEntryArea: parsed.preferredEntryArea && typeof parsed.preferredEntryArea === "object"
-        ? {
-            direction: String(parsed.preferredEntryArea.direction || "neutral").toLowerCase(),
-            areaType: String(parsed.preferredEntryArea.areaType || "none").toLowerCase(),
-            low: Number.isFinite(Number(parsed.preferredEntryArea.low)) ? Number(parsed.preferredEntryArea.low) : null,
-            high: Number.isFinite(Number(parsed.preferredEntryArea.high)) ? Number(parsed.preferredEntryArea.high) : null,
-            singlePrice: Number.isFinite(Number(parsed.preferredEntryArea.singlePrice)) ? Number(parsed.preferredEntryArea.singlePrice) : null,
-            status: String(parsed.preferredEntryArea.status || "unclear").toLowerCase(),
-            triggerPresent: parsed.preferredEntryArea.triggerPresent === true,
-            description: safeUserText(parsed.preferredEntryArea.description || ""),
-          }
-        : null,
-      convertedLevelAssessment: safeUserText(parsed.convertedLevelAssessment),
-      firstTarget: safeUserText(parsed.firstTarget),
-      recommendedStop: safeUserText(parsed.recommendedStop),
       simpleMistakeHub: normalizeVisualMistakeItems(parsed.simpleMistakeHub),
       setupQualityScore: Number.isFinite(Number(parsed.setupQualityScore)) ? clampScore(Number(parsed.setupQualityScore)) : null,
       entryAccuracyScore: Number.isFinite(Number(parsed.entryAccuracyScore)) ? clampScore(Number(parsed.entryAccuracyScore)) : null,
@@ -3012,11 +3019,9 @@ function feedbackCategory(text = "") {
   ) return "levels_not_marked";
 
   if (
-    /(no clear|not detected|missing|not yet).*(confirmation|trigger)/.test(value) ||
-    /(confirmation|trigger).*(not clear|not visible|missing|not yet)/.test(value)
+    /(no clear|not detected|missing).*(confirmation|trigger)/.test(value) ||
+    /(confirmation|trigger).*(not clear|not visible|missing)/.test(value)
   ) return "entry_confirmation_missing";
-
-  if (/(has not|not yet).*(reached|retested)|(entry zone|planned area).*(not reached|not retested)/.test(value)) return "entry_area_not_reached";
 
   if (
     /(no visible|missing|not shown|cannot judge).*(stop loss|target|take profit|risk)/.test(value) ||
@@ -3080,11 +3085,7 @@ function isActualWeakness(text = "") {
     value.includes("setup is unclear") ||
     value.includes("trade plan is unclear") ||
     value.includes("against the bigger picture") ||
-    value.includes("does not match") ||
-    value.includes("has not yet retested") ||
-    value.includes("has not yet reached") ||
-    value.includes("not confirmed as resistance") ||
-    value.includes("not confirmed as support")
+    value.includes("does not match")
   );
 }
 
@@ -3255,12 +3256,14 @@ function buildDashboardFeedback({
   }
 
   const strengths = removeDuplicateFeedback(
-    [...visualStrengths, ...frameworkStrengths],
+    [
+      ...visualStrengths,
+      ...frameworkStrengths.filter((item) =>
+        /market direction|support|resistance|supply|demand|entry area|bearish|bullish/i.test(item)
+      ),
+      ...frameworkStrengths,
+    ],
     4
-  );
-
-  visualWeaknesses = visualWeaknesses.filter((item) =>
-    !/exact (sell|buy|entry) (level|price).*not (defined|shown)|exact level is not defined/i.test(String(item || ""))
   );
 
   const weaknesses = removeDuplicateFeedback(
@@ -3303,15 +3306,16 @@ function buildDashboardFeedback({
       : 30
   );
 
-  // A valid pre-trade plan is not a failed trade. Score planning/readiness instead of forcing 0/F.
-  if (isPreTrade && !hasVisibleTrade) {
+  // A chart with no visible executed trade is a plan/readiness review, not an automatic failure.
+  // Apply this protection even when the user accidentally selects post-trade mode.
+  if (!hasVisibleTrade) {
     if (hasUsefulMarkedPlan || hasPlannedArea) setupQualityScore = Math.max(setupQualityScore, 60);
-    else setupQualityScore = Math.max(setupQualityScore, 45);
+    else setupQualityScore = Math.max(setupQualityScore, isPreTrade ? 45 : 40);
 
     // No trigger yet means “not ready”, not “zero accuracy”.
     entryAccuracyScore = Math.max(entryAccuracyScore, hasConfirmedTrigger ? 65 : 45);
 
-    // Missing SL/TP should reduce risk score, but not erase the quality of the plan.
+    // Missing SL/TP reduces the score, but does not erase the quality of the plan.
     riskManagementScore = Math.max(riskManagementScore, hasVisibleRiskPlan ? 65 : 35);
   }
 
@@ -4311,79 +4315,60 @@ function buildStoppedDashboard({ errorType, error, submittedInstrument, timefram
 }
 
 
-function formatPreferredEntryArea(area = null, symbol = "") {
+function formatPreferredEntryZone(visualReview = null, directionalBias = "") {
+  const area = visualReview?.preferredEntryArea;
   if (!area || typeof area !== "object") return "";
-  const low = Number(area.low);
-  const high = Number(area.high);
-  const single = Number(area.singlePrice);
-  if (Number.isFinite(low) && Number.isFinite(high)) {
-    const lower = Math.min(low, high);
-    const upper = Math.max(low, high);
-    return `${formatPrice(lower)}–${formatPrice(upper)}`;
-  }
-  if (Number.isFinite(single)) return formatPrice(single);
-  return "";
-}
 
-function buildCsaStarterAction({ directionalBias = "", visualReview = null, trendPlan = {}, symbol = "" }) {
-  const biasText = String(directionalBias || "").toLowerCase();
-  const area = visualReview?.preferredEntryArea || null;
-  const areaText = formatPreferredEntryArea(area, symbol);
-  const areaType = String(area?.areaType || "").toLowerCase();
-  const status = String(area?.status || "unclear").toLowerCase();
-  const isBearish = biasText.includes("bearish");
-  const isBullish = biasText.includes("bullish");
+  const low = Number(area.zoneLow);
+  const high = Number(area.zoneHigh);
+  const hasLow = Number.isFinite(low);
+  const hasHigh = Number.isFinite(high);
+  const areaType = String(area.areaType || "area").toLowerCase();
+  const direction = String(area.direction || "").toLowerCase();
+  const status = String(area.priceStatus || "unclear").toLowerCase();
+  const zoneText = String(area.zoneText || "").trim();
 
-  if (isBearish && area && ["sell", "neutral"].includes(String(area.direction || "sell").toLowerCase())) {
-    const label = areaType.includes("supply") ? "supply area" : areaType.includes("converted") ? "converted resistance area" : "resistance area";
-    const where = areaText ? `${label} around ${areaText}` : `the marked ${label}`;
-    const statusLead = status === "not_reached" || status === "approaching"
-      ? `Wait for price to retrace towards ${where}.`
-      : status === "inside"
-      ? `Price is inside ${where}; wait for confirmation.`
-      : status === "reacted"
-      ? `Price has reacted from ${where}; only consider the setup if a fresh bearish trigger is still valid.`
-      : `Wait for price to return to ${where}.`;
-    const supportWarning = trendPlan?.nextSupportText
-      ? ` Do not chase the sell while price is close to support around ${trendPlan.nextSupportText}.`
-      : " Do not chase the sell while price is already near support.";
-    return `${statusLead} Consider a sell only after a clear bearish trigger appears.${supportWarning}`;
+  let priceText = zoneText;
+  if (hasLow && hasHigh) {
+    const zoneMin = Math.min(low, high);
+    const zoneMax = Math.max(low, high);
+    priceText = `${formatPrice(zoneMin)}–${formatPrice(zoneMax)}`;
+  } else if (hasLow) {
+    priceText = formatPrice(low);
+  } else if (hasHigh) {
+    priceText = formatPrice(high);
   }
 
-  if (isBullish && area && ["buy", "neutral"].includes(String(area.direction || "buy").toLowerCase())) {
-    const label = areaType.includes("demand") ? "demand area" : areaType.includes("converted") ? "converted support area" : "support area";
-    const where = areaText ? `${label} around ${areaText}` : `the marked ${label}`;
-    const statusLead = status === "not_reached" || status === "approaching"
-      ? `Wait for price to pull back towards ${where}.`
-      : status === "inside"
-      ? `Price is inside ${where}; wait for confirmation.`
-      : status === "reacted"
-      ? `Price has reacted from ${where}; only consider the setup if a fresh bullish trigger is still valid.`
-      : `Wait for price to return to ${where}.`;
-    const resistanceWarning = trendPlan?.nextResistanceText
-      ? ` Do not chase the buy while price is close to resistance around ${trendPlan.nextResistanceText}.`
-      : " Do not chase the buy while price is already near resistance.";
-    return `${statusLead} Consider a buy only after a clear bullish trigger appears.${resistanceWarning}`;
+  const bearish = /bearish/.test(String(directionalBias).toLowerCase()) || direction === "sell";
+  const bullish = /bullish/.test(String(directionalBias).toLowerCase()) || direction === "buy";
+  const namedArea = areaType && areaType !== "none" ? areaType : bearish ? "supply area" : bullish ? "demand area" : "planned area";
+  const location = priceText ? `${namedArea} around ${priceText}` : `the ${namedArea}`;
+
+  if (bearish) {
+    if (["not reached", "approaching", "unclear"].includes(status)) {
+      return `Wait for price to retrace towards the ${location} and show a clear bearish trigger before considering a sell. Do not chase the move while price remains close to support.`;
+    }
+    if (status === "inside") {
+      return `Price is now inside the ${location}. Wait for a clear bearish trigger before considering a sell.`;
+    }
+    if (status === "reacted") {
+      return `Price has reacted from the ${location}. Only consider the sell if the bearish trigger is still fresh and the first support target leaves enough room.`;
+    }
   }
 
-  return String(visualReview?.bestAreaToWatch || trendPlan?.bestAreaToWatch || "").trim();
-}
-
-function buildStarterScores({ dashboardFeedback = {}, visualReview = null, analysisType = "pre-trade" }) {
-  const isPreTrade = normalizeAnalysisType(analysisType) === "pre-trade";
-  let setup = clampScore(dashboardFeedback?.setupQualityScore ?? dashboardFeedback?.setupQuality?.score ?? 0);
-  let entry = clampScore(dashboardFeedback?.entryAccuracyScore ?? dashboardFeedback?.entryAccuracy?.score ?? 0);
-  let risk = clampScore(dashboardFeedback?.riskManagementScore ?? dashboardFeedback?.riskManagement?.score ?? 0);
-  if (isPreTrade) {
-    const area = visualReview?.preferredEntryArea;
-    const hasArea = Boolean(area && (Number.isFinite(Number(area.low)) || Number.isFinite(Number(area.high)) || Number.isFinite(Number(area.singlePrice)) || area.description));
-    setup = Math.max(setup, hasArea ? 65 : 45);
-    entry = Math.max(entry, area?.triggerPresent ? 65 : 45);
-    const riskText = String(visualReview?.riskEvidence || "").toLowerCase();
-    const hasRisk = riskText && !/not shown|not visible|cannot be judged|no visible/.test(riskText);
-    risk = Math.max(risk, hasRisk ? 65 : 35);
+  if (bullish) {
+    if (["not reached", "approaching", "unclear"].includes(status)) {
+      return `Wait for price to return to the ${location} and show a clear bullish trigger before considering a buy. Do not chase the move while price remains close to resistance.`;
+    }
+    if (status === "inside") {
+      return `Price is now inside the ${location}. Wait for a clear bullish trigger before considering a buy.`;
+    }
+    if (status === "reacted") {
+      return `Price has reacted from the ${location}. Only consider the buy if the bullish trigger is still fresh and the first resistance target leaves enough room.`;
+    }
   }
-  return { setup, entry, risk };
+
+  return priceText ? `Watch the ${location} and wait for a fresh confirmation trigger.` : "";
 }
 
 function buildStarterCoachSummary({
@@ -4432,17 +4417,11 @@ function buildStarterCoachSummary({
   );
   const similarities = normalizeArrayOfStrings(visualReview?.csaSimilarities, []);
   const dashboardStrengths = normalizeArrayOfStrings(dashboardFeedback?.strengths, []);
-  const preferredArea = visualReview?.preferredEntryArea || null;
-  const preferredAreaText = formatPreferredEntryArea(preferredArea, symbol);
-  const preferredAreaStrength = preferredArea && preferredAreaText
-    ? `The ${String(preferredArea.areaType || "entry").replace(/_/g, " ")} around ${preferredAreaText} is identified as the main area to watch.`
-    : "";
 
   // Trading-specific evidence must appear before generic chart validation comments.
   const strengths = removeDuplicateFeedback(
     [
       ...chartSpecificStrengths,
-      preferredAreaStrength,
       ...similarities,
       ...dashboardStrengths.filter((item) =>
         /support|resistance|supply|demand|entry area|market direction|bearish|bullish|avoid|wait/i.test(item)
@@ -4456,32 +4435,22 @@ function buildStarterCoachSummary({
 
   let weaknesses = removeDuplicateFeedback(
     [
-      ...normalizeArrayOfStrings(visualReview?.chartSpecificWeaknesses, []).filter((item) =>
-        !/exact (sell|buy|entry) (level|price).*not (defined|shown)|exact level is not defined/i.test(String(item || ""))
-      ),
+      ...normalizeArrayOfStrings(visualReview?.chartSpecificWeaknesses, []),
       ...normalizeArrayOfStrings(visualReview?.csaDifferences, []),
       ...normalizeArrayOfStrings(dashboardFeedback?.weaknesses, []),
-    ],
+    ].filter((item) =>
+      !/exact (sell|buy|entry) (level|price).*not defined|exact .* level is not defined/i.test(String(item || ""))
+    ),
     4
   );
 
   const entryText = String(visualReview?.entryEvidence || "").toLowerCase();
   const riskText = String(visualReview?.riskEvidence || "").toLowerCase();
+  const structuredAreaAction = formatPreferredEntryZone(visualReview, directionalBias);
   const bestAreaText = String(visualReview?.bestAreaToWatch || "").trim();
+  const convertedLevelText = String(visualReview?.convertedLevelAssessment || "").trim();
   const warningText = String(visualReview?.mainWarning || "").trim();
   const verdictText = String(visualReview?.coachVerdict || "").trim();
-  const preferredStatus = String(preferredArea?.status || "unclear").toLowerCase();
-
-  if (["not_reached", "approaching"].includes(preferredStatus)) {
-    weaknesses.unshift("Price has not yet retested the planned entry zone, so there is no confirmed entry yet.");
-  }
-  if (preferredArea && preferredArea.triggerPresent !== true) {
-    weaknesses.unshift("No clear entry trigger is visible at the planned area yet.");
-  }
-  if (String(visualReview?.convertedLevelAssessment || "").trim()) {
-    const convertedText = String(visualReview.convertedLevelAssessment).trim();
-    if (/not confirmed|potential|may act|await|needs? a retest|unconfirmed/i.test(convertedText)) weaknesses.push(convertedText);
-  }
 
   if (/no visible entry|no clear|not yet|has not reached|has not retested/.test(entryText)) {
     weaknesses.unshift("Price has not yet produced a confirmed entry trigger at the planned area.");
@@ -4489,15 +4458,14 @@ function buildStarterCoachSummary({
   if (/not shown|not visible|no visible trade risk|cannot be judged/.test(riskText)) {
     weaknesses.push("A stop loss and target are not clearly shown, so the planned risk cannot yet be assessed.");
   }
+  if (convertedLevelText && !/none|not applicable/i.test(convertedLevelText)) {
+    weaknesses.push(convertedLevelText);
+  }
   weaknesses = removeDuplicateFeedback(weaknesses, 4);
 
-  let correctionAction = buildCsaStarterAction({
-    directionalBias,
-    visualReview,
-    trendPlan,
-    symbol,
-  }) || bestAreaText || verdictText || warningText || trendPlan.bestAreaToWatch;
+  let correctionAction = structuredAreaAction || bestAreaText || verdictText || warningText || trendPlan.bestAreaToWatch;
 
+  // Never replace an image-aware supply/demand plan with a generic nearest-level fallback.
   if (!correctionAction) correctionAction = trendPlan.bestAreaToWatch;
 
   // Prevent an unrelated opposite-direction scenario when the chart has a clear directional plan.
@@ -4556,27 +4524,9 @@ function applyPlanToAnalysisResponse({
 
   const strengths = (dashboardFeedback?.strengths || []).slice(0, 3);
   const weaknesses = (dashboardFeedback?.weaknesses || []).slice(0, 3);
-  const starterScores = buildStarterScores({
-    dashboardFeedback,
-    visualReview,
-    analysisType: responseBody?.analysisType || "pre-trade",
-  });
-  const starterOverall = Math.round((starterScores.setup + starterScores.entry + starterScores.risk) / 3);
-  const starterGrade = starterOverall >= 85 ? "A" : starterOverall >= 75 ? "B" : starterOverall >= 60 ? "C" : starterOverall >= 40 ? "D" : "F";
 
   return {
     ...responseBody,
-    grade: starterGrade,
-    confidence: starterOverall,
-    structureScore: starterScores.setup,
-    executionScore: starterScores.entry,
-    riskScore: starterScores.risk,
-    setupQualityScore: starterScores.setup,
-    entryAccuracyScore: starterScores.entry,
-    riskManagementScore: starterScores.risk,
-    setupQuality: { ...(responseBody.setupQuality || {}), score: starterScores.setup, label: scoreLabel(starterScores.setup) },
-    entryAccuracy: { ...(responseBody.entryAccuracy || {}), score: starterScores.entry, label: scoreLabel(starterScores.entry) },
-    riskManagement: { ...(responseBody.riskManagement || {}), score: starterScores.risk, label: scoreLabel(starterScores.risk) },
     analysis: starterSummary,
     summary: starterSummary,
     coachAdvice: [starterSummary],
@@ -4584,6 +4534,20 @@ function applyPlanToAnalysisResponse({
     whatYouDidWell: strengths,
     weaknesses,
     whatCostYouProfit: weaknesses,
+    setupQuality: dashboardFeedback.setupQuality,
+    entryAccuracy: dashboardFeedback.entryAccuracy,
+    riskManagement: dashboardFeedback.riskManagement,
+    setupQualityScore: dashboardFeedback.setupQualityScore,
+    entryAccuracyScore: dashboardFeedback.entryAccuracyScore,
+    riskManagementScore: dashboardFeedback.riskManagementScore,
+    structureScore: dashboardFeedback.setupQualityScore,
+    executionScore: dashboardFeedback.entryAccuracyScore,
+    riskScore: dashboardFeedback.riskManagementScore,
+    confidence: Math.round((dashboardFeedback.setupQualityScore + dashboardFeedback.entryAccuracyScore + dashboardFeedback.riskManagementScore) / 3),
+    grade: (() => {
+      const score = Math.round((dashboardFeedback.setupQualityScore + dashboardFeedback.entryAccuracyScore + dashboardFeedback.riskManagementScore) / 3);
+      return score >= 85 ? "A" : score >= 75 ? "B" : score >= 60 ? "C" : score >= 40 ? "D" : "F";
+    })(),
     mistakes: [],
     mistakeHub: [],
     mistakeDetectionHub: [],
