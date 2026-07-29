@@ -2343,6 +2343,10 @@ ENTRY AREA AND TIMING
 - Avoid buying directly under resistance, selling directly above support, entering in the middle, or chasing after price has already moved.
 - Clearly distinguish: not reached, approaching, inside, reacted, or moved away.
 - If price has not retested the area, say so. Never imply a rejection or trigger has already happened.
+- For every proposed entry zone, explicitly decide one status internally: NOT_REACHED, APPROACHING, INSIDE, REACTED, or MOVED_AWAY.
+- In user-facing feedback, state the status plainly. Example: "Price has not yet retested the supply area, so there is no confirmed sell entry yet."
+- Do not choose the nearest broken support/resistance as the main entry merely because it is closest to current price. Rank the fresh supply/demand zone that caused the move, the quality of the zone, direction, and room to the first target.
+- A broken level without an opposite-side retest is only potential converted support/resistance. It may be Entry 1, but it must not replace a clearer Entry 2 supply/demand zone automatically.
 
 ENTRY 1 AND ENTRY 2
 - More than one area can be valid.
@@ -2485,6 +2489,12 @@ STRICT MARKED/UNMARKED RULE:
   Example: "The bigger picture is slightly bearish, but the ${timeframe} chart is pushing up short-term."
 - Do not give financial advice or guaranteed predictions. This is only chart feedback.
 
+PRE-TRADE SCORING RULE:
+- A pre-trade chart with a correct direction and a valid planned area must not receive 0 simply because no trade has been entered.
+- Score setup quality based on the plan. Score entry readiness lower when price has not reached the area or no trigger is visible.
+- Score risk planning lower when stop loss/target are missing, but do not automatically use 0 unless the plan is unusable or completely contradictory.
+- The written feedback and scores must agree. Do not return "No major weakness" together with an F or 0 scores.
+
 VERIFIED PRICE RULE:
 - Twelve Data is the only approved source for exact market prices in user-facing feedback.
 - You may visually estimate a line price only inside approximatePrice for internal matching.
@@ -2541,6 +2551,8 @@ Return exactly this JSON shape:
   "whatThisMeans": "one simple sentence explaining what the trader should understand from the chart",
   "timeframeSummary": "one simple sentence describing what the uploaded ${timeframe} chart is doing",
   "bestAreaToWatch": "one simple sentence saying exactly where price should return before a better setup, including support/resistance and price level",
+  "primaryEntryAreaStatus": "not_reached | approaching | inside | reacted | moved_away | unclear",
+  "primaryEntryAreaType": "support | resistance | supply | demand | converted_support | converted_resistance | unclear",
   "visualSummary": "2 short beginner-friendly sentences. Mention bigger-picture direction and uploaded timeframe direction if different.",
   "chartMarkupAssessment": "simple comment about whether the important support/resistance areas are clear; do not mention trendlines/channels/indicators",
   "tradeVisibility": "visible | not_visible | unclear",
@@ -2606,6 +2618,10 @@ Return exactly this JSON shape:
       whatThisMeans: safeUserText(parsed.whatThisMeans),
       timeframeSummary: safeUserText(parsed.timeframeSummary),
       bestAreaToWatch: safeUserText(parsed.bestAreaToWatch),
+      primaryEntryAreaStatus: ["not_reached", "approaching", "inside", "reacted", "moved_away", "unclear"].includes(String(parsed.primaryEntryAreaStatus || "").toLowerCase())
+        ? String(parsed.primaryEntryAreaStatus).toLowerCase()
+        : "unclear",
+      primaryEntryAreaType: String(parsed.primaryEntryAreaType || "unclear").toLowerCase(),
       mainWarning: safeUserText(parsed.mainWarning),
       coachVerdict: safeUserText(parsed.coachVerdict),
       chartSpecificStrengths: normalizeArrayOfStrings(parsed.chartSpecificStrengths, []).map(safeUserText),
@@ -3089,6 +3105,7 @@ function buildDashboardFeedback({
   detectedDateText,
   submittedNotes = "",
   setupScore = 0,
+  analysisType = "post-trade",
 }) {
   const profile =
     marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
@@ -3155,6 +3172,25 @@ function buildDashboardFeedback({
     );
   }
 
+  if (!hasVisibleTrade && normalizeAnalysisType(analysisType) === "pre-trade") {
+    const areaStatus = String(visualReview?.primaryEntryAreaStatus || "").toLowerCase();
+    if (["not_reached", "approaching"].includes(areaStatus)) {
+      frameworkWeaknesses.push(
+        "Price has not yet completed a retest of the planned entry area, so the setup is not ready."
+      );
+    }
+    if (!hasConfirmedTrigger) {
+      frameworkWeaknesses.push(
+        "No clear entry confirmation is visible at the planned area yet."
+      );
+    }
+    if (!hasVisibleRiskPlan) {
+      frameworkWeaknesses.push(
+        "A clear stop loss and first target are not shown, so the planned risk cannot yet be assessed."
+      );
+    }
+  }
+
   let visualStrengths = visualOk
     ? normalizeArrayOfStrings(visualReview.chartSpecificStrengths, [])
     : [];
@@ -3164,13 +3200,22 @@ function buildDashboardFeedback({
     : [];
 
   if (!hasVisibleTrade) {
-    visualWeaknesses = visualWeaknesses.filter(
-      (item) =>
-        !assumesTradeWasTaken(item) &&
-        feedbackCategory(item) !== "entry_confirmation_missing" &&
-        feedbackCategory(item) !== "risk_plan_missing" &&
-        feedbackCategory(item) !== "middle_range_entry"
-    );
+    // Never criticise execution when no trade is visible. In a pre-trade review,
+    // however, "price has not reached the area", "no trigger yet", and a missing
+    // stop/target plan are valid setup limitations and must remain in feedback.
+    visualWeaknesses = visualWeaknesses.filter((item) => {
+      if (assumesTradeWasTaken(item)) return false;
+      if (feedbackCategory(item) === "middle_range_entry") return false;
+      if (
+        normalizeAnalysisType(analysisType) !== "pre-trade" &&
+        ["entry_confirmation_missing", "risk_plan_missing"].includes(
+          feedbackCategory(item)
+        )
+      ) {
+        return false;
+      }
+      return true;
+    });
   }
 
   if (chartMarkingStatus === "unmarked") {
@@ -3202,7 +3247,8 @@ function buildDashboardFeedback({
   }
 
   const strengths = removeDuplicateFeedback(
-    [...frameworkStrengths, ...visualStrengths],
+    // Chart-specific observations are more useful than generic validation notes.
+    [...visualStrengths, ...frameworkStrengths],
     4
   );
 
@@ -3214,26 +3260,58 @@ function buildDashboardFeedback({
     4
   );
 
+  const isPreTrade = normalizeAnalysisType(analysisType) === "pre-trade";
+  const chartUsable = Boolean(chartDetection?.hasUsablePriceData && marketOk);
+
+  // Do not let a model-generated zero turn a valid pre-trade plan into an F merely
+  // because no trade has been entered yet. Score the quality/readiness of the plan.
+  const rawSetupScore = shouldUseVisualScore(
+    visualReview?.setupQualityScore,
+    marketOk
+  )
+    ? Number(visualReview.setupQualityScore)
+    : Number(setupScore || (chartUsable ? 60 : 0));
+
   const setupQualityScore = clampScore(
-    Number.isFinite(Number(visualReview?.setupQualityScore))
-      ? visualReview.setupQualityScore
-      : setupScore
+    chartUsable ? Math.max(40, rawSetupScore) : rawSetupScore
   );
+
+  const rawEntryScore = shouldUseVisualScore(
+    visualReview?.entryAccuracyScore,
+    marketOk
+  )
+    ? Number(visualReview.entryAccuracyScore)
+    : hasConfirmedTrigger
+    ? 70
+    : isPreTrade
+    ? 50
+    : 30;
 
   const entryAccuracyScore = clampScore(
-    Number.isFinite(Number(visualReview?.entryAccuracyScore))
-      ? visualReview.entryAccuracyScore
-      : hasConfirmedTrigger
-      ? 60
-      : 30
+    !hasVisibleTrade && isPreTrade
+      ? hasConfirmedTrigger
+        ? Math.max(60, rawEntryScore)
+        : Math.max(40, rawEntryScore)
+      : rawEntryScore
   );
 
+  const rawRiskScore = shouldUseVisualScore(
+    visualReview?.riskManagementScore,
+    marketOk
+  )
+    ? Number(visualReview.riskManagementScore)
+    : hasVisibleRiskPlan
+    ? 70
+    : isPreTrade
+    ? 45
+    : 30;
+
   const riskManagementScore = clampScore(
-    Number.isFinite(Number(visualReview?.riskManagementScore))
-      ? visualReview.riskManagementScore
-      : hasVisibleRiskPlan
-      ? 60
-      : 30
+    !hasVisibleTrade && isPreTrade
+      ? hasVisibleRiskPlan
+        ? Math.max(60, rawRiskScore)
+        : Math.max(35, rawRiskScore)
+      : rawRiskScore
   );
 
   return {
@@ -3255,8 +3333,12 @@ function buildDashboardFeedback({
     entryAccuracy: {
       score: entryAccuracyScore,
       label: scoreLabel(entryAccuracyScore),
-      summary: !hasVisibleTrade
-        ? "No trade entry is visible, so entry quality was not judged."
+      summary: !hasVisibleTrade && isPreTrade
+        ? hasConfirmedTrigger
+          ? `A valid pre-trade confirmation is visible: ${chartDetection.visibleTrigger}.`
+          : "This is still a developing setup. Price must reach the planned area and show a fresh trigger before entry."
+        : !hasVisibleTrade
+        ? "No completed trade is visible, so execution quality was not judged."
         : hasConfirmedTrigger
         ? `Visible confirmation: ${chartDetection.visibleTrigger}.`
         : "No clear entry confirmation is visible for the trade.",
@@ -3264,8 +3346,12 @@ function buildDashboardFeedback({
     riskManagement: {
       score: riskManagementScore,
       label: scoreLabel(riskManagementScore),
-      summary: !hasVisibleTrade
-        ? "No trade is visible, so stop loss and target placement were not judged."
+      summary: !hasVisibleTrade && isPreTrade
+        ? hasVisibleRiskPlan
+          ? riskEvidence
+          : "A clear stop loss and first target are not shown, so the planned risk is not yet complete."
+        : !hasVisibleTrade
+        ? "No completed trade is visible, so stop loss and target execution were not judged."
         : hasVisibleRiskPlan
         ? riskEvidence
         : "Stop loss and target are not shown, so the trade risk cannot be judged.",
@@ -3459,7 +3545,9 @@ function buildDashboardAliases(dashboardFeedback = {}) {
   const entryAccuracy = dashboardFeedback.entryAccuracy || { score: 0, label: "Unavailable", summary: "Entry accuracy was not calculated." };
   const riskManagement = dashboardFeedback.riskManagement || { score: 0, label: "Unavailable", summary: "Risk management was not calculated." };
   const strengths = Array.isArray(dashboardFeedback.strengths) && dashboardFeedback.strengths.length ? dashboardFeedback.strengths : ["CSA Coach completed the review."];
-  const weaknesses = Array.isArray(dashboardFeedback.weaknesses) && dashboardFeedback.weaknesses.length ? dashboardFeedback.weaknesses : ["No major weakness detected."];
+  const weaknesses = Array.isArray(dashboardFeedback.weaknesses) && dashboardFeedback.weaknesses.length
+    ? dashboardFeedback.weaknesses
+    : ["The setup still needs a clear entry trigger and a complete risk plan before it is trade-ready."];
   const aiMistakeDetectionHub = Array.isArray(dashboardFeedback.aiMistakeDetectionHub) && dashboardFeedback.aiMistakeDetectionHub.length ? dashboardFeedback.aiMistakeDetectionHub : [makeSimpleMistake("No major mistake detected", "REVIEW")];
   const failedAreas = Array.isArray(dashboardFeedback.failedAreas) ? dashboardFeedback.failedAreas : [];
   return {
@@ -3549,7 +3637,15 @@ function buildEntryCandidate(area, { direction = "sell", levels = [], symbol = "
     : null;
 
   let score = 0;
-  if (roleInfo.flip) score += 3;
+
+  // Prefer the fresh supply/demand area that caused the latest meaningful move.
+  // A broken support/resistance area remains valid as Entry 1, but it must not
+  // automatically outrank a clearer supply/demand zone simply because it flipped.
+  const originalType = String(area?.type || "").toLowerCase();
+  if (originalType === "supply" || originalType === "demand") score += 4;
+  if (originalType === "resistance" || originalType === "support") score += 2;
+  if (roleInfo.flip) score += 1;
+
   if (distancePercent >= 0.12) score += 2;
   if (distancePercent >= 0.22) score += 1;
   if (distancePercent < 0.08) score -= 3;
@@ -5363,6 +5459,7 @@ ${(visualReview?.strategyMissingInformation || []).length
         chartDetection.latestVisibleDate || "Not detected",
       submittedNotes,
       setupScore,
+      analysisType: mode,
     });
     const dashboardAliases = buildDashboardAliases(dashboardFeedback);
     const structureLabel = marketReference.profile?.structureLabel || selectedTimeframeProfile.structureLabel || "CSA structure levels";
