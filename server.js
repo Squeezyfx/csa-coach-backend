@@ -2486,13 +2486,14 @@ STRICT MARKED/UNMARKED RULE:
 - Do not give financial advice or guaranteed predictions. This is only chart feedback.
 
 VERIFIED PRICE RULE:
-- Twelve Data is the only approved source for exact market prices in user-facing feedback.
-- You may visually estimate a line price only inside approximatePrice for internal matching.
-- Never copy a visually estimated price into quickVerdict, plainMarketDirection, whatThisMeans, timeframeSummary, bestAreaToWatch, visualSummary, chartMarkupAssessment, entryEvidence, riskEvidence, mainWarning, coachVerdict, strengths, weaknesses, similarities, or differences.
-- In all user-facing text, use only an exact price from this approved list:
+- Twelve Data remains the primary source for exact market prices in user-facing feedback.
+- A price may also be used when it is clearly printed on the uploaded chart as a platform price label, horizontal-line label, or readable user annotation. Do not guess a candle price from scale position alone.
+- You may visually estimate an unlabelled line price only inside approximatePrice for internal matching. Never present an unlabelled visual estimate as exact.
+- Prefer exact prices from this approved list:
 ${JSON.stringify(buildApprovedMarketAreas(marketReference), null, 2)}
-- If no approved price fits the point you are making, say "the confirmed support area", "the confirmed resistance area", "the supply area", or "the demand area" without inventing a number.
-- Never create, round, transpose, or substitute a price that is not in the approved list.
+- You may use a clearly printed chart price when the visible label itself proves the number.
+- If neither an approved market price nor a clearly printed chart price is available, say "the confirmed support area", "the confirmed resistance area", "the supply area", or "the demand area" without inventing a number.
+- Never create, transpose, or silently substitute a price.
 
 Internal support/resistance framework:
 ${buildCsaFrameworkSummaryForVision(marketReference)}
@@ -3089,6 +3090,7 @@ function buildDashboardFeedback({
   detectedDateText,
   submittedNotes = "",
   setupScore = 0,
+  analysisType = "post-trade",
 }) {
   const profile =
     marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
@@ -3164,41 +3166,18 @@ function buildDashboardFeedback({
     : [];
 
   if (!hasVisibleTrade) {
-    // A pre-trade chart can still have genuine setup limitations.
-    // Keep missing-trigger and missing-risk-plan feedback because those explain
-    // why the setup is not ready. Remove only wording that falsely assumes a
-    // completed trade was taken or managed.
-    visualWeaknesses = visualWeaknesses.filter(
-      (item) =>
-        !assumesTradeWasTaken(item) &&
-        feedbackCategory(item) !== "middle_range_entry"
-    );
+    visualWeaknesses = visualWeaknesses.filter((item) => {
+      if (assumesTradeWasTaken(item)) return false;
+      if (feedbackCategory(item) === "middle_range_entry") return false;
 
-    const entryEvidence = String(visualReview?.entryEvidence || "").toLowerCase();
-    const riskEvidenceText = String(visualReview?.riskEvidence || "").toLowerCase();
+      // In pre-trade mode, these are valid readiness checks even when no trade exists.
+      if (normalizeAnalysisType(analysisType) === "pre-trade") return true;
 
-    if (
-      entryEvidence.includes("no visible") ||
-      entryEvidence.includes("not visible") ||
-      entryEvidence.includes("no clear") ||
-      entryEvidence.includes("not reached") ||
-      entryEvidence.includes("not retest")
-    ) {
-      visualWeaknesses.push(
-        "Price has not produced a clear entry trigger at the planned area yet, so the setup is not ready for entry."
+      // In post-trade mode with no visible/described trade, avoid judging execution.
+      return !["entry_confirmation_missing", "risk_plan_missing"].includes(
+        feedbackCategory(item)
       );
-    }
-
-    if (
-      riskEvidenceText.includes("no visible") ||
-      riskEvidenceText.includes("not visible") ||
-      riskEvidenceText.includes("not shown") ||
-      riskEvidenceText.includes("cannot be judged")
-    ) {
-      visualWeaknesses.push(
-        "A stop loss and target are not clearly shown, so the invalidation point and planned risk cannot yet be assessed."
-      );
-    }
+    });
   }
 
   if (chartMarkingStatus === "unmarked") {
@@ -3229,10 +3208,8 @@ function buildDashboardFeedback({
       );
   }
 
-  // Put chart-specific evidence first. Generic chart-readability comments
-  // should never replace the actual CSA observations about levels and setup.
   const strengths = removeDuplicateFeedback(
-    [...visualStrengths, ...frameworkStrengths],
+    [...frameworkStrengths, ...visualStrengths],
     4
   );
 
@@ -3244,27 +3221,49 @@ function buildDashboardFeedback({
     4
   );
 
-  const setupQualityScore = clampScore(
+  const isPreTrade = normalizeAnalysisType(analysisType) === "pre-trade";
+  const hasUsefulMarkedPlan =
+    chartMarkingStatus === "marked" &&
+    (normalizeArrayOfStrings(visualReview?.csaSimilarities, []).length > 0 ||
+      normalizeArrayOfStrings(visualReview?.chartSpecificStrengths, []).some(
+        (item) => /support|resistance|supply|demand|entry area|sell area|buy area/i.test(item)
+      ));
+  const hasPlannedArea = Boolean(
+    String(visualReview?.bestAreaToWatch || "").trim() ||
+      String(visualReview?.coachVerdict || "").trim()
+  );
+
+  let setupQualityScore = clampScore(
     Number.isFinite(Number(visualReview?.setupQualityScore))
       ? visualReview.setupQualityScore
       : setupScore
   );
-
-  const entryAccuracyScore = clampScore(
+  let entryAccuracyScore = clampScore(
     Number.isFinite(Number(visualReview?.entryAccuracyScore))
       ? visualReview.entryAccuracyScore
       : hasConfirmedTrigger
       ? 60
       : 30
   );
-
-  const riskManagementScore = clampScore(
+  let riskManagementScore = clampScore(
     Number.isFinite(Number(visualReview?.riskManagementScore))
       ? visualReview.riskManagementScore
       : hasVisibleRiskPlan
       ? 60
       : 30
   );
+
+  // A valid pre-trade plan is not a failed trade. Score planning/readiness instead of forcing 0/F.
+  if (isPreTrade && !hasVisibleTrade) {
+    if (hasUsefulMarkedPlan || hasPlannedArea) setupQualityScore = Math.max(setupQualityScore, 60);
+    else setupQualityScore = Math.max(setupQualityScore, 45);
+
+    // No trigger yet means “not ready”, not “zero accuracy”.
+    entryAccuracyScore = Math.max(entryAccuracyScore, hasConfirmedTrigger ? 65 : 45);
+
+    // Missing SL/TP should reduce risk score, but not erase the quality of the plan.
+    riskManagementScore = Math.max(riskManagementScore, hasVisibleRiskPlan ? 65 : 35);
+  }
 
   return {
     strengths,
@@ -3491,7 +3490,7 @@ function buildDashboardAliases(dashboardFeedback = {}) {
   const strengths = Array.isArray(dashboardFeedback.strengths) && dashboardFeedback.strengths.length ? dashboardFeedback.strengths : ["CSA Coach completed the review."];
   const weaknesses = Array.isArray(dashboardFeedback.weaknesses) && dashboardFeedback.weaknesses.length
     ? dashboardFeedback.weaknesses
-    : ["No specific improvement was returned. Check whether price has reached the planned area, whether a fresh trigger is visible, and whether stop loss and target are shown."];
+    : ["Price has not yet confirmed a complete entry setup. Wait for the planned area, trigger, stop loss, and target to be clear."];
   const aiMistakeDetectionHub = Array.isArray(dashboardFeedback.aiMistakeDetectionHub) && dashboardFeedback.aiMistakeDetectionHub.length ? dashboardFeedback.aiMistakeDetectionHub : [makeSimpleMistake("No major mistake detected", "REVIEW")];
   const failedAreas = Array.isArray(dashboardFeedback.failedAreas) ? dashboardFeedback.failedAreas : [];
   return {
@@ -3856,11 +3855,13 @@ function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "
     mainWarning = `The market has not fully opened up yet. Do not chase; wait for support around ${initialSupportText} or resistance around ${initialResistanceText}.`;
     coachVerdict = `For now, treat this as a range with bullish pressure until price clearly closes above ${initialResistanceText} or below ${initialSupportText}.`;
   } else if (biasGroup === "range_bearish") {
-    quickVerdict = `No clean trend yet, but sellers have pressure. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
-    whatThisMeans = `Price is still inside the main range, so support around ${initialSupportText} and resistance around ${initialResistanceText} are the key areas for now.`;
-    bestAreaToWatch = `Buy only if price drops to support around ${initialSupportText} and holds. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
-    mainWarning = `The market has not fully opened up yet. Do not chase; wait for support around ${initialSupportText} or resistance around ${initialResistanceText}.`;
-    coachVerdict = `For now, treat this as a range with bearish pressure until price clearly closes below ${initialSupportText} or above ${initialResistanceText}.`;
+    quickVerdict = `Bearish pressure remains, but price is consolidating. Wait for price to rise to the better selling area around ${sellPriceText}.`;
+    whatThisMeans = `The broader pressure favours sellers, but price is currently close to support, so selling now would mean chasing the move.`;
+    bestAreaToWatch = sellAreaComparison || `Wait for price to return to the supply or resistance area around ${sellPriceText} and show a clear bearish trigger before considering a sell.`;
+    mainWarning = nextSupportText
+      ? `Do not sell while price is close to support around ${nextSupportText}. Wait for the better selling area around ${sellPriceText}.`
+      : `Do not chase the sell while price is already low. Wait for the better selling area around ${sellPriceText}.`;
+    coachVerdict = `The cleaner plan is to wait for a bearish trigger from the better supply or resistance area around ${sellPriceText}.`;
   }
 
   return {
@@ -4275,95 +4276,111 @@ function buildStarterCoachSummary({
   const profile = marketReference?.profile || getSupportedCsaTimeframeProfile("H1");
   const symbol = marketReference?.symbol || "";
 
-  const trendPlan = buildBeginnerTrendPlan({
-    levels,
-    areas,
-    bias,
-    symbol,
-    profile,
-  });
+  const trendPlan = buildBeginnerTrendPlan({ levels, areas, bias, symbol, profile });
+  const chartMarkingStatus = getChartMarkingStatus(visualReview);
 
-  const directionalBias =
-    bias?.bias || visualReview?.plainMarketDirection || "Not available";
+  const visualDirection = String(
+    visualReview?.shortTermDirection || visualReview?.plainMarketDirection || ""
+  ).toLowerCase();
+  const backendDirection = String(bias?.bias || "").toLowerCase();
 
-  // Use the visual chart review first because it can see the user's marked
-  // supply/demand zone and whether price has actually reached it. The
-  // deterministic market plan remains the fallback only.
-  const visualStrengths = removeDuplicateFeedback([
-    ...normalizeArrayOfStrings(visualReview?.chartSpecificStrengths, []),
-    ...normalizeArrayOfStrings(visualReview?.csaSimilarities, []),
-  ], 4);
-
-  const dashboardStrengths = normalizeArrayOfStrings(
-    dashboardFeedback?.strengths,
-    []
-  );
-
-  const finalStrengths = removeDuplicateFeedback(
-    [...visualStrengths, ...dashboardStrengths],
-    3
-  );
-
-  let weaknesses = removeDuplicateFeedback([
-    ...normalizeArrayOfStrings(visualReview?.chartSpecificWeaknesses, []),
-    ...normalizeArrayOfStrings(visualReview?.csaDifferences, []),
-    ...normalizeArrayOfStrings(dashboardFeedback?.weaknesses, []),
-  ], 3);
-
-  if (!weaknesses.length) {
-    const entryEvidence = String(visualReview?.entryEvidence || "").toLowerCase();
-    const riskEvidence = String(visualReview?.riskEvidence || "").toLowerCase();
-
-    if (
-      entryEvidence.includes("no visible") ||
-      entryEvidence.includes("not visible") ||
-      entryEvidence.includes("no clear") ||
-      entryEvidence.includes("not reached")
-    ) {
-      weaknesses.push(
-        "Price has not produced a clear entry trigger at the planned area yet, so the setup is not ready."
-      );
-    }
-
-    if (
-      riskEvidence.includes("no visible") ||
-      riskEvidence.includes("not visible") ||
-      riskEvidence.includes("not shown") ||
-      riskEvidence.includes("cannot be judged")
-    ) {
-      weaknesses.push(
-        "A stop loss and target are not clearly shown, so the planned risk cannot yet be assessed."
-      );
-    }
+  let directionalBias = bias?.bias || "Not available";
+  if (/bearish/.test(visualDirection)) {
+    directionalBias = /range/.test(visualDirection)
+      ? "Bearish with short-term consolidation"
+      : "Bearish";
+  } else if (/bullish/.test(visualDirection)) {
+    directionalBias = /range/.test(visualDirection)
+      ? "Bullish with short-term consolidation"
+      : "Bullish";
+  } else if (/range/.test(visualDirection)) {
+    directionalBias = "Range-bound";
+  } else if (/range-bound with bearish pressure/.test(backendDirection)) {
+    directionalBias = "Bearish with short-term consolidation";
+  } else if (/range-bound with bullish pressure/.test(backendDirection)) {
+    directionalBias = "Bullish with short-term consolidation";
   }
 
-  // Never overwrite the image-aware recommendation with the nearest numeric
-  // level. This was the cause of the GBPUSD result using 1.32846 instead of
-  // the visibly marked supply area around 1.3307-1.3313.
-  let correctionAction =
-    String(visualReview?.bestAreaToWatch || "").trim() ||
-    String(visualReview?.coachVerdict || "").trim() ||
-    String(visualReview?.mainWarning || "").trim() ||
-    String(trendPlan?.bestAreaToWatch || "").trim() ||
-    "Wait for price to reach the planned area and show a clear trigger before considering a trade.";
+  const chartSpecificStrengths = normalizeArrayOfStrings(
+    visualReview?.chartSpecificStrengths,
+    []
+  );
+  const similarities = normalizeArrayOfStrings(visualReview?.csaSimilarities, []);
+  const dashboardStrengths = normalizeArrayOfStrings(dashboardFeedback?.strengths, []);
+
+  // Trading-specific evidence must appear before generic chart validation comments.
+  const strengths = removeDuplicateFeedback(
+    [
+      ...chartSpecificStrengths,
+      ...similarities,
+      ...dashboardStrengths.filter((item) =>
+        /support|resistance|supply|demand|entry area|market direction|bearish|bullish|avoid|wait/i.test(item)
+      ),
+      chartMarkingStatus === "marked"
+        ? "The chart contains visible levels and a planned area that can be reviewed."
+        : "The chart contains enough price history to identify the main direction and areas to watch.",
+    ],
+    4
+  );
+
+  let weaknesses = removeDuplicateFeedback(
+    [
+      ...normalizeArrayOfStrings(visualReview?.chartSpecificWeaknesses, []),
+      ...normalizeArrayOfStrings(visualReview?.csaDifferences, []),
+      ...normalizeArrayOfStrings(dashboardFeedback?.weaknesses, []),
+    ],
+    4
+  );
+
+  const entryText = String(visualReview?.entryEvidence || "").toLowerCase();
+  const riskText = String(visualReview?.riskEvidence || "").toLowerCase();
+  const bestAreaText = String(visualReview?.bestAreaToWatch || "").trim();
+  const warningText = String(visualReview?.mainWarning || "").trim();
+  const verdictText = String(visualReview?.coachVerdict || "").trim();
+
+  if (/no visible entry|no clear|not yet|has not reached|has not retested/.test(entryText)) {
+    weaknesses.unshift("Price has not yet produced a confirmed entry trigger at the planned area.");
+  }
+  if (/not shown|not visible|no visible trade risk|cannot be judged/.test(riskText)) {
+    weaknesses.push("A stop loss and target are not clearly shown, so the planned risk cannot yet be assessed.");
+  }
+  weaknesses = removeDuplicateFeedback(weaknesses, 4);
+
+  let correctionAction = bestAreaText || verdictText || warningText || trendPlan.bestAreaToWatch;
+
+  // Never replace an image-aware supply/demand plan with a generic nearest-level fallback.
+  if (!correctionAction) correctionAction = trendPlan.bestAreaToWatch;
+
+  // Prevent an unrelated opposite-direction scenario when the chart has a clear directional plan.
+  if (/bearish/.test(String(directionalBias).toLowerCase())) {
+    correctionAction = correctionAction
+      .replace(/Buy only if[\s\S]*?\.\s*/i, "")
+      .trim();
+    if (!/sell|bearish|resistance|supply/i.test(correctionAction)) {
+      correctionAction = trendPlan.bestAreaToWatch;
+    }
+  } else if (/bullish/.test(String(directionalBias).toLowerCase())) {
+    correctionAction = correctionAction
+      .replace(/Sell only if[\s\S]*?\.\s*/i, "")
+      .trim();
+    if (!/buy|bullish|support|demand/i.test(correctionAction)) {
+      correctionAction = trendPlan.bestAreaToWatch;
+    }
+  }
 
   return [
     "DIRECTIONAL BIAS:",
     String(directionalBias),
     "",
     "WHAT YOU DID WELL:",
-    ...(
-      finalStrengths.length
-        ? finalStrengths.map((item) => `- ${item}`)
-        : ["- The chart contains enough information for a basic review."]
-    ),
+    ...(strengths.length
+      ? strengths.map((item) => `- ${item}`)
+      : ["- The chart contains enough information to review the market direction and planned area."]),
     "",
     "WHAT TO IMPROVE:",
-    ...(
-      weaknesses.length
-        ? weaknesses.map((item) => `- ${item}`)
-        : ["- Confirm that price has reached the planned area, a fresh trigger is visible, and the stop loss and target are clearly defined."]
-    ),
+    ...(weaknesses.length
+      ? weaknesses.map((item) => `- ${item}`)
+      : ["- Wait for price to reach the planned area and show a clear trigger before considering an entry."]),
     "",
     "NEXT ACTION:",
     correctionAction,
@@ -5325,6 +5342,7 @@ ${(visualReview?.strategyMissingInformation || []).length
         chartDetection.latestVisibleDate || "Not detected",
       submittedNotes,
       setupScore,
+      analysisType: mode,
     });
     const dashboardAliases = buildDashboardAliases(dashboardFeedback);
     const structureLabel = marketReference.profile?.structureLabel || selectedTimeframeProfile.structureLabel || "CSA structure levels";
