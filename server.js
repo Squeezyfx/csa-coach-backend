@@ -1740,6 +1740,20 @@ function sanitizeVisualReviewMarketPrices({
       visualReview.chartSpecificWeaknesses,
       []
     ).map(safeText),
+    preferredEntryArea:
+      visualReview.preferredEntryArea && typeof visualReview.preferredEntryArea === "object"
+        ? {
+            ...visualReview.preferredEntryArea,
+            // Preserve the structured visual zone. It is explicitly presented as an approximate area.
+            zoneText: String(visualReview.preferredEntryArea.zoneText || "").trim(),
+            zoneLow: Number.isFinite(Number(visualReview.preferredEntryArea.zoneLow))
+              ? Number(visualReview.preferredEntryArea.zoneLow)
+              : null,
+            zoneHigh: Number.isFinite(Number(visualReview.preferredEntryArea.zoneHigh))
+              ? Number(visualReview.preferredEntryArea.zoneHigh)
+              : null,
+          }
+        : null,
   };
 }
 
@@ -2274,16 +2288,18 @@ function visualFallback(reason) {
     csaSimilarities: [],
     csaDifferences: [],
     csaAnchorMatch: "not_checked",
+    // Internal visual-review errors must never be displayed as trader weaknesses.
     chartSpecificStrengths: [],
-    chartSpecificWeaknesses: [reason],
+    chartSpecificWeaknesses: [],
     simpleMistakeHub: [],
     setupQualityScore: null,
     entryAccuracyScore: null,
     riskManagementScore: null,
-    visualSummary: reason,
+    visualSummary: "",
     chartMarkupAssessment: "",
     entryEvidence: "",
     riskEvidence: "",
+    internalError: String(reason || ""),
     raw: "",
   };
 }
@@ -2488,7 +2504,8 @@ STRICT MARKED/UNMARKED RULE:
 VERIFIED PRICE RULE:
 - Twelve Data remains the primary source for exact market prices in user-facing feedback.
 - A price may also be used when it is clearly printed on the uploaded chart as a platform price label, horizontal-line label, or readable user annotation. Do not guess a candle price from scale position alone.
-- You may visually estimate an unlabelled line price only inside approximatePrice for internal matching. Never present an unlabelled visual estimate as exact.
+- For a clearly drawn supply or demand rectangle, you may give an approximate zone range from the visible upper and lower boundaries. Always introduce it with "around" and treat it as an area, not an exact order price.
+- Do not create an exact single entry price from scale position alone. An approximate visual range is allowed only when both zone boundaries are clearly visible.
 - Prefer exact prices from this approved list:
 ${JSON.stringify(buildApprovedMarketAreas(marketReference), null, 2)}
 - You may use a clearly printed chart price when the visible label itself proves the number.
@@ -2563,9 +2580,9 @@ Return exactly this JSON shape:
   "preferredEntryArea": {
     "direction": "buy | sell | none",
     "areaType": "support | resistance | demand | supply | converted support | converted resistance | none",
-    "zoneLow": "exact lower boundary only when clearly printed on chart or approved market data; otherwise null",
-    "zoneHigh": "exact upper boundary only when clearly printed on chart or approved market data; otherwise null",
-    "zoneText": "beginner-friendly area description, preferably a range when the chart shows a zone",
+    "zoneLow": "lower boundary from a printed price, approved market data, or a clearly visible approximate zone boundary; otherwise null",
+    "zoneHigh": "upper boundary from a printed price, approved market data, or a clearly visible approximate zone boundary; otherwise null",
+    "zoneText": "beginner-friendly area description. When a visible rectangle/zone exists, return an approximate range and use the word around",
     "priceStatus": "not reached | approaching | inside | reacted | moved away | unclear",
     "triggerPresent": false,
     "triggerDescription": "visible trigger or null"
@@ -4328,11 +4345,17 @@ function formatPreferredEntryZone(visualReview = null, directionalBias = "") {
   const status = String(area.priceStatus || "unclear").toLowerCase();
   const zoneText = String(area.zoneText || "").trim();
 
+  const zoneTextHasRange =
+    /\d+(?:\.\d+)?\s*(?:-|–|to)\s*\d+(?:\.\d+)?/i.test(zoneText);
+
   let priceText = zoneText;
   if (hasLow && hasHigh) {
     const zoneMin = Math.min(low, high);
     const zoneMax = Math.max(low, high);
     priceText = `${formatPrice(zoneMin)}–${formatPrice(zoneMax)}`;
+  } else if (zoneTextHasRange) {
+    // Keep the visually identified range instead of collapsing it to one price.
+    priceText = zoneText;
   } else if (hasLow) {
     priceText = formatPrice(low);
   } else if (hasHigh) {
@@ -4342,7 +4365,12 @@ function formatPreferredEntryZone(visualReview = null, directionalBias = "") {
   const bearish = /bearish/.test(String(directionalBias).toLowerCase()) || direction === "sell";
   const bullish = /bullish/.test(String(directionalBias).toLowerCase()) || direction === "buy";
   const namedArea = areaType && areaType !== "none" ? areaType : bearish ? "supply area" : bullish ? "demand area" : "planned area";
-  const location = priceText ? `${namedArea} around ${priceText}` : `the ${namedArea}`;
+  const cleanedPriceText = String(priceText || "")
+    .replace(/^\s*(?:the\s+)?(?:supply|demand|support|resistance|converted support|converted resistance)\s+(?:area|zone)?\s*(?:around|near|at)?\s*/i, "")
+    .trim();
+  const location = cleanedPriceText
+    ? `${namedArea} around ${cleanedPriceText}`
+    : `the ${namedArea}`;
 
   if (bearish) {
     if (["not reached", "approaching", "unclear"].includes(status)) {
@@ -4438,9 +4466,13 @@ function buildStarterCoachSummary({
       ...normalizeArrayOfStrings(visualReview?.chartSpecificWeaknesses, []),
       ...normalizeArrayOfStrings(visualReview?.csaDifferences, []),
       ...normalizeArrayOfStrings(dashboardFeedback?.weaknesses, []),
-    ].filter((item) =>
-      !/exact (sell|buy|entry) (level|price).*not defined|exact .* level is not defined/i.test(String(item || ""))
-    ),
+    ].filter((item) => {
+      const text = String(item || "");
+      return (
+        !/exact (sell|buy|entry) (level|price).*not defined|exact .* level is not defined/i.test(text) &&
+        !/visual trade review failed|visual comparison was inconclusive|referenceerror|is not defined/i.test(text)
+      );
+    }),
     4
   );
 
@@ -4451,6 +4483,27 @@ function buildStarterCoachSummary({
   const convertedLevelText = String(visualReview?.convertedLevelAssessment || "").trim();
   const warningText = String(visualReview?.mainWarning || "").trim();
   const verdictText = String(visualReview?.coachVerdict || "").trim();
+  const preferredArea = visualReview?.preferredEntryArea;
+  const preferredStatus = String(preferredArea?.priceStatus || "").toLowerCase();
+  const preferredType = String(preferredArea?.areaType || "").toLowerCase();
+  const preferredZone = formatPreferredEntryZone(visualReview, directionalBias);
+
+  if (preferredArea && ["supply", "demand", "resistance", "support", "converted resistance", "converted support"].includes(preferredType)) {
+    const directionWord = /bearish/.test(String(directionalBias).toLowerCase()) ? "bearish" : /bullish/.test(String(directionalBias).toLowerCase()) ? "bullish" : "";
+    strengths.unshift(
+      `The marked ${preferredType} area agrees with the ${directionWord || "planned"} setup direction.`
+    );
+  }
+
+  if (["not reached", "approaching"].includes(preferredStatus)) {
+    weaknesses.unshift(
+      `Price has not yet retested the planned ${preferredType || "entry"} area, so there is no confirmed entry yet.`
+    );
+  }
+
+  if (preferredArea && preferredArea.triggerPresent !== true) {
+    weaknesses.push("No fresh entry trigger is visible at the planned area yet.");
+  }
 
   if (/no visible entry|no clear|not yet|has not reached|has not retested/.test(entryText)) {
     weaknesses.unshift("Price has not yet produced a confirmed entry trigger at the planned area.");
