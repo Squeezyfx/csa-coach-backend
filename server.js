@@ -2964,12 +2964,6 @@ function shouldUseVisualScore(score, marketOk) {
 }
 
 
-function isIntradayCsaTimeframe(timeframe = "") {
-  return ["M1", "M5", "M15", "M30", "H1"].includes(
-    comparableTimeframe(timeframe)
-  );
-}
-
 function parseApproximateMarkedPrice(value) {
   if (value === null || value === undefined) return null;
 
