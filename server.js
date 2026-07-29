@@ -978,9 +978,13 @@ async function saveCompletedReview({
     const overallScore = Math.round((setupScore + entryScore + riskScore) / 3);
 
     const directionalBias =
-      marketReference?.directionalBias?.bias ||
-      visualReview?.plainMarketDirection ||
-      "Not available";
+      visualReview?.preferredEntryArea?.direction === "sell"
+        ? "Bearish"
+        : visualReview?.preferredEntryArea?.direction === "buy"
+        ? "Bullish"
+        : visualReview?.plainMarketDirection ||
+          marketReference?.directionalBias?.bias ||
+          "Not available";
 
     const keyAreas = Array.isArray(marketReference?.csaAreas)
       ? marketReference.csaAreas.slice(0, 30)
@@ -1744,14 +1748,18 @@ function sanitizeVisualReviewMarketPrices({
       visualReview.preferredEntryArea && typeof visualReview.preferredEntryArea === "object"
         ? {
             ...visualReview.preferredEntryArea,
-            // Preserve the structured visual zone. It is explicitly presented as an approximate area.
-            zoneText: String(visualReview.preferredEntryArea.zoneText || "").trim(),
+            direction: String(visualReview.preferredEntryArea.direction || "none").toLowerCase(),
+            areaType: String(visualReview.preferredEntryArea.areaType || "none").toLowerCase(),
             zoneLow: Number.isFinite(Number(visualReview.preferredEntryArea.zoneLow))
               ? Number(visualReview.preferredEntryArea.zoneLow)
               : null,
             zoneHigh: Number.isFinite(Number(visualReview.preferredEntryArea.zoneHigh))
               ? Number(visualReview.preferredEntryArea.zoneHigh)
               : null,
+            zoneText: String(visualReview.preferredEntryArea.zoneText || "").trim(),
+            priceStatus: String(visualReview.preferredEntryArea.priceStatus || "unclear").toLowerCase(),
+            triggerPresent: visualReview.preferredEntryArea.triggerPresent === true,
+            triggerDescription: String(visualReview.preferredEntryArea.triggerDescription || "").trim(),
           }
         : null,
   };
@@ -2288,18 +2296,16 @@ function visualFallback(reason) {
     csaSimilarities: [],
     csaDifferences: [],
     csaAnchorMatch: "not_checked",
-    // Internal visual-review errors must never be displayed as trader weaknesses.
     chartSpecificStrengths: [],
-    chartSpecificWeaknesses: [],
+    chartSpecificWeaknesses: [reason],
     simpleMistakeHub: [],
     setupQualityScore: null,
     entryAccuracyScore: null,
     riskManagementScore: null,
-    visualSummary: "",
+    visualSummary: reason,
     chartMarkupAssessment: "",
     entryEvidence: "",
     riskEvidence: "",
-    internalError: String(reason || ""),
     raw: "",
   };
 }
@@ -2334,6 +2340,11 @@ MARKET DIRECTION
 - Use range/unclear when price repeatedly crosses nearby levels, structure is mixed, or neither side has clear control.
 - Direction must be based on structure and level behaviour, not one candle.
 - A correct direction does not mean an immediate entry is available.
+- Determine direction from the full visible structure, not only the last few candles.
+- A short bounce from support does not make the chart bullish when the wider visible structure still shows lower highs, lower lows, seller control, or a valid sell plan from supply.
+- In that situation, describe the chart as bearish with short-term consolidation or a short-term bounce.
+- Do not create an opposite-direction buy plan merely because current price is near support when the clearer framework setup is waiting for a sell from supply.
+- The uploaded chart and its visible structure are the primary evidence. Market-reference data is supporting evidence and must not overwrite a clearer visual conclusion.
 
 SUPPORT, RESISTANCE, SUPPLY, AND DEMAND
 - Treat levels as areas, not exact price points.
@@ -2504,8 +2515,7 @@ STRICT MARKED/UNMARKED RULE:
 VERIFIED PRICE RULE:
 - Twelve Data remains the primary source for exact market prices in user-facing feedback.
 - A price may also be used when it is clearly printed on the uploaded chart as a platform price label, horizontal-line label, or readable user annotation. Do not guess a candle price from scale position alone.
-- For a clearly drawn supply or demand rectangle, you may give an approximate zone range from the visible upper and lower boundaries. Always introduce it with "around" and treat it as an area, not an exact order price.
-- Do not create an exact single entry price from scale position alone. An approximate visual range is allowed only when both zone boundaries are clearly visible.
+- You may visually estimate an unlabelled line price only inside approximatePrice for internal matching. Never present an unlabelled visual estimate as exact.
 - Prefer exact prices from this approved list:
 ${JSON.stringify(buildApprovedMarketAreas(marketReference), null, 2)}
 - You may use a clearly printed chart price when the visible label itself proves the number.
@@ -2582,7 +2592,7 @@ Return exactly this JSON shape:
     "areaType": "support | resistance | demand | supply | converted support | converted resistance | none",
     "zoneLow": "lower boundary from a printed price, approved market data, or a clearly visible approximate zone boundary; otherwise null",
     "zoneHigh": "upper boundary from a printed price, approved market data, or a clearly visible approximate zone boundary; otherwise null",
-    "zoneText": "beginner-friendly area description. When a visible rectangle/zone exists, return an approximate range and use the word around",
+    "zoneText": "beginner-friendly area description. When a visible supply/demand rectangle exists, return an approximate range and use the word around",
     "priceStatus": "not reached | approaching | inside | reacted | moved away | unclear",
     "triggerPresent": false,
     "triggerDescription": "visible trigger or null"
@@ -4354,7 +4364,6 @@ function formatPreferredEntryZone(visualReview = null, directionalBias = "") {
     const zoneMax = Math.max(low, high);
     priceText = `${formatPrice(zoneMin)}–${formatPrice(zoneMax)}`;
   } else if (zoneTextHasRange) {
-    // Keep the visually identified range instead of collapsing it to one price.
     priceText = zoneText;
   } else if (hasLow) {
     priceText = formatPrice(low);
@@ -4421,9 +4430,40 @@ function buildStarterCoachSummary({
     visualReview?.shortTermDirection || visualReview?.plainMarketDirection || ""
   ).toLowerCase();
   const backendDirection = String(bias?.bias || "").toLowerCase();
+  const preferredDirection = String(
+    visualReview?.preferredEntryArea?.direction || ""
+  ).toLowerCase();
+  const preferredAreaType = String(
+    visualReview?.preferredEntryArea?.areaType || ""
+  ).toLowerCase();
+  const visualPlanText = [
+    visualReview?.bestAreaToWatch,
+    visualReview?.coachVerdict,
+    visualReview?.mainWarning,
+    ...(Array.isArray(visualReview?.chartSpecificStrengths)
+      ? visualReview.chartSpecificStrengths
+      : []),
+  ].join(" ").toLowerCase();
 
   let directionalBias = bias?.bias || "Not available";
-  if (/bearish/.test(visualDirection)) {
+
+  if (
+    preferredDirection === "sell" ||
+    (["supply", "resistance", "converted resistance"].includes(preferredAreaType) &&
+      /sell|bearish/.test(visualPlanText))
+  ) {
+    directionalBias = /range|consolidat|bounce/.test(visualDirection)
+      ? "Bearish with short-term consolidation"
+      : "Bearish";
+  } else if (
+    preferredDirection === "buy" ||
+    (["demand", "support", "converted support"].includes(preferredAreaType) &&
+      /buy|bullish/.test(visualPlanText))
+  ) {
+    directionalBias = /range|consolidat|pullback/.test(visualDirection)
+      ? "Bullish with short-term consolidation"
+      : "Bullish";
+  } else if (/bearish/.test(visualDirection)) {
     directionalBias = /range/.test(visualDirection)
       ? "Bearish with short-term consolidation"
       : "Bearish";
@@ -4431,6 +4471,10 @@ function buildStarterCoachSummary({
     directionalBias = /range/.test(visualDirection)
       ? "Bullish with short-term consolidation"
       : "Bullish";
+  } else if (/sell|supply|bearish/.test(visualPlanText)) {
+    directionalBias = "Bearish";
+  } else if (/buy|demand|bullish/.test(visualPlanText)) {
+    directionalBias = "Bullish";
   } else if (/range/.test(visualDirection)) {
     directionalBias = "Range-bound";
   } else if (/range-bound with bearish pressure/.test(backendDirection)) {
@@ -4467,10 +4511,10 @@ function buildStarterCoachSummary({
       ...normalizeArrayOfStrings(visualReview?.csaDifferences, []),
       ...normalizeArrayOfStrings(dashboardFeedback?.weaknesses, []),
     ].filter((item) => {
-      const text = String(item || "");
+      const value = String(item || "");
       return (
-        !/exact (sell|buy|entry) (level|price).*not defined|exact .* level is not defined/i.test(text) &&
-        !/visual trade review failed|visual comparison was inconclusive|referenceerror|is not defined/i.test(text)
+        !/exact (sell|buy|entry) (level|price).*not defined|exact .* level is not defined/i.test(value) &&
+        !/visual trade review failed|visual comparison was inconclusive|referenceerror|is not defined/i.test(value)
       );
     }),
     4
@@ -4486,12 +4530,10 @@ function buildStarterCoachSummary({
   const preferredArea = visualReview?.preferredEntryArea;
   const preferredStatus = String(preferredArea?.priceStatus || "").toLowerCase();
   const preferredType = String(preferredArea?.areaType || "").toLowerCase();
-  const preferredZone = formatPreferredEntryZone(visualReview, directionalBias);
 
-  if (preferredArea && ["supply", "demand", "resistance", "support", "converted resistance", "converted support"].includes(preferredType)) {
-    const directionWord = /bearish/.test(String(directionalBias).toLowerCase()) ? "bearish" : /bullish/.test(String(directionalBias).toLowerCase()) ? "bullish" : "";
+  if (preferredArea && preferredType && preferredType !== "none") {
     strengths.unshift(
-      `The marked ${preferredType} area agrees with the ${directionWord || "planned"} setup direction.`
+      `The marked ${preferredType} area agrees with the planned ${/bearish/.test(String(directionalBias).toLowerCase()) ? "sell" : /bullish/.test(String(directionalBias).toLowerCase()) ? "buy" : "trade"} direction.`
     );
   }
 
@@ -4516,26 +4558,29 @@ function buildStarterCoachSummary({
   }
   weaknesses = removeDuplicateFeedback(weaknesses, 4);
 
-  let correctionAction = structuredAreaAction || bestAreaText || verdictText || warningText || trendPlan.bestAreaToWatch;
+  let correctionAction =
+    structuredAreaAction || bestAreaText || verdictText || warningText || "";
 
-  // Never replace an image-aware supply/demand plan with a generic nearest-level fallback.
-  if (!correctionAction) correctionAction = trendPlan.bestAreaToWatch;
-
-  // Prevent an unrelated opposite-direction scenario when the chart has a clear directional plan.
   if (/bearish/.test(String(directionalBias).toLowerCase())) {
-    correctionAction = correctionAction
-      .replace(/Buy only if[\s\S]*?\.\s*/i, "")
+    correctionAction = String(correctionAction || "")
+      .replace(/Buy only if[\s\S]*?(?=Sell only if|$)/i, "")
       .trim();
+
     if (!/sell|bearish|resistance|supply/i.test(correctionAction)) {
-      correctionAction = trendPlan.bestAreaToWatch;
+      correctionAction =
+        "Wait for price to retrace towards the marked supply or resistance area and show a clear bearish trigger before considering a sell. Do not chase price while it remains close to support.";
     }
   } else if (/bullish/.test(String(directionalBias).toLowerCase())) {
-    correctionAction = correctionAction
-      .replace(/Sell only if[\s\S]*?\.\s*/i, "")
+    correctionAction = String(correctionAction || "")
+      .replace(/Sell only if[\s\S]*$/i, "")
       .trim();
+
     if (!/buy|bullish|support|demand/i.test(correctionAction)) {
-      correctionAction = trendPlan.bestAreaToWatch;
+      correctionAction =
+        "Wait for price to return towards the marked demand or support area and show a clear bullish trigger before considering a buy. Do not chase price while it remains close to resistance.";
     }
+  } else if (!correctionAction) {
+    correctionAction = trendPlan.bestAreaToWatch;
   }
 
   return [
