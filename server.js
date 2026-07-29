@@ -1748,6 +1748,24 @@ function sanitizeVisualReviewMarketPrices({
       visualReview.chartSpecificWeaknesses,
       []
     ).map(safeText),
+    preferredEntryArea:
+      visualReview.preferredEntryArea && typeof visualReview.preferredEntryArea === "object"
+        ? {
+            ...visualReview.preferredEntryArea,
+            direction: String(visualReview.preferredEntryArea.direction || "none").toLowerCase(),
+            areaType: String(visualReview.preferredEntryArea.areaType || "none").toLowerCase(),
+            zoneLow: Number.isFinite(Number(visualReview.preferredEntryArea.zoneLow))
+              ? Number(visualReview.preferredEntryArea.zoneLow)
+              : null,
+            zoneHigh: Number.isFinite(Number(visualReview.preferredEntryArea.zoneHigh))
+              ? Number(visualReview.preferredEntryArea.zoneHigh)
+              : null,
+            zoneText: String(visualReview.preferredEntryArea.zoneText || "").trim(),
+            priceStatus: String(visualReview.preferredEntryArea.priceStatus || "unclear").toLowerCase(),
+            triggerPresent: visualReview.preferredEntryArea.triggerPresent === true,
+            triggerDescription: String(visualReview.preferredEntryArea.triggerDescription || "").trim(),
+          }
+        : null,
   };
 }
 
@@ -2526,15 +2544,16 @@ function visualFallback(reason) {
     csaDifferences: [],
     csaAnchorMatch: "not_checked",
     chartSpecificStrengths: [],
-    chartSpecificWeaknesses: [reason],
+    chartSpecificWeaknesses: [],
     simpleMistakeHub: [],
     setupQualityScore: null,
     entryAccuracyScore: null,
     riskManagementScore: null,
-    visualSummary: reason,
+    visualSummary: "",
     chartMarkupAssessment: "",
     entryEvidence: "",
     riskEvidence: "",
+    internalError: String(reason || ""),
     raw: "",
   };
 }
@@ -2817,9 +2836,9 @@ Return exactly this JSON shape:
   "preferredEntryArea": {
     "direction": "buy | sell | none",
     "areaType": "support | resistance | demand | supply | converted support | converted resistance | none",
-    "zoneLow": "exact lower boundary only when clearly printed on chart or approved market data; otherwise null",
-    "zoneHigh": "exact upper boundary only when clearly printed on chart or approved market data; otherwise null",
-    "zoneText": "beginner-friendly area description, preferably a range when the chart shows a zone",
+    "zoneLow": "lower boundary from a printed price, approved market data, or a clearly visible approximate zone boundary; otherwise null",
+    "zoneHigh": "upper boundary from a printed price, approved market data, or a clearly visible approximate zone boundary; otherwise null",
+    "zoneText": "beginner-friendly area description. When a visible supply or demand rectangle exists, return the approximate full range and use the word around",
     "priceStatus": "not reached | approaching | inside | reacted | moved away | unclear",
     "triggerPresent": false,
     "triggerDescription": "visible trigger or null"
@@ -3502,6 +3521,33 @@ function buildDashboardFeedback({
         visualWeaknesses.push(item)
       );
   }
+
+  const preferredArea = visualReview?.preferredEntryArea;
+  const preferredDirection = String(preferredArea?.direction || "").toLowerCase();
+  const preferredType = String(preferredArea?.areaType || "").toLowerCase();
+  const preferredStatus = String(preferredArea?.priceStatus || "").toLowerCase();
+
+  if (preferredArea && preferredType && preferredType !== "none") {
+    visualStrengths.unshift(
+      `The marked ${preferredType} area gives a clear ${preferredDirection === "sell" ? "sell" : preferredDirection === "buy" ? "buy" : "trade"} location to monitor.`
+    );
+  }
+
+  if (["not reached", "approaching"].includes(preferredStatus)) {
+    visualWeaknesses.unshift(
+      `Price has not yet retested the planned ${preferredType || "entry"} area, so the setup is not confirmed.`
+    );
+  }
+
+  if (preferredArea && preferredArea.triggerPresent !== true) {
+    visualWeaknesses.push(
+      `No fresh ${preferredDirection === "sell" ? "bearish" : preferredDirection === "buy" ? "bullish" : "entry"} trigger is visible at the planned area yet.`
+    );
+  }
+
+  visualWeaknesses = visualWeaknesses.filter((item) =>
+    !/sell level is not defined|buy level is not defined|exact .* level is not defined|visual trade review failed|referenceerror|is not defined/i.test(String(item || ""))
+  );
 
   const strengths = removeDuplicateFeedback(
     [
@@ -4576,11 +4622,16 @@ function formatPreferredEntryZone(visualReview = null, directionalBias = "") {
   const status = String(area.priceStatus || "unclear").toLowerCase();
   const zoneText = String(area.zoneText || "").trim();
 
+  const zoneTextHasRange =
+    /\d+(?:\.\d+)?\s*(?:-|–|to)\s*\d+(?:\.\d+)?/i.test(zoneText);
+
   let priceText = zoneText;
   if (hasLow && hasHigh) {
     const zoneMin = Math.min(low, high);
     const zoneMax = Math.max(low, high);
     priceText = `${formatPrice(zoneMin)}–${formatPrice(zoneMax)}`;
+  } else if (zoneTextHasRange) {
+    priceText = zoneText;
   } else if (hasLow) {
     priceText = formatPrice(low);
   } else if (hasHigh) {
@@ -4590,7 +4641,12 @@ function formatPreferredEntryZone(visualReview = null, directionalBias = "") {
   const bearish = /bearish/.test(String(directionalBias).toLowerCase()) || direction === "sell";
   const bullish = /bullish/.test(String(directionalBias).toLowerCase()) || direction === "buy";
   const namedArea = areaType && areaType !== "none" ? areaType : bearish ? "supply area" : bullish ? "demand area" : "planned area";
-  const location = priceText ? `${namedArea} around ${priceText}` : `the ${namedArea}`;
+  const cleanedPriceText = String(priceText || "")
+    .replace(/^\s*(?:the\s+)?(?:supply|demand|support|resistance|converted support|converted resistance)\s+(?:area|zone)?\s*(?:around|near|at)?\s*/i, "")
+    .trim();
+  const location = cleanedPriceText
+    ? `${namedArea} around ${cleanedPriceText}`
+    : `the ${namedArea}`;
 
   if (bearish) {
     if (["not reached", "approaching", "unclear"].includes(status)) {
@@ -4686,9 +4742,13 @@ function buildStarterCoachSummary({
       ...normalizeArrayOfStrings(visualReview?.chartSpecificWeaknesses, []),
       ...normalizeArrayOfStrings(visualReview?.csaDifferences, []),
       ...normalizeArrayOfStrings(dashboardFeedback?.weaknesses, []),
-    ].filter((item) =>
-      !/exact (sell|buy|entry) (level|price).*not defined|exact .* level is not defined/i.test(String(item || ""))
-    ),
+    ].filter((item) => {
+      const text = String(item || "");
+      return (
+        !/exact (sell|buy|entry) (level|price).*not defined|exact .* level is not defined/i.test(text) &&
+        !/sell level is not defined|buy level is not defined|visual trade review failed|referenceerror|is not defined/i.test(text)
+      );
+    }),
     4
   );
 
@@ -4699,6 +4759,28 @@ function buildStarterCoachSummary({
   const convertedLevelText = String(visualReview?.convertedLevelAssessment || "").trim();
   const warningText = String(visualReview?.mainWarning || "").trim();
   const verdictText = String(visualReview?.coachVerdict || "").trim();
+  const preferredArea = visualReview?.preferredEntryArea;
+  const preferredStatus = String(preferredArea?.priceStatus || "").toLowerCase();
+  const preferredType = String(preferredArea?.areaType || "").toLowerCase();
+  const preferredDirection = String(preferredArea?.direction || "").toLowerCase();
+
+  if (preferredArea && preferredType && preferredType !== "none") {
+    strengths.unshift(
+      `The marked ${preferredType} area gives a clear ${preferredDirection === "sell" ? "sell" : preferredDirection === "buy" ? "buy" : "trade"} location to monitor.`
+    );
+  }
+
+  if (["not reached", "approaching"].includes(preferredStatus)) {
+    weaknesses.unshift(
+      `Price has not yet retested the planned ${preferredType || "entry"} area, so there is no confirmed entry yet.`
+    );
+  }
+
+  if (preferredArea && preferredArea.triggerPresent !== true) {
+    weaknesses.push(
+      `No fresh ${preferredDirection === "sell" ? "bearish" : preferredDirection === "buy" ? "bullish" : "entry"} trigger is visible at the planned area yet.`
+    );
+  }
 
   if (/no visible entry|no clear|not yet|has not reached|has not retested/.test(entryText)) {
     weaknesses.unshift("Price has not yet produced a confirmed entry trigger at the planned area.");
@@ -4710,27 +4792,33 @@ function buildStarterCoachSummary({
     weaknesses.push(convertedLevelText);
   }
   weaknesses = removeDuplicateFeedback(weaknesses, 4);
+  const finalStrengths = removeDuplicateFeedback(strengths, 4);
 
-  let correctionAction = structuredAreaAction || bestAreaText || verdictText || warningText || trendPlan.bestAreaToWatch;
+  let correctionAction =
+    structuredAreaAction || bestAreaText || verdictText || warningText || "";
 
-  // Never replace an image-aware supply/demand plan with a generic nearest-level fallback.
-  if (!correctionAction) correctionAction = trendPlan.bestAreaToWatch;
-
-  // Prevent an unrelated opposite-direction scenario when the chart has a clear directional plan.
+  // When a visual supply/demand plan exists, never replace it with a generic
+  // nearest-level sentence containing multiple almost-identical prices.
   if (/bearish/.test(String(directionalBias).toLowerCase())) {
-    correctionAction = correctionAction
-      .replace(/Buy only if[\s\S]*?\.\s*/i, "")
+    correctionAction = String(correctionAction || "")
+      .replace(/Buy only if[\s\S]*?(?=Sell only if|$)/i, "")
       .trim();
+
     if (!/sell|bearish|resistance|supply/i.test(correctionAction)) {
-      correctionAction = trendPlan.bestAreaToWatch;
+      correctionAction =
+        "Wait for price to retrace towards the marked supply or resistance area and show a clear bearish trigger before considering a sell. Do not chase a sell while price remains close to support.";
     }
   } else if (/bullish/.test(String(directionalBias).toLowerCase())) {
-    correctionAction = correctionAction
-      .replace(/Sell only if[\s\S]*?\.\s*/i, "")
+    correctionAction = String(correctionAction || "")
+      .replace(/Sell only if[\s\S]*$/i, "")
       .trim();
+
     if (!/buy|bullish|support|demand/i.test(correctionAction)) {
-      correctionAction = trendPlan.bestAreaToWatch;
+      correctionAction =
+        "Wait for price to return towards the marked demand or support area and show a clear bullish trigger before considering a buy. Do not chase a buy while price remains close to resistance.";
     }
+  } else if (!correctionAction) {
+    correctionAction = trendPlan.bestAreaToWatch;
   }
 
   return [
@@ -4738,8 +4826,8 @@ function buildStarterCoachSummary({
     String(directionalBias),
     "",
     "WHAT YOU DID WELL:",
-    ...(strengths.length
-      ? strengths.map((item) => `- ${item}`)
+    ...(finalStrengths.length
+      ? finalStrengths.map((item) => `- ${item}`)
       : ["- The chart contains enough information to review the market direction and planned area."]),
     "",
     "WHAT TO IMPROVE:",
@@ -4770,8 +4858,12 @@ function applyPlanToAnalysisResponse({
     marketReference: responseBody?.marketReference || null,
   });
 
-  const strengths = (dashboardFeedback?.strengths || []).slice(0, 3);
-  const weaknesses = (dashboardFeedback?.weaknesses || []).slice(0, 3);
+  const strengths = (dashboardFeedback?.strengths || [])
+    .filter((item) => !/instrument and timeframe are visible|chart is clear enough/i.test(String(item || "")))
+    .slice(0, 3);
+  const weaknesses = (dashboardFeedback?.weaknesses || [])
+    .filter((item) => !/sell level is not defined|buy level is not defined|visual trade review failed|referenceerror|is not defined/i.test(String(item || "")))
+    .slice(0, 3);
 
   return {
     ...responseBody,
