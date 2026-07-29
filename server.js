@@ -920,6 +920,9 @@ function compactRawAiResponse({
         ? marketReference.csaAreas.slice(0, 30)
         : [],
       approvedAreas: buildApprovedMarketAreas(marketReference),
+      chartCutoff: marketReference?.chartCutoff || null,
+      rawCandleCount: Number(marketReference?.rawCandleCount || 0),
+      filteredCandleCount: Number(marketReference?.filteredCandleCount || 0),
     },
   };
 }
@@ -978,13 +981,9 @@ async function saveCompletedReview({
     const overallScore = Math.round((setupScore + entryScore + riskScore) / 3);
 
     const directionalBias =
-      visualReview?.preferredEntryArea?.direction === "sell"
-        ? "Bearish"
-        : visualReview?.preferredEntryArea?.direction === "buy"
-        ? "Bullish"
-        : visualReview?.plainMarketDirection ||
-          marketReference?.directionalBias?.bias ||
-          "Not available";
+      marketReference?.directionalBias?.bias ||
+      visualReview?.plainMarketDirection ||
+      "Not available";
 
     const keyAreas = Array.isArray(marketReference?.csaAreas)
       ? marketReference.csaAreas.slice(0, 30)
@@ -1232,6 +1231,9 @@ Important:
 - If the uploaded chart timeframe is not clearly readable, set detectedTimeframe=null. Do not guess.
 - Be practical. If a chart clearly has visible price movement, do not mark it insufficient just because the exact selected date is hard to read.
 - If the selected date is clearly far after the latest visible chart date, set selectedDateVisible=false and provide latestVisibleDate.
+- Inspect the far-right side of the time axis and the latest visible candle. When readable, return the latest visible candle time in 24-hour HH:mm format.
+- latestVisibleTime must describe where the uploaded screenshot stops, not the current time and not a later market time.
+- If the final candle time cannot be read confidently, set latestVisibleTime=null and latestVisibleTimeConfidence="low". Never guess.
 - If the date axis is hard to read, set dateConfidence="low" instead of blocking the chart.
 - Only mark hasUsablePriceData=false when the chart is truly blank, unreadable, severely cropped, loading, or has almost no price movement.
 - Do not comment on strategies such as trendlines, channels, indicators, Fibonacci, or moving averages in this step. This step only validates the chart and detects basic context.
@@ -1255,6 +1257,8 @@ Return exactly this JSON shape:
   "detectedInstrument": "GBPUSD or null",
   "detectedTimeframe": "H1 or M5 or H4 or D1 or W1 or MN or null",
   "latestVisibleDate": "YYYY-MM-DD or null",
+  "latestVisibleTime": "HH:mm in 24-hour time or null",
+  "latestVisibleTimeConfidence": "high or medium or low",
   "dateConfidence": "high or medium or low",
   "visibleTrigger": "brief trigger description or null",
   "triggerDirection": "bullish or bearish or neutral or null",
@@ -1744,24 +1748,6 @@ function sanitizeVisualReviewMarketPrices({
       visualReview.chartSpecificWeaknesses,
       []
     ).map(safeText),
-    preferredEntryArea:
-      visualReview.preferredEntryArea && typeof visualReview.preferredEntryArea === "object"
-        ? {
-            ...visualReview.preferredEntryArea,
-            direction: String(visualReview.preferredEntryArea.direction || "none").toLowerCase(),
-            areaType: String(visualReview.preferredEntryArea.areaType || "none").toLowerCase(),
-            zoneLow: Number.isFinite(Number(visualReview.preferredEntryArea.zoneLow))
-              ? Number(visualReview.preferredEntryArea.zoneLow)
-              : null,
-            zoneHigh: Number.isFinite(Number(visualReview.preferredEntryArea.zoneHigh))
-              ? Number(visualReview.preferredEntryArea.zoneHigh)
-              : null,
-            zoneText: String(visualReview.preferredEntryArea.zoneText || "").trim(),
-            priceStatus: String(visualReview.preferredEntryArea.priceStatus || "unclear").toLowerCase(),
-            triggerPresent: visualReview.preferredEntryArea.triggerPresent === true,
-            triggerDescription: String(visualReview.preferredEntryArea.triggerDescription || "").trim(),
-          }
-        : null,
   };
 }
 
@@ -1973,36 +1959,271 @@ function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupp
   };
 }
 
-async function fetchTwelveDataStructureLevels({ symbol, chartDate, timeframe = "H1", timezone = "UTC", analysisType = "post-trade" }) {
+
+function isIntradayCsaTimeframe(timeframe = "") {
+  return ["M1", "M5", "M15", "M30", "H1", "H4"].includes(
+    comparableTimeframe(timeframe)
+  );
+}
+
+function previousDateText(dateText = "") {
+  const parsed = parseISODateOnly(dateText);
+  if (!parsed) return null;
+  return formatDateOnly(addDays(parsed, -1));
+}
+
+function resolveTwelveDataChartCutoff({
+  chartDetection = null,
+  dateDecision = null,
+  timeframe = "H1",
+  analysisType = "post-trade",
+}) {
+  const detectedDate = String(chartDetection?.latestVisibleDate || "").trim();
+  const detectedDateConfidence = String(
+    chartDetection?.dateConfidence || "low"
+  ).toLowerCase();
+  const detectedTime = String(
+    chartDetection?.latestVisibleTime || ""
+  ).trim();
+  const detectedTimeConfidence = String(
+    chartDetection?.latestVisibleTimeConfidence || "low"
+  ).toLowerCase();
+
+  const usableDetectedDate =
+    /^\d{4}-\d{2}-\d{2}$/.test(detectedDate) &&
+    ["high", "medium"].includes(detectedDateConfidence);
+
+  const usableDetectedTime =
+    /^([01]\d|2[0-3]):[0-5]\d$/.test(detectedTime) &&
+    ["high", "medium"].includes(detectedTimeConfidence);
+
+  const finalDateText =
+    (usableDetectedDate ? detectedDate : null) ||
+    dateDecision?.finalDateText ||
+    dateDecision?.selectedDateText ||
+    null;
+
+  if (!finalDateText || finalDateText === "Not provided") {
+    return {
+      endDateTime: null,
+      source: "missing-cutoff",
+      exactVisibleCutoff: false,
+      allowMarketDirectionalBias: false,
+      reason: "No reliable chart cutoff date was available.",
+    };
+  }
+
+  const intraday = isIntradayCsaTimeframe(timeframe);
+  const isHistoricalReview =
+    String(analysisType || "").toLowerCase() === "post-trade";
+
+  if (intraday && usableDetectedDate && usableDetectedTime) {
+    return {
+      // Include the final visible candle timestamp, but nothing after it.
+      endDateTime: `${detectedDate} ${detectedTime}:59`,
+      source: "chart-detected-date-time",
+      exactVisibleCutoff: true,
+      allowMarketDirectionalBias: true,
+      reason:
+        "Twelve Data was stopped at the final date and time visible on the uploaded chart.",
+    };
+  }
+
+  if (intraday && isHistoricalReview) {
+    /*
+     * A calendar date alone is not enough for an intraday historical review.
+     * Using 23:59:59 could introduce candles formed after the screenshot.
+     * Fetch only through the previous completed day and let the screenshot
+     * control the current-day direction and setup.
+     */
+    const safePreviousDate = previousDateText(finalDateText);
+    return {
+      endDateTime: safePreviousDate
+        ? `${safePreviousDate} 23:59:59`
+        : null,
+      source: "safe-previous-day-fallback",
+      exactVisibleCutoff: false,
+      allowMarketDirectionalBias: false,
+      reason:
+        "The final visible intraday time could not be verified, so later same-day candles were excluded and the uploaded chart remains the source of truth for direction.",
+    };
+  }
+
+  return {
+    endDateTime: `${finalDateText} 23:59:59`,
+    source: usableDetectedDate
+      ? "chart-detected-date"
+      : "selected-date",
+    exactVisibleCutoff: !intraday,
+    allowMarketDirectionalBias: !intraday,
+    reason:
+      "The review was limited to the final visible or selected chart date.",
+  };
+}
+
+function normalizeTwelveDataDateTime(value = "") {
+  const text = String(value || "").trim().replace("T", " ");
+  if (!text) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return `${text} 00:00:00`;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(text)) return `${text}:00`;
+  return text.slice(0, 19);
+}
+
+async function fetchTwelveDataStructureLevels({
+  symbol,
+  chartDate,
+  timeframe = "H1",
+  timezone = "UTC",
+  analysisType = "post-trade",
+  chartCutoff = null,
+}) {
   const apiKey = process.env.TWELVE_DATA_API_KEY;
   const profile = getSupportedCsaTimeframeProfile(timeframe);
-  const empty = (error, range = null) => ({ ok: false, error, dailyLevels: [], csaAreas: [], directionalBias: calculateCsaDirectionalBias([], symbol, profile), rawCandleCount: 0, weekRange: range, symbol, timezone, interval: profile.interval, profile });
+
+  const empty = (error, range = null) => ({
+    ok: false,
+    error,
+    dailyLevels: [],
+    csaAreas: [],
+    directionalBias: calculateCsaDirectionalBias([], symbol, profile),
+    rawCandleCount: 0,
+    filteredCandleCount: 0,
+    weekRange: range,
+    symbol,
+    timezone,
+    interval: profile.interval,
+    profile,
+    chartCutoff: chartCutoff || null,
+  });
+
   if (!apiKey) return empty("TWELVE_DATA_API_KEY is missing on the server.");
   if (!symbol) return empty("Instrument/pair is missing or unsupported.");
   if (!chartDate) return empty("Final visible chart date is missing.");
-  const structureRange = getStructureRangeForProfile(chartDate, profile, analysisType);
-  const params = new URLSearchParams({ symbol, interval: profile.interval, start_date: `${structureRange.startDate} 00:00:00`, end_date: `${structureRange.endDate} 23:59:59`, timezone, order: "ASC", outputsize: getOutputSizeForInterval(profile.interval), apikey: apiKey });
-  const response = await fetch(`${TWELVE_DATA_BASE_URL}?${params.toString()}`);
+
+  const structureRange = getStructureRangeForProfile(
+    chartDate,
+    profile,
+    analysisType
+  );
+
+  const endDateTime =
+    chartCutoff?.endDateTime ||
+    `${structureRange.endDate} 23:59:59`;
+
+  if (!endDateTime) {
+    return empty(
+      "A safe Twelve Data cutoff could not be established for this chart.",
+      structureRange
+    );
+  }
+
+  const params = new URLSearchParams({
+    symbol,
+    interval: profile.interval,
+    start_date: `${structureRange.startDate} 00:00:00`,
+    end_date: endDateTime,
+    timezone,
+    order: "ASC",
+    outputsize: getOutputSizeForInterval(profile.interval),
+    apikey: apiKey,
+  });
+
+  console.log("Twelve Data historical cutoff:", {
+    symbol,
+    timeframe,
+    analysisType,
+    startDate: `${structureRange.startDate} 00:00:00`,
+    endDate: endDateTime,
+    cutoffSource: chartCutoff?.source || "legacy-date-end",
+    exactVisibleCutoff: chartCutoff?.exactVisibleCutoff === true,
+    allowMarketDirectionalBias:
+      chartCutoff?.allowMarketDirectionalBias !== false,
+  });
+
+  const response = await fetch(
+    `${TWELVE_DATA_BASE_URL}?${params.toString()}`
+  );
   const data = await response.json();
-  if (!response.ok || data.status === "error" || !Array.isArray(data.values)) return { ...empty(data.message || data.error || `Twelve Data request failed with status ${response.status}.`, structureRange), twelveDataStatus: data.status || "unknown" };
+
+  if (
+    !response.ok ||
+    data.status === "error" ||
+    !Array.isArray(data.values)
+  ) {
+    return {
+      ...empty(
+        data.message ||
+          data.error ||
+          `Twelve Data request failed with status ${response.status}.`,
+        structureRange
+      ),
+      twelveDataStatus: data.status || "unknown",
+    };
+  }
+
   const rawCandles = data.values || [];
-  const dailyLevels = buildStructureLevelsFromCandles(rawCandles, structureRange, profile);
+  const normalizedCutoff = normalizeTwelveDataDateTime(endDateTime);
+
+  // Defence in depth: discard anything later than the screenshot cutoff
+  // even if the provider returns an extra candle.
+  const filteredCandles = rawCandles.filter((bar) => {
+    const candleDateTime = normalizeTwelveDataDateTime(bar?.datetime);
+    return (
+      !normalizedCutoff ||
+      !candleDateTime ||
+      candleDateTime <= normalizedCutoff
+    );
+  });
+
+  const dailyLevels = buildStructureLevelsFromCandles(
+    filteredCandles,
+    structureRange,
+    profile
+  );
   const csaAreas = buildCsaAreas(dailyLevels, symbol, profile);
-  const directionalBias = calculateCsaDirectionalBias(dailyLevels, symbol, profile);
+
+  const directionalBias =
+    chartCutoff?.allowMarketDirectionalBias === false
+      ? {
+          ...calculateCsaDirectionalBias([], symbol, profile),
+          bias: "Use uploaded chart",
+          biasCode: "chart_primary",
+          confidence: "low",
+          traderBias:
+            "The uploaded chart controls direction because the final visible intraday time could not be verified safely.",
+          higherTimeframeView:
+            "Twelve Data was restricted to avoid using candles formed after the screenshot.",
+          timeframeView:
+            "Use the price action visible on the uploaded chart for the review direction and setup status.",
+          reason:
+            chartCutoff?.reason ||
+            "Later same-day market data was excluded.",
+        }
+      : calculateCsaDirectionalBias(dailyLevels, symbol, profile);
+
   const approvedAreas = buildApprovedMarketAreas({ csaAreas });
+
   return {
     ok: dailyLevels.length > 0,
-    error: dailyLevels.length > 0 ? "" : `No usable ${profile.sourceUnitPlural} were returned.`,
+    error:
+      dailyLevels.length > 0
+        ? ""
+        : `No usable ${profile.sourceUnitPlural} were returned before the chart cutoff.`,
     dailyLevels,
     csaAreas,
     approvedAreas,
     directionalBias,
     rawCandleCount: rawCandles.length,
+    filteredCandleCount: filteredCandles.length,
     weekRange: structureRange,
     symbol,
     timezone,
     interval: profile.interval,
     profile,
+    chartCutoff: {
+      ...chartCutoff,
+      endDateTime,
+    },
   };
 }
 
@@ -2074,7 +2295,7 @@ function buildFrameworkMistakeHub({ failedAreas = [], hasConfirmedTrigger = fals
 }
 
 async function detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument = "", selectedTimeframe = "", selectedDateText = "", analysisType = "post-trade" }) {
-  const fallback = (reason) => ({ ok: false, isTradingChart: false, chartValidityReason: reason, hasUsablePriceData: false, visibleCandleCount: 0, chartDataQuality: "unclear", chartOccupancyPercent: 0, isNestedChart: false, isChartReadableAtCurrentSize: false, selectedDateVisible: false, insufficientDataReason: reason, detectedInstrument: null, detectedTimeframe: null, latestVisibleDate: null, dateConfidence: "low", visibleTrigger: null, rejectedTriggerContext: null, triggerDirection: null, triggerConfidence: "low", notes: reason, raw: "" });
+  const fallback = (reason) => ({ ok: false, isTradingChart: false, chartValidityReason: reason, hasUsablePriceData: false, visibleCandleCount: 0, chartDataQuality: "unclear", chartOccupancyPercent: 0, isNestedChart: false, isChartReadableAtCurrentSize: false, selectedDateVisible: false, insufficientDataReason: reason, detectedInstrument: null, detectedTimeframe: null, latestVisibleDate: null, latestVisibleTime: null, latestVisibleTimeConfidence: "low", dateConfidence: "low", visibleTrigger: null, rejectedTriggerContext: null, triggerDirection: null, triggerConfidence: "low", notes: reason, raw: "" });
   if (!process.env.OPENAI_API_KEY) return fallback("OPENAI_API_KEY is missing.");
 
   try {
@@ -2167,6 +2388,14 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
       detectedInstrument: isTradingChart ? parsed?.detectedInstrument || null : null,
       detectedTimeframe: isTradingChart ? parsed?.detectedTimeframe || null : null,
       latestVisibleDate: isTradingChart ? parsed?.latestVisibleDate || null : null,
+      latestVisibleTime:
+        isTradingChart && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(parsed?.latestVisibleTime || ""))
+          ? String(parsed.latestVisibleTime)
+          : null,
+      latestVisibleTimeConfidence:
+        isTradingChart
+          ? String(parsed?.latestVisibleTimeConfidence || "low").toLowerCase()
+          : "low",
       dateConfidence: isTradingChart ? parsed?.dateConfidence || "low" : "low",
       visibleTrigger: isTradingChart ? cleanTrigger : null,
       rejectedTriggerContext: isTradingChart && rawTrigger && !cleanTrigger ? rawTrigger : null,
@@ -2340,11 +2569,6 @@ MARKET DIRECTION
 - Use range/unclear when price repeatedly crosses nearby levels, structure is mixed, or neither side has clear control.
 - Direction must be based on structure and level behaviour, not one candle.
 - A correct direction does not mean an immediate entry is available.
-- Determine direction from the full visible structure, not only the last few candles.
-- A short bounce from support does not make the chart bullish when the wider visible structure still shows lower highs, lower lows, seller control, or a valid sell plan from supply.
-- In that situation, describe the chart as bearish with short-term consolidation or a short-term bounce.
-- Do not create an opposite-direction buy plan merely because current price is near support when the clearer framework setup is waiting for a sell from supply.
-- The uploaded chart and its visible structure are the primary evidence. Market-reference data is supporting evidence and must not overwrite a clearer visual conclusion.
 
 SUPPORT, RESISTANCE, SUPPLY, AND DEMAND
 - Treat levels as areas, not exact price points.
@@ -2538,6 +2762,9 @@ Initial image validation:
 - Detected instrument: ${chartDetection?.detectedInstrument || "not detected"}
 - Detected timeframe: ${chartDetection?.detectedTimeframe || "not detected"}
 - Latest visible date: ${chartDetection?.latestVisibleDate || "not detected"}
+- Latest visible time: ${chartDetection?.latestVisibleTime || "not detected"}
+- Twelve Data cutoff: ${marketReference?.chartCutoff?.endDateTime || "not available"}
+- Cutoff rule: ${marketReference?.chartCutoff?.reason || "The uploaded chart remains the primary source of truth."}
 - Detected trigger: ${chartDetection?.visibleTrigger || "none confirmed"}
 
 CSA ENTRY-ZONE RULES:
@@ -2590,9 +2817,9 @@ Return exactly this JSON shape:
   "preferredEntryArea": {
     "direction": "buy | sell | none",
     "areaType": "support | resistance | demand | supply | converted support | converted resistance | none",
-    "zoneLow": "lower boundary from a printed price, approved market data, or a clearly visible approximate zone boundary; otherwise null",
-    "zoneHigh": "upper boundary from a printed price, approved market data, or a clearly visible approximate zone boundary; otherwise null",
-    "zoneText": "beginner-friendly area description. When a visible supply/demand rectangle exists, return an approximate range and use the word around",
+    "zoneLow": "exact lower boundary only when clearly printed on chart or approved market data; otherwise null",
+    "zoneHigh": "exact upper boundary only when clearly printed on chart or approved market data; otherwise null",
+    "zoneText": "beginner-friendly area description, preferably a range when the chart shows a zone",
     "priceStatus": "not reached | approaching | inside | reacted | moved away | unclear",
     "triggerPresent": false,
     "triggerDescription": "visible trigger or null"
@@ -4355,16 +4582,11 @@ function formatPreferredEntryZone(visualReview = null, directionalBias = "") {
   const status = String(area.priceStatus || "unclear").toLowerCase();
   const zoneText = String(area.zoneText || "").trim();
 
-  const zoneTextHasRange =
-    /\d+(?:\.\d+)?\s*(?:-|–|to)\s*\d+(?:\.\d+)?/i.test(zoneText);
-
   let priceText = zoneText;
   if (hasLow && hasHigh) {
     const zoneMin = Math.min(low, high);
     const zoneMax = Math.max(low, high);
     priceText = `${formatPrice(zoneMin)}–${formatPrice(zoneMax)}`;
-  } else if (zoneTextHasRange) {
-    priceText = zoneText;
   } else if (hasLow) {
     priceText = formatPrice(low);
   } else if (hasHigh) {
@@ -4374,12 +4596,7 @@ function formatPreferredEntryZone(visualReview = null, directionalBias = "") {
   const bearish = /bearish/.test(String(directionalBias).toLowerCase()) || direction === "sell";
   const bullish = /bullish/.test(String(directionalBias).toLowerCase()) || direction === "buy";
   const namedArea = areaType && areaType !== "none" ? areaType : bearish ? "supply area" : bullish ? "demand area" : "planned area";
-  const cleanedPriceText = String(priceText || "")
-    .replace(/^\s*(?:the\s+)?(?:supply|demand|support|resistance|converted support|converted resistance)\s+(?:area|zone)?\s*(?:around|near|at)?\s*/i, "")
-    .trim();
-  const location = cleanedPriceText
-    ? `${namedArea} around ${cleanedPriceText}`
-    : `the ${namedArea}`;
+  const location = priceText ? `${namedArea} around ${priceText}` : `the ${namedArea}`;
 
   if (bearish) {
     if (["not reached", "approaching", "unclear"].includes(status)) {
@@ -4430,40 +4647,9 @@ function buildStarterCoachSummary({
     visualReview?.shortTermDirection || visualReview?.plainMarketDirection || ""
   ).toLowerCase();
   const backendDirection = String(bias?.bias || "").toLowerCase();
-  const preferredDirection = String(
-    visualReview?.preferredEntryArea?.direction || ""
-  ).toLowerCase();
-  const preferredAreaType = String(
-    visualReview?.preferredEntryArea?.areaType || ""
-  ).toLowerCase();
-  const visualPlanText = [
-    visualReview?.bestAreaToWatch,
-    visualReview?.coachVerdict,
-    visualReview?.mainWarning,
-    ...(Array.isArray(visualReview?.chartSpecificStrengths)
-      ? visualReview.chartSpecificStrengths
-      : []),
-  ].join(" ").toLowerCase();
 
   let directionalBias = bias?.bias || "Not available";
-
-  if (
-    preferredDirection === "sell" ||
-    (["supply", "resistance", "converted resistance"].includes(preferredAreaType) &&
-      /sell|bearish/.test(visualPlanText))
-  ) {
-    directionalBias = /range|consolidat|bounce/.test(visualDirection)
-      ? "Bearish with short-term consolidation"
-      : "Bearish";
-  } else if (
-    preferredDirection === "buy" ||
-    (["demand", "support", "converted support"].includes(preferredAreaType) &&
-      /buy|bullish/.test(visualPlanText))
-  ) {
-    directionalBias = /range|consolidat|pullback/.test(visualDirection)
-      ? "Bullish with short-term consolidation"
-      : "Bullish";
-  } else if (/bearish/.test(visualDirection)) {
+  if (/bearish/.test(visualDirection)) {
     directionalBias = /range/.test(visualDirection)
       ? "Bearish with short-term consolidation"
       : "Bearish";
@@ -4471,10 +4657,6 @@ function buildStarterCoachSummary({
     directionalBias = /range/.test(visualDirection)
       ? "Bullish with short-term consolidation"
       : "Bullish";
-  } else if (/sell|supply|bearish/.test(visualPlanText)) {
-    directionalBias = "Bearish";
-  } else if (/buy|demand|bullish/.test(visualPlanText)) {
-    directionalBias = "Bullish";
   } else if (/range/.test(visualDirection)) {
     directionalBias = "Range-bound";
   } else if (/range-bound with bearish pressure/.test(backendDirection)) {
@@ -4510,13 +4692,9 @@ function buildStarterCoachSummary({
       ...normalizeArrayOfStrings(visualReview?.chartSpecificWeaknesses, []),
       ...normalizeArrayOfStrings(visualReview?.csaDifferences, []),
       ...normalizeArrayOfStrings(dashboardFeedback?.weaknesses, []),
-    ].filter((item) => {
-      const value = String(item || "");
-      return (
-        !/exact (sell|buy|entry) (level|price).*not defined|exact .* level is not defined/i.test(value) &&
-        !/visual trade review failed|visual comparison was inconclusive|referenceerror|is not defined/i.test(value)
-      );
-    }),
+    ].filter((item) =>
+      !/exact (sell|buy|entry) (level|price).*not defined|exact .* level is not defined/i.test(String(item || ""))
+    ),
     4
   );
 
@@ -4527,25 +4705,6 @@ function buildStarterCoachSummary({
   const convertedLevelText = String(visualReview?.convertedLevelAssessment || "").trim();
   const warningText = String(visualReview?.mainWarning || "").trim();
   const verdictText = String(visualReview?.coachVerdict || "").trim();
-  const preferredArea = visualReview?.preferredEntryArea;
-  const preferredStatus = String(preferredArea?.priceStatus || "").toLowerCase();
-  const preferredType = String(preferredArea?.areaType || "").toLowerCase();
-
-  if (preferredArea && preferredType && preferredType !== "none") {
-    strengths.unshift(
-      `The marked ${preferredType} area agrees with the planned ${/bearish/.test(String(directionalBias).toLowerCase()) ? "sell" : /bullish/.test(String(directionalBias).toLowerCase()) ? "buy" : "trade"} direction.`
-    );
-  }
-
-  if (["not reached", "approaching"].includes(preferredStatus)) {
-    weaknesses.unshift(
-      `Price has not yet retested the planned ${preferredType || "entry"} area, so there is no confirmed entry yet.`
-    );
-  }
-
-  if (preferredArea && preferredArea.triggerPresent !== true) {
-    weaknesses.push("No fresh entry trigger is visible at the planned area yet.");
-  }
 
   if (/no visible entry|no clear|not yet|has not reached|has not retested/.test(entryText)) {
     weaknesses.unshift("Price has not yet produced a confirmed entry trigger at the planned area.");
@@ -4558,29 +4717,26 @@ function buildStarterCoachSummary({
   }
   weaknesses = removeDuplicateFeedback(weaknesses, 4);
 
-  let correctionAction =
-    structuredAreaAction || bestAreaText || verdictText || warningText || "";
+  let correctionAction = structuredAreaAction || bestAreaText || verdictText || warningText || trendPlan.bestAreaToWatch;
 
+  // Never replace an image-aware supply/demand plan with a generic nearest-level fallback.
+  if (!correctionAction) correctionAction = trendPlan.bestAreaToWatch;
+
+  // Prevent an unrelated opposite-direction scenario when the chart has a clear directional plan.
   if (/bearish/.test(String(directionalBias).toLowerCase())) {
-    correctionAction = String(correctionAction || "")
-      .replace(/Buy only if[\s\S]*?(?=Sell only if|$)/i, "")
+    correctionAction = correctionAction
+      .replace(/Buy only if[\s\S]*?\.\s*/i, "")
       .trim();
-
     if (!/sell|bearish|resistance|supply/i.test(correctionAction)) {
-      correctionAction =
-        "Wait for price to retrace towards the marked supply or resistance area and show a clear bearish trigger before considering a sell. Do not chase price while it remains close to support.";
+      correctionAction = trendPlan.bestAreaToWatch;
     }
   } else if (/bullish/.test(String(directionalBias).toLowerCase())) {
-    correctionAction = String(correctionAction || "")
-      .replace(/Sell only if[\s\S]*$/i, "")
+    correctionAction = correctionAction
+      .replace(/Sell only if[\s\S]*?\.\s*/i, "")
       .trim();
-
     if (!/buy|bullish|support|demand/i.test(correctionAction)) {
-      correctionAction =
-        "Wait for price to return towards the marked demand or support area and show a clear bullish trigger before considering a buy. Do not chase price while it remains close to resistance.";
+      correctionAction = trendPlan.bestAreaToWatch;
     }
-  } else if (!correctionAction) {
-    correctionAction = trendPlan.bestAreaToWatch;
   }
 
   return [
@@ -5486,8 +5642,27 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       return stoppedResponse({ res, errorType: "timeframe_mismatch", error: "Selected timeframe does not match uploaded chart timeframe.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
 
-    const dateDecision = chooseFinalChartDate({ selectedDate, detection: chartDetection, analysisType: mode });
-    const marketReference = await fetchTwelveDataStructureLevels({ symbol: normalizedSymbol, chartDate: dateDecision.finalDate, timeframe, timezone: timezone || "UTC", analysisType: mode });
+    const dateDecision = chooseFinalChartDate({
+      selectedDate,
+      detection: chartDetection,
+      analysisType: mode,
+    });
+
+    const chartCutoff = resolveTwelveDataChartCutoff({
+      chartDetection,
+      dateDecision,
+      timeframe,
+      analysisType: mode,
+    });
+
+    const marketReference = await fetchTwelveDataStructureLevels({
+      symbol: normalizedSymbol,
+      chartDate: dateDecision.finalDate,
+      timeframe,
+      timezone: timezone || "UTC",
+      analysisType: mode,
+      chartCutoff,
+    });
     let visualReview = await compareUploadedChartWithCsaFramework({
       imageBase64,
       mimeType,
