@@ -2294,6 +2294,95 @@ function isBadVisualReview(parsed) {
 }
 
 
+
+const CSA_FRAMEWORK_VERSION = "1.0";
+
+const CSA_FRAMEWORK_RULES_V1 = `
+CSA FRAMEWORK VERSION ${CSA_FRAMEWORK_VERSION}
+
+CORE REVIEW ORDER
+1. Confirm chart readability, instrument, timeframe, review mode, selected date, and whether a trade is actually visible.
+2. Classify the chart as marked, unmarked, or unclear.
+3. Determine the bigger-picture direction and the uploaded-timeframe direction.
+4. Identify support, resistance, supply, and demand.
+5. Check for valid breaks, false breaks, and potential or confirmed converted levels.
+6. Rank the valid entry areas and state whether price has not reached, is approaching, is inside, has reacted from, or has moved away from each area.
+7. Check for a fresh entry trigger.
+8. Recommend one clear stop-loss location at the setup invalidation point.
+9. Use the next opposing support or resistance as the first target.
+10. Give evidence-based strengths, improvements, one precise next action, and fair scores.
+
+MARKET DIRECTION
+- Bullish evidence includes higher highs, higher lows, support holding, resistance breaking with continued movement, confirmed resistance-to-support conversion, or clear buyer control from demand.
+- Bearish evidence includes lower highs, lower lows, resistance holding, support breaking with continued movement, confirmed support-to-resistance conversion, or clear seller control from supply.
+- Use range/unclear when price repeatedly crosses nearby levels, structure is mixed, or neither side has clear control.
+- Direction must be based on structure and level behaviour, not one candle.
+- A correct direction does not mean an immediate entry is available.
+
+SUPPORT, RESISTANCE, SUPPLY, AND DEMAND
+- Treat levels as areas, not exact price points.
+- Support/resistance gives the broader structure. Newer reactions may form more precise demand/supply areas inside that structure.
+- A supply or demand zone can be valid from its edge, middle, or deeper portion. Price does not need to touch one exact number.
+- A touch of the zone edge counts as a retest when a valid trigger appears.
+- If an edge entry fails but the wider zone remains intact, a fresh setup deeper in the same zone can still be valid after a new trigger.
+
+BREAKS, FALSE BREAKS, AND CONVERTED LEVELS
+- A valid break requires a clear move through the level followed by continued movement showing control.
+- A wick through a level that closes back on the original side is normally a false break.
+- Stage 1: broken level. Stage 2: potential converted level after clear continuation. Stage 3: confirmed converted level after price returns from the opposite side and respects it.
+- Before a retest, say the broken level may act in the new role. Do not call it confirmed.
+- If price repeatedly crosses the area, describe it as ranging or unconfirmed rather than cleanly converted.
+
+FIBONACCI
+- Use Fibonacci only as internal confluence to refine direction and rank valid structural areas.
+- Fibonacci must not create a setup by itself and should not normally be mentioned in beginner-facing feedback.
+- The valid entry remains the support/resistance or supply/demand zone, not an exact Fibonacci price.
+
+ENTRY AREA AND TIMING
+- Prefer entries that agree with direction and occur at support, resistance, supply, demand, or a valid converted level.
+- Avoid buying directly under resistance, selling directly above support, entering in the middle, or chasing after price has already moved.
+- Clearly distinguish: not reached, approaching, inside, reacted, or moved away.
+- If price has not retested the area, say so. Never imply a rejection or trigger has already happened.
+
+ENTRY 1 AND ENTRY 2
+- More than one area can be valid.
+- Entry 1 is the first valid area likely to be reached; Entry 2 is a second valid area, often deeper or at a different confluence point.
+- Do not automatically call Entry 2 superior or tell the trader to skip Entry 1. Price may react from Entry 1 and never reach Entry 2.
+- Entry 2 should generally be considered if Entry 1 fails and a fresh trigger appears.
+- Do not encourage adding to a losing Entry 1 position. An advanced add-on is outside the default beginner recommendation.
+
+ENTRY CONFIRMATION
+- Preferred approach: wait for a visible candlestick or market-structure trigger after price reaches a valid area.
+- Pending orders are possible but riskier and should not be the default beginner recommendation.
+- Valid triggers include bullish/bearish engulfing, pin bar, hammer, rejection candle, doji plus confirmed break, inside-bar break, higher low, lower high, short-term structure break, break-and-hold, retest-and-hold, head and shoulders, inverse head and shoulders, or Quasimodo.
+- Bounce, pullback, retracement, reaction, ranging, consolidation, or merely touching the zone is not a trigger by itself.
+
+STOP LOSS
+- Recommend one simple stop based on where the setup is invalidated.
+- Choose from beyond the trigger structure, beyond the zone, or beyond the structural swing according to visible evidence.
+- A trigger-based stop is tighter but easier to knock out; a zone/structure stop gives more room but needs a smaller lot size.
+- Put alternatives only in a short More details explanation, not in the main beginner instruction.
+
+TARGET AND TRADE MANAGEMENT
+- First target is normally the next opposing support or resistance.
+- Further targets require a clear break and hold beyond the first target.
+- Only assess breakeven, partial close, trailing stop, or other management when visible or described.
+
+RISK MANAGEMENT
+- Consider stop distance, lot size, account risk, room to first target, and reward-to-risk.
+- A wider stop requires a smaller position size to keep account risk unchanged.
+- Do not invent a distant target to make reward-to-risk look better.
+
+EVIDENCE AND FEEDBACK
+- Never invent an entry, trigger, stop, target, trade, or mistake.
+- For pre-trade analysis, absence of a trigger is a valid current limitation: say the setup is not ready yet.
+- For post-trade analysis with no visible/described trade, do not criticise how an entry or stop was executed. You may still state that no current trigger or risk plan is visible when reviewing the chart plan.
+- If no stop is shown, say the invalidation point and risk cannot be assessed; do not say the stop was badly placed.
+- Give at most 4 distinct strengths and 4 distinct improvements. Do not repeat the same issue.
+- Keep feedback simple, specific, beginner-friendly, and based on visible evidence.
+- End with one practical next action and include an approved price whenever one is available.
+`;
+
 async function compareUploadedChartWithCsaFramework({
   imageBase64,
   mimeType,
@@ -2318,6 +2407,8 @@ Your job:
 - FIRST classify the uploaded chart as MARKED, UNMARKED, or UNCLEAR before giving any feedback.
 - Then review the uploaded chart using the internal support/resistance framework below.
 - The main purpose is to compare what is visibly marked on the uploaded chart with the internal support/resistance areas and identify similarities and differences.
+
+${CSA_FRAMEWORK_RULES_V1}
 
 STRICT MARKED/UNMARKED RULE:
 - For M1, M5, M15, M30, and H1 charts, the internal method starts with Monday's high as resistance and Monday's low as support.
@@ -2352,8 +2443,8 @@ STRICT MARKED/UNMARKED RULE:
 - Do not use support, resistance, supply, or demand created on the selected chart date when giving entry areas or a trade plan. Use only earlier completed days or periods.
 - If the chart is unclear, do not guess. Use UNCLEAR and state what cannot be verified.
 - The user is likely a beginner. Use very simple trading language.
-- The backend can use the internal method, but user-facing fields must NOT say "CSA", "framework", "daily high/low logic", "supply/demand classification", or other internal method words.
-- Do not mention trendlines, channels, Fibonacci, indicators, or moving averages. They are outside this review. Ignore them unless they hide price.
+- The backend can use the internal method, but user-facing fields must NOT say "CSA", "framework", or "daily high/low logic". Simple terms such as support, resistance, supply area, and demand area are allowed when they help the beginner understand the setup.
+- Do not discuss trendlines, channels, indicators, or moving averages unless the selected personal strategy requires them. Use Fibonacci only as silent internal confluence and do not mention Fibonacci in normal beginner-facing feedback.
 - Explain only what matters to a beginner:
   1. Is the bigger picture bullish, bearish, or ranging?
   2. What is the selected ${timeframe} chart doing right now?
@@ -2363,9 +2454,9 @@ STRICT MARKED/UNMARKED RULE:
   6. Is stop loss/target visible enough to judge?
 - The internal range-position check may use the first key high/low as a deep-pullback guide, but user-facing wording should stay simple.
 - Do not mention Fibonacci, retracement percentages, 61.8, 50%, or technical confluence in user-facing feedback.
-- When there are two possible entry areas, explain which one is better in beginner language: the closer area may be possible but may offer poor reward, while the deeper pullback area may be better because it gives price more room to move.
+- When there are two valid entry areas, label them Entry 1 and Entry 2 when useful. Do not automatically dismiss Entry 1 or claim Entry 2 is always better. Explain that Entry 1 may react first, while Entry 2 may remain valid if Entry 1 fails and a fresh trigger appears. Do not encourage adding to a losing Entry 1 position.
 - Entry confirmation must match the trade direction: for a sell setup, wait for price to approach resistance and reject; for a buy setup, wait for price to approach support and hold.
-- Do not write awkward phrases like "hold below support" or "hold above resistance." If support is broken, call it "previous support" and explain that a better sell entry needs a pullback and rejection from that area. If resistance is broken, call it "previous resistance" and explain that a better buy entry needs a pullback and hold from that area.
+- Use staged converted-level wording. After a clear break and continuation, call the level potential resistance/support. Call it confirmed converted resistance/support only after price returns from the opposite side and respects it. A wick that closes back on the original side is normally a false break.
 - A failed support/resistance area should be explained under market structure or best area to watch, not as the main warning.
 - Main warning should focus on the trader's mistake to avoid: chasing price, selling too close to support, buying too close to resistance, entering without confirmation, or poor reward-to-risk.
 - CSA is mainly a trend-trading strategy. If there is no clean trend yet, do not force a buy or sell. Give both sides: buy at support if it holds, or sell at resistance if it rejects.
@@ -2388,7 +2479,7 @@ STRICT MARKED/UNMARKED RULE:
 - Do not assume that a trade was taken merely because the selected mode is post-trade review.
 - First decide whether a trade is actually visible from entry markers, order lines, stop loss, take profit, position labels, or clear user notes describing a completed entry.
 - If no trade is visible and the notes do not describe a taken trade, set tradeVisibility="not_visible".
-- When tradeVisibility="not_visible", do not write weaknesses about entry confirmation, entry timing, stop loss, target, or how the trade was taken.
+- When tradeVisibility="not_visible", do not claim a trade was badly entered or managed. In pre-trade mode, you may still state that price has not reached the area, no trigger is visible, or stop/target planning is missing. In post-trade mode without a described trade, assess only the visible chart plan and missing information, not execution quality.
 - If a trade is visible but stop loss or target is missing, say "Stop loss and target are not shown, so the trade risk cannot be judged."
 - If the bigger-picture view and uploaded chart timeframe disagree, state both clearly.
   Example: "The bigger picture is slightly bearish, but the ${timeframe} chart is pushing up short-term."
@@ -2483,7 +2574,7 @@ Return exactly this JSON shape:
           { type: "input_image", image_url: `data:${mimeType};base64,${imageBase64}` },
         ]},
       ],
-      max_output_tokens: 1500,
+      max_output_tokens: 2200,
     });
 
     const parsed = extractJsonObject(response.output_text || "");
