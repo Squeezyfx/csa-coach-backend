@@ -1,11 +1,12 @@
 {
   "name": "csa-coach-backend",
-  "version": "1.2.0",
-  "description": "CSA Coach backend with Supabase journal storage and Stripe subscriptions",
+  "version": "2.0.0",
+  "description": "CSA Coach backend with consolidated deterministic analysis facts, Supabase journal storage and Stripe subscriptions",
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "check": "node --check server.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.52.0",
