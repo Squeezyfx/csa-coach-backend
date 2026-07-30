@@ -6062,7 +6062,7 @@ function controlledScores(facts) {
   };
 }
 
-function scoreLabel(score) {
+function controlledScoreLabel(score) {
   return score >= 85
     ? "Excellent"
     : score >= 75
@@ -6272,7 +6272,7 @@ function buildControlledFeedback({
     scores,
     setupQuality: {
       score: scores.setupQuality,
-      label: scoreLabel(scores.setupQuality),
+      label: controlledScoreLabel(scores.setupQuality),
       summary:
         area.invalidated
           ? "The previous area has failed and the setup must be rebuilt."
@@ -6282,7 +6282,7 @@ function buildControlledFeedback({
     },
     entryAccuracy: {
       score: scores.entryAccuracy,
-      label: scoreLabel(scores.entryAccuracy),
+      label: controlledScoreLabel(scores.entryAccuracy),
       summary:
         area.triggerPresent
           ? "A valid trigger is visible at the planned area."
@@ -6290,7 +6290,7 @@ function buildControlledFeedback({
     },
     riskManagement: {
       score: scores.riskManagement,
-      label: scoreLabel(scores.riskManagement),
+      label: controlledScoreLabel(scores.riskManagement),
       summary:
         facts.risk.assessable
           ? "The stop and target are visible enough to review risk."
