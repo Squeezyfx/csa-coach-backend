@@ -5602,7 +5602,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "2.2.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "2.3.0";
 
 function asPositiveNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -5844,11 +5844,15 @@ function buildValidatedAnalysisFacts({
     candleReachEvidence.test(areaReachEvidence) &&
     !annotationOnlyEvidence.test(areaReachEvidence);
 
-  let areaRetested = currentPriceInsideZone || areaReachVisuallyProven;
+  // Market-reference price can be later than the screenshot's exact final
+  // intraday candle when the chart time is unreadable. It must not prove that
+  // the planned area was reached. Only candle-based evidence extracted from
+  // the screenshot may confirm a retest.
+  let areaRetested = areaReachVisuallyProven;
 
   // A boolean supplied by the model is not enough. The model must also give
-  // candle-based visual evidence. Labels, arrows and written trade ideas are
-  // treated only as annotations.
+  // candle-based visual evidence. Labels, arrows, written trade ideas and a
+  // Twelve Data close inside the zone are not treated as proof.
   if (!areaRetested) {
     if (
       direction === "bearish" &&
@@ -6008,6 +6012,7 @@ function buildValidatedAnalysisFacts({
       priceStatus,
       areaRetested,
       areaReachEvidence: areaRetested ? areaReachEvidence : "",
+      marketReferenceInsideZone: currentPriceInsideZone,
       triggerPresent,
       triggerEvidence: triggerPresent ? triggerEvidence : "",
       triggerDescription: triggerPresent ? triggerDescription : "",
