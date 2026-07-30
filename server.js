@@ -5782,7 +5782,7 @@ function buildStarterCoachSummary(options = {}) {
 
   if (preferredArea) {
     strengths.push(
-      `The ${areaLabel} gives a clear ${
+      `The marked ${areaLabel.replace(/^marked\s+/i, "")} gives a clear ${
         directionCode === "bearish"
           ? "sell"
           : directionCode === "bullish"
@@ -5836,21 +5836,19 @@ function buildStarterCoachSummary(options = {}) {
     );
   }
 
+  const convertedLevelWasActuallyDetected =
+    Boolean(convertedLevelText) &&
+    /broken support|broken resistance|converted support|converted resistance|retest from below|retest from above|confirmed as support|confirmed as resistance/i.test(
+      convertedLevelText
+    );
+
   if (
-    convertedLevelText &&
-    /not confirmed|has not been confirmed|unconfirmed|needs a retest|retest from below|retest from above/.test(
-      convertedLevelText.toLowerCase()
+    convertedLevelWasActuallyDetected &&
+    /not confirmed|has not been confirmed|unconfirmed|needs a retest|retest from below|retest from above/i.test(
+      convertedLevelText
     )
   ) {
     weaknesses.push(convertedLevelText);
-  } else if (directionCode === "bearish") {
-    weaknesses.push(
-      "Any broken support below price must first retest from below and reject before it can be treated as confirmed resistance."
-    );
-  } else if (directionCode === "bullish") {
-    weaknesses.push(
-      "Any broken resistance above price must first retest from above and hold before it can be treated as confirmed support."
-    );
   }
 
   const finalStrengths = cleanUserFeedbackItems(strengths).slice(0, 4);
@@ -5861,12 +5859,12 @@ function buildStarterCoachSummary(options = {}) {
   if (directionCode === "bearish") {
     correctionAction =
       `Wait for price to retrace towards the ${areaLabel} and show a clear bearish trigger before considering a sell. ` +
-      "Make sure the next support leaves enough room for a reasonable risk-to-reward ratio. " +
+      "Make sure there is enough room to the next support for a reasonable risk-to-reward ratio. " +
       "Do not chase a sell while price remains close to support.";
   } else if (directionCode === "bullish") {
     correctionAction =
       `Wait for price to return towards the ${areaLabel} and show a clear bullish trigger before considering a buy. ` +
-      "Make sure the next resistance leaves enough room for a reasonable risk-to-reward ratio. " +
+      "Make sure there is enough room to the next resistance for a reasonable risk-to-reward ratio. " +
       "Do not chase a buy while price remains close to resistance.";
   } else {
     correctionAction =
