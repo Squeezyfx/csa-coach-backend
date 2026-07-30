@@ -2816,8 +2816,10 @@ function normalizePreferredEntryAreaFromVisual(parsed = {}) {
     zoneText,
     priceStatus,
     areaVisuallyReached: raw.areaVisuallyReached === true,
+    areaReachEvidence: String(raw.areaReachEvidence || "").trim(),
     triggerPresent,
     triggerAtAreaVisible: raw.triggerAtAreaVisible === true,
+    triggerEvidence: String(raw.triggerEvidence || "").trim(),
     triggerDescription,
   };
 }
@@ -3118,8 +3120,10 @@ Return exactly this JSON shape:
     "zoneText": "beginner-friendly area description. When a visible supply or demand rectangle exists, return the approximate full range and use the word around",
     "priceStatus": "not reached | approaching | inside | reacted | moved away | unclear",
     "areaVisuallyReached": false,
+    "areaReachEvidence": "describe the candle body/wick that visibly entered the zone, or null",
     "triggerPresent": false,
     "triggerAtAreaVisible": false,
+    "triggerEvidence": "name the valid candle/structure trigger visibly formed at the zone, or null",
     "triggerDescription": "visible trigger at the planned area or null"
   },
   "stopLossVisible": false,
@@ -5598,7 +5602,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "2.1.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "2.2.0";
 
 function asPositiveNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -5827,13 +5831,24 @@ function buildValidatedAnalysisFacts({
     currentPrice >= zone.zoneLow &&
     currentPrice <= zone.zoneHigh;
 
-  let areaRetested =
-    preferredArea?.areaVisuallyReached === true ||
-    currentPriceInsideZone;
+  const areaReachEvidence = String(
+    preferredArea?.areaReachEvidence || ""
+  ).trim();
+  const annotationOnlyEvidence =
+    /annotation|label|arrow|text says|marked as|planned|retest here|entry here/i;
+  const candleReachEvidence =
+    /candle|wick|body|high|low|closed|entered|touched|traded into/i;
 
-  // Annotation text such as "retest here" or "entry" is not proof that candles
-  // reached the area. Without explicit visual confirmation, keep the area
-  // unconfirmed.
+  const areaReachVisuallyProven =
+    preferredArea?.areaVisuallyReached === true &&
+    candleReachEvidence.test(areaReachEvidence) &&
+    !annotationOnlyEvidence.test(areaReachEvidence);
+
+  let areaRetested = currentPriceInsideZone || areaReachVisuallyProven;
+
+  // A boolean supplied by the model is not enough. The model must also give
+  // candle-based visual evidence. Labels, arrows and written trade ideas are
+  // treated only as annotations.
   if (!areaRetested) {
     if (
       direction === "bearish" &&
@@ -5860,15 +5875,22 @@ function buildValidatedAnalysisFacts({
       visualReview?.entryEvidence ||
       ""
   ).trim();
+  const triggerEvidence = String(
+    preferredArea?.triggerEvidence || ""
+  ).trim();
 
   const invalidTriggerWords =
     /bounce|pullback|retracement|reaction|ranging|consolidation|touch(?:ed|ing)?|merely touching|no clear|not visible|not yet/i;
+  const validTriggerEvidence =
+    /engulf|pin bar|hammer|doji|inside bar|lower high|higher low|break(?:out|down)|retest[- ]and[- ]hold|break[- ]and[- ]hold|head and shoulders|quasimodo/i;
 
   let triggerPresent =
     preferredArea?.triggerPresent === true &&
     preferredArea?.triggerAtAreaVisible === true &&
     areaRetested &&
-    !invalidTriggerWords.test(triggerDescription);
+    validTriggerEvidence.test(`${triggerEvidence} ${triggerDescription}`) &&
+    !annotationOnlyEvidence.test(`${triggerEvidence} ${triggerDescription}`) &&
+    !invalidTriggerWords.test(`${triggerEvidence} ${triggerDescription}`);
 
   if (!areaRetested || priceStatus === "invalidated") triggerPresent = false;
 
@@ -5985,7 +6007,9 @@ function buildValidatedAnalysisFacts({
       zoneText: zone.zoneText,
       priceStatus,
       areaRetested,
+      areaReachEvidence: areaRetested ? areaReachEvidence : "",
       triggerPresent,
+      triggerEvidence: triggerPresent ? triggerEvidence : "",
       triggerDescription: triggerPresent ? triggerDescription : "",
       lifecycleStatus,
       invalidated: areaInvalidated,
