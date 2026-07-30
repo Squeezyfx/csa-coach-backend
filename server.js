@@ -3589,6 +3589,407 @@ function removeDuplicateFeedback(items = [], limit = 4) {
   return result;
 }
 
+
+function extractNumericPricesFromText(value = "") {
+  const matches = String(value || "")
+    .replace(/,/g, "")
+    .match(/\b\d{1,6}(?:\.\d{1,8})\b/g);
+
+  if (!matches) return [];
+
+  return matches
+    .map(Number)
+    .filter((price) => Number.isFinite(price) && price > 0);
+}
+
+function visibleMarkedPriceCandidates(visualReview = null) {
+  const items = [
+    ...(Array.isArray(visualReview?.visibleMarkedLevels)
+      ? visualReview.visibleMarkedLevels
+      : []),
+    ...(Array.isArray(visualReview?.visibleHorizontalLines)
+      ? visualReview.visibleHorizontalLines
+      : []),
+  ];
+
+  const candidates = [];
+
+  items.forEach((item) => {
+    const text = [
+      item?.type,
+      item?.description,
+      item?.platformLabel,
+      item?.label,
+      item?.role,
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    const lower = text.toLowerCase();
+
+    const prices = [
+      ...extractNumericPricesFromText(item?.platformLabel),
+      ...extractNumericPricesFromText(item?.description),
+      ...extractNumericPricesFromText(item?.label),
+    ];
+
+    if (Number.isFinite(Number(item?.approximatePrice))) {
+      prices.push(Number(item.approximatePrice));
+    }
+
+    const type =
+      /\bsupply\b/.test(lower)
+        ? "supply"
+        : /\bdemand\b/.test(lower)
+        ? "demand"
+        : /\bresistance\b/.test(lower)
+        ? "resistance"
+        : /\bsupport\b/.test(lower)
+        ? "support"
+        : "unknown";
+
+    prices.forEach((price) => {
+      candidates.push({
+        price,
+        type,
+        text,
+        exactVisibleLabel:
+          extractNumericPricesFromText(item?.platformLabel).includes(price) ||
+          extractNumericPricesFromText(item?.description).includes(price),
+      });
+    });
+  });
+
+  return candidates.filter(
+    (candidate, index, array) =>
+      array.findIndex(
+        (other) =>
+          Math.abs(other.price - candidate.price) < 1e-10 &&
+          other.type === candidate.type
+      ) === index
+  );
+}
+
+function currentReferencePrice(marketReference = null) {
+  const levels = Array.isArray(marketReference?.dailyLevels)
+    ? marketReference.dailyLevels
+    : [];
+
+  const last = levels[levels.length - 1];
+  const close = Number(last?.close);
+  return Number.isFinite(close) ? close : null;
+}
+
+function closePriceTolerance(symbol = "", price = 0) {
+  const compact = comparableInstrument(symbol);
+
+  if (compact.includes("BTC")) return 150;
+  if (compact.includes("XAU")) return 1.5;
+  if (compact.includes("JPY")) return 0.15;
+  if (price >= 100) return 0.15;
+
+  return 0.0012;
+}
+
+function buildZoneFromCandidates({
+  candidates = [],
+  direction = "none",
+  currentPrice = null,
+  symbol = "",
+}) {
+  const wantsSell = direction === "sell";
+  const acceptedTypes = wantsSell
+    ? new Set(["supply", "resistance", "unknown"])
+    : new Set(["demand", "support", "unknown"]);
+
+  let filtered = candidates.filter((candidate) => {
+    if (!acceptedTypes.has(candidate.type)) return false;
+    if (!Number.isFinite(currentPrice)) return true;
+
+    return wantsSell
+      ? candidate.price > currentPrice
+      : candidate.price < currentPrice;
+  });
+
+  filtered = filtered.sort((a, b) =>
+    wantsSell ? a.price - b.price : b.price - a.price
+  );
+
+  if (!filtered.length) return null;
+
+  const first = filtered[0];
+  const tolerance = closePriceTolerance(symbol, first.price);
+
+  const nearby = filtered
+    .filter((candidate) => Math.abs(candidate.price - first.price) <= tolerance)
+    .slice(0, 4);
+
+  const prices = nearby.map((item) => item.price);
+  const low = Math.min(...prices);
+  const high = Math.max(...prices);
+
+  return {
+    low,
+    high,
+    type:
+      nearby.some((item) => item.type === "supply")
+        ? "supply"
+        : nearby.some((item) => item.type === "demand")
+        ? "demand"
+        : wantsSell
+        ? "resistance"
+        : "support",
+    exactVisible:
+      nearby.length > 0 && nearby.every((item) => item.exactVisibleLabel),
+  };
+}
+
+function buildZoneFromMarketAreas({
+  marketReference = null,
+  direction = "none",
+}) {
+  const currentPrice = currentReferencePrice(marketReference);
+  const areas = Array.isArray(marketReference?.csaAreas)
+    ? marketReference.csaAreas
+    : [];
+
+  const wantsSell = direction === "sell";
+  const acceptedTypes = wantsSell
+    ? new Set(["supply", "resistance"])
+    : new Set(["demand", "support"]);
+
+  const eligible = areas
+    .filter((area) => {
+      const price = Number(area?.price);
+      if (!Number.isFinite(price) || !acceptedTypes.has(String(area?.type || "").toLowerCase())) {
+        return false;
+      }
+
+      if (!Number.isFinite(currentPrice)) return true;
+      return wantsSell ? price > currentPrice : price < currentPrice;
+    })
+    .sort((a, b) =>
+      wantsSell
+        ? Number(a.price) - Number(b.price)
+        : Number(b.price) - Number(a.price)
+    );
+
+  if (!eligible.length) return null;
+
+  const first = eligible[0];
+  const tolerance = closePriceTolerance(
+    marketReference?.symbol || "",
+    Number(first.price)
+  );
+
+  const nearby = eligible
+    .filter(
+      (area) =>
+        Math.abs(Number(area.price) - Number(first.price)) <= tolerance
+    )
+    .slice(0, 3);
+
+  const prices = nearby.map((area) => Number(area.price));
+  return {
+    low: Math.min(...prices),
+    high: Math.max(...prices),
+    type:
+      nearby.some((area) => String(area.type).toLowerCase() === "supply")
+        ? "supply"
+        : nearby.some((area) => String(area.type).toLowerCase() === "demand")
+        ? "demand"
+        : wantsSell
+        ? "resistance"
+        : "support",
+    exactVisible: false,
+  };
+}
+
+function inferReviewDirection(visualReview = null, marketReference = null) {
+  const text = [
+    visualReview?.shortTermDirection,
+    visualReview?.plainMarketDirection,
+    visualReview?.quickVerdict,
+    visualReview?.bestAreaToWatch,
+    visualReview?.coachVerdict,
+    visualReview?.mainWarning,
+    ...(Array.isArray(visualReview?.chartSpecificStrengths)
+      ? visualReview.chartSpecificStrengths
+      : []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (/\bsell\b|\bbearish\b/.test(text)) return "sell";
+  if (/\bbuy\b|\bbullish\b/.test(text)) return "buy";
+
+  const bias = String(
+    marketReference?.directionalBias?.bias || ""
+  ).toLowerCase();
+
+  if (/bearish/.test(bias)) return "sell";
+  if (/bullish/.test(bias)) return "buy";
+
+  return "none";
+}
+
+function enrichVisualReviewForFinalFeedback({
+  visualReview = null,
+  marketReference = null,
+  symbol = "",
+}) {
+  if (!visualReview) return visualReview;
+
+  const direction = inferReviewDirection(visualReview, marketReference);
+  const currentPrice = currentReferencePrice(marketReference);
+  const markedCandidates = visibleMarkedPriceCandidates(visualReview);
+
+  let preferredArea =
+    visualReview.preferredEntryArea &&
+    typeof visualReview.preferredEntryArea === "object"
+      ? { ...visualReview.preferredEntryArea }
+      : null;
+
+  const preferredHasUsefulZone =
+    preferredArea &&
+    (Number.isFinite(Number(preferredArea.zoneLow)) ||
+      Number.isFinite(Number(preferredArea.zoneHigh)) ||
+      String(preferredArea.zoneText || "").trim());
+
+  if (!preferredHasUsefulZone && ["buy", "sell"].includes(direction)) {
+    const visualZone = buildZoneFromCandidates({
+      candidates: markedCandidates,
+      direction,
+      currentPrice,
+      symbol,
+    });
+
+    const marketZone =
+      visualZone ||
+      buildZoneFromMarketAreas({
+        marketReference,
+        direction,
+      });
+
+    if (marketZone) {
+      preferredArea = {
+        direction,
+        areaType: marketZone.type,
+        zoneLow: marketZone.low,
+        zoneHigh: marketZone.high,
+        zoneText:
+          Math.abs(marketZone.high - marketZone.low) > 1e-10
+            ? `around ${formatPrice(marketZone.low)}–${formatPrice(marketZone.high)}`
+            : `around ${formatPrice(marketZone.low)}`,
+        priceStatus:
+          Number.isFinite(currentPrice) &&
+          (direction === "sell"
+            ? currentPrice < marketZone.low
+            : currentPrice > marketZone.high)
+            ? "not reached"
+            : "unclear",
+        triggerPresent: false,
+        triggerDescription: "",
+        recoveredFrom:
+          visualZone ? "visible-chart-markings" : "historical-market-areas",
+      };
+    }
+  }
+
+  if (preferredArea && !["buy", "sell"].includes(String(preferredArea.direction || ""))) {
+    preferredArea.direction = direction;
+  }
+
+  const strengths = normalizeArrayOfStrings(
+    visualReview.chartSpecificStrengths,
+    []
+  ).filter(
+    (item) =>
+      !/chart has enough price history|instrument and timeframe|chart is clear enough/i.test(
+        String(item || "")
+      )
+  );
+
+  const weaknesses = normalizeArrayOfStrings(
+    visualReview.chartSpecificWeaknesses,
+    []
+  ).filter(
+    (item) =>
+      !/sell level is not defined|buy level is not defined|visual trade review failed|referenceerror|is not defined/i.test(
+        String(item || "")
+      )
+  );
+
+  if (preferredArea && String(preferredArea.areaType || "") !== "none") {
+    const areaType = String(preferredArea.areaType || "entry");
+    const zoneText = String(preferredArea.zoneText || "").trim();
+
+    strengths.unshift(
+      zoneText
+        ? `The ${areaType} area ${zoneText} gives a clear ${
+            preferredArea.direction === "sell" ? "sell" : "buy"
+          } location to monitor.`
+        : `The marked ${areaType} area gives a clear ${
+            preferredArea.direction === "sell" ? "sell" : "buy"
+          } location to monitor.`
+    );
+
+    if (
+      ["not reached", "approaching"].includes(
+        String(preferredArea.priceStatus || "").toLowerCase()
+      )
+    ) {
+      weaknesses.unshift(
+        `Price has not yet retested the planned ${areaType} area, so the setup is not confirmed.`
+      );
+    }
+
+    if (preferredArea.triggerPresent !== true) {
+      weaknesses.push(
+        `No fresh ${
+          preferredArea.direction === "sell" ? "bearish" : "bullish"
+        } trigger is visible at the planned area yet.`
+      );
+    }
+  }
+
+  const riskText = String(visualReview.riskEvidence || "").toLowerCase();
+  if (
+    /not shown|not visible|no visible|cannot be judged/.test(riskText) &&
+    !weaknesses.some((item) => /stop loss|risk|target/i.test(item))
+  ) {
+    weaknesses.push(
+      "A stop loss and target are not clearly shown, so the planned risk cannot yet be assessed."
+    );
+  }
+
+  let bestAreaToWatch = String(visualReview.bestAreaToWatch || "").trim();
+
+  if (preferredArea && ["buy", "sell"].includes(preferredArea.direction)) {
+    const areaType = String(preferredArea.areaType || "entry");
+    const zoneText = String(preferredArea.zoneText || "").trim();
+
+    bestAreaToWatch =
+      preferredArea.direction === "sell"
+        ? `Wait for price to retrace towards the ${areaType} area${
+            zoneText ? ` ${zoneText}` : ""
+          } and show a clear bearish trigger before considering a sell. Do not chase a sell while price remains close to support.`
+        : `Wait for price to return towards the ${areaType} area${
+            zoneText ? ` ${zoneText}` : ""
+          } and show a clear bullish trigger before considering a buy. Do not chase a buy while price remains close to resistance.`;
+  }
+
+  return {
+    ...visualReview,
+    preferredEntryArea: preferredArea,
+    bestAreaToWatch,
+    chartSpecificStrengths: removeDuplicateFeedback(strengths, 4),
+    chartSpecificWeaknesses: removeDuplicateFeedback(weaknesses, 4),
+  };
+}
+
+
 function buildDashboardFeedback({
   marketReference,
   chartDetection,
@@ -3660,9 +4061,11 @@ function buildDashboardFeedback({
     !riskEvidenceLower.includes("cannot be judged") &&
     !riskEvidenceLower.includes("no visible");
 
-  if (hasVisibleTrade && !hasVisibleRiskPlan) {
+  if (!hasVisibleRiskPlan) {
     frameworkWeaknesses.push(
-      "Stop loss and target are not shown, so the trade risk cannot be judged."
+      hasVisibleTrade
+        ? "Stop loss and target are not shown, so the trade risk cannot be judged."
+        : "A stop loss and target are not clearly shown, so the planned risk cannot yet be assessed."
     );
   }
 
@@ -3682,10 +4085,9 @@ function buildDashboardFeedback({
       // In pre-trade mode, these are valid readiness checks even when no trade exists.
       if (normalizeAnalysisType(analysisType) === "pre-trade") return true;
 
-      // In post-trade mode with no visible/described trade, avoid judging execution.
-      return !["entry_confirmation_missing", "risk_plan_missing"].includes(
-        feedbackCategory(item)
-      );
+      // In post-trade mode with no visible/described trade, avoid judging execution,
+      // but keep plan-readiness issues such as a missing stop/target plan.
+      return feedbackCategory(item) !== "entry_confirmation_missing";
     });
   }
 
@@ -3750,7 +4152,14 @@ function buildDashboardFeedback({
       ...frameworkStrengths.filter((item) =>
         /market direction|support|resistance|supply|demand|entry area|bearish|bullish/i.test(item)
       ),
-      ...frameworkStrengths,
+      ...(visualStrengths.length
+        ? []
+        : frameworkStrengths.filter(
+            (item) =>
+              !/instrument and timeframe are visible|chart is clear enough|chart has enough price history/i.test(
+                String(item || "")
+              )
+          )),
     ],
     4
   );
@@ -4893,8 +5302,20 @@ function buildStarterCoachSummary({
   ).toLowerCase();
   const backendDirection = String(bias?.bias || "").toLowerCase();
 
+  const recoveredDirection = String(
+    visualReview?.preferredEntryArea?.direction || ""
+  ).toLowerCase();
+
   let directionalBias = bias?.bias || "Not available";
-  if (/bearish/.test(visualDirection)) {
+  if (recoveredDirection === "sell") {
+    directionalBias = /range|consolidat|bounce/.test(visualDirection)
+      ? "Bearish with short-term consolidation"
+      : "Bearish";
+  } else if (recoveredDirection === "buy") {
+    directionalBias = /range|consolidat|pullback/.test(visualDirection)
+      ? "Bullish with short-term consolidation"
+      : "Bullish";
+  } else if (/bearish/.test(visualDirection)) {
     directionalBias = /range/.test(visualDirection)
       ? "Bearish with short-term consolidation"
       : "Bearish";
@@ -5968,6 +6389,25 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       visualReview,
       marketReference,
       symbol: normalizedSymbol || submittedInstrument,
+    });
+
+    visualReview = enrichVisualReviewForFinalFeedback({
+      visualReview,
+      marketReference,
+      symbol: normalizedSymbol || submittedInstrument,
+    });
+
+    console.log("Final enriched visual review:", {
+      direction: visualReview?.preferredEntryArea?.direction || null,
+      areaType: visualReview?.preferredEntryArea?.areaType || null,
+      zoneLow: visualReview?.preferredEntryArea?.zoneLow ?? null,
+      zoneHigh: visualReview?.preferredEntryArea?.zoneHigh ?? null,
+      zoneText: visualReview?.preferredEntryArea?.zoneText || null,
+      priceStatus: visualReview?.preferredEntryArea?.priceStatus || null,
+      triggerPresent:
+        visualReview?.preferredEntryArea?.triggerPresent === true,
+      strengths: visualReview?.chartSpecificStrengths || [],
+      weaknesses: visualReview?.chartSpecificWeaknesses || [],
     });
 
     const baseAnalysis = buildDeterministicCsaAnalysis({
