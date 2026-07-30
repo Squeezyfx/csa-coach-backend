@@ -1457,6 +1457,12 @@ function normalizeArrayOfStrings(value = [], fallback = []) {
   }).filter(Boolean);
 }
 
+function safeUserText(value = "") {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function normalizeVisualMistakeItems(items = []) {
   if (!Array.isArray(items)) return [];
   return items.map((item) => {
@@ -5560,7 +5566,7 @@ function buildStarterCoachSummary({
   const dashboardStrengths = normalizeArrayOfStrings(dashboardFeedback?.strengths, []);
 
   // Trading-specific evidence must appear before generic chart validation comments.
-  const strengths = removeDuplicateFeedback(
+  let strengths = removeDuplicateFeedback(
     [
       ...chartSpecificStrengths,
       ...similarities,
