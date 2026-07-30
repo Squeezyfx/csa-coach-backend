@@ -897,7 +897,10 @@ function compactRawAiResponse({
     personalStrategySnapshot,
     chartDetection,
     visualReview,
-    dateDecision,
+    dateDecision: {
+      ...dateDecision,
+      selectedDateAdjusted: dateDecision?.selectedDateAdjusted === true,
+    },
     dashboard: {
       strengths: dashboardFeedback?.strengths || [],
       weaknesses: dashboardFeedback?.weaknesses || [],
@@ -2490,11 +2493,80 @@ function isUsableChartDateDetection(detection) {
   return confidence === "high" || confidence === "medium";
 }
 
-function chooseFinalChartDate({ selectedDate, detection }) {
-  const detectedDate = isUsableChartDateDetection(detection) ? parseISODateOnly(detection.latestVisibleDate) : null;
-  if (selectedDate) return { finalDate: selectedDate, finalDateText: formatDateOnly(selectedDate), selectedDateText: formatDateOnly(selectedDate), detectedDateText: detectedDate ? formatDateOnly(detectedDate) : null, source: "user-selected-date", reason: "User-selected chart/trade date was used." };
-  if (detectedDate) return { finalDate: detectedDate, finalDateText: formatDateOnly(detectedDate), selectedDateText: null, detectedDateText: formatDateOnly(detectedDate), source: "chart-detected-date", reason: "No user-selected date was provided, so the chart-detected latest visible date was used." };
-  return { finalDate: null, finalDateText: "Not provided", selectedDateText: null, detectedDateText: null, source: "missing-date", reason: "No usable date was available." };
+function chooseFinalChartDate({
+  selectedDate,
+  detection,
+  analysisType = "post-trade",
+}) {
+  const detectedDate = isUsableChartDateDetection(detection)
+    ? parseISODateOnly(detection.latestVisibleDate)
+    : null;
+
+  const selectedDateText = selectedDate
+    ? formatDateOnly(selectedDate)
+    : null;
+  const detectedDateText = detectedDate
+    ? formatDateOnly(detectedDate)
+    : null;
+
+  const isPostTrade =
+    String(analysisType || "").toLowerCase() === "post-trade";
+
+  // A post-trade screenshot is a frozen historical record.
+  // Never analyse candles beyond the final date visible on that screenshot.
+  if (
+    isPostTrade &&
+    selectedDate &&
+    detectedDate &&
+    selectedDate.getTime() > detectedDate.getTime()
+  ) {
+    return {
+      finalDate: detectedDate,
+      finalDateText: detectedDateText,
+      selectedDateText,
+      detectedDateText,
+      source: "chart-visible-date-clamped",
+      selectedDateAdjusted: true,
+      reason:
+        `The selected date ${selectedDateText} is later than the chart's final visible date ${detectedDateText}. ` +
+        "The review was therefore limited to the uploaded chart.",
+    };
+  }
+
+  if (selectedDate) {
+    return {
+      finalDate: selectedDate,
+      finalDateText: selectedDateText,
+      selectedDateText,
+      detectedDateText,
+      source: "user-selected-date",
+      selectedDateAdjusted: false,
+      reason: "The selected chart/trade date was used.",
+    };
+  }
+
+  if (detectedDate) {
+    return {
+      finalDate: detectedDate,
+      finalDateText: detectedDateText,
+      selectedDateText: null,
+      detectedDateText,
+      source: "chart-detected-date",
+      selectedDateAdjusted: false,
+      reason:
+        "No user-selected date was provided, so the chart's final visible date was used.",
+    };
+  }
+
+  return {
+    finalDate: null,
+    finalDateText: "Not provided",
+    selectedDateText: null,
+    detectedDateText: null,
+    source: "missing-date",
+    selectedDateAdjusted: false,
+    reason: "No usable chart date was available.",
+  };
 }
 
 
@@ -5279,6 +5351,91 @@ function formatPreferredEntryZone(visualReview = null, directionalBias = "") {
   return priceText ? `Watch the ${location} and wait for a fresh confirmation trigger.` : "";
 }
 
+function feedbackMeaningKey(value = "") {
+  const text = String(value || "").toLowerCase();
+
+  if (/has not yet (?:retested|reached)|not yet (?:retested|reached)/.test(text)) {
+    return "area_not_retested";
+  }
+  if (/no fresh .*trigger|no .*trigger is visible|confirmed entry trigger/.test(text)) {
+    return "trigger_missing";
+  }
+  if (/stop loss|target|planned risk|risk cannot/.test(text)) {
+    return "risk_plan_missing";
+  }
+  if (/converted resistance|converted support|confirmed as resistance|confirmed as support|retest from below|retest from above/.test(text)) {
+    return "converted_level_unconfirmed";
+  }
+  if (/supply area|demand area|resistance area|support area/.test(text) && /clear .*location|marked/.test(text)) {
+    return "marked_entry_area";
+  }
+  if (/market direction|bearish|bullish/.test(text)) {
+    return "direction";
+  }
+  if (/enough price history|instrument and timeframe|chart is clear enough/.test(text)) {
+    return "generic_validation";
+  }
+
+  return normalizeMistakeTitle(text);
+}
+
+function removeSemanticFeedbackDuplicates(items = [], limit = 4) {
+  const result = [];
+  const seen = new Set();
+
+  for (const rawItem of items) {
+    const item = String(rawItem || "").trim();
+    if (!item) continue;
+
+    const key = feedbackMeaningKey(item);
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    result.push(item);
+
+    if (result.length >= limit) break;
+  }
+
+  return result;
+}
+
+function prioritizeStarterStrengths(items = [], preferredArea = null) {
+  const hasSpecificArea = Boolean(
+    preferredArea &&
+    String(preferredArea.areaType || "").toLowerCase() !== "none"
+  );
+
+  const filtered = items.filter((item) => {
+    if (!hasSpecificArea) return true;
+    return feedbackMeaningKey(item) !== "generic_validation";
+  });
+
+  return removeSemanticFeedbackDuplicates(filtered, 4);
+}
+
+function prioritizeStarterWeaknesses(items = []) {
+  const keysPresent = new Set(items.map(feedbackMeaningKey));
+
+  return removeSemanticFeedbackDuplicates(
+    items.filter((item) => {
+      const key = feedbackMeaningKey(item);
+
+      // A specific retest comment is clearer than a broad "entry not confirmed" comment.
+      if (
+        key === "trigger_missing" &&
+        /confirmed entry trigger at the planned area/i.test(String(item || "")) &&
+        keysPresent.has("area_not_retested")
+      ) {
+        return false;
+      }
+
+      return true;
+    }),
+    4
+  );
+}
+
+
 function buildStarterCoachSummary({
   bias,
   dashboardFeedback,
@@ -5381,9 +5538,53 @@ function buildStarterCoachSummary({
   const preferredDirection = String(preferredArea?.direction || "").toLowerCase();
 
   if (preferredArea && preferredType && preferredType !== "none") {
+    const zoneText = String(preferredArea.zoneText || "").trim();
+
     strengths.unshift(
-      `The marked ${preferredType} area gives a clear ${preferredDirection === "sell" ? "sell" : preferredDirection === "buy" ? "buy" : "trade"} location to monitor.`
+      zoneText
+        ? `The marked ${preferredType} area ${zoneText} gives a clear ${
+            preferredDirection === "sell"
+              ? "sell"
+              : preferredDirection === "buy"
+              ? "buy"
+              : "trade"
+          } location to monitor.`
+        : `The marked ${preferredType} area gives a clear ${
+            preferredDirection === "sell"
+              ? "sell"
+              : preferredDirection === "buy"
+              ? "buy"
+              : "trade"
+          } location to monitor.`
     );
+
+    if (
+      !strengths.some((item) =>
+        /important support|important resistance|key support|key resistance|levels are visible/i.test(
+          String(item || "")
+        )
+      )
+    ) {
+      strengths.push(
+        "The important support and resistance areas are visible and can be used to judge where price is trading."
+      );
+    }
+
+    if (
+      preferredDirection === "sell" &&
+      !strengths.some((item) => /avoid|chasing|close to support/i.test(String(item || "")))
+    ) {
+      strengths.push(
+        "The plan avoids chasing a sell while price is already close to support."
+      );
+    } else if (
+      preferredDirection === "buy" &&
+      !strengths.some((item) => /avoid|chasing|close to resistance/i.test(String(item || "")))
+    ) {
+      strengths.push(
+        "The plan avoids chasing a buy while price is already close to resistance."
+      );
+    }
   }
 
   if (["not reached", "approaching"].includes(preferredStatus)) {
@@ -5398,8 +5599,17 @@ function buildStarterCoachSummary({
     );
   }
 
-  if (/no visible entry|no clear|not yet|has not reached|has not retested/.test(entryText)) {
-    weaknesses.unshift("Price has not yet produced a confirmed entry trigger at the planned area.");
+  if (
+    /no visible entry|no clear|not yet|has not reached|has not retested/.test(entryText) &&
+    !weaknesses.some((item) =>
+      /has not yet (?:retested|reached)|no fresh .*trigger|no .*trigger is visible/i.test(
+        String(item || "")
+      )
+    )
+  ) {
+    weaknesses.unshift(
+      "Price has not yet produced a confirmed entry trigger at the planned area."
+    );
   }
   if (/not shown|not visible|no visible trade risk|cannot be judged/.test(riskText)) {
     weaknesses.push("A stop loss and target are not clearly shown, so the planned risk cannot yet be assessed.");
@@ -5407,8 +5617,11 @@ function buildStarterCoachSummary({
   if (convertedLevelText && !/none|not applicable/i.test(convertedLevelText)) {
     weaknesses.push(convertedLevelText);
   }
-  weaknesses = removeDuplicateFeedback(weaknesses, 4);
-  const finalStrengths = removeDuplicateFeedback(strengths, 4);
+  weaknesses = prioritizeStarterWeaknesses(weaknesses);
+  const finalStrengths = prioritizeStarterStrengths(
+    strengths,
+    preferredArea
+  );
 
   let correctionAction =
     structuredAreaAction || bestAreaText || verdictText || warningText || "";
@@ -6348,6 +6561,15 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       selectedDate,
       detection: chartDetection,
       analysisType: mode,
+    });
+
+    console.log("Chart date decision:", {
+      selectedDate: dateDecision.selectedDateText,
+      detectedVisibleDate: dateDecision.detectedDateText,
+      finalAnalysisDate: dateDecision.finalDateText,
+      selectedDateAdjusted: dateDecision.selectedDateAdjusted === true,
+      source: dateDecision.source,
+      reason: dateDecision.reason,
     });
 
     const chartCutoff = resolveTwelveDataChartCutoff({
