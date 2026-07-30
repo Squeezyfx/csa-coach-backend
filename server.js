@@ -2815,7 +2815,9 @@ function normalizePreferredEntryAreaFromVisual(parsed = {}) {
     zoneHigh,
     zoneText,
     priceStatus,
+    areaVisuallyReached: raw.areaVisuallyReached === true,
     triggerPresent,
+    triggerAtAreaVisible: raw.triggerAtAreaVisible === true,
     triggerDescription,
   };
 }
@@ -3059,6 +3061,10 @@ CSA ENTRY-ZONE RULES:
 - A broken support/resistance level is only confirmed as converted after an opposite-side retest and hold/rejection.
 - Never say an exact entry price is required when the chart clearly shows a valid zone.
 - If price has not reached the planned area, say no trigger exists there yet.
+- Treat chart annotations, arrows, labels, and written trade ideas as the trader's claims, not as proof that price actually reached an area or formed a trigger.
+- Mark areaVisuallyReached true only when candle highs/lows/bodies visibly enter or touch the planned zone.
+- Mark triggerAtAreaVisible true only when a valid trigger is visibly formed at the planned area after price reaches it.
+- Mark stopLossVisible and targetVisible true only when the chart visibly shows the actual stop-loss and target levels for the reviewed trade. Text discussing stop loss or target without a plotted level is not enough.
 
 OUTPUT PRIORITY RULES:
 - chartSpecificStrengths and chartSpecificWeaknesses must describe the actual visible setup before generic validation comments.
@@ -3111,9 +3117,14 @@ Return exactly this JSON shape:
     "zoneHigh": "upper boundary from a printed price, approved market data, or a clearly visible approximate zone boundary; otherwise null",
     "zoneText": "beginner-friendly area description. When a visible supply or demand rectangle exists, return the approximate full range and use the word around",
     "priceStatus": "not reached | approaching | inside | reacted | moved away | unclear",
+    "areaVisuallyReached": false,
     "triggerPresent": false,
-    "triggerDescription": "visible trigger or null"
+    "triggerAtAreaVisible": false,
+    "triggerDescription": "visible trigger at the planned area or null"
   },
+  "stopLossVisible": false,
+  "targetVisible": false,
+  "annotationClaimsOnly": false,
   "convertedLevelAssessment": "brief beginner-friendly statement about any broken level and whether an opposite-side retest confirmed conversion, or null",
   "visualSummary": "2 short beginner-friendly sentences. Mention bigger-picture direction and uploaded timeframe direction if different.",
   "chartMarkupAssessment": "simple comment about whether the important support/resistance areas are clear; do not mention trendlines/channels/indicators",
@@ -5587,7 +5598,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "2.0.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "2.1.0";
 
 function asPositiveNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -5712,31 +5723,21 @@ function normalizeZone(preferredArea = {}, symbol = "") {
 
 function inferRiskVisibility(visualReview = {}) {
   const riskText = String(visualReview?.riskEvidence || "").toLowerCase();
-  const stopText = String(
-    visualReview?.stopLossAssessment ||
-      visualReview?.stopLoss ||
-      visualReview?.visibleStopLoss ||
-      ""
-  ).toLowerCase();
-  const targetText = String(
-    visualReview?.targetAssessment ||
-      visualReview?.takeProfitAssessment ||
-      visualReview?.target ||
-      ""
-  ).toLowerCase();
 
   const stopShown =
+    visualReview?.stopLossVisible === true ||
     visualReview?.stopShown === true ||
     visualReview?.stopLossShown === true ||
-    /stop loss.*(shown|visible|marked|placed)|\bsl\b.*(shown|visible|marked)/.test(
-      `${riskText} ${stopText}`
+    /(?:actual|plotted|marked|visible)\s+stop[- ]?loss|stop[- ]?loss\s+(?:line|level)\s+(?:is\s+)?(?:shown|visible|marked)/i.test(
+      riskText
     );
 
   const targetShown =
+    visualReview?.targetVisible === true ||
     visualReview?.targetShown === true ||
     visualReview?.takeProfitShown === true ||
-    /target.*(shown|visible|marked)|take profit.*(shown|visible|marked)|\btp\d?\b.*(shown|visible|marked)/.test(
-      `${riskText} ${targetText}`
+    /(?:actual|plotted|marked|visible)\s+(?:target|take profit)|(?:target|take profit)\s+(?:line|level)\s+(?:is\s+)?(?:shown|visible|marked)/i.test(
+      riskText
     );
 
   return { stopShown, targetShown };
@@ -5819,33 +5820,38 @@ function buildValidatedAnalysisFacts({
     priceStatus = normalizePriceStatus(combinedAreaEvidence);
   }
 
-  let areaRetested = ["inside", "reacted", "moved_away"].includes(priceStatus);
-
-  // Hard contradiction checks. A bearish area above current price or a bullish
-  // area below current price cannot be treated as retested unless the visual
-  // evidence explicitly says price reacted there.
-  if (
-    direction === "bearish" &&
+  const currentPriceInsideZone =
     currentPrice !== null &&
     zone.zoneLow !== null &&
-    currentPrice < zone.zoneLow &&
-    priceStatus !== "reacted" &&
-    priceStatus !== "moved_away"
-  ) {
-    areaRetested = false;
-    priceStatus = priceStatus === "approaching" ? "approaching" : "not_reached";
-  }
-
-  if (
-    direction === "bullish" &&
-    currentPrice !== null &&
     zone.zoneHigh !== null &&
-    currentPrice > zone.zoneHigh &&
-    priceStatus !== "reacted" &&
-    priceStatus !== "moved_away"
-  ) {
-    areaRetested = false;
-    priceStatus = priceStatus === "approaching" ? "approaching" : "not_reached";
+    currentPrice >= zone.zoneLow &&
+    currentPrice <= zone.zoneHigh;
+
+  let areaRetested =
+    preferredArea?.areaVisuallyReached === true ||
+    currentPriceInsideZone;
+
+  // Annotation text such as "retest here" or "entry" is not proof that candles
+  // reached the area. Without explicit visual confirmation, keep the area
+  // unconfirmed.
+  if (!areaRetested) {
+    if (
+      direction === "bearish" &&
+      currentPrice !== null &&
+      zone.zoneLow !== null &&
+      currentPrice < zone.zoneLow
+    ) {
+      priceStatus = priceStatus === "approaching" ? "approaching" : "not_reached";
+    } else if (
+      direction === "bullish" &&
+      currentPrice !== null &&
+      zone.zoneHigh !== null &&
+      currentPrice > zone.zoneHigh
+    ) {
+      priceStatus = priceStatus === "approaching" ? "approaching" : "not_reached";
+    } else if (["reacted", "moved_away"].includes(priceStatus)) {
+      priceStatus = "unclear";
+    }
   }
 
   const triggerDescription = String(
@@ -5860,6 +5866,7 @@ function buildValidatedAnalysisFacts({
 
   let triggerPresent =
     preferredArea?.triggerPresent === true &&
+    preferredArea?.triggerAtAreaVisible === true &&
     areaRetested &&
     !invalidTriggerWords.test(triggerDescription);
 
@@ -6043,6 +6050,15 @@ function controlledScores(facts) {
 
   if (facts.preferredEntryArea.areaRetested) entry += 12;
   if (facts.preferredEntryArea.triggerPresent) entry += 20;
+
+  if (!facts.preferredEntryArea.areaRetested) {
+    setup = Math.min(setup, 72);
+    entry = Math.min(entry, 50);
+  }
+
+  if (!facts.preferredEntryArea.triggerPresent) {
+    entry = Math.min(entry, 60);
+  }
   if (facts.preferredEntryArea.invalidated) entry -= 20;
   if (!facts.trade.visible && !facts.preferredEntryArea.triggerPresent) entry = Math.min(entry, 55);
 
@@ -6171,9 +6187,15 @@ function buildControlledFeedback({
     cleanUserFeedbackItems(strengths),
     4
   );
-  const finalWeaknesses = prioritizeStarterWeaknesses(
+  let finalWeaknesses = prioritizeStarterWeaknesses(
     removeSemanticFeedbackDuplicates(cleanUserFeedbackItems(weaknesses), 4)
   );
+
+  if (!finalWeaknesses.length) {
+    finalWeaknesses = [
+      "No major weakness was confirmed from the visible information, but the entry, stop loss, and target should remain clearly marked."
+    ];
+  }
 
   let nextAction;
 
