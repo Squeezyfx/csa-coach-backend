@@ -3748,7 +3748,2102 @@ function visibleMarkedPriceCandidates(visualReview = null) {
   );
 }
 
-function currentReferencePrice(marketReference = null}
+function currentReferencePrice(marketReference = null) {
+  const levels = Array.isArray(marketReference?.dailyLevels)
+    ? marketReference.dailyLevels
+    : [];
+
+  const last = levels[levels.length - 1];
+  const close = Number(last?.close);
+  return Number.isFinite(close) ? close : null;
+}
+
+function closePriceTolerance(symbol = "", price = 0) {
+  const compact = comparableInstrument(symbol);
+
+  if (compact.includes("BTC")) return 150;
+  if (compact.includes("XAU")) return 1.5;
+  if (compact.includes("JPY")) return 0.15;
+  if (price >= 100) return 0.15;
+
+  return 0.0012;
+}
+
+function buildZoneFromCandidates({
+  candidates = [],
+  direction = "none",
+  currentPrice = null,
+  symbol = "",
+}) {
+  const wantsSell = direction === "sell";
+  const acceptedTypes = wantsSell
+    ? new Set(["supply", "resistance", "unknown"])
+    : new Set(["demand", "support", "unknown"]);
+
+  let filtered = candidates.filter((candidate) => {
+    if (!acceptedTypes.has(candidate.type)) return false;
+    if (!Number.isFinite(currentPrice)) return true;
+
+    return wantsSell
+      ? candidate.price > currentPrice
+      : candidate.price < currentPrice;
+  });
+
+  filtered = filtered.sort((a, b) =>
+    wantsSell ? a.price - b.price : b.price - a.price
+  );
+
+  if (!filtered.length) return null;
+
+  const first = filtered[0];
+  const tolerance = closePriceTolerance(symbol, first.price);
+
+  const nearby = filtered
+    .filter((candidate) => Math.abs(candidate.price - first.price) <= tolerance)
+    .slice(0, 4);
+
+  const prices = nearby.map((item) => item.price);
+  const low = Math.min(...prices);
+  const high = Math.max(...prices);
+
+  return {
+    low,
+    high,
+    type:
+      nearby.some((item) => item.type === "supply")
+        ? "supply"
+        : nearby.some((item) => item.type === "demand")
+        ? "demand"
+        : wantsSell
+        ? "resistance"
+        : "support",
+    exactVisible:
+      nearby.length > 0 && nearby.every((item) => item.exactVisibleLabel),
+  };
+}
+
+function buildZoneFromMarketAreas({
+  marketReference = null,
+  direction = "none",
+}) {
+  const currentPrice = currentReferencePrice(marketReference);
+  const areas = Array.isArray(marketReference?.csaAreas)
+    ? marketReference.csaAreas
+    : [];
+
+  const wantsSell = direction === "sell";
+  const acceptedTypes = wantsSell
+    ? new Set(["supply", "resistance"])
+    : new Set(["demand", "support"]);
+
+  const eligible = areas
+    .filter((area) => {
+      const price = Number(area?.price);
+      if (!Number.isFinite(price) || !acceptedTypes.has(String(area?.type || "").toLowerCase())) {
+        return false;
+      }
+
+      if (!Number.isFinite(currentPrice)) return true;
+      return wantsSell ? price > currentPrice : price < currentPrice;
+    })
+    .sort((a, b) =>
+      wantsSell
+        ? Number(a.price) - Number(b.price)
+        : Number(b.price) - Number(a.price)
+    );
+
+  if (!eligible.length) return null;
+
+  const first = eligible[0];
+  const tolerance = closePriceTolerance(
+    marketReference?.symbol || "",
+    Number(first.price)
+  );
+
+  const nearby = eligible
+    .filter(
+      (area) =>
+        Math.abs(Number(area.price) - Number(first.price)) <= tolerance
+    )
+    .slice(0, 3);
+
+  const prices = nearby.map((area) => Number(area.price));
+  return {
+    low: Math.min(...prices),
+    high: Math.max(...prices),
+    type:
+      nearby.some((area) => String(area.type).toLowerCase() === "supply")
+        ? "supply"
+        : nearby.some((area) => String(area.type).toLowerCase() === "demand")
+        ? "demand"
+        : wantsSell
+        ? "resistance"
+        : "support",
+    exactVisible: false,
+  };
+}
+
+function inferReviewDirection(visualReview = null, marketReference = null) {
+  const text = [
+    visualReview?.shortTermDirection,
+    visualReview?.plainMarketDirection,
+    visualReview?.quickVerdict,
+    visualReview?.bestAreaToWatch,
+    visualReview?.coachVerdict,
+    visualReview?.mainWarning,
+    ...(Array.isArray(visualReview?.chartSpecificStrengths)
+      ? visualReview.chartSpecificStrengths
+      : []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (/\bsell\b|\bbearish\b/.test(text)) return "sell";
+  if (/\bbuy\b|\bbullish\b/.test(text)) return "buy";
+
+  const bias = String(
+    marketReference?.directionalBias?.bias || ""
+  ).toLowerCase();
+
+  if (/bearish/.test(bias)) return "sell";
+  if (/bullish/.test(bias)) return "buy";
+
+  return "none";
+}
+
+function enrichVisualReviewForFinalFeedback({
+  visualReview = null,
+  marketReference = null,
+  symbol = "",
+}) {
+  if (!visualReview) return visualReview;
+
+  const direction = inferReviewDirection(visualReview, marketReference);
+  const currentPrice = currentReferencePrice(marketReference);
+  const markedCandidates = visibleMarkedPriceCandidates(visualReview);
+
+  let preferredArea =
+    visualReview.preferredEntryArea &&
+    typeof visualReview.preferredEntryArea === "object"
+      ? { ...visualReview.preferredEntryArea }
+      : null;
+
+  const preferredRangeText = String(preferredArea?.zoneText || "").trim();
+  const preferredRange = extractVisibleZoneRange(preferredRangeText);
+
+  const preferredHasUsefulZone =
+    preferredArea &&
+    (
+      (
+        Number.isFinite(Number(preferredArea.zoneLow)) &&
+        Number.isFinite(Number(preferredArea.zoneHigh))
+      ) ||
+      (
+        preferredRange.low !== null &&
+        preferredRange.high !== null
+      )
+    );
+
+  if (
+    preferredArea &&
+    preferredRange.low !== null &&
+    preferredRange.high !== null
+  ) {
+    preferredArea.zoneLow = preferredRange.low;
+    preferredArea.zoneHigh = preferredRange.high;
+  }
+
+  if (!preferredHasUsefulZone && ["buy", "sell"].includes(direction)) {
+    const visualZone = buildZoneFromCandidates({
+      candidates: markedCandidates,
+      direction,
+      currentPrice,
+      symbol,
+    });
+
+    const marketZone =
+      visualZone ||
+      buildZoneFromMarketAreas({
+        marketReference,
+        direction,
+      });
+
+    if (marketZone) {
+      preferredArea = {
+        direction,
+        areaType: marketZone.type,
+        zoneLow: marketZone.low,
+        zoneHigh: marketZone.high,
+        zoneText:
+          Math.abs(marketZone.high - marketZone.low) > 1e-10
+            ? `around ${formatPrice(marketZone.low)}–${formatPrice(marketZone.high)}`
+            : `around ${formatPrice(marketZone.low)}`,
+        priceStatus:
+          Number.isFinite(currentPrice) &&
+          (direction === "sell"
+            ? currentPrice < marketZone.low
+            : currentPrice > marketZone.high)
+            ? "not reached"
+            : "unclear",
+        triggerPresent: false,
+        triggerDescription: "",
+        recoveredFrom:
+          visualZone ? "visible-chart-markings" : "historical-market-areas",
+      };
+    }
+  }
+
+  if (preferredArea && !["buy", "sell"].includes(String(preferredArea.direction || ""))) {
+    preferredArea.direction = direction;
+  }
+
+  const strengths = cleanUserFeedbackItems(
+    visualReview.chartSpecificStrengths
+  ).filter(
+    (item) =>
+      !/chart has enough price history|instrument and timeframe|chart is clear enough/i.test(
+        String(item || "")
+      )
+  );
+
+  const weaknesses = cleanUserFeedbackItems(
+    visualReview.chartSpecificWeaknesses
+  ).filter(
+    (item) =>
+      !/sell level is not defined|buy level is not defined|visual trade review failed|referenceerror|is not defined/i.test(
+        String(item || "")
+      )
+  );
+
+  if (preferredArea && String(preferredArea.areaType || "") !== "none") {
+    const areaType = String(preferredArea.areaType || "entry");
+    const zoneText = String(preferredArea.zoneText || "").trim();
+
+    strengths.unshift(
+      zoneText
+        ? `The ${areaType} area ${zoneText} gives a clear ${
+            preferredArea.direction === "sell" ? "sell" : "buy"
+          } location to monitor.`
+        : `The marked ${areaType} area gives a clear ${
+            preferredArea.direction === "sell" ? "sell" : "buy"
+          } location to monitor.`
+    );
+
+    if (
+      ["not reached", "approaching"].includes(
+        String(preferredArea.priceStatus || "").toLowerCase()
+      )
+    ) {
+      weaknesses.unshift(
+        `Price has not yet retested the planned ${areaType} area, so the setup is not confirmed.`
+      );
+    }
+
+    if (preferredArea.triggerPresent !== true) {
+      weaknesses.push(
+        `No fresh ${
+          preferredArea.direction === "sell" ? "bearish" : "bullish"
+        } trigger is visible at the planned area yet.`
+      );
+    }
+  }
+
+  const riskText = String(visualReview.riskEvidence || "").toLowerCase();
+  if (
+    /not shown|not visible|no visible|cannot be judged/.test(riskText) &&
+    !weaknesses.some((item) => /stop loss|risk|target/i.test(item))
+  ) {
+    weaknesses.push(
+      "A stop loss and target are not clearly shown, so the planned risk cannot yet be assessed."
+    );
+  }
+
+  let bestAreaToWatch = String(visualReview.bestAreaToWatch || "").trim();
+
+  if (preferredArea && ["buy", "sell"].includes(preferredArea.direction)) {
+    const areaType = String(preferredArea.areaType || "entry");
+    const zoneText = String(preferredArea.zoneText || "").trim();
+
+    bestAreaToWatch =
+      preferredArea.direction === "sell"
+        ? `Wait for price to retrace towards the ${areaType} area${
+            zoneText ? ` ${zoneText}` : ""
+          } and show a clear bearish trigger before considering a sell. Do not chase a sell while price remains close to support.`
+        : `Wait for price to return towards the ${areaType} area${
+            zoneText ? ` ${zoneText}` : ""
+          } and show a clear bullish trigger before considering a buy. Do not chase a buy while price remains close to resistance.`;
+  }
+
+  return {
+    ...visualReview,
+    preferredEntryArea: preferredArea,
+    bestAreaToWatch,
+    chartSpecificStrengths: removeDuplicateFeedback(strengths, 4),
+    chartSpecificWeaknesses: removeDuplicateFeedback(weaknesses, 4),
+  };
+}
+
+
+function buildDashboardFeedback({
+  marketReference,
+  chartDetection,
+  visualReview = null,
+  submittedInstrument,
+  timeframe,
+  selectedDateText,
+  detectedDateText,
+  submittedNotes = "",
+  setupScore = 0,
+  analysisType = "post-trade",
+}) {
+  const profile =
+    marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
+  const bias =
+    marketReference?.directionalBias ||
+    calculateCsaDirectionalBias(
+      [],
+      marketReference?.symbol || submittedInstrument,
+      profile
+    );
+
+  const marketOk = Boolean(marketReference?.ok);
+  const visualOk = Boolean(visualReview?.ok);
+  const hasConfirmedTrigger = Boolean(chartDetection?.visibleTrigger);
+  const chartMarkingStatus = getChartMarkingStatus(visualReview);
+  const tradeVisibility = getTradeVisibility({
+    visualReview,
+    submittedNotes,
+  });
+  const hasVisibleTrade = tradeVisibility === "visible";
+
+  const frameworkStrengths = [];
+  const frameworkWeaknesses = [];
+
+  if (chartDetection?.hasUsablePriceData) {
+    frameworkStrengths.push(
+      "The chart is clear enough to review the recent price movement."
+    );
+  }
+
+  if (
+    isDetectedInstrumentUsable(chartDetection?.detectedInstrument) &&
+    isDetectedTimeframeUsable(chartDetection?.detectedTimeframe)
+  ) {
+    frameworkStrengths.push(
+      "The instrument and timeframe are visible and match the selected chart details."
+    );
+  }
+
+  if (marketOk) {
+    frameworkStrengths.push(
+      `The bigger-picture market direction was checked. Current view: ${bias.bias}.`
+    );
+  }
+
+  if (hasVisibleTrade && !hasConfirmedTrigger) {
+    frameworkWeaknesses.push(
+      "No clear entry confirmation is visible for the trade."
+    );
+  }
+
+  const riskEvidence = String(visualReview?.riskEvidence || "").trim();
+  const riskEvidenceLower = riskEvidence.toLowerCase();
+  const hasVisibleRiskPlan =
+    riskEvidence &&
+    !riskEvidenceLower.includes("not shown") &&
+    !riskEvidenceLower.includes("not visible") &&
+    !riskEvidenceLower.includes("cannot be judged") &&
+    !riskEvidenceLower.includes("no visible");
+
+  if (!hasVisibleRiskPlan) {
+    frameworkWeaknesses.push(
+      hasVisibleTrade
+        ? "Stop loss and target are not shown, so the trade risk cannot be judged."
+        : "A stop loss and target are not clearly shown, so the planned risk cannot yet be assessed."
+    );
+  }
+
+  let visualStrengths = visualOk
+    ? normalizeArrayOfStrings(visualReview.chartSpecificStrengths, [])
+    : [];
+
+  let visualWeaknesses = visualOk
+    ? normalizeArrayOfStrings(visualReview.chartSpecificWeaknesses, [])
+    : [];
+
+  if (!hasVisibleTrade) {
+    visualWeaknesses = visualWeaknesses.filter((item) => {
+      if (assumesTradeWasTaken(item)) return false;
+      if (feedbackCategory(item) === "middle_range_entry") return false;
+
+      // In pre-trade mode, these are valid readiness checks even when no trade exists.
+      if (normalizeAnalysisType(analysisType) === "pre-trade") return true;
+
+      // In post-trade mode with no visible/described trade, avoid judging execution,
+      // but keep plan-readiness issues such as a missing stop/target plan.
+      return feedbackCategory(item) !== "entry_confirmation_missing";
+    });
+  }
+
+  if (chartMarkingStatus === "unmarked") {
+    visualStrengths = visualStrengths.filter(
+      (item) => !isUnsupportedMarkedLevelClaim(item)
+    );
+
+    visualWeaknesses = visualWeaknesses.filter(
+      (item) => feedbackCategory(item) !== "levels_not_marked"
+    );
+
+    visualWeaknesses.unshift(
+      "There is no visible evidence of user-marked support or resistance on this chart."
+    );
+  }
+
+  if (chartMarkingStatus === "marked") {
+    normalizeArrayOfStrings(visualReview?.csaSimilarities, [])
+      .slice(0, 2)
+      .forEach((item) =>
+        visualStrengths.push(item)
+      );
+
+    normalizeArrayOfStrings(visualReview?.csaDifferences, [])
+      .slice(0, 2)
+      .forEach((item) =>
+        visualWeaknesses.push(item)
+      );
+  }
+
+  const preferredArea = visualReview?.preferredEntryArea;
+  const preferredDirection = String(preferredArea?.direction || "").toLowerCase();
+  const preferredType = String(preferredArea?.areaType || "").toLowerCase();
+  const preferredStatus = String(preferredArea?.priceStatus || "").toLowerCase();
+
+  if (preferredArea && preferredType && preferredType !== "none") {
+    visualStrengths.unshift(
+      `The marked ${preferredType} area gives a clear ${preferredDirection === "sell" ? "sell" : preferredDirection === "buy" ? "buy" : "trade"} location to monitor.`
+    );
+  }
+
+  if (["not reached", "approaching"].includes(preferredStatus)) {
+    visualWeaknesses.unshift(
+      `Price has not yet retested the planned ${preferredType || "entry"} area, so the setup is not confirmed.`
+    );
+  }
+
+  if (preferredArea && preferredArea.triggerPresent !== true) {
+    visualWeaknesses.push(
+      `No fresh ${preferredDirection === "sell" ? "bearish" : preferredDirection === "buy" ? "bullish" : "entry"} trigger is visible at the planned area yet.`
+    );
+  }
+
+  visualWeaknesses = visualWeaknesses.filter((item) =>
+    !/sell level is not defined|buy level is not defined|exact .* level is not defined|visual trade review failed|referenceerror|is not defined/i.test(String(item || ""))
+  );
+
+  const strengths = removeDuplicateFeedback(
+    [
+      ...visualStrengths,
+      ...frameworkStrengths.filter((item) =>
+        /market direction|support|resistance|supply|demand|entry area|bearish|bullish/i.test(item)
+      ),
+      ...(visualStrengths.length
+        ? []
+        : frameworkStrengths.filter(
+            (item) =>
+              !/instrument and timeframe are visible|chart is clear enough|chart has enough price history/i.test(
+                String(item || "")
+              )
+          )),
+    ],
+    4
+  );
+
+  const weaknesses = removeDuplicateFeedback(
+    [
+      ...visualWeaknesses.filter(isActualWeakness),
+      ...frameworkWeaknesses.filter(isActualWeakness),
+    ],
+    4
+  );
+
+  const isPreTrade = normalizeAnalysisType(analysisType) === "pre-trade";
+  const hasUsefulMarkedPlan =
+    chartMarkingStatus === "marked" &&
+    (normalizeArrayOfStrings(visualReview?.csaSimilarities, []).length > 0 ||
+      normalizeArrayOfStrings(visualReview?.chartSpecificStrengths, []).some(
+        (item) => /support|resistance|supply|demand|entry area|sell area|buy area/i.test(item)
+      ));
+  const hasPlannedArea = Boolean(
+    String(visualReview?.bestAreaToWatch || "").trim() ||
+      String(visualReview?.coachVerdict || "").trim()
+  );
+
+  let setupQualityScore = clampScore(
+    Number.isFinite(Number(visualReview?.setupQualityScore))
+      ? visualReview.setupQualityScore
+      : setupScore
+  );
+  let entryAccuracyScore = clampScore(
+    Number.isFinite(Number(visualReview?.entryAccuracyScore))
+      ? visualReview.entryAccuracyScore
+      : hasConfirmedTrigger
+      ? 60
+      : 30
+  );
+  let riskManagementScore = clampScore(
+    Number.isFinite(Number(visualReview?.riskManagementScore))
+      ? visualReview.riskManagementScore
+      : hasVisibleRiskPlan
+      ? 60
+      : 30
+  );
+
+  // A chart with no visible executed trade is a plan/readiness review, not an automatic failure.
+  // Apply this protection even when the user accidentally selects post-trade mode.
+  if (!hasVisibleTrade) {
+    if (hasUsefulMarkedPlan || hasPlannedArea) setupQualityScore = Math.max(setupQualityScore, 60);
+    else setupQualityScore = Math.max(setupQualityScore, isPreTrade ? 45 : 40);
+
+    // No trigger yet means “not ready”, not “zero accuracy”.
+    entryAccuracyScore = Math.max(entryAccuracyScore, hasConfirmedTrigger ? 65 : 45);
+
+    // Missing SL/TP reduces the score, but does not erase the quality of the plan.
+    riskManagementScore = Math.max(riskManagementScore, hasVisibleRiskPlan ? 65 : 35);
+  }
+
+  return {
+    strengths,
+    weaknesses,
+    aiMistakeDetectionHub: normalizeVisualMistakeItems(
+      visualReview?.simpleMistakeHub || []
+    ).slice(0, 4),
+    setupQualityScore,
+    entryAccuracyScore,
+    riskManagementScore,
+    setupQuality: {
+      score: setupQualityScore,
+      label: scoreLabel(setupQualityScore),
+      summary:
+        visualReview?.visualSummary ||
+        "The setup was checked against the CSA framework.",
+    },
+    entryAccuracy: {
+      score: entryAccuracyScore,
+      label: scoreLabel(entryAccuracyScore),
+      summary: !hasVisibleTrade
+        ? "No trade entry is visible, so entry quality was not judged."
+        : hasConfirmedTrigger
+        ? `Visible confirmation: ${chartDetection.visibleTrigger}.`
+        : "No clear entry confirmation is visible for the trade.",
+    },
+    riskManagement: {
+      score: riskManagementScore,
+      label: scoreLabel(riskManagementScore),
+      summary: !hasVisibleTrade
+        ? "No trade is visible, so stop loss and target placement were not judged."
+        : hasVisibleRiskPlan
+        ? riskEvidence
+        : "Stop loss and target are not shown, so the trade risk cannot be judged.",
+    },
+    contextCheck: {
+      selectedInstrument: submittedInstrument,
+      selectedTimeframe: timeframe,
+      selectedDate: selectedDateText,
+      detectedInstrument: chartDetection?.detectedInstrument || null,
+      detectedTimeframe: chartDetection?.detectedTimeframe || null,
+      detectedDate: detectedDateText || null,
+      detectedLatestVisibleDate:
+        detectedDateText || chartDetection?.latestVisibleDate || null,
+      chartMarkingStatus,
+      tradeVisibility,
+      tradeVisibilityReason:
+        visualReview?.tradeVisibilityReason || "",
+      csaAnchorMatch: visualReview?.csaAnchorMatch || "not_checked",
+      csaLevelVisibility:
+        visualReview?.csaLevelVisibility || "Not reviewed",
+      visibleMarkedLevels: visualReview?.visibleMarkedLevels || [],
+      csaSimilarities: visualReview?.csaSimilarities || [],
+      csaDifferences: visualReview?.csaDifferences || [],
+      chartContextScore: 100,
+      chartContextLabel: "Verified",
+      chartContextSummary:
+        "The selected instrument and timeframe were checked against the uploaded chart.",
+      status: "Reviewed",
+    },
+
+    // Backward-compatible fields used by the response builder and dashboard.
+    chartContextCheck: {
+      selectedInstrument: submittedInstrument,
+      selectedTimeframe: timeframe,
+      selectedDate: selectedDateText,
+      detectedInstrument: chartDetection?.detectedInstrument || null,
+      detectedTimeframe: chartDetection?.detectedTimeframe || null,
+      detectedDate: detectedDateText || null,
+      detectedLatestVisibleDate:
+        detectedDateText || chartDetection?.latestVisibleDate || null,
+      chartMarkingStatus,
+      tradeVisibility,
+      tradeVisibilityReason:
+        visualReview?.tradeVisibilityReason || "",
+      csaAnchorMatch: visualReview?.csaAnchorMatch || "not_checked",
+      csaLevelVisibility:
+        visualReview?.csaLevelVisibility || "Not reviewed",
+      visibleMarkedLevels: visualReview?.visibleMarkedLevels || [],
+      csaSimilarities: visualReview?.csaSimilarities || [],
+      csaDifferences: visualReview?.csaDifferences || [],
+      chartContextScore: 100,
+      chartContextLabel: "Verified",
+      chartContextSummary:
+        "The selected instrument and timeframe were checked against the uploaded chart.",
+      status: "Reviewed",
+    },
+    scores: {
+      setupQuality: setupQualityScore,
+      entryAccuracy: entryAccuracyScore,
+      riskManagement: riskManagementScore,
+    },
+    failedAreas: [],
+  };
+}
+
+function getBiasGroup(biasCode = "") {
+  const code = String(biasCode || "").toLowerCase();
+
+  if (code === "bullish" || code === "slightly_bullish") {
+    return "bullish";
+  }
+
+  if (code === "bearish" || code === "slightly_bearish") {
+    return "bearish";
+  }
+
+  if (code === "range_bullish") {
+    return "range_bullish";
+  }
+
+  if (code === "range_bearish") {
+    return "range_bearish";
+  }
+
+  return "range";
+}
+
+function getFirstAnchorLabel(profile = getSupportedCsaTimeframeProfile("H1")) {
+  if (profile.structureMode === "daily-in-week") return "Monday";
+  if (profile.structureMode === "weekly-in-month") return "the first week";
+  if (profile.structureMode === "monthly-in-year") return "the first month";
+  if (profile.structureMode === "quarterly-in-year") return "the first quarter";
+  if (profile.structureMode === "yearly-in-multi-year") return "the first year";
+  return "the first key range";
+}
+
+function getInitialRangeAreas(
+  levels = [],
+  profile = getSupportedCsaTimeframeProfile("H1")
+) {
+  const first = Array.isArray(levels) && levels.length ? levels[0] : null;
+  const label = first?.periodLabel || first?.day || getFirstAnchorLabel(profile);
+
+  return {
+    label,
+    support:
+      first && Number.isFinite(Number(first.low))
+        ? Number(first.low)
+        : null,
+    resistance:
+      first && Number.isFinite(Number(first.high))
+        ? Number(first.high)
+        : null,
+  };
+}
+
+function getInitialRangeStatus(
+  levels = [],
+  symbol = "",
+  profile = getSupportedCsaTimeframeProfile("H1")
+) {
+  const initial = getInitialRangeAreas(levels, profile);
+  const tolerance = getCleanBreakTolerance(symbol);
+  const support = Number(initial.support);
+  const resistance = Number(initial.resistance);
+
+  const status = {
+    ...initial,
+    supportText: formatPrice(support),
+    resistanceText: formatPrice(resistance),
+    hasInitialRange:
+      Number.isFinite(support) && Number.isFinite(resistance),
+    wickAboveHigh: false,
+    wickBelowLow: false,
+    closeAboveHigh: false,
+    closeBelowLow: false,
+    isStillInsideInitialRange: false,
+    breakoutDirection: "none",
+    rangeMessage: "",
+  };
+
+  if (!status.hasInitialRange) {
+    status.rangeMessage =
+      "The first key support/resistance range is not available.";
+    return status;
+  }
+
+  if (!Array.isArray(levels) || levels.length < 2) {
+    status.isStillInsideInitialRange = true;
+    status.rangeMessage = `${initial.label} resistance around ${status.resistanceText} and ${initial.label} support around ${status.supportText} are the only active areas for now.`;
+    return status;
+  }
+
+  const laterLevels = levels.slice(1);
+
+  status.wickAboveHigh = laterLevels.some(
+    (item) => Number(item.high) > resistance + tolerance
+  );
+  status.wickBelowLow = laterLevels.some(
+    (item) => Number(item.low) < support - tolerance
+  );
+  status.closeAboveHigh = laterLevels.some(
+    (item) => Number(item.close) > resistance + tolerance
+  );
+  status.closeBelowLow = laterLevels.some(
+    (item) => Number(item.close) < support - tolerance
+  );
+  status.isStillInsideInitialRange =
+    !status.closeAboveHigh && !status.closeBelowLow;
+
+  if (status.closeAboveHigh) status.breakoutDirection = "up";
+  if (status.closeBelowLow) {
+    status.breakoutDirection =
+      status.breakoutDirection === "up" ? "both" : "down";
+  }
+
+  status.rangeMessage = status.isStillInsideInitialRange
+    ? `Price has not closed above ${initial.label} high around ${status.resistanceText} or below ${initial.label} low around ${status.supportText} yet. For now, those remain the only main rejection areas.`
+    : status.breakoutDirection === "up"
+    ? `Price has closed above ${initial.label} resistance around ${status.resistanceText}. The better trend setup is to wait for a pullback/retest of that broken resistance as support.`
+    : status.breakoutDirection === "down"
+    ? `Price has closed below ${initial.label} support around ${status.supportText}. The better trend setup is to wait for a pullback/retest of that broken support as resistance.`
+    : `Price has moved outside ${initial.label}'s range. Wait for a clear retest before judging the next setup.`;
+
+  return status;
+}
+
+function buildDashboardAliases(dashboardFeedback = {}) {
+  const contextCheck = dashboardFeedback.contextCheck || dashboardFeedback.chartContextCheck || {};
+  const setupQuality = dashboardFeedback.setupQuality || { score: 0, label: "Unavailable", summary: "Setup quality was not calculated." };
+  const entryAccuracy = dashboardFeedback.entryAccuracy || { score: 0, label: "Unavailable", summary: "Entry accuracy was not calculated." };
+  const riskManagement = dashboardFeedback.riskManagement || { score: 0, label: "Unavailable", summary: "Risk management was not calculated." };
+  const strengths = Array.isArray(dashboardFeedback.strengths) && dashboardFeedback.strengths.length ? dashboardFeedback.strengths : ["CSA Coach completed the review."];
+  const weaknesses = Array.isArray(dashboardFeedback.weaknesses) && dashboardFeedback.weaknesses.length
+    ? dashboardFeedback.weaknesses
+    : ["Price has not yet confirmed a complete entry setup. Wait for the planned area, trigger, stop loss, and target to be clear."];
+  const aiMistakeDetectionHub = Array.isArray(dashboardFeedback.aiMistakeDetectionHub) && dashboardFeedback.aiMistakeDetectionHub.length ? dashboardFeedback.aiMistakeDetectionHub : [makeSimpleMistake("No major mistake detected", "REVIEW")];
+  const failedAreas = Array.isArray(dashboardFeedback.failedAreas) ? dashboardFeedback.failedAreas : [];
+  return {
+    strengths, weaknesses,
+    chartContextCheck: contextCheck, contextCheck, chartContext: contextCheck, chartContextStatus: contextCheck.status || "Not available",
+    selectedContext: { instrument: contextCheck.selectedInstrument || "Not provided", timeframe: contextCheck.selectedTimeframe || "Not provided", date: contextCheck.selectedDate || "Not provided" },
+    detectedContext: { instrument: contextCheck.detectedInstrument || "Not detected", timeframe: contextCheck.detectedTimeframe || "Not detected", latestVisibleDate: contextCheck.detectedLatestVisibleDate || "Not detected" },
+    setupQuality, setupQualityScore: setupQuality.score, setupQualityLabel: setupQuality.label, setupQualitySummary: setupQuality.summary,
+    entryAccuracy, entryAccuracyScore: entryAccuracy.score, entryAccuracyLabel: entryAccuracy.label, entryAccuracySummary: entryAccuracy.summary,
+    riskManagement, riskManagementScore: riskManagement.score, riskManagementLabel: riskManagement.label, riskManagementSummary: riskManagement.summary,
+    chartContextScore: Number(contextCheck.chartContextScore ?? (contextCheck.status === "Reviewed" ? 100 : 0)), chartContextLabel: contextCheck.chartContextLabel || (contextCheck.status === "Reviewed" ? "Verified" : "Not verified"), chartContextSummary: contextCheck.chartContextSummary || "Checks whether the selected pair/timeframe matches the uploaded chart before analysis.",
+    aiMistakeDetectionHub, mistakeDetectionHub: aiMistakeDetectionHub, mistakeHub: aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub,
+    failedAreas,
+    dashboard: { strengths, weaknesses, chartContextCheck: contextCheck, contextCheck, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, mistakes: aiMistakeDetectionHub, failedAreas },
+    dashboardCards: { strengths, weaknesses, chartContextCheck: contextCheck, setupQuality, entryAccuracy, riskManagement, aiMistakeDetectionHub, failedAreas },
+  };
+}
+
+function buildSimpleStructureBreakdown(levels = [], normalizedSymbol = "") {
+  if (!levels.length) return "- No structure data available.";
+  return levels.map((period, index) => {
+    const label = period.periodLabel || period.day || period.key;
+    if (index === 0) return `${label}:\n- High ${formatPrice(period.high)} = first resistance.\n- Low ${formatPrice(period.low)} = first support.`;
+    const previous = levels[index - 1];
+    const highComparison = compareHighWithTolerance(period.high, previous.high, normalizedSymbol);
+    const lowComparison = compareLowWithTolerance(period.low, previous.low, normalizedSymbol);
+    return `${label}:\n- ${highComparison.cleanBreak ? "High broke previous high = resistance." : "High failed to break previous high = supply."}\n- ${lowComparison.cleanBreak ? "Low broke previous low = support." : "Low held/retested previous low = demand."}`;
+  }).join("\n\n");
+}
+
+function getPeriodExtremes(levels = [], symbol = "") {
+  const highs = Array.isArray(levels) ? levels.map((item) => Number(item.high)).filter(Number.isFinite) : [];
+  const lows = Array.isArray(levels) ? levels.map((item) => Number(item.low)).filter(Number.isFinite) : [];
+  const high = highs.length ? Math.max(...highs) : null;
+  const low = lows.length ? Math.min(...lows) : null;
+  const range = Number.isFinite(high) && Number.isFinite(low)
+    ? Math.max(Math.abs(high - low), getCleanBreakTolerance(symbol))
+    : getCleanBreakTolerance(symbol);
+  return { high, low, range };
+}
+
+function entryRoleForArea(area, direction = "sell", levels = [], symbol = "") {
+  const type = String(area?.type || "").toLowerCase();
+  const broken = isAreaBrokenIntoOppositeRole(area, levels, symbol);
+
+  if (direction === "sell") {
+    if (type === "resistance" || type === "supply") return { usable: !broken, role: "resistance", flip: false };
+    if ((type === "support" || type === "demand") && broken) return { usable: true, role: "resistance", flip: true };
+    return { usable: false, role: "resistance", flip: false };
+  }
+
+  if (type === "support" || type === "demand") return { usable: !broken, role: "support", flip: false };
+  if ((type === "resistance" || type === "supply") && broken) return { usable: true, role: "support", flip: true };
+  return { usable: false, role: "support", flip: false };
+}
+
+function isAreaBrokenIntoOppositeRole(area, levels = [], symbol = "") {
+  return Boolean(area && areaBrokenByCloseLater(area, levels, symbol));
+}
+
+function isMeaningfullyDifferentArea(a, b, symbol = "") {
+  if (!a || !b) return false;
+  const tolerance = getCleanBreakTolerance(symbol) * 2;
+  return Math.abs(Number(a.price) - Number(b.price)) > tolerance;
+}
+
+function buildEntryCandidate(area, { direction = "sell", levels = [], symbol = "", currentPrice = null }) {
+  const price = Number(area?.price);
+  const current = Number(currentPrice);
+  if (!Number.isFinite(price)) return null;
+
+  const tolerance = getCleanBreakTolerance(symbol);
+  if (Number.isFinite(current)) {
+    if (direction === "sell" && price < current - tolerance) return null;
+    if (direction === "buy" && price > current + tolerance) return null;
+  }
+
+  const roleInfo = entryRoleForArea(area, direction, levels, symbol);
+  if (!roleInfo.usable) return null;
+
+  const extremes = getPeriodExtremes(levels, symbol);
+  const range = extremes.range || getCleanBreakTolerance(symbol);
+  const distanceFromCurrent = Number.isFinite(current) ? Math.abs(price - current) : null;
+  const distancePercent = Number.isFinite(distanceFromCurrent) ? distanceFromCurrent / range : 0.25;
+  const levelPosition = Number.isFinite(extremes.high) && Number.isFinite(extremes.low)
+    ? (price - extremes.low) / range
+    : null;
+
+  let score = 0;
+  if (roleInfo.flip) score += 3;
+  if (distancePercent >= 0.12) score += 2;
+  if (distancePercent >= 0.22) score += 1;
+  if (distancePercent < 0.08) score -= 3;
+
+  // Internal deep-pullback guide only. Do not expose this as Fibonacci or percentages to users.
+  if (Number.isFinite(levelPosition)) {
+    if (direction === "sell") {
+      if (levelPosition >= 0.50 && levelPosition <= 0.82) score += 3;
+      else if (levelPosition >= 0.38 && levelPosition < 0.50) score += 1;
+      else if (levelPosition < 0.25) score -= 2;
+    } else {
+      if (levelPosition >= 0.18 && levelPosition <= 0.50) score += 3;
+      else if (levelPosition > 0.50 && levelPosition <= 0.62) score += 1;
+      else if (levelPosition > 0.75) score -= 2;
+    }
+  }
+
+  return {
+    label: area.day || area.period || area.date || "key area",
+    originalType: area.type,
+    type: roleInfo.role,
+    price,
+    priceText: area.priceText || formatPrice(price),
+    isFlipArea: roleInfo.flip,
+    distanceFromCurrent,
+    distancePercent,
+    levelPosition,
+    score,
+    sourceArea: area,
+  };
+}
+
+function getRankedEntryAreas({ areas = [], levels = [], symbol = "", direction = "sell", currentPrice = null, profile = getSupportedCsaTimeframeProfile("H1") }) {
+  const candidates = [];
+  const seen = new Set();
+
+  for (const area of areas) {
+    const candidate = buildEntryCandidate(area, { direction, levels, symbol, currentPrice });
+    if (!candidate) continue;
+    const key = `${candidate.type}-${candidate.priceText}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(candidate);
+  }
+
+  const initial = getInitialRangeAreas(levels, profile);
+  if (direction === "sell" && Number.isFinite(Number(initial.resistance))) {
+    candidates.push({
+      label: initial.label,
+      originalType: "resistance",
+      type: "resistance",
+      price: Number(initial.resistance),
+      priceText: formatPrice(initial.resistance),
+      isFlipArea: false,
+      distanceFromCurrent: Number.isFinite(Number(currentPrice)) ? Math.abs(Number(initial.resistance) - Number(currentPrice)) : null,
+      distancePercent: 0.2,
+      levelPosition: null,
+      score: 1,
+      sourceArea: null,
+    });
+  }
+
+  if (direction === "buy" && Number.isFinite(Number(initial.support))) {
+    candidates.push({
+      label: initial.label,
+      originalType: "support",
+      type: "support",
+      price: Number(initial.support),
+      priceText: formatPrice(initial.support),
+      isFlipArea: false,
+      distanceFromCurrent: Number.isFinite(Number(currentPrice)) ? Math.abs(Number(initial.support) - Number(currentPrice)) : null,
+      distancePercent: 0.2,
+      levelPosition: null,
+      score: 1,
+      sourceArea: null,
+    });
+  }
+
+  return candidates
+    .filter((candidate) => Number.isFinite(Number(candidate.price)))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      const ad = Number.isFinite(a.distanceFromCurrent) ? a.distanceFromCurrent : Infinity;
+      const bd = Number.isFinite(b.distanceFromCurrent) ? b.distanceFromCurrent : Infinity;
+      return ad - bd;
+    });
+}
+
+function getNearestCandidate(candidates = [], currentPrice = null) {
+  const current = Number(currentPrice);
+  if (!Number.isFinite(current) || !Array.isArray(candidates) || !candidates.length) return null;
+  return [...candidates].sort((a, b) => Math.abs(Number(a.price) - current) - Math.abs(Number(b.price) - current))[0] || null;
+}
+
+function formatAreaComparison({ direction = "sell", nearestArea = null, betterArea = null, symbol = "" }) {
+  if (!nearestArea || !betterArea || !isMeaningfullyDifferentArea(nearestArea, betterArea, symbol)) return "";
+  const action = direction === "sell" ? "sell" : "buy";
+  const role = direction === "sell" ? "resistance" : "support";
+  const roomText = direction === "sell" ? "more room to fall" : "more room to rise";
+  const rejectText = direction === "sell" ? "rejects from there" : "holds from there";
+  const nearText = nearestArea.priceText || formatPrice(nearestArea.price);
+  const betterText = betterArea.priceText || formatPrice(betterArea.price);
+  return `${role[0].toUpperCase() + role.slice(1)} around ${nearText} is a possible ${action} area, but it is very close to current price, so the reward may be limited. A better ${action} area is around ${betterText} because it gives price ${roomText} if it ${rejectText}.`;
+}
+
+function getNearestAreaForDirection({ areas = [], levels = [], symbol = "", direction = "buy", currentPrice = null, profile = getSupportedCsaTimeframeProfile("H1") }) {
+  const initial = getInitialRangeAreas(levels, profile);
+  const ranked = getRankedEntryAreas({ areas, levels, symbol, direction, currentPrice, profile });
+  if (ranked.length) return ranked[0];
+
+  if (direction === "buy") {
+    return { label: initial.label, type: "support", price: initial.support, priceText: formatPrice(initial.support) };
+  }
+
+  return { label: initial.label, type: "resistance", price: initial.resistance, priceText: formatPrice(initial.resistance) };
+}
+
+function excludeSameDayAreas(areas = [], selectedDateText = "") {
+  const selectedDate = String(selectedDateText || "").slice(0, 10);
+  if (!selectedDate) return Array.isArray(areas) ? areas : [];
+
+  return (Array.isArray(areas) ? areas : []).filter(
+    (area) => String(area?.date || "").slice(0, 10) !== selectedDate
+  );
+}
+
+function buildBeginnerTrendPlan({ levels = [], areas = [], bias = {}, symbol = "", profile = getSupportedCsaTimeframeProfile("H1") }) {
+  const currentPrice = Number(bias.presentPrice);
+  const biasGroup = getBiasGroup(bias.biasCode);
+  const initialStatus = getInitialRangeStatus(levels, symbol, profile);
+  const initial = getInitialRangeAreas(levels, profile);
+
+  // Core CSA trend-trading rule:
+  // Until the first key high/low closes broken, do not use smaller internal levels
+  // as the main entry areas. The active areas remain the first high and first low.
+  // For H1/M15/M30/M5/M1 this means Monday high = resistance and Monday low = support.
+  const useInitialRangeOnly = initialStatus.hasInitialRange && initialStatus.isStillInsideInitialRange;
+
+  // Always rank every valid buying and selling area.
+  // The first range remains an important anchor, but it must not hide a later
+  // supply/demand area that offers the better entry location.
+  const buyCandidates = getRankedEntryAreas({
+    areas,
+    levels,
+    symbol,
+    direction: "buy",
+    currentPrice,
+    profile,
+  });
+  const sellCandidates = getRankedEntryAreas({
+    areas,
+    levels,
+    symbol,
+    direction: "sell",
+    currentPrice,
+    profile,
+  });
+
+  const buyArea =
+    buyCandidates[0] ||
+    getNearestAreaForDirection({
+      areas,
+      levels,
+      symbol,
+      direction: "buy",
+      currentPrice,
+      profile,
+    }) ||
+    {
+      label: "the first key range",
+      type: "support",
+      price: initial.support,
+      priceText: formatPrice(initial.support),
+    };
+
+  const sellArea =
+    sellCandidates[0] ||
+    getNearestAreaForDirection({
+      areas,
+      levels,
+      symbol,
+      direction: "sell",
+      currentPrice,
+      profile,
+    }) ||
+    {
+      label: "the first key range",
+      type: "resistance",
+      price: initial.resistance,
+      priceText: formatPrice(initial.resistance),
+    };
+
+  const nearestBuyArea = getNearestCandidate(buyCandidates, currentPrice);
+  const nearestSellArea = getNearestCandidate(sellCandidates, currentPrice);
+  const buyAreaComparison = formatAreaComparison({ direction: "buy", nearestArea: nearestBuyArea, betterArea: buyArea, symbol });
+  const sellAreaComparison = formatAreaComparison({ direction: "sell", nearestArea: nearestSellArea, betterArea: sellArea, symbol });
+
+  const initialSupportText = initialStatus.supportText || formatPrice(initial.support);
+  const initialResistanceText = initialStatus.resistanceText || formatPrice(initial.resistance);
+  const buyPriceText = buyArea.priceText || formatPrice(buyArea.price);
+  const sellPriceText = sellArea.priceText || formatPrice(sellArea.price);
+
+  const lowerSupportCandidates = buyCandidates
+    .filter(
+      (candidate) =>
+        Number.isFinite(Number(candidate?.price)) &&
+        Number(candidate.price) < currentPrice
+    )
+    .sort(
+      (a, b) =>
+        Math.abs(currentPrice - Number(a.price)) -
+        Math.abs(currentPrice - Number(b.price))
+    );
+
+  const nextSupportArea = lowerSupportCandidates[0] || null;
+  const nextSupportText = nextSupportArea
+    ? nextSupportArea.priceText || formatPrice(nextSupportArea.price)
+    : null;
+
+  const higherResistanceCandidates = sellCandidates
+    .filter(
+      (candidate) =>
+        Number.isFinite(Number(candidate?.price)) &&
+        Number(candidate.price) > currentPrice
+    )
+    .sort(
+      (a, b) =>
+        Math.abs(Number(a.price) - currentPrice) -
+        Math.abs(Number(b.price) - currentPrice)
+    );
+
+  const nextResistanceArea = higherResistanceCandidates[0] || null;
+  const nextResistanceText = nextResistanceArea
+    ? nextResistanceArea.priceText ||
+      formatPrice(nextResistanceArea.price)
+    : null;
+
+  let quickVerdict = "Wait for price to reach a clear area before taking action.";
+  let whatThisMeans = "The safest plan is to wait for price to reach support or resistance, then look for a clear reaction.";
+  let bestAreaToWatch = `Buy only if price drops to support around ${initialSupportText} and holds. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
+  let mainWarning = "Do not trade in the middle of the range. Wait for price to reach a clear support or resistance area first.";
+  let coachVerdict = "This is a wait setup until price reaches one of the key areas and shows a clear reaction.";
+  let preferredTrendSetup = "The preferred trend-trading setup is breakout, pullback, and retest.";
+
+  if (useInitialRangeOnly && biasGroup === "range") {
+    quickVerdict = "Wait. Price is still moving inside the main range.";
+    whatThisMeans = "The market has not produced a clean directional break, so entries should be taken only from a confirmed edge of the range.";
+    bestAreaToWatch = `The main buying area is around ${buyPriceText}, while the main selling area is around ${sellPriceText}. Wait for confirmation at either area.`;
+    mainWarning = "Do not enter in the middle of the range or chase price after it has already moved.";
+    coachVerdict = "This remains a wait setup until price reaches a confirmed buying or selling area.";
+    preferredTrendSetup = "Wait for price to reach a confirmed area and show a clear rejection or break-and-hold.";
+  } else if (biasGroup === "bullish") {
+    quickVerdict = `Bullish plan: wait for price to pull back to support around ${buyPriceText} before considering a buy.`;
+    whatThisMeans = `The better buy idea is not to chase price now, but to wait for price to drop back to support around ${buyPriceText} and hold.`;
+    bestAreaToWatch = buyAreaComparison || `For a buy, wait for price to drop back to support around ${buyPriceText} and then show a clear bullish candle or strong rejection from that area.`;
+    mainWarning = nextResistanceText
+      ? `Do not buy in the middle. Wait for the better support area around ${buyPriceText} or a fresh breakout-and-hold of ${nextResistanceText} resistance before considering a buy.`
+      : `Do not buy in the middle. Wait for the better support area around ${buyPriceText} or a fresh breakout-and-hold of the next resistance before considering a buy.`;
+    coachVerdict = `The cleaner plan is to look for buys only after price holds the better support area around ${buyPriceText}.`;
+  } else if (biasGroup === "bearish") {
+    quickVerdict = `Bearish plan: wait for price to rise back to resistance around ${sellPriceText} before considering a sell.`;
+    whatThisMeans = `The better sell idea is not to chase price now, but to wait for price to pull back up to resistance around ${sellPriceText} and reject.`;
+    bestAreaToWatch = sellAreaComparison || `For a sell, wait for price to rise back to resistance around ${sellPriceText} and then show a clear bearish candle or strong rejection from that area.`;
+    mainWarning = nextSupportText
+      ? `Do not sell after price has already dropped. Wait for the better resistance area around ${sellPriceText} or a fresh breakdown-and-hold of ${nextSupportText} support before considering a sell.`
+      : `Do not sell after price has already dropped. Wait for the better resistance area around ${sellPriceText} or a fresh breakdown-and-hold of the next support before considering a sell.`;
+    coachVerdict = `The cleaner plan is to look for sells only after price rejects the better resistance area around ${sellPriceText}.`;
+  } else if (biasGroup === "range_bullish") {
+    quickVerdict = `No clean trend yet, but buyers have pressure. Buy only if price drops to support around ${initialSupportText} and holds.`;
+    whatThisMeans = `Price is still inside the main range, so support around ${initialSupportText} and resistance around ${initialResistanceText} are the key areas for now.`;
+    bestAreaToWatch = `Buy only if price drops to support around ${initialSupportText} and holds. Sell only if price rises to resistance around ${initialResistanceText} and rejects.`;
+    mainWarning = `The market has not fully opened up yet. Do not chase; wait for support around ${initialSupportText} or resistance around ${initialResistanceText}.`;
+    coachVerdict = `For now, treat this as a range with bullish pressure until price clearly closes above ${initialResistanceText} or below ${initialSupportText}.`;
+  } else if (biasGroup === "range_bearish") {
+    quickVerdict = `Bearish pressure remains, but price is consolidating. Wait for price to rise to the better selling area around ${sellPriceText}.`;
+    whatThisMeans = `The broader pressure favours sellers, but price is currently close to support, so selling now would mean chasing the move.`;
+    bestAreaToWatch = sellAreaComparison || `Wait for price to return to the supply or resistance area around ${sellPriceText} and show a clear bearish trigger before considering a sell.`;
+    mainWarning = nextSupportText
+      ? `Do not sell while price is close to support around ${nextSupportText}. Wait for the better selling area around ${sellPriceText}.`
+      : `Do not chase the sell while price is already low. Wait for the better selling area around ${sellPriceText}.`;
+    coachVerdict = `The cleaner plan is to wait for a bearish trigger from the better supply or resistance area around ${sellPriceText}.`;
+  }
+
+  return {
+    biasGroup,
+    useInitialRangeOnly,
+    initialRangeStatus: initialStatus,
+    initialSupport: initial.support,
+    initialResistance: initial.resistance,
+    initialSupportText,
+    initialResistanceText,
+    buyArea,
+    sellArea,
+    nextSupportArea,
+    nextSupportText,
+    nextResistanceArea,
+    nextResistanceText,
+    nearestBuyArea,
+    nearestSellArea,
+    buyAreaComparison,
+    sellAreaComparison,
+    quickVerdict,
+    whatThisMeans,
+    bestAreaToWatch,
+    mainWarning,
+    coachVerdict,
+    preferredTrendSetup,
+  };
+}
+
+
+function extractPriceTextFromText(text = "") {
+  const matches = String(text).match(/\b\d+(?:\.\d+)?\b/g);
+  if (!matches || !matches.length) return "";
+  return matches[matches.length - 1];
+}
+
+function buildVisibleTriggerConfirmation({ trigger = "", trendPlan = {} }) {
+  const text = String(trigger || "").trim();
+  if (!text) return "";
+
+  const lower = text.toLowerCase();
+  const biasGroup = String(trendPlan?.biasGroup || "").toLowerCase();
+  const sellPriceText = extractPriceTextFromText(text) || trendPlan?.sellArea?.priceText || trendPlan?.initialResistanceText || "the resistance area";
+  const buyPriceText = extractPriceTextFromText(text) || trendPlan?.buyArea?.priceText || trendPlan?.initialSupportText || "the support area";
+
+  const isBearishBreak = /breakdown|break down|broke below|break below|closed below|close below|hold below|held below/.test(lower);
+  const isBullishBreak = /breakout|break out|broke above|break above|closed above|close above|hold above|held above/.test(lower);
+
+  // Do not describe a broken support as "hold below support" in user-facing text.
+  // Once support has broken and price stays below it, explain it as previous support
+  // and guide the trader to wait for a pullback/rejection instead of chasing.
+  if (isBearishBreak || (biasGroup.includes("bearish") && lower.includes("below") && lower.includes("support"))) {
+    return `No fresh sell confirmation is visible yet. Price has already broken below previous support around ${sellPriceText}, so the better sell confirmation would be a pullback toward that area and a rejection from it.`;
+  }
+
+  // Same idea for bullish breaks: once resistance has broken and price stays above it,
+  // explain it as previous resistance and guide the trader to wait for a pullback/hold.
+  if (isBullishBreak || (biasGroup.includes("bullish") && lower.includes("above") && lower.includes("resistance"))) {
+    return `No fresh buy confirmation is visible yet. Price has already broken above previous resistance around ${buyPriceText}, so the better buy confirmation would be a pullback toward that area and a hold from it.`;
+  }
+
+  return `A possible confirmation is visible: ${text}`;
+}
+
+function buildEntryConfirmationText({ trendPlan = {}, chartDetection = null, visualReview = null }) {
+  const biasGroup = String(trendPlan?.biasGroup || "").toLowerCase();
+  const sellPriceText = trendPlan?.sellArea?.priceText || trendPlan?.initialResistanceText || "the resistance area";
+  const buyPriceText = trendPlan?.buyArea?.priceText || trendPlan?.initialSupportText || "the support area";
+
+  const hasVisibleTrigger = Boolean(chartDetection?.visibleTrigger);
+  if (hasVisibleTrigger) {
+    return buildVisibleTriggerConfirmation({ trigger: chartDetection.visibleTrigger, trendPlan });
+  }
+
+  // Do not let the visual model say "wait for support" during a sell-focused setup
+  // or "wait for resistance" during a buy-focused setup. Entry confirmation should
+  // match the active trade idea.
+  if (biasGroup === "bearish" || biasGroup === "range_bearish") {
+    return "No clear sell confirmation is visible yet.";
+  }
+
+  if (biasGroup === "bullish" || biasGroup === "range_bullish") {
+    return "No clear buy confirmation is visible yet.";
+  }
+
+  if (trendPlan?.useInitialRangeOnly) {
+    return "No clear entry confirmation is visible yet.";
+  }
+
+  const visualText = String(visualReview?.entryEvidence || "").trim();
+  if (visualText && !/support first|resistance first|hold below support|below support/i.test(visualText)) return visualText;
+
+  return "No clear entry confirmation is visible yet.";
+}
+
+function buildChartMarkingComparisonText({
+  visualReview,
+  trendPlan,
+}) {
+  const markingStatus = getChartMarkingStatus(visualReview);
+  const anchorMatch = String(
+    visualReview?.csaAnchorMatch || ""
+  ).toLowerCase();
+
+  const initialStatus = trendPlan?.initialRangeStatus || {};
+  const supportHasFlipped =
+    initialStatus.breakoutDirection === "down" ||
+    initialStatus.breakoutDirection === "both" ||
+    initialStatus.closeBelowLow === true;
+
+  const resistanceHasFlipped =
+    initialStatus.breakoutDirection === "up" ||
+    initialStatus.breakoutDirection === "both" ||
+    initialStatus.closeAboveHigh === true;
+
+  if (anchorMatch === "full") {
+    if (resistanceHasFlipped && supportHasFlipped) {
+      return `There is a resistance correctly marked around ${trendPlan.initialResistanceText}, which has now broken and should act as support, and a support correctly marked around ${trendPlan.initialSupportText}, which has now broken and should act as resistance.`;
+    }
+
+    if (resistanceHasFlipped) {
+      return `There is a resistance correctly marked around ${trendPlan.initialResistanceText}, which has now broken and should act as support, and a support correctly marked around ${trendPlan.initialSupportText}.`;
+    }
+
+    if (supportHasFlipped) {
+      return `There is a resistance correctly marked around ${trendPlan.initialResistanceText}, and a support correctly marked around ${trendPlan.initialSupportText}, which has now broken and should act as resistance.`;
+    }
+
+    return `There is a resistance correctly marked around ${trendPlan.initialResistanceText}, and a support correctly marked around ${trendPlan.initialSupportText}.`;
+  }
+
+  if (anchorMatch === "partial") {
+    const firstMatch = normalizeArrayOfStrings(
+      visualReview?.csaSimilarities,
+      []
+    )[0];
+
+    if (/resistance/i.test(firstMatch || "")) {
+      if (resistanceHasFlipped) {
+        return `There is a resistance correctly marked around ${trendPlan.initialResistanceText}, which has now broken and should act as support.`;
+      }
+
+      return `There is a resistance correctly marked around ${trendPlan.initialResistanceText}.`;
+    }
+
+    if (/support/i.test(firstMatch || "")) {
+      if (supportHasFlipped) {
+        return `There is a support correctly marked around ${trendPlan.initialSupportText}, which has now broken and should act as resistance.`;
+      }
+
+      return `There is a support correctly marked around ${trendPlan.initialSupportText}.`;
+    }
+
+    return "One key level is marked correctly, but the other level could not be confirmed.";
+  }
+
+  if (markingStatus === "marked") {
+    return "Support and resistance lines are visible, but their exact prices could not be confirmed.";
+  }
+
+  if (markingStatus === "unmarked") {
+    if (resistanceHasFlipped && supportHasFlipped) {
+      return `No support or resistance lines are marked. The main areas to watch are support around ${trendPlan.initialSupportText}, which has now broken and should act as resistance, and resistance around ${trendPlan.initialResistanceText}, which has now broken and should act as support.`;
+    }
+
+    if (resistanceHasFlipped) {
+      return `No support or resistance lines are marked. The main areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}, which has now broken and should act as support.`;
+    }
+
+    if (supportHasFlipped) {
+      return `No support or resistance lines are marked. The main areas to watch are support around ${trendPlan.initialSupportText}, which has now broken and should act as resistance, and resistance around ${trendPlan.initialResistanceText}.`;
+    }
+
+    return `No support or resistance lines are marked. The main areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}.`;
+  }
+
+  if (resistanceHasFlipped && supportHasFlipped) {
+    return `The chart levels could not be confirmed clearly. The main areas to watch are support around ${trendPlan.initialSupportText}, which has now broken and should act as resistance, and resistance around ${trendPlan.initialResistanceText}, which has now broken and should act as support.`;
+  }
+
+  if (resistanceHasFlipped) {
+    return `The chart levels could not be confirmed clearly. The main areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}, which has now broken and should act as support.`;
+  }
+
+  if (supportHasFlipped) {
+    return `The chart levels could not be confirmed clearly. The main areas to watch are support around ${trendPlan.initialSupportText}, which has now broken and should act as resistance, and resistance around ${trendPlan.initialResistanceText}.`;
+  }
+
+  return `The chart levels could not be confirmed clearly. The main areas to watch are support around ${trendPlan.initialSupportText} and resistance around ${trendPlan.initialResistanceText}.`;
+}
+
+function buildDeterministicCsaAnalysis({ marketReference, dateDecision, chartDetection, visualReview = null, submittedInstrument, normalizedSymbol, timeframe }) {
+  const profile = marketReference?.profile || getSupportedCsaTimeframeProfile(timeframe);
+
+  if (!marketReference || !marketReference.ok) {
+    return `Quick Verdict:
+- I could not review this chart properly because the market data was not available.
+
+What This Means:
+- Check that the selected instrument, timeframe, and date are correct, then run the review again.
+
+Overall Setup Score:
+- 0/10`;
+  }
+
+  const levels = marketReference.dailyLevels || [];
+  const allAreas = marketReference.csaAreas || [];
+  const selectedDateText =
+    dateDecision?.finalDateText ||
+    dateDecision?.selectedDateText ||
+    "";
+
+  // Use only levels created before the selected date.
+  const areas = excludeSameDayAreas(allAreas, selectedDateText);
+
+  const bias =
+    marketReference.directionalBias ||
+    calculateCsaDirectionalBias(
+      levels,
+      normalizedSymbol,
+      profile
+    );
+
+  const {
+    resistanceAreas,
+    supportAreas,
+    supplyAreas,
+    demandAreas,
+  } = splitAreas(areas);
+
+  const failedAreas = buildFailedAreas({
+    supportAreas,
+    resistanceAreas,
+    supplyAreas,
+    demandAreas,
+    levels,
+    symbol: normalizedSymbol,
+  });
+
+  const trendPlan = buildBeginnerTrendPlan({
+    levels,
+    areas,
+    bias,
+    symbol: normalizedSymbol,
+    profile,
+  });
+
+  const overallScore =
+    Number.isFinite(Number(visualReview?.setupQualityScore)) && Number(visualReview.setupQualityScore) >= 20
+      ? Math.max(1, Math.round(Number(visualReview.setupQualityScore) / 10))
+      : failedAreas.length
+      ? 5
+      : String(bias.biasCode || "").includes("range")
+      ? 6
+      : 7;
+
+  const quickVerdict = trendPlan.quickVerdict;
+  const bestAreaToWatch = trendPlan.bestAreaToWatch;
+  const entryConfirmation = buildEntryConfirmationText({
+    trendPlan,
+    chartDetection,
+    visualReview,
+  });
+  const mainWarning = trendPlan.mainWarning;
+  const markingComparison = buildChartMarkingComparisonText({
+    visualReview,
+    trendPlan,
+  });
+
+  const supportText = listAreas([...supportAreas, ...demandAreas], "support area", 3);
+  const resistanceText = listAreas([...resistanceAreas, ...supplyAreas], "resistance area", 3);
+
+  return `Quick Verdict:
+- ${quickVerdict}
+
+Chart Levels:
+- ${markingComparison}
+
+Key Areas & Trade Plan:
+- ${bestAreaToWatch}
+- Preferred setup: ${trendPlan.preferredTrendSetup || "Breakout, pullback, and retest."}
+
+Entry, Stop Loss & Target:
+- ${entryConfirmation}
+- ${visualReview?.riskEvidence || "Stop loss and target are not shown, so the trade risk cannot be judged."}
+
+Main Warning:
+- ${mainWarning}
+
+Overall Setup Score:
+- ${overallScore}/10
+
+READ_MORE_DETAILS:
+
+Bigger Picture:
+- ${bias.higherTimeframeView || bias.reason}
+- Pullback quality note: ${bias.rangePositionNote || "Not available."}
+
+Trend Trading Plan:
+- Main support to watch: ${trendPlan.initialSupportText}
+- Main resistance to watch: ${trendPlan.initialResistanceText}
+- Buy plan: wait for price to drop to the better support area around ${(trendPlan.buyArea?.priceText || trendPlan.initialSupportText)} and hold before considering a buy.
+- Sell plan: wait for price to rise to the better resistance area around ${(trendPlan.sellArea?.priceText || trendPlan.initialResistanceText)} and reject before considering a sell.${trendPlan.sellAreaComparison ? `
+- Sell area comparison: ${trendPlan.sellAreaComparison}` : ""}${trendPlan.buyAreaComparison ? `
+- Buy area comparison: ${trendPlan.buyAreaComparison}` : ""}
+
+Uploaded Chart:
+- ${visualReview?.visualSummary || "The uploaded chart was reviewed using the main support and resistance areas."}
+- ${visualReview?.timeframeSummary || "Short-term direction was not clear enough to judge."}
+
+Key Areas To Watch:
+Support areas:
+${supportText}
+
+Resistance areas:
+${resistanceText}
+
+Trade Management:
+- If already in a trade, protect the position when price reaches the first trouble area.
+- If price does not move away cleanly from entry, reduce risk or wait for a better setup.
+
+Review Details:
+- Selected instrument: ${submittedInstrument}
+- Selected timeframe: ${timeframe}
+- Final date used: ${dateDecision?.finalDateText || "Not provided"}
+- Latest visible chart date: ${chartDetection?.latestVisibleDate || "Not detected"}
+- Chart data quality: ${chartDetection?.chartDataQuality || "unclear"}
+- Reviewed high: ${formatPrice(bias.periodHigh)}
+- Reviewed low: ${formatPrice(bias.periodLow)}
+- Higher closes: ${bias.risingCloses ?? "N/A"}
+- Lower closes: ${bias.fallingCloses ?? "N/A"}
+- Direction confidence: ${bias.confidence}
+
+Failed Areas:
+${listFailedAreas(failedAreas)}
+
+Technical Structure Summary:
+${buildSimpleStructureBreakdown(levels, normalizedSymbol)}`;
+}
+
+function buildInvalidChartAnalysis({ submittedInstrument, timeframe, chartDetection }) {
+  return `Upload The Chart Itself
+
+This image is not clear enough for a reliable CSA review.
+
+What to upload:
+- The trading chart should fill most of the image.
+- Candles or price movement must be clearly visible.
+- The price scale and time axis must be readable.
+- The instrument and timeframe should be visible.
+- Do not upload a screenshot of a webpage, phone screen, dashboard, document, or another app containing a small chart.
+
+Reason:
+${chartDetection?.chartValidityReason || chartDetection?.insufficientDataReason || "The uploaded image could not be verified as a clear trading chart."}`;
+}
+function buildInsufficientChartDataAnalysis({ submittedInstrument, timeframe, selectedDateText, chartDetection }) {
+  return `Insufficient Chart Data\n\nThe uploaded image appears to be a trading chart, but it does not show enough usable visible price data for CSA Coach to review the setup.\n\nSelected:\n- Instrument: ${submittedInstrument || "Not provided"}\n- Timeframe: ${timeframe || "Not provided"}\n- Selected chart/trade date: ${selectedDateText || "Not provided"}\n\nAI image check:\n- Chart data quality: ${chartDetection?.chartDataQuality || "unclear"}\n- Visible candle count: ${chartDetection?.visibleCandleCount ?? "Not detected"}\n- Reason: ${chartDetection?.insufficientDataReason || "The chart does not show enough usable price movement."}`;
+}
+function buildDateMismatchAnalysis({ selectedDateText, chartDetection, dateMismatch }) {
+  return `Selected Date Not Visible On Chart\n\nSelected date: ${selectedDateText || "Not provided"}\nLatest visible chart date: ${dateMismatch?.latestVisibleDateText || chartDetection?.latestVisibleDate || "Not detected"}\nReason: ${dateMismatch?.reason || "Selected date was not confirmed on the uploaded chart."}\n\nUpload a chart where the selected chart/trade date is visible, or change the selected date.`;
+}
+function buildInstrumentMismatchAnalysis({ selectedInstrument, detectedInstrument, selectedTimeframe, detectedTimeframe }) {
+  return `Chart Context Mismatch\n\nSelected Instrument:\n${selectedInstrument || "Not provided"}\n\nDetected Chart Instrument:\n${detectedInstrument || "Not detected"}\n\nSelected Timeframe:\n${selectedTimeframe || "Not provided"}\n\nDetected Chart Timeframe:\n${detectedTimeframe || "Not detected"}`;
+}
+function buildTimeframeMismatchAnalysis({ selectedInstrument, detectedInstrument, selectedTimeframe, detectedTimeframe }) {
+  return `Chart Timeframe Mismatch\n\nSelected Instrument:\n${selectedInstrument || "Not provided"}\n\nDetected Chart Instrument:\n${detectedInstrument || "Not detected"}\n\nSelected Timeframe:\n${selectedTimeframe || "Not provided"}\n\nDetected Chart Timeframe:\n${detectedTimeframe || "Not detected"}`;
+}
+
+
+function buildUnverifiedChartContextAnalysis({ selectedInstrument, detectedInstrument, selectedTimeframe, detectedTimeframe, error }) {
+  return `Chart Context Could Not Be Verified
+
+${error || "The uploaded chart context could not be clearly verified."}
+
+Selected:
+- Instrument: ${selectedInstrument || "Not provided"}
+- Timeframe: ${selectedTimeframe || "Not provided"}
+
+Detected from uploaded chart:
+- Instrument: ${detectedInstrument || "Not detected"}
+- Timeframe: ${detectedTimeframe || "Not detected"}
+
+Please upload a clearer chart where the instrument and timeframe are visible, or correct the selected pair/timeframe before running diagnostics again.`;
+}
+
+function buildStoppedDashboard({ errorType, error, submittedInstrument, timeframe, chartDetection, selectedTimeframeProfile }) {
+  return buildDashboardAliases({
+    strengths: ["Chart context validation was completed before the review was stopped."],
+    weaknesses: [error, chartDetection?.insufficientDataReason || chartDetection?.chartValidityReason || "Analysis stopped."],
+    contextCheck: { selectedInstrument: submittedInstrument || "Not provided", selectedTimeframe: timeframe || "Not provided", detectedInstrument: chartDetection?.detectedInstrument || "Not detected", detectedTimeframe: chartDetection?.detectedTimeframe || "Not detected", detectedLatestVisibleDate: chartDetection?.latestVisibleDate || "Not detected", status: "Analysis stopped", structureUsed: selectedTimeframeProfile?.structureLabel || "Not available", chartValidation: chartDetection?.isTradingChart ? "Valid trading chart" : "Invalid or unverified chart", chartDataQuality: chartDetection?.chartDataQuality || "unclear", visibleCandleCount: chartDetection?.visibleCandleCount || 0, chartContextScore: 0, chartContextLabel: "Not verified", chartContextSummary: error, visualFrameworkMatch: "Not reviewed", visualChartStyle: "Not reviewed", csaLevelVisibility: "Not reviewed" },
+    setupQuality: { score: 0, label: "Stopped", summary: error },
+    entryAccuracy: { score: 0, label: "Stopped", summary: error },
+    riskManagement: { score: 0, label: "Stopped", summary: error },
+    aiMistakeDetectionHub: [makeSimpleMistake(errorType, "HIGH RISK")],
+    failedAreas: [],
+  });
+}
+
+
+function formatPreferredEntryZone(visualReview = null, directionalBias = "") {
+  const area = visualReview?.preferredEntryArea;
+  if (!area || typeof area !== "object") return "";
+
+  const low = Number(area.zoneLow);
+  const high = Number(area.zoneHigh);
+  const hasLow = Number.isFinite(low);
+  const hasHigh = Number.isFinite(high);
+  const areaType = String(area.areaType || "area").toLowerCase();
+  const direction = String(area.direction || "").toLowerCase();
+  const status = String(area.priceStatus || "unclear").toLowerCase();
+  const zoneText = String(area.zoneText || "").trim();
+
+  const zoneTextHasRange =
+    /\d+(?:\.\d+)?\s*(?:-|–|to)\s*\d+(?:\.\d+)?/i.test(zoneText);
+
+  let priceText = zoneText;
+  if (hasLow && hasHigh) {
+    const zoneMin = Math.min(low, high);
+    const zoneMax = Math.max(low, high);
+    priceText = `${formatPrice(zoneMin)}–${formatPrice(zoneMax)}`;
+  } else if (zoneTextHasRange) {
+    priceText = zoneText;
+  } else if (hasLow) {
+    priceText = formatPrice(low);
+  } else if (hasHigh) {
+    priceText = formatPrice(high);
+  }
+
+  const bearish = /bearish/.test(String(directionalBias).toLowerCase()) || direction === "sell";
+  const bullish = /bullish/.test(String(directionalBias).toLowerCase()) || direction === "buy";
+  const namedArea = areaType && areaType !== "none" ? areaType : bearish ? "supply area" : bullish ? "demand area" : "planned area";
+  const cleanedPriceText = String(priceText || "")
+    .replace(/^\s*(?:the\s+)?(?:supply|demand|support|resistance|converted support|converted resistance)\s+(?:area|zone)?\s*(?:around|near|at)?\s*/i, "")
+    .trim();
+  const location = cleanedPriceText
+    ? `${namedArea} around ${cleanedPriceText}`
+    : `the ${namedArea}`;
+
+  if (bearish) {
+    if (["not reached", "approaching", "unclear"].includes(status)) {
+      return `Wait for price to retrace towards the ${location} and show a clear bearish trigger before considering a sell. Do not chase the move while price remains close to support.`;
+    }
+    if (status === "inside") {
+      return `Price is now inside the ${location}. Wait for a clear bearish trigger before considering a sell.`;
+    }
+    if (status === "reacted") {
+      return `Price has reacted from the ${location}. Only consider the sell if the bearish trigger is still fresh and the first support target leaves enough room.`;
+    }
+  }
+
+  if (bullish) {
+    if (["not reached", "approaching", "unclear"].includes(status)) {
+      return `Wait for price to return to the ${location} and show a clear bullish trigger before considering a buy. Do not chase the move while price remains close to resistance.`;
+    }
+    if (status === "inside") {
+      return `Price is now inside the ${location}. Wait for a clear bullish trigger before considering a buy.`;
+    }
+    if (status === "reacted") {
+      return `Price has reacted from the ${location}. Only consider the buy if the bullish trigger is still fresh and the first resistance target leaves enough room.`;
+    }
+  }
+
+  return priceText ? `Watch the ${location} and wait for a fresh confirmation trigger.` : "";
+}
+
+
+function containsMalformedPriceRange(value = "") {
+  const text = String(value || "").trim();
+
+  if (/\d+(?:\.\d+)?\s*(?:-|–|—|to)\s*$/i.test(text)) {
+    return true;
+  }
+
+  const range = text.match(
+    /(\d+(?:\.\d+)?)\s*(?:-|–|—|to)\s*(\d+\.?\d*)\s*$/i
+  );
+
+  if (!range) return false;
+
+  const right = String(range[2] || "").trim();
+
+  if (/^\d+\.$/.test(right)) {
+    return true;
+  }
+
+  return !Number.isFinite(Number(right));
+}
+
+function isIncompleteFeedbackSentence(value = "") {
+  const text = String(value || "").trim();
+
+  if (!text) return true;
+  if (containsMalformedPriceRange(text)) return true;
+
+  return /(?:\bto|\band|\bor|\baround|\bnear|\bat|\bfrom|\bbetween)\s*$/i.test(
+    text
+  );
+}
+
+function cleanUserFeedbackItems(items = []) {
+  return normalizeArrayOfStrings(items, [])
+    .map((item) =>
+      removeWeekdayNamesFromUserText(
+        String(item || "").replace(/\s+/g, " ").trim()
+      )
+    )
+    .filter((item) => !isIncompleteFeedbackSentence(item));
+}
+
+
+function feedbackMeaningKey(value = "") {
+  const text = String(value || "").toLowerCase();
+
+  if (/has not yet (?:retested|reached)|not yet (?:retested|reached)/.test(text)) {
+    return "area_not_retested";
+  }
+
+  if (
+    /no fresh .*trigger|no .*trigger is visible|confirmed entry trigger|no entry trigger|trigger has not formed/.test(
+      text
+    )
+  ) {
+    return "trigger_missing";
+  }
+
+  if (/stop loss|target|planned risk|risk cannot/.test(text)) {
+    return "risk_plan_missing";
+  }
+
+  if (
+    /converted resistance|converted support|confirmed as resistance|confirmed as support|retest from below|retest from above|broken support|broken resistance/.test(
+      text
+    )
+  ) {
+    return "converted_level_unconfirmed";
+  }
+
+  if (
+    /supply area|demand area|resistance area|support area/.test(text) &&
+    /clear .*location|marked|sell location|buy location|monitor/.test(text)
+  ) {
+    return "marked_entry_area";
+  }
+
+  if (/market direction|bearish|bullish/.test(text)) {
+    return "direction";
+  }
+
+  if (/enough price history|instrument and timeframe|chart is clear enough/.test(text)) {
+    return "generic_validation";
+  }
+
+  return normalizeMistakeTitle(text);
+}
+
+function removeSemanticFeedbackDuplicates(items = [], limit = 4) {
+  const result = [];
+  const seen = new Set();
+
+  for (const rawItem of cleanUserFeedbackItems(items)) {
+    const item = String(rawItem || "").trim();
+    if (!item) continue;
+
+    const key = feedbackMeaningKey(item);
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    result.push(item);
+
+    if (result.length >= limit) break;
+  }
+
+  return result;
+}
+
+function prioritizeStarterStrengths(items = [], preferredArea = null) {
+  const hasSpecificArea = Boolean(
+    preferredArea &&
+    String(preferredArea.areaType || "").toLowerCase() !== "none"
+  );
+
+  const direction = String(preferredArea?.direction || "").toLowerCase();
+  const areaType = String(preferredArea?.areaType || "entry");
+  const zoneText = String(preferredArea?.zoneText || "").trim();
+
+  const canonicalItems = [];
+
+  if (direction === "sell") {
+    canonicalItems.push("The bearish market direction is identified correctly.");
+  } else if (direction === "buy") {
+    canonicalItems.push("The bullish market direction is identified correctly.");
+  }
+
+  if (hasSpecificArea) {
+    canonicalItems.push(
+      [
+        `The marked ${areaType} area`,
+        zoneText,
+        `gives a clear ${
+          direction === "sell" ? "sell" : direction === "buy" ? "buy" : "trade"
+        } location to monitor.`,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim()
+    );
+
+    canonicalItems.push(
+      "The important support and resistance areas are visible and can be used to judge where price is trading."
+    );
+
+    if (direction === "sell") {
+      canonicalItems.push(
+        "The plan avoids chasing a sell while price remains close to support."
+      );
+    } else if (direction === "buy") {
+      canonicalItems.push(
+        "The plan avoids chasing a buy while price remains close to resistance."
+      );
+    }
+  }
+
+  const filtered = cleanUserFeedbackItems(items).filter((item) => {
+    const meaning = feedbackMeaningKey(item);
+
+    if (hasSpecificArea && meaning === "generic_validation") return false;
+    if (hasSpecificArea && meaning === "marked_entry_area") return false;
+    if (direction && meaning === "direction") return false;
+
+    return true;
+  });
+
+  return removeSemanticFeedbackDuplicates(
+    [...canonicalItems, ...filtered],
+    4
+  );
+}
+
+function prioritizeStarterWeaknesses(items = []) {
+  const cleaned = cleanUserFeedbackItems(items);
+  const result = [];
+  const seen = new Set();
+
+  const preferredOrder = [
+    "area_not_retested",
+    "trigger_missing",
+    "risk_plan_missing",
+    "converted_level_unconfirmed",
+  ];
+
+  for (const key of preferredOrder) {
+    const matchedItem = cleaned.find(
+      (item) => feedbackMeaningKey(item) === key
+    );
+
+    if (matchedItem && !seen.has(key)) {
+      seen.add(key);
+      result.push(matchedItem);
+    }
+  }
+
+  for (const item of cleaned) {
+    const key = feedbackMeaningKey(item);
+
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    result.push(item);
+
+    if (result.length >= 4) break;
+  }
+
+  return result.slice(0, 4);
+}
+
+
+function buildStarterCoachSummary(options = {}) {
+  const {
+    bias = null,
+    dashboardFeedback = null,
+    visualReview = null,
+    marketReference = null,
+  } = options;
+
+  /*
+   * One deterministic source of truth for Starter feedback.
+   * AI extracts facts; this function controls the final wording.
+   */
+
+  const preferredArea =
+    visualReview?.preferredEntryArea &&
+    typeof visualReview.preferredEntryArea === "object"
+      ? visualReview.preferredEntryArea
+      : null;
+
+  const visualDirection = String(
+    visualReview?.shortTermDirection ||
+      visualReview?.plainMarketDirection ||
+      ""
+  ).toLowerCase();
+
+  const preferredDirection = String(
+    preferredArea?.direction || ""
+  ).toLowerCase();
+
+  const backendDirection = String(
+    bias?.bias || marketReference?.directionalBias?.bias || ""
+  ).toLowerCase();
+
+  let directionCode = "range";
+
+  if (preferredDirection === "sell") {
+    directionCode = "bearish";
+  } else if (preferredDirection === "buy") {
+    directionCode = "bullish";
+  } else if (/bearish/.test(visualDirection)) {
+    directionCode = "bearish";
+  } else if (/bullish/.test(visualDirection)) {
+    directionCode = "bullish";
+  } else if (/bearish/.test(backendDirection)) {
+    directionCode = "bearish";
+  } else if (/bullish/.test(backendDirection)) {
+    directionCode = "bullish";
+  }
+
+  const hasShortTermPause =
+    /range|consolidat|bounce|pullback|sideways/.test(visualDirection);
+
+  const directionalBias =
+    directionCode === "bearish"
+      ? hasShortTermPause
+        ? "Bearish with short-term consolidation"
+        : "Bearish"
+      : directionCode === "bullish"
+      ? hasShortTermPause
+        ? "Bullish with short-term consolidation"
+        : "Bullish"
+      : "Range-bound";
+
+  const areaTypeRaw = String(preferredArea?.areaType || "").toLowerCase();
+
+  const areaType =
+    areaTypeRaw && areaTypeRaw !== "none"
+      ? areaTypeRaw
+      : directionCode === "bearish"
+      ? "supply"
+      : directionCode === "bullish"
+      ? "demand"
+      : "entry";
+
+  const zoneLow = Number(preferredArea?.zoneLow);
+  const zoneHigh = Number(preferredArea?.zoneHigh);
+
+  const hasLow = Number.isFinite(zoneLow);
+  const hasHigh = Number.isFinite(zoneHigh);
+
+  let zoneText = String(preferredArea?.zoneText || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (hasLow && hasHigh) {
+    const low = Math.min(zoneLow, zoneHigh);
+    const high = Math.max(zoneLow, zoneHigh);
+
+    zoneText =
+      Math.abs(high - low) > 1e-10
+        ? `around ${formatPrice(low)}–${formatPrice(high)}`
+        : `around ${formatPrice(low)}`;
+  }
+
+  zoneText = removeWeekdayNamesFromUserText(zoneText);
+
+  if (containsMalformedPriceRange(zoneText)) {
+    zoneText = "";
+  }
+
+  const areaLabel = zoneText
+    ? `${areaType} area ${zoneText}`
+    : `marked ${areaType} area`;
+
+  const priceStatus = String(
+    preferredArea?.priceStatus || ""
+  ).toLowerCase();
+
+  const areaRetested =
+    ["inside", "reacted", "moved away"].includes(priceStatus);
+
+  const triggerPresent = preferredArea?.triggerPresent === true;
+
+  const riskEvidence = String(
+    visualReview?.riskEvidence || ""
+  ).toLowerCase();
+
+  const stopOrTargetMissing =
+    !riskEvidence ||
+    /not shown|not visible|no visible|cannot be judged|cannot be assessed/.test(
+      riskEvidence
+    );
+
+  const convertedLevelText = removeWeekdayNamesFromUserText(
+    String(visualReview?.convertedLevelAssessment || "")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+
+  const convertedLevelUnconfirmed =
+    convertedLevelText &&
+    /not confirmed|has not been confirmed|unconfirmed|needs a retest|retest from below|retest from above/.test(
+      convertedLevelText.toLowerCase()
+    );
+
+  const strengths = [];
+
+  if (directionCode === "bearish") {
+    strengths.push("The bearish market direction is identified correctly.");
+  } else if (directionCode === "bullish") {
+    strengths.push("The bullish market direction is identified correctly.");
+  } else {
+    strengths.push("The chart correctly shows that price is currently range-bound.");
+  }
+
+  if (preferredArea) {
+    strengths.push(
+      `The ${areaLabel} gives a clear ${
+        directionCode === "bearish"
+          ? "sell"
+          : directionCode === "bullish"
+          ? "buy"
+          : "trade"
+      } location to monitor.`
+    );
+  }
+
+  strengths.push(
+    "The important support and resistance areas are visible and can be used to judge where price is trading."
+  );
+
+  if (directionCode === "bearish") {
+    strengths.push(
+      "The plan avoids chasing a sell while price remains close to support."
+    );
+  } else if (directionCode === "bullish") {
+    strengths.push(
+      "The plan avoids chasing a buy while price remains close to resistance."
+    );
+  } else {
+    strengths.push(
+      "The plan waits for price to reach a better area instead of entering in the middle."
+    );
+  }
+
+  const weaknesses = [];
+
+  if (!areaRetested) {
+    weaknesses.push(
+      `Price has not yet retested the planned ${areaType} area, so there is no confirmed entry yet.`
+    );
+  }
+
+  if (!triggerPresent) {
+    weaknesses.push(
+      `No fresh ${
+        directionCode === "bearish"
+          ? "bearish"
+          : directionCode === "bullish"
+          ? "bullish"
+          : "entry"
+      } trigger is visible at the planned area yet.`
+    );
+  }
+
+  if (stopOrTargetMissing) {
+    weaknesses.push(
+      "A stop loss and target are not clearly shown, so the planned risk cannot yet be assessed."
+    );
+  }
+
+  if (convertedLevelUnconfirmed) {
+    weaknesses.push(convertedLevelText);
+  } else if (directionCode === "bearish") {
+    weaknesses.push(
+      "Any broken support below price must first retest from below and reject before it can be treated as confirmed resistance."
+    );
+  } else if (directionCode === "bullish") {
+    weaknesses.push(
+      "Any broken resistance above price must first retest from above and hold before it can be treated as confirmed support."
+    );
+  }
+
+  const finalStrengths = cleanUserFeedbackItems(strengths).slice(0, 4);
+  const finalWeaknesses = cleanUserFeedbackItems(weaknesses).slice(0, 4);
+
+  let correctionAction;
+
+  if (directionCode === "bearish") {
+    correctionAction =
+      `Wait for price to retrace towards the ${areaLabel} and show a clear bearish trigger before considering a sell. ` +
+      "Make sure there is enough space to the next support for a reasonable risk-to-reward ratio. " +
+      "Do not chase a sell while price remains close to support.";
+  } else if (directionCode === "bullish") {
+    correctionAction =
+      `Wait for price to return towards the ${areaLabel} and show a clear bullish trigger before considering a buy. ` +
+      "Make sure there is enough space to the next resistance for a reasonable risk-to-reward ratio. " +
+      "Do not chase a buy while price remains close to resistance.";
+  } else {
+    correctionAction =
+      "Wait for price to reach a clearly marked support or resistance area and show a valid entry trigger before considering a trade. Avoid entering in the middle of the range.";
+  }
+
+  correctionAction = removeWeekdayNamesFromUserText(correctionAction);
+
+  if (containsMalformedPriceRange(correctionAction)) {
+    correctionAction =
+      directionCode === "bearish"
+        ? "Wait for price to retrace towards the marked supply or resistance area and show a clear bearish trigger before considering a sell. Do not chase a sell while price remains close to support."
+        : directionCode === "bullish"
+        ? "Wait for price to return towards the marked demand or support area and show a clear bullish trigger before considering a buy. Do not chase a buy while price remains close to resistance."
+        : "Wait for price to reach a clearly marked support or resistance area and show a valid entry trigger before considering a trade.";
+  }
+
+  return [
+    "DIRECTIONAL BIAS:",
+    directionalBias,
+    "",
+    "WHAT YOU DID WELL:",
+    ...finalStrengths.map((item) => `- ${item}`),
+    "",
+    "WHAT TO IMPROVE:",
+    ...finalWeaknesses.map((item) => `- ${item}`),
+    "",
+    "NEXT ACTION:",
+    correctionAction,
+  ].join("\n");
+}
 
 function applyPlanToAnalysisResponse({
   responseBody,
