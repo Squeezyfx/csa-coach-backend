@@ -2553,6 +2553,11 @@ function visualFallback(reason) {
     chartMarkupAssessment: "",
     entryEvidence: "",
     riskEvidence: "",
+    preferredEntryArea: null,
+    convertedLevelAssessment: "",
+    mainWarning: "",
+    coachVerdict: "",
+    visualQualityWarning: "",
     internalError: String(reason || ""),
     raw: "",
   };
@@ -2561,6 +2566,180 @@ function visualFallback(reason) {
 function isBadVisualReview(parsed) {
   const text = [parsed?.visualSummary, parsed?.chartMarkupAssessment, parsed?.entryEvidence, parsed?.riskEvidence, ...(Array.isArray(parsed?.chartSpecificWeaknesses) ? parsed.chartSpecificWeaknesses : [])].join(" ").toLowerCase();
   return text.includes("insufficient chart data") || text.includes("uploaded image appears to be a trading chart, but") || text.includes("not enough visible price data");
+}
+
+
+function extractVisibleZoneRange(text = "") {
+  const value = String(text || "").replace(/,/g, "");
+  const rangeMatch = value.match(
+    /(\d{1,6}(?:\.\d{1,8})?)\s*(?:-|–|—|to)\s*(\d{1,6}(?:\.\d{1,8})?)/i
+  );
+
+  if (!rangeMatch) return { low: null, high: null };
+
+  const first = Number(rangeMatch[1]);
+  const second = Number(rangeMatch[2]);
+
+  if (!Number.isFinite(first) || !Number.isFinite(second)) {
+    return { low: null, high: null };
+  }
+
+  return {
+    low: Math.min(first, second),
+    high: Math.max(first, second),
+  };
+}
+
+function normalizePreferredEntryAreaFromVisual(parsed = {}) {
+  const raw =
+    parsed?.preferredEntryArea &&
+    typeof parsed.preferredEntryArea === "object"
+      ? parsed.preferredEntryArea
+      : {};
+
+  const evidenceText = [
+    raw.zoneText,
+    parsed.bestAreaToWatch,
+    parsed.coachVerdict,
+    parsed.mainWarning,
+    parsed.visualSummary,
+    ...(Array.isArray(parsed.chartSpecificStrengths)
+      ? parsed.chartSpecificStrengths
+      : []),
+    ...(Array.isArray(parsed.chartSpecificWeaknesses)
+      ? parsed.chartSpecificWeaknesses
+      : []),
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const lowerEvidence = evidenceText.toLowerCase();
+
+  let direction = String(raw.direction || "").toLowerCase();
+  if (!["buy", "sell", "none"].includes(direction)) direction = "";
+  if (!direction) {
+    if (/\bsell\b|\bbearish\b/.test(lowerEvidence)) direction = "sell";
+    else if (/\bbuy\b|\bbullish\b/.test(lowerEvidence)) direction = "buy";
+    else direction = "none";
+  }
+
+  let areaType = String(raw.areaType || "").toLowerCase();
+  const validAreaTypes = new Set([
+    "support",
+    "resistance",
+    "demand",
+    "supply",
+    "converted support",
+    "converted resistance",
+    "none",
+  ]);
+
+  if (!validAreaTypes.has(areaType)) areaType = "";
+  if (!areaType) {
+    if (/converted resistance/.test(lowerEvidence)) {
+      areaType = "converted resistance";
+    } else if (/converted support/.test(lowerEvidence)) {
+      areaType = "converted support";
+    } else if (/\bsupply\b/.test(lowerEvidence)) {
+      areaType = "supply";
+    } else if (/\bdemand\b/.test(lowerEvidence)) {
+      areaType = "demand";
+    } else if (/\bresistance\b/.test(lowerEvidence)) {
+      areaType = "resistance";
+    } else if (/\bsupport\b/.test(lowerEvidence)) {
+      areaType = "support";
+    } else {
+      areaType = "none";
+    }
+  }
+
+  let zoneLow = Number.isFinite(Number(raw.zoneLow))
+    ? Number(raw.zoneLow)
+    : null;
+  let zoneHigh = Number.isFinite(Number(raw.zoneHigh))
+    ? Number(raw.zoneHigh)
+    : null;
+
+  const recoveredRange = extractVisibleZoneRange(
+    raw.zoneText || parsed.bestAreaToWatch || evidenceText
+  );
+
+  if (zoneLow === null && recoveredRange.low !== null) {
+    zoneLow = recoveredRange.low;
+  }
+  if (zoneHigh === null && recoveredRange.high !== null) {
+    zoneHigh = recoveredRange.high;
+  }
+
+  if (
+    Number.isFinite(zoneLow) &&
+    Number.isFinite(zoneHigh) &&
+    zoneLow > zoneHigh
+  ) {
+    [zoneLow, zoneHigh] = [zoneHigh, zoneLow];
+  }
+
+  let priceStatus = String(raw.priceStatus || "").toLowerCase();
+  const validStatuses = new Set([
+    "not reached",
+    "approaching",
+    "inside",
+    "reacted",
+    "moved away",
+    "unclear",
+  ]);
+
+  if (!validStatuses.has(priceStatus)) priceStatus = "";
+  if (!priceStatus) {
+    if (/has not (?:yet )?(?:reached|retested)|not (?:yet )?(?:reached|retested)/.test(lowerEvidence)) {
+      priceStatus = "not reached";
+    } else if (/\bapproaching\b|\bnear(?:ing)?\b/.test(lowerEvidence)) {
+      priceStatus = "approaching";
+    } else if (/\binside\b|\bwithin the zone\b/.test(lowerEvidence)) {
+      priceStatus = "inside";
+    } else if (/\breacted\b|\brejected\b|\bheld\b/.test(lowerEvidence)) {
+      priceStatus = "reacted";
+    } else if (/\bmoved away\b|\balready moved\b/.test(lowerEvidence)) {
+      priceStatus = "moved away";
+    } else {
+      priceStatus = "unclear";
+    }
+  }
+
+  const triggerDescription = safeUserText(
+    raw.triggerDescription || parsed.entryEvidence || ""
+  );
+
+  const triggerPresent =
+    raw.triggerPresent === true &&
+    !/no visible|no fresh|not visible|not yet|none/i.test(triggerDescription);
+
+  const zoneText = safeUserText(
+    raw.zoneText ||
+      (zoneLow !== null && zoneHigh !== null
+        ? `around ${formatPrice(zoneLow)}–${formatPrice(zoneHigh)}`
+        : parsed.bestAreaToWatch || "")
+  );
+
+  const hasUsefulArea =
+    direction !== "none" ||
+    areaType !== "none" ||
+    zoneLow !== null ||
+    zoneHigh !== null ||
+    Boolean(zoneText);
+
+  if (!hasUsefulArea) return null;
+
+  return {
+    direction,
+    areaType,
+    zoneLow,
+    zoneHigh,
+    zoneText,
+    priceStatus,
+    triggerPresent,
+    triggerDescription,
+  };
 }
 
 
@@ -2666,8 +2845,11 @@ async function compareUploadedChartWithCsaFramework({
   personalStrategySnapshot = null,
 }) {
   if (!process.env.OPENAI_API_KEY) return visualFallback("OPENAI_API_KEY is missing.");
-  if (!marketReference?.ok) return visualFallback("Market structure was unavailable, so visual comparison could not be completed.");
   if (!imageBase64) return visualFallback("Uploaded chart image was not available for visual comparison.");
+
+  // The screenshot is the primary evidence. Twelve Data is optional supporting
+  // context and must never prevent the uploaded chart from being reviewed.
+  const marketReferenceAvailable = Boolean(marketReference?.ok);
 
   const prompt = `
 You are CSA Coach's beginner-friendly trade review assistant.
@@ -2755,18 +2937,20 @@ STRICT MARKED/UNMARKED RULE:
   Example: "The bigger picture is slightly bearish, but the ${timeframe} chart is pushing up short-term."
 - Do not give financial advice or guaranteed predictions. This is only chart feedback.
 
-VERIFIED PRICE RULE:
-- Twelve Data remains the primary source for exact market prices in user-facing feedback.
-- A price may also be used when it is clearly printed on the uploaded chart as a platform price label, horizontal-line label, or readable user annotation. Do not guess a candle price from scale position alone.
-- You may visually estimate an unlabelled line price only inside approximatePrice for internal matching. Never present an unlabelled visual estimate as exact.
-- Prefer exact prices from this approved list:
+EVIDENCE AND PRICE RULE:
+- The uploaded screenshot is the primary source for direction, marked zones, retest status, trigger status, and the visible trade plan.
+- Twelve Data is optional supporting context. It must not overwrite a clearer conclusion from the screenshot.
+- Twelve Data available for this review: ${marketReferenceAvailable ? "yes" : "no"}.
+- A clearly printed chart price may be used as an exact visible price.
+- When a visible supply or demand rectangle has readable upper and lower boundaries, return the full approximate range in zoneLow, zoneHigh, and zoneText. Introduce it as "around" and treat it as an area rather than an exact order price.
+- Do not discard a visible zone merely because its boundaries are not in the approved Twelve Data list.
+- Approved supporting market prices, when available:
 ${JSON.stringify(buildApprovedMarketAreas(marketReference), null, 2)}
-- You may use a clearly printed chart price when the visible label itself proves the number.
-- If neither an approved market price nor a clearly printed chart price is available, say "the confirmed support area", "the confirmed resistance area", "the supply area", or "the demand area" without inventing a number.
+- If no readable range or approved price is available, refer to "the marked supply area", "the marked demand area", "the confirmed support area", or "the confirmed resistance area" without inventing a number.
 - Never create, transpose, or silently substitute a price.
 
-Internal support/resistance framework:
-${buildCsaFrameworkSummaryForVision(marketReference)}
+Optional internal support/resistance context:
+${marketReferenceAvailable ? buildCsaFrameworkSummaryForVision(marketReference) : "Twelve Data structure was unavailable or deliberately restricted. Review the uploaded screenshot independently."}
 
 Selected context:
 - Instrument: ${submittedInstrument}
@@ -2797,6 +2981,15 @@ CSA ENTRY-ZONE RULES:
 - A broken support/resistance level is only confirmed as converted after an opposite-side retest and hold/rejection.
 - Never say an exact entry price is required when the chart clearly shows a valid zone.
 - If price has not reached the planned area, say no trigger exists there yet.
+
+OUTPUT PRIORITY RULES:
+- chartSpecificStrengths and chartSpecificWeaknesses must describe the actual visible setup before generic validation comments.
+- Do not use "the chart has enough history", "the instrument is visible", or "the timeframe is visible" as a main strength when a marked direction, zone, support, resistance, trigger status, or risk issue can be described.
+- If a marked supply/demand area exists, mention it in chartSpecificStrengths.
+- If price has not retested that area, mention it directly in chartSpecificWeaknesses.
+- If no trigger exists at that area, state this as a separate weakness.
+- If stop loss, account risk, or target is not shown, state that the risk plan cannot be fully assessed.
+- Do not say a sell or buy level is undefined when a visible zone is marked.
 
 SCORING RULES:
 - A readable pre-trade or post-trade chart with no visible executed trade is still a plan review, not an automatic failure.
@@ -2877,11 +3070,28 @@ Return exactly this JSON shape:
           { type: "input_image", image_url: `data:${mimeType};base64,${imageBase64}` },
         ]},
       ],
-      max_output_tokens: 2200,
+      max_output_tokens: 3200,
     });
 
     const parsed = extractJsonObject(response.output_text || "");
-    if (!parsed || isBadVisualReview(parsed)) return visualFallback("Visual comparison was inconclusive, so market-structure fallback was used.");
+    if (!parsed) {
+      return visualFallback("The visual response could not be parsed as JSON.");
+    }
+
+    const visualQualityWarning = isBadVisualReview(parsed)
+      ? "The visual response contained a low-confidence phrase, but all usable chart fields were preserved."
+      : "";
+
+    const normalizedPreferredEntryArea =
+      normalizePreferredEntryAreaFromVisual(parsed);
+
+    console.log("Visual review structured output:", {
+      marketReferenceAvailable,
+      shortTermDirection: parsed.shortTermDirection || null,
+      chartMarkingStatus: parsed.chartMarkingStatus || null,
+      preferredEntryArea: normalizedPreferredEntryArea,
+      visualQualityWarning,
+    });
 
     return {
       ok: true,
@@ -2909,23 +3119,7 @@ Return exactly this JSON shape:
       whatThisMeans: safeUserText(parsed.whatThisMeans),
       timeframeSummary: safeUserText(parsed.timeframeSummary),
       bestAreaToWatch: safeUserText(parsed.bestAreaToWatch),
-      preferredEntryArea:
-        parsed.preferredEntryArea && typeof parsed.preferredEntryArea === "object"
-          ? {
-              direction: String(parsed.preferredEntryArea.direction || "none").toLowerCase(),
-              areaType: String(parsed.preferredEntryArea.areaType || "none").toLowerCase(),
-              zoneLow: Number.isFinite(Number(parsed.preferredEntryArea.zoneLow))
-                ? Number(parsed.preferredEntryArea.zoneLow)
-                : null,
-              zoneHigh: Number.isFinite(Number(parsed.preferredEntryArea.zoneHigh))
-                ? Number(parsed.preferredEntryArea.zoneHigh)
-                : null,
-              zoneText: safeUserText(parsed.preferredEntryArea.zoneText),
-              priceStatus: String(parsed.preferredEntryArea.priceStatus || "unclear").toLowerCase(),
-              triggerPresent: parsed.preferredEntryArea.triggerPresent === true,
-              triggerDescription: safeUserText(parsed.preferredEntryArea.triggerDescription),
-            }
-          : null,
+      preferredEntryArea: normalizedPreferredEntryArea,
       convertedLevelAssessment: safeUserText(parsed.convertedLevelAssessment),
       mainWarning: safeUserText(parsed.mainWarning),
       coachVerdict: safeUserText(parsed.coachVerdict),
@@ -2967,6 +3161,7 @@ Return exactly this JSON shape:
       ).trim(),
       entryEvidence: safeUserText(parsed.entryEvidence),
       riskEvidence: safeUserText(parsed.riskEvidence),
+      visualQualityWarning,
       raw: response.output_text || "",
     };
   } catch (error) {
