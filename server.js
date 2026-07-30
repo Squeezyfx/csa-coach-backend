@@ -5586,6 +5586,740 @@ function prioritizeStarterWeaknesses(items = []) {
 }
 
 
+
+const CSA_FEEDBACK_ENGINE_VERSION = "2.0.0";
+
+function asPositiveNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : null;
+}
+
+function normalizedDirectionCode(value = "") {
+  const text = String(value || "").toLowerCase();
+  if (/sell|bearish|downtrend|lower high|lower low/.test(text)) return "bearish";
+  if (/buy|bullish|uptrend|higher high|higher low/.test(text)) return "bullish";
+  return "range";
+}
+
+function normalizedAreaType(value = "", direction = "range") {
+  const text = String(value || "").toLowerCase().trim();
+
+  if (/converted resistance/.test(text)) return "converted resistance";
+  if (/converted support/.test(text)) return "converted support";
+  if (/supply/.test(text)) return "supply";
+  if (/demand/.test(text)) return "demand";
+  if (/resistance/.test(text)) return "resistance";
+  if (/support/.test(text)) return "support";
+
+  return direction === "bearish"
+    ? "supply"
+    : direction === "bullish"
+    ? "demand"
+    : "entry";
+}
+
+function areaDirectionMatches(areaType, direction) {
+  if (direction === "bearish") {
+    return ["supply", "resistance", "converted resistance"].includes(areaType);
+  }
+  if (direction === "bullish") {
+    return ["demand", "support", "converted support"].includes(areaType);
+  }
+  return true;
+}
+
+function normalizePriceStatus(value = "") {
+  const text = String(value || "").toLowerCase();
+
+  if (/invalid|failed|broken through|breakout through|breakdown through/.test(text)) return "invalidated";
+  if (/moved away|completed|missed/.test(text)) return "moved_away";
+  if (/reacted|rejected|held|respected/.test(text)) return "reacted";
+  if (/inside|within|at the zone|in the zone/.test(text)) return "inside";
+  if (/approach|near/.test(text)) return "approaching";
+  if (/not reached|not retested|has not reached|has not retested/.test(text)) return "not_reached";
+
+  return "unclear";
+}
+
+function normalizeLevelState(value = "") {
+  const text = String(value || "").toLowerCase();
+
+  if (/failed conversion|conversion failed/.test(text)) return "failed_conversion";
+  if (/confirmed.*support|confirmed.*resistance|retest.*held|retest.*reject/.test(text)) {
+    return "confirmed_conversion";
+  }
+  if (/potential|not confirmed|unconfirmed|needs a retest|retest from below|retest from above/.test(text)) {
+    return "potential_conversion";
+  }
+  if (/broken support|broken resistance|broke support|broke resistance/.test(text)) {
+    return "broken";
+  }
+  if (/invalid|failed|broken through/.test(text)) return "invalidated";
+
+  return "intact";
+}
+
+function extractLastMarketPrice(marketReference) {
+  const candidates = [];
+
+  if (Array.isArray(marketReference?.dailyLevels)) {
+    for (const level of marketReference.dailyLevels) {
+      const close = asPositiveNumber(level?.close);
+      if (close !== null) candidates.push(close);
+    }
+  }
+
+  if (Array.isArray(marketReference?.candles)) {
+    for (const candle of marketReference.candles) {
+      const close = asPositiveNumber(candle?.close);
+      if (close !== null) candidates.push(close);
+    }
+  }
+
+  return candidates.length ? candidates[candidates.length - 1] : null;
+}
+
+function normalizeZone(preferredArea = {}, symbol = "") {
+  let zoneLow = asPositiveNumber(preferredArea?.zoneLow);
+  let zoneHigh = asPositiveNumber(preferredArea?.zoneHigh);
+  const rawZoneText = String(preferredArea?.zoneText || "").replace(/\s+/g, " ").trim();
+  const recovered = extractVisibleZoneRange(rawZoneText);
+
+  if (zoneLow === null && recovered.low !== null) zoneLow = recovered.low;
+  if (zoneHigh === null && recovered.high !== null) zoneHigh = recovered.high;
+
+  if (zoneLow !== null && zoneHigh !== null && zoneLow > zoneHigh) {
+    [zoneLow, zoneHigh] = [zoneHigh, zoneLow];
+  }
+
+  if (zoneLow === 0) zoneLow = null;
+  if (zoneHigh === 0) zoneHigh = null;
+
+  let zoneText = "";
+
+  if (zoneLow !== null && zoneHigh !== null) {
+    zoneText =
+      Math.abs(zoneHigh - zoneLow) > 1e-10
+        ? `${formatPrice(zoneLow, symbol)}–${formatPrice(zoneHigh, symbol)}`
+        : `${formatPrice(zoneLow, symbol)}`;
+  } else if (zoneLow !== null || zoneHigh !== null) {
+    zoneText = formatPrice(zoneLow ?? zoneHigh, symbol);
+  }
+
+  return { zoneLow, zoneHigh, zoneText };
+}
+
+function inferRiskVisibility(visualReview = {}) {
+  const riskText = String(visualReview?.riskEvidence || "").toLowerCase();
+  const stopText = String(
+    visualReview?.stopLossAssessment ||
+      visualReview?.stopLoss ||
+      visualReview?.visibleStopLoss ||
+      ""
+  ).toLowerCase();
+  const targetText = String(
+    visualReview?.targetAssessment ||
+      visualReview?.takeProfitAssessment ||
+      visualReview?.target ||
+      ""
+  ).toLowerCase();
+
+  const stopShown =
+    visualReview?.stopShown === true ||
+    visualReview?.stopLossShown === true ||
+    /stop loss.*(shown|visible|marked|placed)|\bsl\b.*(shown|visible|marked)/.test(
+      `${riskText} ${stopText}`
+    );
+
+  const targetShown =
+    visualReview?.targetShown === true ||
+    visualReview?.takeProfitShown === true ||
+    /target.*(shown|visible|marked)|take profit.*(shown|visible|marked)|\btp\d?\b.*(shown|visible|marked)/.test(
+      `${riskText} ${targetText}`
+    );
+
+  return { stopShown, targetShown };
+}
+
+function inferConfluence(visualReview = {}) {
+  const combined = [
+    visualReview?.visualSummary,
+    visualReview?.bestAreaToWatch,
+    visualReview?.entryEvidence,
+    visualReview?.chartLevels,
+    visualReview?.convertedLevelAssessment,
+    ...(Array.isArray(visualReview?.chartSpecificStrengths)
+      ? visualReview.chartSpecificStrengths
+      : []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const periodLevel = /earlier period|previous period|daily high|daily low|weekly high|weekly low|monthly high|monthly low|support|resistance/.test(combined);
+  const supplyDemand = /supply|demand/.test(combined);
+  const convertedLevel = /converted|broken support|broken resistance|former support|former resistance/.test(combined);
+  const fibonacci = /fib|38\.2|50(?:\.0)?|61\.8/.test(combined);
+  const structure = /higher high|higher low|lower high|lower low|trend|structure|bullish|bearish/.test(combined);
+
+  const count = [periodLevel, supplyDemand, convertedLevel, fibonacci, structure].filter(Boolean).length;
+
+  return {
+    periodLevel,
+    supplyDemand,
+    convertedLevel,
+    fibonacci,
+    structure,
+    count,
+    strength: count >= 4 ? "high" : count >= 2 ? "medium" : "low",
+  };
+}
+
+function buildValidatedAnalysisFacts({
+  visualReview = {},
+  marketReference = {},
+  chartDetection = {},
+  bias = {},
+  submittedInstrument = "",
+  timeframe = "",
+  analysisType = "post-trade",
+  submittedNotes = "",
+}) {
+  const preferredArea =
+    visualReview?.preferredEntryArea &&
+    typeof visualReview.preferredEntryArea === "object"
+      ? visualReview.preferredEntryArea
+      : {};
+
+  const rawDirection =
+    preferredArea?.direction ||
+    visualReview?.shortTermDirection ||
+    visualReview?.plainMarketDirection ||
+    bias?.bias ||
+    marketReference?.directionalBias?.bias ||
+    "";
+
+  const direction = normalizedDirectionCode(rawDirection);
+  const areaType = normalizedAreaType(preferredArea?.areaType, direction);
+  const zone = normalizeZone(preferredArea, submittedInstrument);
+  const currentPrice = extractLastMarketPrice(marketReference);
+  let priceStatus = normalizePriceStatus(preferredArea?.priceStatus);
+  const combinedAreaEvidence = [
+    preferredArea?.priceStatus,
+    visualReview?.entryEvidence,
+    visualReview?.bestAreaToWatch,
+    visualReview?.coachVerdict,
+    visualReview?.mainWarning,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  if (priceStatus === "unclear") {
+    priceStatus = normalizePriceStatus(combinedAreaEvidence);
+  }
+
+  let areaRetested = ["inside", "reacted", "moved_away"].includes(priceStatus);
+
+  // Hard contradiction checks. A bearish area above current price or a bullish
+  // area below current price cannot be treated as retested unless the visual
+  // evidence explicitly says price reacted there.
+  if (
+    direction === "bearish" &&
+    currentPrice !== null &&
+    zone.zoneLow !== null &&
+    currentPrice < zone.zoneLow &&
+    priceStatus !== "reacted" &&
+    priceStatus !== "moved_away"
+  ) {
+    areaRetested = false;
+    priceStatus = priceStatus === "approaching" ? "approaching" : "not_reached";
+  }
+
+  if (
+    direction === "bullish" &&
+    currentPrice !== null &&
+    zone.zoneHigh !== null &&
+    currentPrice > zone.zoneHigh &&
+    priceStatus !== "reacted" &&
+    priceStatus !== "moved_away"
+  ) {
+    areaRetested = false;
+    priceStatus = priceStatus === "approaching" ? "approaching" : "not_reached";
+  }
+
+  const triggerDescription = String(
+    preferredArea?.triggerDescription ||
+      visualReview?.entryConfirmation ||
+      visualReview?.entryEvidence ||
+      ""
+  ).trim();
+
+  const invalidTriggerWords =
+    /bounce|pullback|retracement|reaction|ranging|consolidation|touch(?:ed|ing)?|merely touching|no clear|not visible|not yet/i;
+
+  let triggerPresent =
+    preferredArea?.triggerPresent === true &&
+    areaRetested &&
+    !invalidTriggerWords.test(triggerDescription);
+
+  if (!areaRetested || priceStatus === "invalidated") triggerPresent = false;
+
+  const convertedText = String(
+    visualReview?.convertedLevelAssessment || ""
+  ).replace(/\s+/g, " ").trim();
+
+  const convertedLevelDetected =
+    /broken support|broken resistance|converted support|converted resistance|former support|former resistance|retest from below|retest from above/i.test(
+      convertedText
+    );
+
+  const convertedLevelState = convertedLevelDetected
+    ? normalizeLevelState(convertedText)
+    : "not_detected";
+
+  const areaFailureEvidence = [
+    preferredArea?.priceStatus,
+    visualReview?.mainWarning,
+    visualReview?.coachVerdict,
+    visualReview?.entryEvidence,
+    visualReview?.convertedLevelAssessment,
+    ...(Array.isArray(visualReview?.chartSpecificWeaknesses)
+      ? visualReview.chartSpecificWeaknesses
+      : []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const areaInvalidated =
+    priceStatus === "invalidated" ||
+    /area.*failed|zone.*failed|broke through (?:the )?(?:supply|demand|support|resistance)|decisive (?:breakout|breakdown)|close(?:d)? decisively beyond|invalidated/.test(
+      areaFailureEvidence
+    );
+
+  const lifecycleStatus = areaInvalidated
+    ? "invalidated"
+    : priceStatus === "moved_away"
+    ? "moved_away"
+    : triggerPresent
+    ? "triggered"
+    : priceStatus === "reacted"
+    ? "respected"
+    : priceStatus === "inside"
+    ? "retested"
+    : priceStatus === "approaching"
+    ? "approaching"
+    : "identified";
+
+  const risk = inferRiskVisibility(visualReview);
+  const tradeVisible =
+    visualReview?.tradeVisible === true ||
+    visualReview?.entryShown === true ||
+    /entry.*(shown|visible|marked|taken)|trade.*(shown|visible|taken)/i.test(
+      `${visualReview?.entryEvidence || ""} ${submittedNotes || ""}`
+    );
+
+  const tradeOutcomeText = [
+    visualReview?.tradeOutcome,
+    visualReview?.coachVerdict,
+    visualReview?.mainWarning,
+    submittedNotes,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const tradeOutcome =
+    /stop(?:ped)? out|stop loss hit|lost|loss/.test(tradeOutcomeText)
+      ? "loss"
+      : /take profit|target hit|winner|profit/.test(tradeOutcomeText)
+      ? "win"
+      : tradeVisible
+      ? "open_or_unknown"
+      : "not_applicable";
+
+  const shortTermText = String(
+    visualReview?.shortTermDirection || visualReview?.plainMarketDirection || ""
+  ).toLowerCase();
+
+  const shortTermCondition =
+    /consolidat|range|sideways/.test(shortTermText)
+      ? "consolidation"
+      : /bounce/.test(shortTermText)
+      ? "bounce"
+      : /pullback|retracement/.test(shortTermText)
+      ? "pullback"
+      : "trend";
+
+  return {
+    engineVersion: CSA_FEEDBACK_ENGINE_VERSION,
+    instrument: submittedInstrument,
+    timeframe,
+    analysisType,
+    chartMarkingStatus: String(
+      visualReview?.chartMarkingStatus ||
+        visualReview?.markingStatus ||
+        "unclear"
+    ).toLowerCase(),
+    direction,
+    shortTermCondition,
+    currentPrice,
+    preferredEntryArea: {
+      direction:
+        direction === "bearish"
+          ? "sell"
+          : direction === "bullish"
+          ? "buy"
+          : "none",
+      areaType,
+      zoneLow: zone.zoneLow,
+      zoneHigh: zone.zoneHigh,
+      zoneText: zone.zoneText,
+      priceStatus,
+      areaRetested,
+      triggerPresent,
+      triggerDescription: triggerPresent ? triggerDescription : "",
+      lifecycleStatus,
+      invalidated: areaInvalidated,
+      directionMatch: areaDirectionMatches(areaType, direction),
+    },
+    convertedLevel: {
+      detected: convertedLevelDetected,
+      state: convertedLevelState,
+      assessment: convertedLevelDetected ? convertedText : "",
+    },
+    confluence: inferConfluence(visualReview),
+    risk: {
+      stopShown: risk.stopShown,
+      targetShown: risk.targetShown,
+      assessable: risk.stopShown && risk.targetShown,
+    },
+    trade: {
+      visible: tradeVisible,
+      outcome: tradeOutcome,
+    },
+    chartCutoff: {
+      latestVisibleDate: chartDetection?.latestVisibleDate || null,
+      latestVisibleTime: chartDetection?.latestVisibleTime || null,
+      source: marketReference?.chartCutoff?.source || null,
+    },
+    confidence: String(visualReview?.confidence || "medium").toLowerCase(),
+  };
+}
+
+function areaDisplay(facts) {
+  const area = facts.preferredEntryArea;
+  const base = area.areaType || (facts.direction === "bearish" ? "supply" : "demand");
+  return area.zoneText ? `${base} area around ${area.zoneText}` : `marked ${base} area`;
+}
+
+function directionDisplay(facts) {
+  if (facts.direction === "bearish") {
+    return facts.shortTermCondition === "consolidation"
+      ? "Bearish with short-term consolidation"
+      : "Bearish";
+  }
+  if (facts.direction === "bullish") {
+    return facts.shortTermCondition === "consolidation"
+      ? "Bullish with short-term consolidation"
+      : "Bullish";
+  }
+  return "Range-bound";
+}
+
+function controlledScores(facts) {
+  let setup = facts.direction === "range" ? 52 : 66;
+  let entry = facts.trade.visible ? 58 : 48;
+  let risk = 35;
+
+  if (facts.preferredEntryArea.directionMatch) setup += 6;
+  if (facts.confluence.strength === "high") setup += 8;
+  else if (facts.confluence.strength === "medium") setup += 4;
+
+  if (facts.preferredEntryArea.invalidated) setup -= 22;
+  else if (facts.preferredEntryArea.lifecycleStatus === "respected") setup += 8;
+  else if (facts.preferredEntryArea.lifecycleStatus === "triggered") setup += 12;
+
+  if (facts.preferredEntryArea.areaRetested) entry += 12;
+  if (facts.preferredEntryArea.triggerPresent) entry += 20;
+  if (facts.preferredEntryArea.invalidated) entry -= 20;
+  if (!facts.trade.visible && !facts.preferredEntryArea.triggerPresent) entry = Math.min(entry, 55);
+
+  if (facts.risk.stopShown) risk += 25;
+  if (facts.risk.targetShown) risk += 25;
+  if (facts.risk.assessable) risk += 10;
+
+  setup = Math.max(0, Math.min(100, Math.round(setup)));
+  entry = Math.max(0, Math.min(100, Math.round(entry)));
+  risk = Math.max(0, Math.min(100, Math.round(risk)));
+
+  return {
+    setupQuality: setup,
+    entryAccuracy: entry,
+    riskManagement: risk,
+    overall: Math.round((setup + entry + risk) / 3),
+  };
+}
+
+function scoreLabel(score) {
+  return score >= 85
+    ? "Excellent"
+    : score >= 75
+    ? "Good"
+    : score >= 60
+    ? "Fair"
+    : score >= 40
+    ? "Needs work"
+    : "Weak";
+}
+
+function gradeFromControlledScore(score) {
+  return score >= 85 ? "A" : score >= 75 ? "B" : score >= 60 ? "C" : score >= 40 ? "D" : "F";
+}
+
+function buildControlledFeedback({
+  facts,
+  plan = "starter",
+  analysisFramework = "csa",
+  personalStrategyAssessment = null,
+}) {
+  const area = facts.preferredEntryArea;
+  const areaText = areaDisplay(facts);
+  const directionText = directionDisplay(facts);
+  const action = area.direction === "sell" ? "sell" : area.direction === "buy" ? "buy" : "trade";
+  const opposingLevel = facts.direction === "bearish" ? "support" : "resistance";
+  const triggerSide = facts.direction === "bearish" ? "bearish" : facts.direction === "bullish" ? "bullish" : "valid";
+
+  const strengths = [];
+
+  if (facts.direction === "bearish") {
+    strengths.push("The bearish market direction is identified correctly.");
+  } else if (facts.direction === "bullish") {
+    strengths.push("The bullish market direction is identified correctly.");
+  } else {
+    strengths.push("The chart correctly shows that price is currently range-bound.");
+  }
+
+  if (!area.invalidated) {
+    strengths.push(
+      `The ${areaText} gives a clear ${action} location to monitor.`
+    );
+  }
+
+  if (facts.confluence.strength === "high") {
+    strengths.push(
+      "The planned area is supported by several matching chart factors, which improves its quality."
+    );
+  } else {
+    strengths.push(
+      "The important support and resistance areas are visible and can be used to judge where price is trading."
+    );
+  }
+
+  if (facts.direction === "bearish") {
+    strengths.push(
+      "The plan avoids chasing a sell while price remains close to support."
+    );
+  } else if (facts.direction === "bullish") {
+    strengths.push(
+      "The plan avoids chasing a buy while price remains close to resistance."
+    );
+  } else {
+    strengths.push(
+      "The plan waits for price to reach a better area instead of entering in the middle."
+    );
+  }
+
+  const weaknesses = [];
+
+  if (area.invalidated) {
+    weaknesses.push(
+      `The previous ${area.areaType} area has failed and should no longer be used for the original ${action} idea.`
+    );
+  } else {
+    if (!area.areaRetested) {
+      weaknesses.push(
+        `Price has not yet retested the planned ${area.areaType} area, so there is no confirmed entry yet.`
+      );
+    }
+
+    if (!area.triggerPresent) {
+      weaknesses.push(
+        `No fresh ${triggerSide} trigger is visible at the planned ${area.areaType} area yet.`
+      );
+    }
+  }
+
+  if (!facts.risk.assessable) {
+    weaknesses.push(
+      "A stop loss and target are not both clearly shown, so the planned risk cannot yet be fully assessed."
+    );
+  }
+
+  if (
+    facts.convertedLevel.detected &&
+    ["broken", "potential_conversion"].includes(facts.convertedLevel.state)
+  ) {
+    weaknesses.push(
+      facts.convertedLevel.assessment ||
+        "The broken level still needs an opposite-side retest before its new role is confirmed."
+    );
+  }
+
+  const finalStrengths = removeSemanticFeedbackDuplicates(
+    cleanUserFeedbackItems(strengths),
+    4
+  );
+  const finalWeaknesses = prioritizeStarterWeaknesses(
+    removeSemanticFeedbackDuplicates(cleanUserFeedbackItems(weaknesses), 4)
+  );
+
+  let nextAction;
+
+  if (area.invalidated) {
+    if (facts.direction === "bearish") {
+      nextAction =
+        `Do not reuse the failed ${area.areaType} area for another sell. Wait for a new supply or confirmed resistance area to form, then require a fresh bearish trigger before considering the next setup.`;
+    } else if (facts.direction === "bullish") {
+      nextAction =
+        `Do not reuse the failed ${area.areaType} area for another buy. Wait for a new demand or confirmed support area to form, then require a fresh bullish trigger before considering the next setup.`;
+    } else {
+      nextAction =
+        "The previous area has failed. Wait for a new support or resistance area and a fresh valid trigger before considering another trade.";
+    }
+  } else if (facts.direction === "bearish") {
+    nextAction =
+      `Wait for price to retrace towards the ${areaText} and show a clear bearish trigger before considering a sell. Make sure there is enough room to the next support for a reasonable risk-to-reward ratio. Do not chase a sell while price remains close to support.`;
+  } else if (facts.direction === "bullish") {
+    nextAction =
+      `Wait for price to return towards the ${areaText} and show a clear bullish trigger before considering a buy. Make sure there is enough room to the next resistance for a reasonable risk-to-reward ratio. Do not chase a buy while price remains close to resistance.`;
+  } else {
+    nextAction =
+      "Wait for price to reach a clearly defined support or resistance area and show a valid trigger before considering a trade. Avoid entering in the middle of the range.";
+  }
+
+  const scores = controlledScores(facts);
+
+  const starterSections = [
+    "DIRECTIONAL BIAS:",
+    directionText,
+    "",
+    "WHAT YOU DID WELL:",
+    ...finalStrengths.map((item) => `- ${item}`),
+    "",
+    "WHAT TO IMPROVE:",
+    ...finalWeaknesses.map((item) => `- ${item}`),
+    "",
+    "NEXT ACTION:",
+    nextAction,
+  ];
+
+  const proSections = [
+    ...starterSections,
+    "",
+    "CHART LEVELS:",
+    `- Primary area: ${areaText}.`,
+    `- Area status: ${area.lifecycleStatus.replace(/_/g, " ")}.`,
+    facts.convertedLevel.detected
+      ? `- Converted level: ${facts.convertedLevel.state.replace(/_/g, " ")}.`
+      : "- No converted level was confirmed from the available evidence.",
+    "",
+    "SETUP READINESS:",
+    `- Area reached: ${area.areaRetested ? "Yes" : "No"}.`,
+    `- Valid trigger present: ${area.triggerPresent ? "Yes" : "No"}.`,
+    `- Stop shown: ${facts.risk.stopShown ? "Yes" : "No"}.`,
+    `- Target shown: ${facts.risk.targetShown ? "Yes" : "No"}.`,
+    "",
+    "RISK & TRADE MANAGEMENT:",
+    facts.risk.assessable
+      ? "- The visible stop and target allow the planned risk to be reviewed."
+      : "- Add a clear invalidation point, target and position-risk plan before execution.",
+    "- First target should normally be the next opposing support or resistance area.",
+  ];
+
+  const eliteSections = [
+    ...proSections,
+    "",
+    "ADVANCED COACHING:",
+    `- Confluence strength: ${facts.confluence.strength}.`,
+    `- Area lifecycle: ${area.lifecycleStatus.replace(/_/g, " ")}.`,
+    facts.trade.visible
+      ? `- Trade outcome: ${facts.trade.outcome.replace(/_/g, " ")}.`
+      : "- No executed trade was clearly visible, so outcome quality was not judged.",
+    analysisFramework === "personal_strategy" && personalStrategyAssessment
+      ? `- Personal strategy match: ${
+          personalStrategyAssessment.strategyMatchScore ?? "Not enough evidence"
+        }%.`
+      : "- Personal strategy comparison was not selected for this review.",
+  ];
+
+  const analysis =
+    plan === "elite"
+      ? eliteSections.join("\n")
+      : plan === "pro"
+      ? proSections.join("\n")
+      : starterSections.join("\n");
+
+  return {
+    engineVersion: CSA_FEEDBACK_ENGINE_VERSION,
+    plan,
+    analysis,
+    directionalBias: directionText,
+    strengths: finalStrengths,
+    weaknesses: finalWeaknesses,
+    nextAction,
+    scores,
+    setupQuality: {
+      score: scores.setupQuality,
+      label: scoreLabel(scores.setupQuality),
+      summary:
+        area.invalidated
+          ? "The previous area has failed and the setup must be rebuilt."
+          : area.triggerPresent
+          ? "The location and trigger are aligned."
+          : "The plan has a useful area, but the setup is not fully ready.",
+    },
+    entryAccuracy: {
+      score: scores.entryAccuracy,
+      label: scoreLabel(scores.entryAccuracy),
+      summary:
+        area.triggerPresent
+          ? "A valid trigger is visible at the planned area."
+          : "The entry still needs a valid trigger at the planned area.",
+    },
+    riskManagement: {
+      score: scores.riskManagement,
+      label: scoreLabel(scores.riskManagement),
+      summary:
+        facts.risk.assessable
+          ? "The stop and target are visible enough to review risk."
+          : "The stop and target are not both visible, so risk is incomplete.",
+    },
+    grade: gradeFromControlledScore(scores.overall),
+    confidence: scores.overall,
+  };
+}
+
+function applyControlledFeedbackToDashboard(legacyDashboard = {}, controlled = {}) {
+  return {
+    ...legacyDashboard,
+    strengths: controlled.strengths,
+    weaknesses: controlled.weaknesses,
+    setupQuality: controlled.setupQuality,
+    entryAccuracy: controlled.entryAccuracy,
+    riskManagement: controlled.riskManagement,
+    setupQualityScore: controlled.scores.setupQuality,
+    entryAccuracyScore: controlled.scores.entryAccuracy,
+    riskManagementScore: controlled.scores.riskManagement,
+    scores: {
+      setupQuality: controlled.scores.setupQuality,
+      entryAccuracy: controlled.scores.entryAccuracy,
+      riskManagement: controlled.scores.riskManagement,
+    },
+  };
+}
+
 function buildStarterCoachSummary(options = {}) {
   const {
     bias = null,
@@ -5925,73 +6659,70 @@ function extractStarterSummarySections(summary = "") {
 function applyPlanToAnalysisResponse({
   responseBody,
   entitlement,
-  bias,
-  dashboardFeedback,
-  visualReview,
 }) {
-  if (entitlement?.effectivePlan !== "starter") {
-    return responseBody;
+  const controlled =
+    responseBody?.finalFeedback &&
+    typeof responseBody.finalFeedback === "object"
+      ? responseBody.finalFeedback
+      : null;
+
+  if (!controlled) return responseBody;
+
+  const plan = normalizePlanCode(
+    entitlement?.effectivePlan || controlled.plan || "starter"
+  );
+
+  const base = {
+    ...responseBody,
+    analysis: controlled.analysis,
+    summary: controlled.analysis,
+    coachAdvice: [controlled.analysis],
+    strengths: controlled.strengths,
+    whatYouDidWell: controlled.strengths,
+    weaknesses: controlled.weaknesses,
+    whatCostYouProfit: controlled.weaknesses,
+    setupQuality: controlled.setupQuality,
+    entryAccuracy: controlled.entryAccuracy,
+    riskManagement: controlled.riskManagement,
+    setupQualityScore: controlled.scores.setupQuality,
+    entryAccuracyScore: controlled.scores.entryAccuracy,
+    riskManagementScore: controlled.scores.riskManagement,
+    structureScore: controlled.scores.setupQuality,
+    executionScore: controlled.scores.entryAccuracy,
+    riskScore: controlled.scores.riskManagement,
+    confidence: controlled.confidence,
+    grade: controlled.grade,
+    dashboard: {
+      ...(responseBody.dashboard || {}),
+      strengths: controlled.strengths,
+      weaknesses: controlled.weaknesses,
+      setupQuality: controlled.setupQuality,
+      entryAccuracy: controlled.entryAccuracy,
+      riskManagement: controlled.riskManagement,
+    },
+  };
+
+  if (plan !== "starter") {
+    return {
+      ...base,
+      starterRestricted: false,
+      lockedFeatures: [],
+    };
   }
 
-  const starterSummary = buildStarterCoachSummary({
-    bias,
-    dashboardFeedback,
-    visualReview,
-    marketReference: responseBody?.marketReference || null,
-  });
-
-  const starterSections =
-    extractStarterSummarySections(starterSummary);
-
-  const strengths = starterSections.strengths.slice(0, 3);
-  const weaknesses = starterSections.weaknesses.slice(0, 3);
-
   return {
-    ...responseBody,
-    analysis: starterSummary,
-    summary: starterSummary,
-    coachAdvice: [starterSummary],
-    strengths,
-    whatYouDidWell: strengths,
-    weaknesses,
-    whatCostYouProfit: weaknesses,
-    setupQuality: dashboardFeedback.setupQuality,
-    entryAccuracy: dashboardFeedback.entryAccuracy,
-    riskManagement: dashboardFeedback.riskManagement,
-    setupQualityScore: dashboardFeedback.setupQualityScore,
-    entryAccuracyScore: dashboardFeedback.entryAccuracyScore,
-    riskManagementScore: dashboardFeedback.riskManagementScore,
-    structureScore: dashboardFeedback.setupQualityScore,
-    executionScore: dashboardFeedback.entryAccuracyScore,
-    riskScore: dashboardFeedback.riskManagementScore,
-    confidence: Math.round((dashboardFeedback.setupQualityScore + dashboardFeedback.entryAccuracyScore + dashboardFeedback.riskManagementScore) / 3),
-    grade: (() => {
-      const score = Math.round((dashboardFeedback.setupQualityScore + dashboardFeedback.entryAccuracyScore + dashboardFeedback.riskManagementScore) / 3);
-      return score >= 85 ? "A" : score >= 75 ? "B" : score >= 60 ? "C" : score >= 40 ? "D" : "F";
-    })(),
+    ...base,
     mistakes: [],
     mistakeHub: [],
     mistakeDetectionHub: [],
     aiMistakeDetectionHub: [],
-    journalTags: ["starter-review", "directional-bias", "setup-score"],
+    journalTags: [
+      "starter-review",
+      "directional-bias",
+      "setup-score",
+      CSA_FEEDBACK_ENGINE_VERSION,
+    ],
     visualReview: null,
-    marketReference: responseBody.marketReference
-      ? {
-          ok: responseBody.marketReference.ok,
-          error: responseBody.marketReference.error,
-          symbol: responseBody.marketReference.symbol,
-          timezone: responseBody.marketReference.timezone,
-          interval: responseBody.marketReference.interval,
-          directionalBias: responseBody.marketReference.directionalBias,
-          profile: responseBody.marketReference.profile
-            ? {
-                selectedTimeframe: responseBody.marketReference.profile.selectedTimeframe,
-                structureMode: responseBody.marketReference.profile.structureMode,
-                structureLabel: responseBody.marketReference.profile.structureLabel,
-              }
-            : null,
-        }
-      : null,
     starterRestricted: true,
     lockedFeatures: [
       "fullAnalysis",
@@ -6001,7 +6732,7 @@ function applyPlanToAnalysisResponse({
       "weeklyFocus",
     ],
     upgradeMessage:
-      "Upgrade to Pro for the full detailed analysis, mistake tracking, unlimited journal history, weekly focus, and advanced analytics.",
+      "Upgrade to Pro for deeper setup-readiness, risk, level-lifecycle and mistake analysis.",
   };
 }
 
@@ -6896,7 +7627,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
 
     const cleanedBaseAnalysis = removeWeekdayNamesFromUserText(baseAnalysis);
 
-    const analysis =
+    let analysis =
       selectedStrategy.analysisFramework === "personal_strategy"
         ? `${cleanedBaseAnalysis}
 
@@ -6930,7 +7661,7 @@ ${(visualReview?.strategyMissingInformation || []).length
     const setupScoreMatch = String(analysis).match(/Overall Setup Score:\s*\n- (\d+)\/10/i);
     const setupScore = setupScoreMatch ? Number(setupScoreMatch[1]) : 0;
 
-    const dashboardFeedback = buildDashboardFeedback({
+    const legacyDashboardFeedback = buildDashboardFeedback({
       marketReference,
       chartDetection,
       visualReview,
@@ -6943,6 +7674,40 @@ ${(visualReview?.strategyMissingInformation || []).length
       setupScore,
       analysisType: mode,
     });
+
+    const analysisFacts = buildValidatedAnalysisFacts({
+      visualReview,
+      marketReference,
+      chartDetection,
+      bias,
+      submittedInstrument,
+      timeframe,
+      analysisType: mode,
+      submittedNotes,
+    });
+
+    const finalFeedback = buildControlledFeedback({
+      facts: analysisFacts,
+      plan: entitlement?.effectivePlan || "starter",
+      analysisFramework: selectedStrategy.analysisFramework,
+      personalStrategyAssessment:
+        selectedStrategy.analysisFramework === "personal_strategy"
+          ? {
+              strategyMatchScore: visualReview?.strategyMatchScore ?? null,
+              rulesFollowed: visualReview?.strategyRulesFollowed || [],
+              rulesViolated: visualReview?.strategyRulesViolated || [],
+              missingInformation: visualReview?.strategyMissingInformation || [],
+              verdict: visualReview?.strategyVerdict || null,
+            }
+          : null,
+    });
+
+    analysis = finalFeedback.analysis;
+
+    const dashboardFeedback = applyControlledFeedbackToDashboard(
+      legacyDashboardFeedback,
+      finalFeedback
+    );
     const dashboardAliases = buildDashboardAliases(dashboardFeedback);
     const structureLabel = marketReference.profile?.structureLabel || selectedTimeframeProfile.structureLabel || "CSA structure levels";
 
@@ -7009,6 +7774,10 @@ ${(visualReview?.strategyMissingInformation || []).length
       finalDateUsed: dateDecision.finalDateText,
       dateDecision,
       csaDirectionalBias: bias,
+      analysisFacts,
+      finalFeedback,
+      feedbackEngineVersion: CSA_FEEDBACK_ENGINE_VERSION,
+      dashboard: dashboardFeedback,
       contextStatus: marketReference.ok ? `Market-data-backed CSA setup review completed using ${structureLabel} and visual chart comparison.` : `Setup review completed without market data: ${marketReference.error}`,
       grade: dashboardFeedback.setupQualityScore >= 85 ? "A" : dashboardFeedback.setupQualityScore >= 75 ? "B" : dashboardFeedback.setupQualityScore >= 60 ? "C" : dashboardFeedback.setupQualityScore >= 40 ? "D" : "F",
       confidence: dashboardFeedback.setupQualityScore,
@@ -7030,9 +7799,6 @@ ${(visualReview?.strategyMissingInformation || []).length
       applyPlanToAnalysisResponse({
         responseBody,
         entitlement: updatedEntitlement,
-        bias,
-        dashboardFeedback,
-        visualReview,
       })
     );
   } catch (error) {
