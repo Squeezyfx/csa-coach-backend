@@ -5594,11 +5594,6 @@ function buildStarterCoachSummary(options = {}) {
     marketReference = null,
   } = options;
 
-  /*
-   * One deterministic source of truth for Starter feedback.
-   * AI extracts facts; this function controls the final wording.
-   */
-
   const preferredArea =
     visualReview?.preferredEntryArea &&
     typeof visualReview.preferredEntryArea === "object"
@@ -5660,17 +5655,22 @@ function buildStarterCoachSummary(options = {}) {
       ? "demand"
       : "entry";
 
-  const zoneLow = Number(preferredArea?.zoneLow);
-  const zoneHigh = Number(preferredArea?.zoneHigh);
+  const nullablePositiveNumber = (value) => {
+    if (value === null || value === undefined || value === "") return null;
+    const numberValue = Number(value);
+    return Number.isFinite(numberValue) && numberValue > 0
+      ? numberValue
+      : null;
+  };
 
-  const hasLow = Number.isFinite(zoneLow);
-  const hasHigh = Number.isFinite(zoneHigh);
+  const zoneLow = nullablePositiveNumber(preferredArea?.zoneLow);
+  const zoneHigh = nullablePositiveNumber(preferredArea?.zoneHigh);
 
   let zoneText = String(preferredArea?.zoneText || "")
     .replace(/\s+/g, " ")
     .trim();
 
-  if (hasLow && hasHigh) {
+  if (zoneLow !== null && zoneHigh !== null) {
     const low = Math.min(zoneLow, zoneHigh);
     const high = Math.max(zoneLow, zoneHigh);
 
@@ -5682,7 +5682,10 @@ function buildStarterCoachSummary(options = {}) {
 
   zoneText = removeWeekdayNamesFromUserText(zoneText);
 
-  if (containsMalformedPriceRange(zoneText)) {
+  if (
+    containsMalformedPriceRange(zoneText) ||
+    /\b0(?:\.0+)?\b/.test(zoneText)
+  ) {
     zoneText = "";
   }
 
@@ -5690,14 +5693,41 @@ function buildStarterCoachSummary(options = {}) {
     ? `${areaType} area ${zoneText}`
     : `marked ${areaType} area`;
 
+  const levels = Array.isArray(marketReference?.dailyLevels)
+    ? marketReference.dailyLevels
+    : [];
+
+  const latestLevel = levels[levels.length - 1];
+  const currentPrice = nullablePositiveNumber(latestLevel?.close);
+
   const priceStatus = String(
     preferredArea?.priceStatus || ""
   ).toLowerCase();
 
-  const areaRetested =
+  let areaRetested =
     ["inside", "reacted", "moved away"].includes(priceStatus);
 
-  const triggerPresent = preferredArea?.triggerPresent === true;
+  // Use the historical cutoff price to correct an AI status that conflicts
+  // with the actual location of price relative to the planned area.
+  if (
+    directionCode === "bearish" &&
+    currentPrice !== null &&
+    zoneLow !== null &&
+    currentPrice < zoneLow
+  ) {
+    areaRetested = false;
+  } else if (
+    directionCode === "bullish" &&
+    currentPrice !== null &&
+    zoneHigh !== null &&
+    currentPrice > zoneHigh
+  ) {
+    areaRetested = false;
+  }
+
+  // A trigger only counts when price has actually reached the planned area.
+  const triggerPresent =
+    areaRetested && preferredArea?.triggerPresent === true;
 
   const riskEvidence = String(
     visualReview?.riskEvidence || ""
@@ -5714,12 +5744,6 @@ function buildStarterCoachSummary(options = {}) {
       .replace(/\s+/g, " ")
       .trim()
   );
-
-  const convertedLevelUnconfirmed =
-    convertedLevelText &&
-    /not confirmed|has not been confirmed|unconfirmed|needs a retest|retest from below|retest from above/.test(
-      convertedLevelText.toLowerCase()
-    );
 
   const strengths = [];
 
@@ -5787,7 +5811,12 @@ function buildStarterCoachSummary(options = {}) {
     );
   }
 
-  if (convertedLevelUnconfirmed) {
+  if (
+    convertedLevelText &&
+    /not confirmed|has not been confirmed|unconfirmed|needs a retest|retest from below|retest from above/.test(
+      convertedLevelText.toLowerCase()
+    )
+  ) {
     weaknesses.push(convertedLevelText);
   } else if (directionCode === "bearish") {
     weaknesses.push(
@@ -5821,12 +5850,15 @@ function buildStarterCoachSummary(options = {}) {
 
   correctionAction = removeWeekdayNamesFromUserText(correctionAction);
 
-  if (containsMalformedPriceRange(correctionAction)) {
+  if (
+    containsMalformedPriceRange(correctionAction) ||
+    /\b0(?:\.0+)?\b/.test(correctionAction)
+  ) {
     correctionAction =
       directionCode === "bearish"
-        ? "Wait for price to retrace towards the marked supply or resistance area and show a clear bearish trigger before considering a sell. Do not chase a sell while price remains close to support."
+        ? "Wait for price to retrace towards the marked supply or resistance area and show a clear bearish trigger before considering a sell. Make sure there is enough space to the next support for a reasonable risk-to-reward ratio. Do not chase a sell while price remains close to support."
         : directionCode === "bullish"
-        ? "Wait for price to return towards the marked demand or support area and show a clear bullish trigger before considering a buy. Do not chase a buy while price remains close to resistance."
+        ? "Wait for price to return towards the marked demand or support area and show a clear bullish trigger before considering a buy. Make sure there is enough space to the next resistance for a reasonable risk-to-reward ratio. Do not chase a buy while price remains close to resistance."
         : "Wait for price to reach a clearly marked support or resistance area and show a valid entry trigger before considering a trade.";
   }
 
@@ -5843,6 +5875,28 @@ function buildStarterCoachSummary(options = {}) {
     "NEXT ACTION:",
     correctionAction,
   ].join("\n");
+}
+
+function extractStarterSummarySections(summary = "") {
+  const text = String(summary || "");
+
+  const strengthsMatch = text.match(
+    /WHAT YOU DID WELL:\s*([\s\S]*?)\s*WHAT TO IMPROVE:/i
+  );
+  const weaknessesMatch = text.match(
+    /WHAT TO IMPROVE:\s*([\s\S]*?)\s*NEXT ACTION:/i
+  );
+
+  const parseBullets = (block = "") =>
+    block
+      .split("\n")
+      .map((line) => line.replace(/^\s*-\s*/, "").trim())
+      .filter(Boolean);
+
+  return {
+    strengths: parseBullets(strengthsMatch?.[1] || "").slice(0, 4),
+    weaknesses: parseBullets(weaknessesMatch?.[1] || "").slice(0, 4),
+  };
 }
 
 function applyPlanToAnalysisResponse({
@@ -5863,16 +5917,11 @@ function applyPlanToAnalysisResponse({
     marketReference: responseBody?.marketReference || null,
   });
 
-  const strengths = cleanUserFeedbackItems(
-    dashboardFeedback?.strengths || []
-  )
-    .filter((item) => !/instrument and timeframe are visible|chart is clear enough/i.test(String(item || "")))
-    .slice(0, 3);
-  const weaknesses = cleanUserFeedbackItems(
-    dashboardFeedback?.weaknesses || []
-  )
-    .filter((item) => !/sell level is not defined|buy level is not defined|visual trade review failed|referenceerror|is not defined/i.test(String(item || "")))
-    .slice(0, 3);
+  const starterSections =
+    extractStarterSummarySections(starterSummary);
+
+  const strengths = starterSections.strengths.slice(0, 3);
+  const weaknesses = starterSections.weaknesses.slice(0, 3);
 
   return {
     ...responseBody,
