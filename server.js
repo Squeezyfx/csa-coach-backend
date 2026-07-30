@@ -5586,12 +5586,13 @@ function prioritizeStarterWeaknesses(items = []) {
 }
 
 
-function buildStarterCoachSummary({
-  bias,
-  dashboardFeedback,
-  visualReview,
-  marketReference,
-}) {
+function buildStarterCoachSummary(options = {}) {
+  const {
+    bias = null,
+    dashboardFeedback = null,
+    visualReview = null,
+    marketReference = null,
+  } = options;
   /*
    * Starter feedback has one deterministic source of truth.
    * AI extracts chart facts; this function writes the final wording.
