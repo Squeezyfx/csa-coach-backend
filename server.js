@@ -5663,12 +5663,22 @@ function buildStarterCoachSummary(options = {}) {
       : null;
   };
 
-  const zoneLow = nullablePositiveNumber(preferredArea?.zoneLow);
-  const zoneHigh = nullablePositiveNumber(preferredArea?.zoneHigh);
+  let zoneLow = nullablePositiveNumber(preferredArea?.zoneLow);
+  let zoneHigh = nullablePositiveNumber(preferredArea?.zoneHigh);
 
   let zoneText = String(preferredArea?.zoneText || "")
     .replace(/\s+/g, " ")
     .trim();
+
+  const recoveredZoneRange = extractVisibleZoneRange(zoneText);
+
+  if (zoneLow === null && recoveredZoneRange.low !== null) {
+    zoneLow = recoveredZoneRange.low;
+  }
+
+  if (zoneHigh === null && recoveredZoneRange.high !== null) {
+    zoneHigh = recoveredZoneRange.high;
+  }
 
   if (zoneLow !== null && zoneHigh !== null) {
     const low = Math.min(zoneLow, zoneHigh);
@@ -5680,17 +5690,24 @@ function buildStarterCoachSummary(options = {}) {
         : `around ${formatPrice(low)}`;
   }
 
-  zoneText = removeWeekdayNamesFromUserText(zoneText);
+  zoneText = removeWeekdayNamesFromUserText(zoneText)
+    .replace(
+      /^\s*(?:the\s+)?(?:marked\s+)?(?:supply|demand|support|resistance|converted support|converted resistance)\s+(?:area|zone)?\s*(?:around|near|at)?\s*/i,
+      ""
+    )
+    .replace(/\s+/g, " ")
+    .trim();
 
   if (
     containsMalformedPriceRange(zoneText) ||
-    /\b0(?:\.0+)?\b/.test(zoneText)
+    /\b0(?:\.0+)?\b/.test(zoneText) ||
+    /earlier period high|earlier period low/i.test(zoneText)
   ) {
     zoneText = "";
   }
 
   const areaLabel = zoneText
-    ? `${areaType} area ${zoneText}`
+    ? `${areaType} area around ${zoneText.replace(/^around\s+/i, "")}`
     : `marked ${areaType} area`;
 
   const levels = Array.isArray(marketReference?.dailyLevels)
@@ -5707,22 +5724,30 @@ function buildStarterCoachSummary(options = {}) {
   let areaRetested =
     ["inside", "reacted", "moved away"].includes(priceStatus);
 
-  // Use the historical cutoff price to correct an AI status that conflicts
-  // with the actual location of price relative to the planned area.
-  if (
-    directionCode === "bearish" &&
-    currentPrice !== null &&
-    zoneLow !== null &&
-    currentPrice < zoneLow
-  ) {
-    areaRetested = false;
-  } else if (
-    directionCode === "bullish" &&
-    currentPrice !== null &&
-    zoneHigh !== null &&
-    currentPrice > zoneHigh
-  ) {
-    areaRetested = false;
+  if (directionCode === "bearish") {
+    if (
+      currentPrice !== null &&
+      zoneLow !== null &&
+      currentPrice < zoneLow
+    ) {
+      areaRetested = false;
+    } else if (
+      ["not reached", "approaching", "unclear"].includes(priceStatus)
+    ) {
+      areaRetested = false;
+    }
+  } else if (directionCode === "bullish") {
+    if (
+      currentPrice !== null &&
+      zoneHigh !== null &&
+      currentPrice > zoneHigh
+    ) {
+      areaRetested = false;
+    } else if (
+      ["not reached", "approaching", "unclear"].includes(priceStatus)
+    ) {
+      areaRetested = false;
+    }
   }
 
   // A trigger only counts when price has actually reached the planned area.
@@ -5801,7 +5826,7 @@ function buildStarterCoachSummary(options = {}) {
           : directionCode === "bullish"
           ? "bullish"
           : "entry"
-      } trigger is visible at the planned area yet.`
+      } trigger is visible at the planned ${areaType} area yet.`
     );
   }
 
@@ -5836,12 +5861,12 @@ function buildStarterCoachSummary(options = {}) {
   if (directionCode === "bearish") {
     correctionAction =
       `Wait for price to retrace towards the ${areaLabel} and show a clear bearish trigger before considering a sell. ` +
-      "Make sure there is enough space to the next support for a reasonable risk-to-reward ratio. " +
+      "Make sure the next support leaves enough room for a reasonable risk-to-reward ratio. " +
       "Do not chase a sell while price remains close to support.";
   } else if (directionCode === "bullish") {
     correctionAction =
       `Wait for price to return towards the ${areaLabel} and show a clear bullish trigger before considering a buy. ` +
-      "Make sure there is enough space to the next resistance for a reasonable risk-to-reward ratio. " +
+      "Make sure the next resistance leaves enough room for a reasonable risk-to-reward ratio. " +
       "Do not chase a buy while price remains close to resistance.";
   } else {
     correctionAction =
