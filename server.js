@@ -3929,11 +3929,30 @@ function enrichVisualReviewForFinalFeedback({
       ? { ...visualReview.preferredEntryArea }
       : null;
 
+  const preferredRangeText = String(preferredArea?.zoneText || "").trim();
+  const preferredRange = extractVisibleZoneRange(preferredRangeText);
+
   const preferredHasUsefulZone =
     preferredArea &&
-    (Number.isFinite(Number(preferredArea.zoneLow)) ||
-      Number.isFinite(Number(preferredArea.zoneHigh)) ||
-      String(preferredArea.zoneText || "").trim());
+    (
+      (
+        Number.isFinite(Number(preferredArea.zoneLow)) &&
+        Number.isFinite(Number(preferredArea.zoneHigh))
+      ) ||
+      (
+        preferredRange.low !== null &&
+        preferredRange.high !== null
+      )
+    );
+
+  if (
+    preferredArea &&
+    preferredRange.low !== null &&
+    preferredRange.high !== null
+  ) {
+    preferredArea.zoneLow = preferredRange.low;
+    preferredArea.zoneHigh = preferredRange.high;
+  }
 
   if (!preferredHasUsefulZone && ["buy", "sell"].includes(direction)) {
     const visualZone = buildZoneFromCandidates({
@@ -5391,7 +5410,11 @@ function isIncompleteFeedbackSentence(value = "") {
 
 function cleanUserFeedbackItems(items = []) {
   return normalizeArrayOfStrings(items, [])
-    .map((item) => String(item || "").replace(/\s+/g, " ").trim())
+    .map((item) =>
+      removeWeekdayNamesFromUserText(
+        String(item || "").replace(/\s+/g, " ").trim()
+      )
+    )
     .filter((item) => !isIncompleteFeedbackSentence(item));
 }
 
@@ -5402,21 +5425,38 @@ function feedbackMeaningKey(value = "") {
   if (/has not yet (?:retested|reached)|not yet (?:retested|reached)/.test(text)) {
     return "area_not_retested";
   }
-  if (/no fresh .*trigger|no .*trigger is visible|confirmed entry trigger/.test(text)) {
+
+  if (
+    /no fresh .*trigger|no .*trigger is visible|confirmed entry trigger|no entry trigger|trigger has not formed/.test(
+      text
+    )
+  ) {
     return "trigger_missing";
   }
+
   if (/stop loss|target|planned risk|risk cannot/.test(text)) {
     return "risk_plan_missing";
   }
-  if (/converted resistance|converted support|confirmed as resistance|confirmed as support|retest from below|retest from above/.test(text)) {
+
+  if (
+    /converted resistance|converted support|confirmed as resistance|confirmed as support|retest from below|retest from above|broken support|broken resistance/.test(
+      text
+    )
+  ) {
     return "converted_level_unconfirmed";
   }
-  if (/supply area|demand area|resistance area|support area/.test(text) && /clear .*location|marked/.test(text)) {
+
+  if (
+    /supply area|demand area|resistance area|support area/.test(text) &&
+    /clear .*location|marked|sell location|buy location|monitor/.test(text)
+  ) {
     return "marked_entry_area";
   }
+
   if (/market direction|bearish|bullish/.test(text)) {
     return "direction";
   }
+
   if (/enough price history|instrument and timeframe|chart is clear enough/.test(text)) {
     return "generic_validation";
   }
@@ -5450,59 +5490,99 @@ function prioritizeStarterStrengths(items = [], preferredArea = null) {
     String(preferredArea.areaType || "").toLowerCase() !== "none"
   );
 
-  const canonicalAreaText = hasSpecificArea
-    ? [
-        `The marked ${String(preferredArea.areaType || "entry")} area`,
-        String(preferredArea.zoneText || "").trim(),
+  const direction = String(preferredArea?.direction || "").toLowerCase();
+  const areaType = String(preferredArea?.areaType || "entry");
+  const zoneText = String(preferredArea?.zoneText || "").trim();
+
+  const canonicalItems = [];
+
+  if (direction === "sell") {
+    canonicalItems.push("The bearish market direction is identified correctly.");
+  } else if (direction === "buy") {
+    canonicalItems.push("The bullish market direction is identified correctly.");
+  }
+
+  if (hasSpecificArea) {
+    canonicalItems.push(
+      [
+        `The marked ${areaType} area`,
+        zoneText,
         `gives a clear ${
-          String(preferredArea.direction || "").toLowerCase() === "sell"
-            ? "sell"
-            : String(preferredArea.direction || "").toLowerCase() === "buy"
-            ? "buy"
-            : "trade"
+          direction === "sell" ? "sell" : direction === "buy" ? "buy" : "trade"
         } location to monitor.`,
       ]
         .filter(Boolean)
         .join(" ")
         .replace(/\s+/g, " ")
         .trim()
-    : "";
+    );
+
+    canonicalItems.push(
+      "The important support and resistance areas are visible and can be used to judge where price is trading."
+    );
+
+    if (direction === "sell") {
+      canonicalItems.push(
+        "The plan avoids chasing a sell while price remains close to support."
+      );
+    } else if (direction === "buy") {
+      canonicalItems.push(
+        "The plan avoids chasing a buy while price remains close to resistance."
+      );
+    }
+  }
 
   const filtered = cleanUserFeedbackItems(items).filter((item) => {
     const meaning = feedbackMeaningKey(item);
 
     if (hasSpecificArea && meaning === "generic_validation") return false;
     if (hasSpecificArea && meaning === "marked_entry_area") return false;
+    if (direction && meaning === "direction") return false;
 
     return true;
   });
 
   return removeSemanticFeedbackDuplicates(
-    canonicalAreaText ? [canonicalAreaText, ...filtered] : filtered,
+    [...canonicalItems, ...filtered],
     4
   );
 }
 
 function prioritizeStarterWeaknesses(items = []) {
-  const keysPresent = new Set(items.map(feedbackMeaningKey));
+  const cleaned = cleanUserFeedbackItems(items);
+  const result = [];
+  const seen = new Set();
 
-  return removeSemanticFeedbackDuplicates(
-    items.filter((item) => {
-      const key = feedbackMeaningKey(item);
+  const preferredOrder = [
+    "area_not_retested",
+    "trigger_missing",
+    "risk_plan_missing",
+    "converted_level_unconfirmed",
+  ];
 
-      // A specific retest comment is clearer than a broad "entry not confirmed" comment.
-      if (
-        key === "trigger_missing" &&
-        /confirmed entry trigger at the planned area/i.test(String(item || "")) &&
-        keysPresent.has("area_not_retested")
-      ) {
-        return false;
-      }
+  for (const key of preferredOrder) {
+    const matchedItem = cleaned.find(
+      (item) => feedbackMeaningKey(item) === key
+    );
 
-      return true;
-    }),
-    4
-  );
+    if (matchedItem && !seen.has(key)) {
+      seen.add(key);
+      result.push(matchedItem);
+    }
+  }
+
+  for (const item of cleaned) {
+    const key = feedbackMeaningKey(item);
+
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    result.push(item);
+
+    if (result.length >= 4) break;
+  }
+
+  return result.slice(0, 4);
 }
 
 
@@ -5709,6 +5789,30 @@ function buildStarterCoachSummary({
   }
 
   if (
+    preferredDirection === "sell" &&
+    !weaknesses.some((item) =>
+      /confirmed as resistance|retest from below|broken support/i.test(
+        String(item || "")
+      )
+    )
+  ) {
+    weaknesses.push(
+      "The broken support below price has not yet been confirmed as resistance through a retest from below."
+    );
+  } else if (
+    preferredDirection === "buy" &&
+    !weaknesses.some((item) =>
+      /confirmed as support|retest from above|broken resistance/i.test(
+        String(item || "")
+      )
+    )
+  ) {
+    weaknesses.push(
+      "The broken resistance above price has not yet been confirmed as support through a retest from above."
+    );
+  }
+
+  if (
     /no visible entry|no clear|not yet|has not reached|has not retested/.test(entryText) &&
     !weaknesses.some((item) =>
       /has not yet (?:retested|reached)|no fresh .*trigger|no .*trigger is visible/i.test(
@@ -5761,6 +5865,7 @@ function buildStarterCoachSummary({
 
   const safeStrengths = cleanUserFeedbackItems(finalStrengths);
   const safeWeaknesses = cleanUserFeedbackItems(weaknesses);
+  correctionAction = removeWeekdayNamesFromUserText(correctionAction);
 
   if (containsMalformedPriceRange(correctionAction)) {
     correctionAction =
