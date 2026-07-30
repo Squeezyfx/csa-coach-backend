@@ -5592,6 +5592,257 @@ function buildStarterCoachSummary({
   visualReview,
   marketReference,
 }) {
+  /*
+   * Starter feedback has one deterministic source of truth.
+   * AI extracts chart facts; this function writes the final wording.
+   * Raw AI strengths/weaknesses are not allowed to compete with this template.
+   */
+
+  const preferredArea =
+    visualReview?.preferredEntryArea &&
+    typeof visualReview.preferredEntryArea === "object"
+      ? visualReview.preferredEntryArea
+      : null;
+
+  const visualDirection = String(
+    visualReview?.shortTermDirection ||
+      visualReview?.plainMarketDirection ||
+      ""
+  ).toLowerCase();
+
+  const preferredDirection = String(
+    preferredArea?.direction || ""
+  ).toLowerCase();
+
+  const backendDirection = String(
+    bias?.bias || marketReference?.directionalBias?.bias || ""
+  ).toLowerCase();
+
+  let directionCode = "range";
+
+  if (preferredDirection === "sell") {
+    directionCode = "bearish";
+  } else if (preferredDirection === "buy") {
+    directionCode = "bullish";
+  } else if (/bearish/.test(visualDirection)) {
+    directionCode = "bearish";
+  } else if (/bullish/.test(visualDirection)) {
+    directionCode = "bullish";
+  } else if (/bearish/.test(backendDirection)) {
+    directionCode = "bearish";
+  } else if (/bullish/.test(backendDirection)) {
+    directionCode = "bullish";
+  }
+
+  const hasShortTermPause =
+    /range|consolidat|bounce|pullback|sideways/.test(visualDirection);
+
+  const directionalBias =
+    directionCode === "bearish"
+      ? hasShortTermPause
+        ? "Bearish with short-term consolidation"
+        : "Bearish"
+      : directionCode === "bullish"
+      ? hasShortTermPause
+        ? "Bullish with short-term consolidation"
+        : "Bullish"
+      : "Range-bound";
+
+  const areaTypeRaw = String(preferredArea?.areaType || "").toLowerCase();
+
+  const areaType =
+    areaTypeRaw && areaTypeRaw !== "none"
+      ? areaTypeRaw
+      : directionCode === "bearish"
+      ? "supply"
+      : directionCode === "bullish"
+      ? "demand"
+      : "entry";
+
+  const zoneLow = Number(preferredArea?.zoneLow);
+  const zoneHigh = Number(preferredArea?.zoneHigh);
+
+  const hasLow = Number.isFinite(zoneLow);
+  const hasHigh = Number.isFinite(zoneHigh);
+
+  let zoneText = String(preferredArea?.zoneText || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (hasLow && hasHigh) {
+    const low = Math.min(zoneLow, zoneHigh);
+    const high = Math.max(zoneLow, zoneHigh);
+
+    zoneText =
+      Math.abs(high - low) > 1e-10
+        ? `around ${formatPrice(low)}–${formatPrice(high)}`
+        : `around ${formatPrice(low)}`;
+  }
+
+  zoneText = removeWeekdayNamesFromUserText(zoneText);
+
+  if (containsMalformedPriceRange(zoneText)) {
+    zoneText = "";
+  }
+
+  const areaLabel = zoneText
+    ? `${areaType} area ${zoneText}`
+    : `marked ${areaType} area`;
+
+  const priceStatus = String(
+    preferredArea?.priceStatus || ""
+  ).toLowerCase();
+
+  const areaRetested =
+    ["inside", "reacted", "moved away"].includes(priceStatus);
+
+  const triggerPresent = preferredArea?.triggerPresent === true;
+
+  const riskEvidence = String(
+    visualReview?.riskEvidence || ""
+  ).toLowerCase();
+
+  const stopOrTargetMissing =
+    !riskEvidence ||
+    /not shown|not visible|no visible|cannot be judged|cannot be assessed/.test(
+      riskEvidence
+    );
+
+  const convertedLevelText = removeWeekdayNamesFromUserText(
+    String(visualReview?.convertedLevelAssessment || "")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+
+  const convertedLevelUnconfirmed =
+    convertedLevelText &&
+    /not confirmed|has not been confirmed|unconfirmed|needs a retest|retest from below|retest from above/.test(
+      convertedLevelText.toLowerCase()
+    );
+
+  const strengths = [];
+
+  if (directionCode === "bearish") {
+    strengths.push("The bearish market direction is identified correctly.");
+  } else if (directionCode === "bullish") {
+    strengths.push("The bullish market direction is identified correctly.");
+  } else {
+    strengths.push("The chart correctly shows that price is currently range-bound.");
+  }
+
+  if (preferredArea) {
+    strengths.push(
+      `The ${areaLabel} gives a clear ${
+        directionCode === "bearish"
+          ? "sell"
+          : directionCode === "bullish"
+          ? "buy"
+          : "trade"
+      } location to monitor.`
+    );
+  }
+
+  strengths.push(
+    "The important support and resistance areas are visible and can be used to judge where price is trading."
+  );
+
+  if (directionCode === "bearish") {
+    strengths.push(
+      "The plan avoids chasing a sell while price remains close to support."
+    );
+  } else if (directionCode === "bullish") {
+    strengths.push(
+      "The plan avoids chasing a buy while price remains close to resistance."
+    );
+  } else {
+    strengths.push(
+      "The plan waits for price to reach a better area instead of entering in the middle."
+    );
+  }
+
+  const weaknesses = [];
+
+  if (!areaRetested) {
+    weaknesses.push(
+      `Price has not yet retested the planned ${areaType} area, so there is no confirmed entry yet.`
+    );
+  }
+
+  if (!triggerPresent) {
+    weaknesses.push(
+      `No fresh ${
+        directionCode === "bearish"
+          ? "bearish"
+          : directionCode === "bullish"
+          ? "bullish"
+          : "entry"
+      } trigger is visible at the planned area yet.`
+    );
+  }
+
+  if (stopOrTargetMissing) {
+    weaknesses.push(
+      "A stop loss and target are not clearly shown, so the planned risk cannot yet be assessed."
+    );
+  }
+
+  if (convertedLevelUnconfirmed) {
+    weaknesses.push(convertedLevelText);
+  } else if (directionCode === "bearish") {
+    weaknesses.push(
+      "Any broken support below price must first retest from below and reject before it can be treated as confirmed resistance."
+    );
+  } else if (directionCode === "bullish") {
+    weaknesses.push(
+      "Any broken resistance above price must first retest from above and hold before it can be treated as confirmed support."
+    );
+  }
+
+  const finalStrengths = cleanUserFeedbackItems(strengths).slice(0, 4);
+  const finalWeaknesses = cleanUserFeedbackItems(weaknesses).slice(0, 4);
+
+  let correctionAction;
+
+  if (directionCode === "bearish") {
+    correctionAction =
+      `Wait for price to retrace towards the ${areaLabel} and show a clear bearish trigger before considering a sell. ` +
+      "Make sure there is enough space to the next support for a reasonable risk-to-reward ratio. " +
+      "Do not chase a sell while price remains close to support.";
+  } else if (directionCode === "bullish") {
+    correctionAction =
+      `Wait for price to return towards the ${areaLabel} and show a clear bullish trigger before considering a buy. ` +
+      "Make sure there is enough space to the next resistance for a reasonable risk-to-reward ratio. " +
+      "Do not chase a buy while price remains close to resistance.";
+  } else {
+    correctionAction =
+      "Wait for price to reach a clearly marked support or resistance area and show a valid entry trigger before considering a trade. Avoid entering in the middle of the range.";
+  }
+
+  correctionAction = removeWeekdayNamesFromUserText(correctionAction);
+
+  if (containsMalformedPriceRange(correctionAction)) {
+    correctionAction =
+      directionCode === "bearish"
+        ? "Wait for price to retrace towards the marked supply or resistance area and show a clear bearish trigger before considering a sell. Do not chase a sell while price remains close to support."
+        : directionCode === "bullish"
+        ? "Wait for price to return towards the marked demand or support area and show a clear bullish trigger before considering a buy. Do not chase a buy while price remains close to resistance."
+        : "Wait for price to reach a clearly marked support or resistance area and show a valid entry trigger before considering a trade.";
+  }
+
+  return [
+    "DIRECTIONAL BIAS:",
+    directionalBias,
+    "",
+    "WHAT YOU DID WELL:",
+    ...finalStrengths.map((item) => `- ${item}`),
+    "",
+    "WHAT TO IMPROVE:",
+    ...finalWeaknesses.map((item) => `- ${item}`),
+    "",
+    "NEXT ACTION:",
+    correctionAction,
+  ].join("\n");
+}) {
   const levels = Array.isArray(marketReference?.dailyLevels)
     ? marketReference.dailyLevels
     : [];
