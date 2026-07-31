@@ -3097,6 +3097,12 @@ STRICT MARKED/UNMARKED RULE:
 - If a trade is visible but stop loss or target is missing, say "Stop loss and target are not shown, so the trade risk cannot be judged."
 - If the bigger-picture view and uploaded chart timeframe disagree, state both clearly.
   Example: "The bigger picture is slightly bearish, but the ${timeframe} chart is pushing up short-term."
+- Distinguish a genuine range from a transition/recovery phase:
+  - bearish structure + strong bullish recovery that has not broken the main resistance = "bullish recovery after bearish breakdown";
+  - bullish structure + strong bearish pullback that has not broken the main support = "bearish pullback after bullish breakout";
+  - only use "range-bound" when neither side has a decisive recent break, recovery, or structural advantage.
+- A strong recovery from a deep low is not automatically bullish. It remains a transition until price clearly breaks and holds above the key resistance.
+- A strong drop from a high is not automatically bearish. It remains a transition until price clearly breaks and holds below the key support.
 - Do not give financial advice or guaranteed predictions. This is only chart feedback.
 
 EVIDENCE AND PRICE RULE:
@@ -3190,6 +3196,7 @@ Return exactly this JSON shape:
   "csaSimilarities": ["simple similarity between visible chart markings and internal areas"],
   "csaDifferences": ["simple difference, missing area, or mismatch"],
   "shortTermDirection": "bullish | bearish | range-bound | range-bound with bullish pressure | range-bound with bearish pressure | unclear",
+  "marketPhase": "trend | bullish breakout | bearish breakdown | bullish recovery after bearish breakdown | bearish pullback after bullish breakout | consolidation | range | unclear",
   "quickVerdict": "one very simple sentence saying wait, avoid chasing, or setup looks acceptable",
   "plainMarketDirection": "one simple sentence combining bigger-picture direction and ${timeframe} chart direction",
   "whatThisMeans": "one simple sentence explaining what the trader should understand from the chart",
@@ -5714,7 +5721,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "3.0.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "3.1.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6208,6 +6215,68 @@ function breakoutOverridesRange({
   return null;
 }
 
+
+function normalizeTransitionState(visualReview = {}, chartDetection = {}) {
+  const explicitPhase = String(visualReview?.marketPhase || "")
+    .trim()
+    .toLowerCase();
+
+  const combined = [
+    explicitPhase,
+    visualReview?.visualSummary,
+    visualReview?.plainMarketDirection,
+    visualReview?.shortTermDirection,
+    visualReview?.whatThisMeans,
+    visualReview?.entryEvidence,
+    visualReview?.mainWarning,
+    visualReview?.coachVerdict,
+    chartDetection?.visibleTrigger,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const bullishRecovery =
+    /bullish recovery after bearish breakdown|strong bullish recovery|sharp bullish recovery|recovery from (?:the )?(?:low|support)|rebounded strongly|strong rebound/.test(
+      combined
+    );
+
+  const bearishPullback =
+    /bearish pullback after bullish breakout|strong bearish pullback|sharp bearish pullback|pullback from (?:the )?(?:high|resistance)|sold off sharply|strong rejection lower/.test(
+      combined
+    );
+
+  const priorBearishBreak =
+    /bearish breakdown|breakdown below|broke below|clean break below|lower low|deep low/.test(
+      combined
+    );
+
+  const priorBullishBreak =
+    /bullish breakout|breakout above|broke above|clean break above|higher high|new high/.test(
+      combined
+    );
+
+  const bullishRecoveryAfterBreakdown =
+    bullishRecovery &&
+    (priorBearishBreak ||
+      explicitPhase === "bullish recovery after bearish breakdown");
+
+  const bearishPullbackAfterBreakout =
+    bearishPullback &&
+    (priorBullishBreak ||
+      explicitPhase === "bearish pullback after bullish breakout");
+
+  return {
+    bullishRecoveryAfterBreakdown,
+    bearishPullbackAfterBreakout,
+    state: bullishRecoveryAfterBreakdown
+      ? "bullish_recovery_after_bearish_breakdown"
+      : bearishPullbackAfterBreakout
+      ? "bearish_pullback_after_bullish_breakout"
+      : "none",
+  };
+}
+
 function buildValidatedAnalysisFacts({
   visualReview = {},
   marketReference = {},
@@ -6249,17 +6318,36 @@ function buildValidatedAnalysisFacts({
     chartDetection
   );
 
+  const transitionState = normalizeTransitionState(
+    visualReview,
+    chartDetection
+  );
+
   const breakoutDirectionOverride = breakoutOverridesRange({
     verifiedMarketDirection,
     visualDirection,
     breakoutState,
   });
 
-  const direction = breakoutDirectionOverride
+  let direction = breakoutDirectionOverride
     ? breakoutDirectionOverride
     : ["bullish", "bearish"].includes(verifiedMarketDirection)
     ? verifiedMarketDirection
     : visualDirection;
+
+  // Transitional recoveries keep the original structural side until the
+  // opposing key level is clearly broken and held.
+  if (
+    transitionState.bullishRecoveryAfterBreakdown &&
+    !breakoutState.bullishBreakout
+  ) {
+    direction = "bearish";
+  } else if (
+    transitionState.bearishPullbackAfterBreakout &&
+    !breakoutState.bearishBreakdown
+  ) {
+    direction = "bullish";
+  }
   const currentPrice =
     asPositiveNumber(visualReview?.latestVisiblePrice) ||
     extractLastMarketPrice(marketReference);
@@ -6482,8 +6570,15 @@ function buildValidatedAnalysisFacts({
     visualDirection,
     verifiedMarketDirection,
     breakoutState,
+    transitionState,
     directionOverride:
-      breakoutDirectionOverride ? "recent_breakout_override" : null,
+      breakoutDirectionOverride
+        ? "recent_breakout_override"
+        : transitionState.bullishRecoveryAfterBreakdown
+        ? "bearish_structure_with_bullish_recovery"
+        : transitionState.bearishPullbackAfterBreakout
+        ? "bullish_structure_with_bearish_pullback"
+        : null,
     shortTermCondition,
     currentPrice,
     latestVisiblePrice: asPositiveNumber(visualReview?.latestVisiblePrice),
@@ -6585,6 +6680,10 @@ function secondaryAreaDisplay(facts) {
 
 function directionDisplay(facts) {
   if (facts.direction === "bearish") {
+    if (facts.transitionState?.bullishRecoveryAfterBreakdown) {
+      return "Bearish structure with a strong bullish recovery";
+    }
+
     if (facts.breakoutState?.bearishBreakdown) {
       return facts.breakoutState.extended
         ? "Bearish after a strong breakdown, with price approaching support"
@@ -6599,6 +6698,10 @@ function directionDisplay(facts) {
   }
 
   if (facts.direction === "bullish") {
+    if (facts.transitionState?.bearishPullbackAfterBreakout) {
+      return "Bullish structure with a strong bearish pullback";
+    }
+
     if (facts.breakoutState?.bullishBreakout) {
       return facts.breakoutState.extended
         ? "Bullish after a strong breakout, with price approaching resistance"
@@ -6700,13 +6803,17 @@ function buildControlledFeedback({
 
   if (facts.direction === "bearish") {
     strengths.push(
-      facts.breakoutState?.bearishBreakdown
+      facts.transitionState?.bullishRecoveryAfterBreakdown
+        ? "The earlier bearish breakdown and the strong bullish recovery are identified separately."
+        : facts.breakoutState?.bearishBreakdown
         ? "The strong bearish breakdown and continuation are identified correctly."
         : "The bearish market direction is identified correctly."
     );
   } else if (facts.direction === "bullish") {
     strengths.push(
-      facts.breakoutState?.bullishBreakout
+      facts.transitionState?.bearishPullbackAfterBreakout
+        ? "The earlier bullish breakout and the strong bearish pullback are identified separately."
+        : facts.breakoutState?.bullishBreakout
         ? "The strong bullish breakout and continuation are identified correctly."
         : "The bullish market direction is identified correctly."
     );
@@ -6789,6 +6896,16 @@ function buildControlledFeedback({
     }
   }
 
+  if (facts.transitionState?.bullishRecoveryAfterBreakdown) {
+    weaknesses.push(
+      "The bullish recovery has not yet broken and held above the main resistance, so the broader bearish structure is not fully reversed."
+    );
+  } else if (facts.transitionState?.bearishPullbackAfterBreakout) {
+    weaknesses.push(
+      "The bearish pullback has not yet broken and held below the main support, so the broader bullish structure is not fully reversed."
+    );
+  }
+
   if (
     facts.breakoutState?.extended &&
     facts.direction === "bullish"
@@ -6838,6 +6955,18 @@ function buildControlledFeedback({
   let nextAction;
 
   if (
+    facts.transitionState?.bullishRecoveryAfterBreakdown &&
+    !area.invalidated
+  ) {
+    nextAction =
+      `Treat this as a transition, not a confirmed bullish trend. Wait to see whether the recovery rejects from the ${areaText} or breaks and holds above it. Avoid buying after the sharp recovery and avoid selling without a clear bearish rejection.`;
+  } else if (
+    facts.transitionState?.bearishPullbackAfterBreakout &&
+    !area.invalidated
+  ) {
+    nextAction =
+      `Treat this as a transition, not a confirmed bearish trend. Wait to see whether the pullback holds at the ${areaText} or breaks and holds below it. Avoid selling after the sharp drop and avoid buying without a clear bullish hold.`;
+  } else if (
     facts.breakoutState?.bullishBreakout &&
     facts.breakoutState?.extended &&
     !area.invalidated
