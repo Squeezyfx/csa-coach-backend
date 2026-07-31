@@ -2309,6 +2309,35 @@ async function fetchTwelveDataStructureLevels({
     );
   });
 
+  const excludedCandles = rawCandles.filter((bar) => {
+    const candleDateTime = normalizeTwelveDataDateTime(bar?.datetime);
+    return Boolean(
+      normalizedCutoff &&
+      candleDateTime &&
+      candleDateTime > normalizedCutoff
+    );
+  });
+
+  const sortedIncludedDateTimes = filteredCandles
+    .map((bar) => normalizeTwelveDataDateTime(bar?.datetime))
+    .filter(Boolean)
+    .sort();
+
+  const sortedExcludedDateTimes = excludedCandles
+    .map((bar) => normalizeTwelveDataDateTime(bar?.datetime))
+    .filter(Boolean)
+    .sort();
+
+  const lastIncludedCandle =
+    sortedIncludedDateTimes.length > 0
+      ? sortedIncludedDateTimes[sortedIncludedDateTimes.length - 1]
+      : null;
+
+  const firstExcludedCandle =
+    sortedExcludedDateTimes.length > 0
+      ? sortedExcludedDateTimes[0]
+      : null;
+
   const timeframeCandles = filteredCandles
     .map((bar) => ({
       datetime: String(bar?.datetime || ""),
@@ -2376,6 +2405,11 @@ async function fetchTwelveDataStructureLevels({
     chartCutoff: {
       ...chartCutoff,
       endDateTime,
+      normalizedCutoff,
+      lastIncludedCandle,
+      firstExcludedCandle,
+      includedCandleCount: filteredCandles.length,
+      excludedCandleCount: excludedCandles.length,
     },
   };
 }
@@ -5836,7 +5870,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "4.0.1";
+const CSA_FEEDBACK_ENGINE_VERSION = "4.0.2";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -9234,6 +9268,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       timezoneMode = "device",
       browserTimezone = "",
       timezone = "",
+      forceFreshAnalysis = "",
       analysisFramework = "csa",
       strategyId = "",
     } = req.body;
@@ -9253,6 +9288,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const selectedDateText = chartDate || tradeDate || "";
     const selectedDate = parseISODateOnly(selectedDateText);
     const normalizedRequestedCutoffMode = normalizeCutoffMode(cutoffMode);
+    const forceFresh =
+      String(forceFreshAnalysis || "").trim().toLowerCase() === "true";
 
     // Selected-day reviews use a stable UTC day boundary.
     // Never allow the browser/device timezone to silently move the cutoff
@@ -9292,8 +9329,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       plan: entitlement.effectivePlan,
     });
 
-    const cachedCompletedAnalysis =
-      getCachedCompletedAnalysis(analysisFingerprint);
+    const cachedCompletedAnalysis = forceFresh
+      ? null
+      : getCachedCompletedAnalysis(analysisFingerprint);
 
     if (cachedCompletedAnalysis) {
       cachedCompletedAnalysis.entitlement = entitlement;
@@ -9625,6 +9663,22 @@ ${(visualReview?.strategyMissingInformation || []).length
       resolvedCutoffTimezone: resolvedTimezone,
       cutoffSource: chartCutoff.source,
       cutoffReason: chartCutoff.reason,
+      forceFreshAnalysis: forceFresh,
+      cutoffDiagnostics: {
+        engineVersion: CSA_FEEDBACK_ENGINE_VERSION,
+        cutoffMode: chartCutoff.mode,
+        resolvedCutoff: chartCutoff.endDateTime,
+        timezone: resolvedTimezone,
+        dayBoundary: chartCutoff.dayBoundary || resolvedTimezone,
+        lastIncludedCandle:
+          marketReference?.chartCutoff?.lastIncludedCandle || null,
+        firstExcludedCandle:
+          marketReference?.chartCutoff?.firstExcludedCandle || null,
+        includedCandleCount:
+          Number(marketReference?.chartCutoff?.includedCandleCount || 0),
+        excludedCandleCount:
+          Number(marketReference?.chartCutoff?.excludedCandleCount || 0),
+      },
       dashboard: dashboardFeedback,
       contextStatus: marketReference.ok ? `Market-data-backed CSA setup review completed using ${structureLabel} and visual chart comparison.` : `Setup review completed without market data: ${marketReference.error}`,
       grade: dashboardFeedback.setupQualityScore >= 85 ? "A" : dashboardFeedback.setupQualityScore >= 75 ? "B" : dashboardFeedback.setupQualityScore >= 60 ? "C" : dashboardFeedback.setupQualityScore >= 40 ? "D" : "F",
@@ -9652,7 +9706,9 @@ ${(visualReview?.strategyMissingInformation || []).length
       entitlement: updatedEntitlement,
     });
 
-    cacheCompletedAnalysis(analysisFingerprint, finalClientResponse);
+    if (!forceFresh) {
+      cacheCompletedAnalysis(analysisFingerprint, finalClientResponse);
+    }
 
     return res.json(finalClientResponse);
   } catch (error) {
