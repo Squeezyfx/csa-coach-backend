@@ -2012,12 +2012,49 @@ function previousDateText(dateText = "") {
   return formatDateOnly(addDays(parsed, -1));
 }
 
+function normalizeCutoffMode(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["selected_day", "end_of_day", "day"].includes(normalized)) {
+    return "selected_day";
+  }
+  if (["exact", "exact_time", "specific_time"].includes(normalized)) {
+    return "exact";
+  }
+  return "final_visible";
+}
+
+function normalizeCutoffTime(value = "") {
+  const text = String(value || "").trim();
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(text) ? text : "";
+}
+
+function normalizeRequestedTimezone({
+  timezone = "",
+  timezoneMode = "",
+  browserTimezone = "",
+}) {
+  const mode = String(timezoneMode || "").trim().toLowerCase();
+  const explicit = String(timezone || "").trim();
+  const browser = String(browserTimezone || "").trim();
+
+  if (mode === "utc") return "UTC";
+  if (mode === "device" && browser) return browser;
+  if (mode === "custom" && explicit) return explicit;
+  if (explicit && explicit !== "chart") return explicit;
+  if (browser) return browser;
+  return "UTC";
+}
+
 function resolveTwelveDataChartCutoff({
   chartDetection = null,
   dateDecision = null,
+  selectedDateText = "",
+  cutoffMode = "final_visible",
+  cutoffTime = "",
   timeframe = "H1",
   analysisType = "post-trade",
 }) {
+  const mode = normalizeCutoffMode(cutoffMode);
   const detectedDate = String(chartDetection?.latestVisibleDate || "").trim();
   const detectedDateConfidence = String(
     chartDetection?.dateConfidence || "low"
@@ -2037,67 +2074,119 @@ function resolveTwelveDataChartCutoff({
     /^([01]\d|2[0-3]):[0-5]\d$/.test(detectedTime) &&
     ["high", "medium"].includes(detectedTimeConfidence);
 
-  const finalDateText =
-    (usableDetectedDate ? detectedDate : null) ||
-    dateDecision?.finalDateText ||
-    dateDecision?.selectedDateText ||
-    null;
+  const selected =
+    /^\d{4}-\d{2}-\d{2}$/.test(String(selectedDateText || "").trim())
+      ? String(selectedDateText).trim()
+      : dateDecision?.selectedDateText || dateDecision?.finalDateText || null;
 
-  if (!finalDateText || finalDateText === "Not provided") {
+  if (mode === "exact") {
+    const exactTime = normalizeCutoffTime(cutoffTime);
+    if (!selected || !exactTime) {
+      return {
+        endDateTime: null,
+        resolvedDate: selected || null,
+        source: "invalid-exact-cutoff",
+        mode,
+        precision: "invalid",
+        exactVisibleCutoff: false,
+        allowMarketDirectionalBias: false,
+        reason:
+          "Exact historical mode requires both a valid date and a valid time.",
+      };
+    }
+
     return {
-      endDateTime: null,
-      source: "missing-cutoff",
-      exactVisibleCutoff: false,
-      allowMarketDirectionalBias: false,
-      reason: "No reliable chart cutoff date was available.",
-    };
-  }
-
-  const intraday = isIntradayCsaTimeframe(timeframe);
-  const isHistoricalReview =
-    String(analysisType || "").toLowerCase() === "post-trade";
-
-  if (intraday && usableDetectedDate && usableDetectedTime) {
-    return {
-      // Include the final visible candle timestamp, but nothing after it.
-      endDateTime: `${detectedDate} ${detectedTime}:59`,
-      source: "chart-detected-date-time",
+      endDateTime: `${selected} ${exactTime}:59`,
+      resolvedDate: selected,
+      source: "user-exact-date-time",
+      mode,
+      precision: "exact",
       exactVisibleCutoff: true,
       allowMarketDirectionalBias: true,
       reason:
-        "Twelve Data was stopped at the final date and time visible on the uploaded chart.",
+        "The market review was limited to the exact historical date and time selected by the user.",
     };
   }
 
-  if (intraday && isHistoricalReview) {
-    /*
-     * A calendar date alone is not enough for an intraday historical review.
-     * Using 23:59:59 could introduce candles formed after the screenshot.
-     * Fetch only through the previous completed day and let the screenshot
-     * control the current-day direction and setup.
-     */
-    const safePreviousDate = previousDateText(finalDateText);
+  if (mode === "selected_day") {
+    if (!selected) {
+      return {
+        endDateTime: null,
+        resolvedDate: null,
+        source: "missing-selected-day",
+        mode,
+        precision: "invalid",
+        exactVisibleCutoff: false,
+        allowMarketDirectionalBias: false,
+        reason: "No selected chart date was available.",
+      };
+    }
+
     return {
-      endDateTime: safePreviousDate
-        ? `${safePreviousDate} 23:59:59`
-        : null,
-      source: "safe-previous-day-fallback",
+      endDateTime: `${selected} 23:59:59`,
+      resolvedDate: selected,
+      source: "user-selected-day-end",
+      mode,
+      precision: "day",
       exactVisibleCutoff: false,
-      allowMarketDirectionalBias: false,
+      allowMarketDirectionalBias: true,
       reason:
-        "The final visible intraday time could not be verified, so later same-day candles were excluded and the uploaded chart remains the source of truth for direction.",
+        "The review uses the final completed candle available on the selected trading day.",
+    };
+  }
+
+  // Default beginner-friendly mode: analyse exactly where the screenshot ends.
+  if (usableDetectedDate && usableDetectedTime) {
+    return {
+      endDateTime: `${detectedDate} ${detectedTime}:59`,
+      resolvedDate: detectedDate,
+      source: "chart-final-visible-candle",
+      mode: "final_visible",
+      precision: "exact-visible",
+      exactVisibleCutoff: true,
+      allowMarketDirectionalBias: true,
+      reason:
+        "The review was stopped at the final date and time visible on the uploaded chart.",
+    };
+  }
+
+  if (usableDetectedDate) {
+    return {
+      endDateTime: `${detectedDate} 23:59:59`,
+      resolvedDate: detectedDate,
+      source: "chart-final-visible-day-fallback",
+      mode: "final_visible",
+      precision: "day",
+      exactVisibleCutoff: false,
+      allowMarketDirectionalBias: true,
+      reason:
+        "The final candle time was not readable, so the review uses the end of the final date visible on the chart.",
+    };
+  }
+
+  if (selected) {
+    return {
+      endDateTime: `${selected} 23:59:59`,
+      resolvedDate: selected,
+      source: "selected-day-fallback",
+      mode: "final_visible",
+      precision: "day",
+      exactVisibleCutoff: false,
+      allowMarketDirectionalBias: true,
+      reason:
+        "The final visible date could not be read reliably, so the review uses the end of the selected chart date.",
     };
   }
 
   return {
-    endDateTime: `${finalDateText} 23:59:59`,
-    source: usableDetectedDate
-      ? "chart-detected-date"
-      : "selected-date",
-    exactVisibleCutoff: !intraday,
-    allowMarketDirectionalBias: !intraday,
-    reason:
-      "The review was limited to the final visible or selected chart date.",
+    endDateTime: null,
+    resolvedDate: null,
+    source: "missing-cutoff",
+    mode: "final_visible",
+    precision: "invalid",
+    exactVisibleCutoff: false,
+    allowMarketDirectionalBias: false,
+    reason: "No reliable historical cutoff could be established.",
   };
 }
 
@@ -3126,8 +3215,10 @@ STRICT MARKED/UNMARKED RULE:
 - Do not give financial advice or guaranteed predictions. This is only chart feedback.
 
 EVIDENCE AND PRICE RULE:
-- The uploaded screenshot is the primary source for direction, marked zones, retest status, trigger status, and the visible trade plan.
-- Twelve Data is optional supporting context. It must not overwrite a clearer conclusion from the screenshot.
+- For historical direction, market phase, breakout/breakdown state, and converted support/resistance, the cutoff-filtered market data is authoritative whenever it is available.
+- The uploaded screenshot is authoritative only for trader markings, visible entry/stop/target evidence, annotations, and trade-management evidence.
+- Never use candles visible after the resolved cutoff to change the historical direction or market phase.
+- Screenshot evidence may describe a short-term reaction, but it must not overwrite the deterministic cutoff-filtered market facts.
 - Twelve Data available for this review: ${marketReferenceAvailable ? "yes" : "no"}.
 - A clearly printed chart price may be used as an exact visible price.
 - When a visible supply or demand rectangle has readable upper and lower boundaries, return the full approximate range in zoneLow, zoneHigh, and zoneText. Introduce it as "around" and treat it as an area rather than an exact order price.
@@ -5741,7 +5832,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "3.5.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "4.0.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -5755,6 +5846,10 @@ function createAnalysisFingerprint({
   analysisType,
   chartDate,
   timezone,
+  cutoffMode,
+  cutoffTime,
+  timezoneMode,
+  browserTimezone,
   analysisFramework,
   strategyId,
   plan,
@@ -5771,6 +5866,14 @@ function createAnalysisFingerprint({
   hash.update(String(chartDate || "").trim());
   hash.update("|");
   hash.update(String(timezone || "UTC").trim());
+  hash.update("|");
+  hash.update(String(cutoffMode || "final_visible").trim().toLowerCase());
+  hash.update("|");
+  hash.update(String(cutoffTime || "").trim());
+  hash.update("|");
+  hash.update(String(timezoneMode || "").trim().toLowerCase());
+  hash.update("|");
+  hash.update(String(browserTimezone || "").trim());
   hash.update("|");
   hash.update(String(analysisFramework || "csa").trim().toLowerCase());
   hash.update("|");
@@ -9122,7 +9225,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       userNotes = "",
       chartDate = "",
       tradeDate = "",
-      timezone = "UTC",
+      cutoffMode = "final_visible",
+      cutoffTime = "",
+      timezoneMode = "device",
+      browserTimezone = "",
+      timezone = "",
       analysisFramework = "csa",
       strategyId = "",
     } = req.body;
@@ -9139,7 +9246,13 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     });
     const imageBase64 = req.file.buffer.toString("base64");
     const mimeType = req.file.mimetype || "image/png";
-    const selectedDate = parseISODateOnly(chartDate || tradeDate);
+    const selectedDateText = chartDate || tradeDate || "";
+    const selectedDate = parseISODateOnly(selectedDateText);
+    const resolvedTimezone = normalizeRequestedTimezone({
+      timezone,
+      timezoneMode,
+      browserTimezone,
+    });
 
     const analysisFingerprint = createAnalysisFingerprint({
       userId: requestAuth.user.id,
@@ -9147,8 +9260,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       instrument: submittedInstrument,
       timeframe,
       analysisType: mode,
-      chartDate: chartDate || tradeDate || "",
-      timezone,
+      chartDate: selectedDateText,
+      timezone: resolvedTimezone,
+      cutoffMode,
+      cutoffTime,
+      timezoneMode,
+      browserTimezone,
       analysisFramework: selectedStrategy.analysisFramework,
       strategyId:
         selectedStrategy.analysisFramework === "personal_strategy"
@@ -9172,21 +9289,21 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
 
     assertAnalysisAllowed(entitlement);
 
-    const chartDetection = await detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument, selectedTimeframe: timeframe, selectedDateText: chartDate || tradeDate || "", analysisType: mode });
+    const chartDetection = await detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument, selectedTimeframe: timeframe, selectedDateText, analysisType: mode });
 
     if (!chartDetection.isTradingChart) {
       const analysis = buildInvalidChartAnalysis({ submittedInstrument, timeframe, chartDetection });
       return stoppedResponse({ res, errorType: "invalid_chart_image", error: "Uploaded image is not a valid trading chart.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
 
-    if (!isUploadedChartDataUsable(chartDetection, chartDate || tradeDate || "")) {
-      const analysis = buildInsufficientChartDataAnalysis({ submittedInstrument, timeframe, selectedDateText: chartDate || tradeDate || "", chartDetection });
+    if (!isUploadedChartDataUsable(chartDetection, selectedDateText)) {
+      const analysis = buildInsufficientChartDataAnalysis({ submittedInstrument, timeframe, selectedDateText, chartDetection });
       return stoppedResponse({ res, errorType: "insufficient_chart_data", error: "Uploaded chart does not have enough visible price data for review.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
 
     const dateMismatch = getSelectedDateMismatch(chartDetection, selectedDate, timeframe);
     if (dateMismatch.hasMismatch) {
-      const analysis = buildDateMismatchAnalysis({ selectedDateText: chartDate || tradeDate || "", chartDetection, dateMismatch });
+      const analysis = buildDateMismatchAnalysis({ selectedDateText, chartDetection, dateMismatch });
       return stoppedResponse({ res, errorType: "selected_date_not_visible", error: "Selected chart/trade date is not visible or reasonably covered by the uploaded chart.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
 
@@ -9243,15 +9360,30 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const chartCutoff = resolveTwelveDataChartCutoff({
       chartDetection,
       dateDecision,
+      selectedDateText,
+      cutoffMode,
+      cutoffTime,
       timeframe,
       analysisType: mode,
     });
 
+    if (!chartCutoff.endDateTime || !chartCutoff.resolvedDate) {
+      return res.status(400).json({
+        success: false,
+        stopped: true,
+        errorType: "invalid_historical_cutoff",
+        error: chartCutoff.reason,
+        chartCutoff,
+      });
+    }
+
+    const resolvedAnalysisDate = parseISODateOnly(chartCutoff.resolvedDate);
+
     const marketReference = await fetchTwelveDataStructureLevels({
       symbol: normalizedSymbol,
-      chartDate: dateDecision.finalDate,
+      chartDate: resolvedAnalysisDate,
       timeframe,
-      timezone: timezone || "UTC",
+      timezone: resolvedTimezone,
       analysisType: mode,
       chartCutoff,
     });
@@ -9352,7 +9484,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       visualReview,
       submittedInstrument,
       timeframe,
-      selectedDateText: chartDate || tradeDate || "Not provided",
+      selectedDateText: chartCutoff.resolvedDate || selectedDateText || "Not provided",
       detectedDateText:
         chartDetection.latestVisibleDate || "Not detected",
       submittedNotes,
@@ -9368,12 +9500,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       submittedInstrument,
       timeframe,
       analysisType: mode,
-      selectedDate:
-        dateDecision?.effectiveDate ||
-        dateDecision?.selectedDate ||
-        chartDate ||
-        tradeDate ||
-        "",
+      selectedDate: chartCutoff.resolvedDate || selectedDateText || "",
       submittedNotes,
     });
 
@@ -9409,7 +9536,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       timeframe,
       mode,
       submittedNotes,
-      chartDateText: chartDate || tradeDate || null,
+      chartDateText: chartCutoff.resolvedDate || selectedDateText || null,
       analysis,
       chartDetection,
       visualReview,
@@ -9468,6 +9595,12 @@ ${(visualReview?.strategyMissingInformation || []).length
       analysisFacts,
       finalFeedback,
       feedbackEngineVersion: CSA_FEEDBACK_ENGINE_VERSION,
+      cutoffMode: chartCutoff.mode,
+      cutoffPrecision: chartCutoff.precision,
+      resolvedCutoff: chartCutoff.endDateTime,
+      resolvedCutoffTimezone: resolvedTimezone,
+      cutoffSource: chartCutoff.source,
+      cutoffReason: chartCutoff.reason,
       dashboard: dashboardFeedback,
       contextStatus: marketReference.ok ? `Market-data-backed CSA setup review completed using ${structureLabel} and visual chart comparison.` : `Setup review completed without market data: ${marketReference.error}`,
       grade: dashboardFeedback.setupQualityScore >= 85 ? "A" : dashboardFeedback.setupQualityScore >= 75 ? "B" : dashboardFeedback.setupQualityScore >= 60 ? "C" : dashboardFeedback.setupQualityScore >= 40 ? "D" : "F",
