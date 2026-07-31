@@ -2336,6 +2336,7 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
         ]},
       ],
       max_output_tokens: 700,
+      temperature: 0,
     });
 
     const parsed = extractJsonObject(response.output_text || "");
@@ -3174,6 +3175,7 @@ Return exactly this JSON shape:
         ]},
       ],
       max_output_tokens: 3200,
+      temperature: 0,
     });
 
     const parsed = extractJsonObject(response.output_text || "");
@@ -5612,7 +5614,78 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "2.4.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "2.5.0";
+
+const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const ANALYSIS_CACHE_MAX_ITEMS = 100;
+const completedAnalysisCache = new Map();
+
+function createAnalysisFingerprint({
+  userId,
+  fileBuffer,
+  instrument,
+  timeframe,
+  analysisType,
+  chartDate,
+  timezone,
+  analysisFramework,
+  strategyId,
+  plan,
+}) {
+  const hash = crypto.createHash("sha256");
+  hash.update(String(userId || ""));
+  hash.update("|");
+  hash.update(String(instrument || "").trim().toUpperCase());
+  hash.update("|");
+  hash.update(String(timeframe || "").trim().toUpperCase());
+  hash.update("|");
+  hash.update(String(analysisType || "").trim().toLowerCase());
+  hash.update("|");
+  hash.update(String(chartDate || "").trim());
+  hash.update("|");
+  hash.update(String(timezone || "UTC").trim());
+  hash.update("|");
+  hash.update(String(analysisFramework || "csa").trim().toLowerCase());
+  hash.update("|");
+  hash.update(String(strategyId || "").trim());
+  hash.update("|");
+  hash.update(String(plan || "starter").trim().toLowerCase());
+  hash.update("|");
+  hash.update(CSA_FEEDBACK_ENGINE_VERSION);
+  hash.update("|");
+
+  if (Buffer.isBuffer(fileBuffer)) {
+    hash.update(fileBuffer);
+  }
+
+  return hash.digest("hex");
+}
+
+function getCachedCompletedAnalysis(fingerprint) {
+  const cached = completedAnalysisCache.get(fingerprint);
+  if (!cached) return null;
+
+  if (Date.now() - cached.createdAt > ANALYSIS_CACHE_TTL_MS) {
+    completedAnalysisCache.delete(fingerprint);
+    return null;
+  }
+
+  return JSON.parse(JSON.stringify(cached.response));
+}
+
+function cacheCompletedAnalysis(fingerprint, response) {
+  if (!fingerprint || !response) return;
+
+  if (completedAnalysisCache.size >= ANALYSIS_CACHE_MAX_ITEMS) {
+    const oldestKey = completedAnalysisCache.keys().next().value;
+    if (oldestKey) completedAnalysisCache.delete(oldestKey);
+  }
+
+  completedAnalysisCache.set(fingerprint, {
+    createdAt: Date.now(),
+    response: JSON.parse(JSON.stringify(response)),
+  });
+}
 
 function asPositiveNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -7562,7 +7635,6 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
   try {
     const requestAuth = await getRequestUser(req);
     const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
-    assertAnalysisAllowed(entitlement);
 
     if (!process.env.OPENAI_API_KEY) return res.status(500).json({ success: false, error: "OPENAI_API_KEY is missing on the server." });
     if (!req.file) return res.status(400).json({ success: false, error: "No chart image uploaded." });
@@ -7595,6 +7667,37 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const imageBase64 = req.file.buffer.toString("base64");
     const mimeType = req.file.mimetype || "image/png";
     const selectedDate = parseISODateOnly(chartDate || tradeDate);
+
+    const analysisFingerprint = createAnalysisFingerprint({
+      userId: requestAuth.user.id,
+      fileBuffer: req.file.buffer,
+      instrument: submittedInstrument,
+      timeframe,
+      analysisType: mode,
+      chartDate: chartDate || tradeDate || "",
+      timezone,
+      analysisFramework: selectedStrategy.analysisFramework,
+      strategyId:
+        selectedStrategy.analysisFramework === "personal_strategy"
+          ? selectedStrategy.strategy?.id || strategyId || ""
+          : "",
+      plan: entitlement.effectivePlan,
+    });
+
+    const cachedCompletedAnalysis =
+      getCachedCompletedAnalysis(analysisFingerprint);
+
+    if (cachedCompletedAnalysis) {
+      cachedCompletedAnalysis.entitlement = entitlement;
+      cachedCompletedAnalysis.cacheHit = true;
+      cachedCompletedAnalysis.analysisFingerprint = analysisFingerprint;
+      cachedCompletedAnalysis.savedToJournal = false;
+      cachedCompletedAnalysis.saveReason =
+        "Identical chart and analysis inputs reused the previous completed result.";
+      return res.json(cachedCompletedAnalysis);
+    }
+
+    assertAnalysisAllowed(entitlement);
 
     const chartDetection = await detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument, selectedTimeframe: timeframe, selectedDateText: chartDate || tradeDate || "", analysisType: mode });
 
@@ -7904,12 +8007,18 @@ ${(visualReview?.strategyMissingInformation || []).length
       marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, weekRange: marketReference.weekRange, dailyLevels: marketReference.dailyLevels, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
     };
 
-    return res.json(
-      applyPlanToAnalysisResponse({
-        responseBody,
-        entitlement: updatedEntitlement,
-      })
-    );
+    const finalClientResponse = applyPlanToAnalysisResponse({
+      responseBody: {
+        ...responseBody,
+        cacheHit: false,
+        analysisFingerprint,
+      },
+      entitlement: updatedEntitlement,
+    });
+
+    cacheCompletedAnalysis(analysisFingerprint, finalClientResponse);
+
+    return res.json(finalClientResponse);
   } catch (error) {
     console.error("CSA Coach analyze error:", error);
     const statusCode = Number(error?.statusCode) || 500;
