@@ -2817,9 +2817,12 @@ function normalizePreferredEntryAreaFromVisual(parsed = {}) {
     priceStatus,
     areaVisuallyReached: raw.areaVisuallyReached === true,
     areaReachEvidence: String(raw.areaReachEvidence || "").trim(),
+    areaReachPrice: nullablePositiveNumber(raw.areaReachPrice),
+    areaReachTime: String(raw.areaReachTime || "").trim(),
     triggerPresent,
     triggerAtAreaVisible: raw.triggerAtAreaVisible === true,
     triggerEvidence: String(raw.triggerEvidence || "").trim(),
+    triggerEvidenceTime: String(raw.triggerEvidenceTime || "").trim(),
     triggerDescription,
   };
 }
@@ -3065,7 +3068,10 @@ CSA ENTRY-ZONE RULES:
 - If price has not reached the planned area, say no trigger exists there yet.
 - Treat chart annotations, arrows, labels, and written trade ideas as the trader's claims, not as proof that price actually reached an area or formed a trigger.
 - Mark areaVisuallyReached true only when candle highs/lows/bodies visibly enter or touch the planned zone.
+- When areaVisuallyReached is true, also provide areaReachPrice as the actual visible candle price that touched/entered the zone and areaReachTime as the visible candle date/time or chart-position description. Without both, areaVisuallyReached must be false.
 - Mark triggerAtAreaVisible true only when a valid trigger is visibly formed at the planned area after price reaches it.
+- When triggerAtAreaVisible is true, provide triggerEvidenceTime and identify the exact trigger candle/pattern. Without this, triggerAtAreaVisible must be false.
+- Read latestVisiblePrice from the final visible candle/header where possible. Do not substitute a later external-data close.
 - Mark stopLossVisible and targetVisible true only when the chart visibly shows the actual stop-loss and target levels for the reviewed trade. Text discussing stop loss or target without a plotted level is not enough.
 
 OUTPUT PRIORITY RULES:
@@ -3121,11 +3127,15 @@ Return exactly this JSON shape:
     "priceStatus": "not reached | approaching | inside | reacted | moved away | unclear",
     "areaVisuallyReached": false,
     "areaReachEvidence": "describe the candle body/wick that visibly entered the zone, or null",
+    "areaReachPrice": null,
+    "areaReachTime": null,
     "triggerPresent": false,
     "triggerAtAreaVisible": false,
     "triggerEvidence": "name the valid candle/structure trigger visibly formed at the zone, or null",
+    "triggerEvidenceTime": null,
     "triggerDescription": "visible trigger at the planned area or null"
   },
+  "latestVisiblePrice": null,
   "stopLossVisible": false,
   "targetVisible": false,
   "annotationClaimsOnly": false,
@@ -5602,7 +5612,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "2.3.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "2.4.0";
 
 function asPositiveNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -5781,6 +5791,33 @@ function inferConfluence(visualReview = {}) {
   };
 }
 
+
+function priceTouchesZone(price, zoneLow, zoneHigh) {
+  const p = asPositiveNumber(price);
+  const low = asPositiveNumber(zoneLow);
+  const high = asPositiveNumber(zoneHigh);
+
+  if (p === null || low === null || high === null) return false;
+
+  const lower = Math.min(low, high);
+  const upper = Math.max(low, high);
+  const tolerance = Math.max((upper - lower) * 0.08, upper * 0.00003);
+
+  return p >= lower - tolerance && p <= upper + tolerance;
+}
+
+function hasSpecificVisibleTime(value = "") {
+  const text = String(value || "").trim();
+  if (!text) return false;
+
+  return (
+    /\b\d{1,2}:\d{2}\b/.test(text) ||
+    /\b\d{4}-\d{2}-\d{2}\b/.test(text) ||
+    /\b(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?\b/i.test(text) ||
+    /\b(?:final|last|rightmost)\s+(?:visible\s+)?candle\b/i.test(text)
+  );
+}
+
 function buildValidatedAnalysisFacts({
   visualReview = {},
   marketReference = {},
@@ -5834,6 +5871,8 @@ function buildValidatedAnalysisFacts({
   const areaReachEvidence = String(
     preferredArea?.areaReachEvidence || ""
   ).trim();
+  const areaReachPrice = asPositiveNumber(preferredArea?.areaReachPrice);
+  const areaReachTime = String(preferredArea?.areaReachTime || "").trim();
   const annotationOnlyEvidence =
     /annotation|label|arrow|text says|marked as|planned|retest here|entry here/i;
   const candleReachEvidence =
@@ -5842,7 +5881,9 @@ function buildValidatedAnalysisFacts({
   const areaReachVisuallyProven =
     preferredArea?.areaVisuallyReached === true &&
     candleReachEvidence.test(areaReachEvidence) &&
-    !annotationOnlyEvidence.test(areaReachEvidence);
+    !annotationOnlyEvidence.test(areaReachEvidence) &&
+    priceTouchesZone(areaReachPrice, zone.zoneLow, zone.zoneHigh) &&
+    hasSpecificVisibleTime(areaReachTime);
 
   // Market-reference price can be later than the screenshot's exact final
   // intraday candle when the chart time is unreadable. It must not prove that
@@ -5888,10 +5929,15 @@ function buildValidatedAnalysisFacts({
   const validTriggerEvidence =
     /engulf|pin bar|hammer|doji|inside bar|lower high|higher low|break(?:out|down)|retest[- ]and[- ]hold|break[- ]and[- ]hold|head and shoulders|quasimodo/i;
 
+  const triggerEvidenceTime = String(
+    preferredArea?.triggerEvidenceTime || ""
+  ).trim();
+
   let triggerPresent =
     preferredArea?.triggerPresent === true &&
     preferredArea?.triggerAtAreaVisible === true &&
     areaRetested &&
+    hasSpecificVisibleTime(triggerEvidenceTime) &&
     validTriggerEvidence.test(`${triggerEvidence} ${triggerDescription}`) &&
     !annotationOnlyEvidence.test(`${triggerEvidence} ${triggerDescription}`) &&
     !invalidTriggerWords.test(`${triggerEvidence} ${triggerDescription}`);
@@ -5998,6 +6044,7 @@ function buildValidatedAnalysisFacts({
     direction,
     shortTermCondition,
     currentPrice,
+    latestVisiblePrice: asPositiveNumber(visualReview?.latestVisiblePrice),
     preferredEntryArea: {
       direction:
         direction === "bearish"
@@ -6012,9 +6059,12 @@ function buildValidatedAnalysisFacts({
       priceStatus,
       areaRetested,
       areaReachEvidence: areaRetested ? areaReachEvidence : "",
+      areaReachPrice: areaRetested ? areaReachPrice : null,
+      areaReachTime: areaRetested ? areaReachTime : "",
       marketReferenceInsideZone: currentPriceInsideZone,
       triggerPresent,
       triggerEvidence: triggerPresent ? triggerEvidence : "",
+      triggerEvidenceTime: triggerPresent ? triggerEvidenceTime : "",
       triggerDescription: triggerPresent ? triggerDescription : "",
       lifecycleStatus,
       invalidated: areaInvalidated,
@@ -6081,12 +6131,20 @@ function controlledScores(facts) {
   if (facts.preferredEntryArea.triggerPresent) entry += 20;
 
   if (!facts.preferredEntryArea.areaRetested) {
-    setup = Math.min(setup, 72);
-    entry = Math.min(entry, 50);
+    setup = Math.min(setup, 68);
+    entry = Math.min(entry, 45);
   }
 
   if (!facts.preferredEntryArea.triggerPresent) {
-    entry = Math.min(entry, 60);
+    entry = Math.min(entry, 55);
+  }
+
+  if (
+    !facts.preferredEntryArea.areaRetested &&
+    !facts.preferredEntryArea.triggerPresent
+  ) {
+    setup = Math.min(setup, 68);
+    entry = Math.min(entry, 45);
   }
   if (facts.preferredEntryArea.invalidated) entry -= 20;
   if (!facts.trade.visible && !facts.preferredEntryArea.triggerPresent) entry = Math.min(entry, 55);
