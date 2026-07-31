@@ -5714,7 +5714,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "2.8.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "2.9.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6164,15 +6164,30 @@ function buildValidatedAnalysisFacts({
       ? visualReview.preferredEntryArea
       : {};
 
-  const rawDirection =
-    fallbackPreferredArea?.direction ||
-    visualReview?.shortTermDirection ||
-    visualReview?.plainMarketDirection ||
-    bias?.bias ||
-    marketReference?.directionalBias?.bias ||
-    "";
+  const verifiedMarketDirection =
+    normalizedDirectionCode(
+      bias?.biasCode ||
+      bias?.bias ||
+      marketReference?.directionalBias?.biasCode ||
+      marketReference?.directionalBias?.bias ||
+      ""
+    );
 
-  const direction = normalizedDirectionCode(rawDirection);
+  const visualDirection =
+    normalizedDirectionCode(
+      fallbackPreferredArea?.direction ||
+      visualReview?.plainMarketDirection ||
+      visualReview?.shortTermDirection ||
+      ""
+    );
+
+  // The verified historical framework controls the broader directional bias.
+  // Visual review may describe a short-term range or pullback, but it must not
+  // turn a verified bullish/bearish structure into a range-bound verdict.
+  const direction =
+    ["bullish", "bearish"].includes(verifiedMarketDirection)
+      ? verifiedMarketDirection
+      : visualDirection;
   const currentPrice =
     asPositiveNumber(visualReview?.latestVisiblePrice) ||
     extractLastMarketPrice(marketReference);
@@ -6362,7 +6377,10 @@ function buildValidatedAnalysisFacts({
       : "not_applicable";
 
   const shortTermText = String(
-    visualReview?.shortTermDirection || visualReview?.plainMarketDirection || ""
+    visualReview?.shortTermDirection ||
+      visualReview?.plainMarketDirection ||
+      visualReview?.visualSummary ||
+      ""
   ).toLowerCase();
 
   const shortTermCondition =
@@ -6370,7 +6388,7 @@ function buildValidatedAnalysisFacts({
       ? "consolidation"
       : /bounce/.test(shortTermText)
       ? "bounce"
-      : /pullback|retracement/.test(shortTermText)
+      : /pullback|retracement|correction/.test(shortTermText)
       ? "pullback"
       : "trend";
 
@@ -6385,6 +6403,12 @@ function buildValidatedAnalysisFacts({
         "unclear"
     ).toLowerCase(),
     direction,
+    directionSource:
+      ["bullish", "bearish"].includes(verifiedMarketDirection)
+        ? "verified_market_framework"
+        : "visual_review",
+    visualDirection,
+    verifiedMarketDirection,
     shortTermCondition,
     currentPrice,
     latestVisiblePrice: asPositiveNumber(visualReview?.latestVisiblePrice),
@@ -6488,11 +6512,15 @@ function directionDisplay(facts) {
   if (facts.direction === "bearish") {
     return facts.shortTermCondition === "consolidation"
       ? "Bearish with short-term consolidation"
+      : facts.shortTermCondition === "pullback"
+      ? "Bearish with a short-term pullback"
       : "Bearish";
   }
   if (facts.direction === "bullish") {
     return facts.shortTermCondition === "consolidation"
       ? "Bullish with short-term consolidation"
+      : facts.shortTermCondition === "pullback"
+      ? "Bullish with a short-term pullback"
       : "Bullish";
   }
   return "Range-bound";
