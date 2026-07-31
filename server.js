@@ -1245,6 +1245,16 @@ Entry trigger rule:
 Only return visibleTrigger if there is real confirmation such as engulfing, pin bar, hammer, doji rejection, inside bar break, lower high/higher low, breakout/breakdown, retest-and-hold, or clean break-and-hold.
 Bounce, pullback, reaction, retracement, ranging, or consolidation alone is not a trigger.
 
+AREA RANKING RULES:
+- Identify up to 3 active entry areas that agree with the directional bias.
+- Rank the nearest valid area first, not merely the largest or highest visible zone.
+- For a bearish plan, a broken support below an older supply zone becomes potential converted resistance and should normally be the primary area when it is the nearest valid sell area above price.
+- For a bullish plan, a broken resistance above an older demand zone becomes potential converted support and should normally be the primary area when it is the nearest valid buy area below price.
+- Keep a farther supply/demand zone as a secondary area when it remains valid.
+- Do not include an invalidated area as an active entry area.
+- Each area must have a state: active, potential conversion, confirmed conversion, or invalidated.
+- The primary and secondary areas must use visible/approved prices only.
+
 Return exactly this JSON shape:
 {
   "isTradingChart": true,
@@ -1757,6 +1767,9 @@ function sanitizeVisualReviewMarketPrices({
       visualReview.chartSpecificWeaknesses,
       []
     ).map(safeText),
+    activeEntryAreas: Array.isArray(visualReview.activeEntryAreas)
+      ? visualReview.activeEntryAreas.slice(0, 5)
+      : [],
     preferredEntryArea:
       visualReview.preferredEntryArea && typeof visualReview.preferredEntryArea === "object"
         ? {
@@ -2829,6 +2842,69 @@ function normalizePreferredEntryAreaFromVisual(parsed = {}) {
 }
 
 
+function normalizeActiveEntryAreasFromVisual(parsed = {}) {
+  const rawAreas = Array.isArray(parsed?.activeEntryAreas)
+    ? parsed.activeEntryAreas
+    : [];
+
+  const normalized = rawAreas
+    .slice(0, 6)
+    .map((raw) => {
+      if (!raw || typeof raw !== "object") return null;
+
+      const area = normalizePreferredEntryAreaFromVisual({
+        preferredEntryArea: raw,
+        bestAreaToWatch: raw.zoneText || raw.sourceReason || "",
+        coachVerdict: raw.sourceReason || "",
+        mainWarning: "",
+        visualSummary: "",
+        chartSpecificStrengths: [],
+        chartSpecificWeaknesses: [],
+        entryEvidence: raw.triggerEvidence || raw.triggerDescription || "",
+      });
+
+      if (!area) return null;
+
+      const stateText = String(raw.state || "active").toLowerCase();
+      const state =
+        /confirmed/.test(stateText)
+          ? "confirmed_conversion"
+          : /potential/.test(stateText)
+          ? "potential_conversion"
+          : /invalid/.test(stateText)
+          ? "invalidated"
+          : "active";
+
+      return {
+        ...area,
+        state,
+        sourceReason: safeUserText(raw.sourceReason || ""),
+      };
+    })
+    .filter(Boolean);
+
+  const preferred = normalizePreferredEntryAreaFromVisual(parsed);
+  if (preferred) {
+    normalized.push({
+      ...preferred,
+      state: "active",
+      sourceReason: safeUserText(parsed.bestAreaToWatch || ""),
+    });
+  }
+
+  const seen = new Set();
+
+  return normalized.filter((area) => {
+    const low = Number.isFinite(Number(area.zoneLow)) ? Number(area.zoneLow) : null;
+    const high = Number.isFinite(Number(area.zoneHigh)) ? Number(area.zoneHigh) : null;
+    const key = `${area.direction}|${area.areaType}|${low}|${high}|${area.zoneText}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 5);
+}
+
+
 
 const CSA_FRAMEWORK_VERSION = "1.0";
 
@@ -3119,6 +3195,27 @@ Return exactly this JSON shape:
   "whatThisMeans": "one simple sentence explaining what the trader should understand from the chart",
   "timeframeSummary": "one simple sentence describing what the uploaded ${timeframe} chart is doing",
   "bestAreaToWatch": "one simple sentence saying where price should return before a better setup. Use a supply/demand ZONE when visible; do not force one exact price.",
+  "activeEntryAreas": [
+    {
+      "direction": "buy | sell",
+      "areaType": "support | resistance | demand | supply | converted support | converted resistance",
+      "zoneLow": null,
+      "zoneHigh": null,
+      "zoneText": "full visible/approved area range",
+      "state": "active | potential conversion | confirmed conversion | invalidated",
+      "sourceReason": "brief reason this area exists",
+      "priceStatus": "not reached | approaching | inside | reacted | moved away | unclear",
+      "areaVisuallyReached": false,
+      "areaReachEvidence": null,
+      "areaReachPrice": null,
+      "areaReachTime": null,
+      "triggerPresent": false,
+      "triggerAtAreaVisible": false,
+      "triggerEvidence": null,
+      "triggerEvidenceTime": null,
+      "triggerDescription": null
+    }
+  ],
   "preferredEntryArea": {
     "direction": "buy | sell | none",
     "areaType": "support | resistance | demand | supply | converted support | converted resistance | none",
@@ -3189,6 +3286,8 @@ Return exactly this JSON shape:
 
     const normalizedPreferredEntryArea =
       normalizePreferredEntryAreaFromVisual(parsed);
+    const normalizedActiveEntryAreas =
+      normalizeActiveEntryAreasFromVisual(parsed);
 
     console.log("Visual review structured output:", {
       marketReferenceAvailable,
@@ -3224,6 +3323,7 @@ Return exactly this JSON shape:
       whatThisMeans: safeUserText(parsed.whatThisMeans),
       timeframeSummary: safeUserText(parsed.timeframeSummary),
       bestAreaToWatch: safeUserText(parsed.bestAreaToWatch),
+      activeEntryAreas: normalizedActiveEntryAreas,
       preferredEntryArea: normalizedPreferredEntryArea,
       convertedLevelAssessment: safeUserText(parsed.convertedLevelAssessment),
       mainWarning: safeUserText(parsed.mainWarning),
@@ -5614,7 +5714,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "2.5.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "2.6.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -5891,6 +5991,113 @@ function hasSpecificVisibleTime(value = "") {
   );
 }
 
+
+function areaCenter(area = {}) {
+  const low = asPositiveNumber(area.zoneLow);
+  const high = asPositiveNumber(area.zoneHigh);
+  if (low !== null && high !== null) return (low + high) / 2;
+  return low ?? high;
+}
+
+function rankRawEntryAreas({
+  visualReview = {},
+  direction = "range",
+  currentPrice = null,
+  symbol = "",
+}) {
+  const raw = [
+    ...(Array.isArray(visualReview?.activeEntryAreas)
+      ? visualReview.activeEntryAreas
+      : []),
+    ...(visualReview?.preferredEntryArea
+      ? [visualReview.preferredEntryArea]
+      : []),
+  ];
+
+  const wantedDirection =
+    direction === "bearish" ? "sell" : direction === "bullish" ? "buy" : "none";
+
+  const candidates = raw
+    .map((area) => {
+      if (!area || typeof area !== "object") return null;
+
+      const normalizedDirection = String(area.direction || wantedDirection).toLowerCase();
+      const areaType = normalizedAreaType(area.areaType, direction);
+      const zone = normalizeZone(area, symbol);
+      const stateText = String(area.state || "active").toLowerCase();
+      const state =
+        /confirmed/.test(stateText)
+          ? "confirmed_conversion"
+          : /potential/.test(stateText)
+          ? "potential_conversion"
+          : /invalid/.test(stateText)
+          ? "invalidated"
+          : "active";
+
+      const center =
+        zone.zoneLow !== null && zone.zoneHigh !== null
+          ? (zone.zoneLow + zone.zoneHigh) / 2
+          : zone.zoneLow ?? zone.zoneHigh;
+
+      if (center === null || state === "invalidated") return null;
+      if (wantedDirection !== "none" && normalizedDirection !== wantedDirection) return null;
+      if (!areaDirectionMatches(areaType, direction)) return null;
+
+      const onCorrectSide =
+        currentPrice === null ||
+        (direction === "bearish" && center >= currentPrice) ||
+        (direction === "bullish" && center <= currentPrice) ||
+        direction === "range";
+
+      if (!onCorrectSide) return null;
+
+      const distance =
+        currentPrice === null ? Number.MAX_SAFE_INTEGER : Math.abs(center - currentPrice);
+
+      const typePriority =
+        areaType === "converted resistance" || areaType === "converted support"
+          ? 0
+          : areaType === "supply" || areaType === "demand"
+          ? 1
+          : 2;
+
+      return {
+        ...area,
+        direction: normalizedDirection,
+        areaType,
+        zoneLow: zone.zoneLow,
+        zoneHigh: zone.zoneHigh,
+        zoneText: zone.zoneText,
+        state,
+        distance,
+        typePriority,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const distanceDifference = a.distance - b.distance;
+      const tolerance = Math.max(
+        Math.abs(Number(currentPrice || 0)) * 0.0005,
+        direction === "bearish" || direction === "bullish" ? 0.0005 : 0
+      );
+
+      if (Math.abs(distanceDifference) > tolerance) {
+        return distanceDifference;
+      }
+
+      return a.typePriority - b.typePriority;
+    });
+
+  const seen = new Set();
+
+  return candidates.filter((area) => {
+    const key = `${area.areaType}|${area.zoneLow}|${area.zoneHigh}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 3);
+}
+
 function buildValidatedAnalysisFacts({
   visualReview = {},
   marketReference = {},
@@ -5901,14 +6108,14 @@ function buildValidatedAnalysisFacts({
   analysisType = "post-trade",
   submittedNotes = "",
 }) {
-  const preferredArea =
+  const fallbackPreferredArea =
     visualReview?.preferredEntryArea &&
     typeof visualReview.preferredEntryArea === "object"
       ? visualReview.preferredEntryArea
       : {};
 
   const rawDirection =
-    preferredArea?.direction ||
+    fallbackPreferredArea?.direction ||
     visualReview?.shortTermDirection ||
     visualReview?.plainMarketDirection ||
     bias?.bias ||
@@ -5916,9 +6123,21 @@ function buildValidatedAnalysisFacts({
     "";
 
   const direction = normalizedDirectionCode(rawDirection);
+  const currentPrice =
+    asPositiveNumber(visualReview?.latestVisiblePrice) ||
+    extractLastMarketPrice(marketReference);
+
+  const rankedRawAreas = rankRawEntryAreas({
+    visualReview,
+    direction,
+    currentPrice,
+    symbol: submittedInstrument,
+  });
+
+  const preferredArea = rankedRawAreas[0] || fallbackPreferredArea;
+  const secondaryRawArea = rankedRawAreas[1] || null;
   const areaType = normalizedAreaType(preferredArea?.areaType, direction);
   const zone = normalizeZone(preferredArea, submittedInstrument);
-  const currentPrice = extractLastMarketPrice(marketReference);
   let priceStatus = normalizePriceStatus(preferredArea?.priceStatus);
   const combinedAreaEvidence = [
     preferredArea?.priceStatus,
@@ -6118,6 +6337,32 @@ function buildValidatedAnalysisFacts({
     shortTermCondition,
     currentPrice,
     latestVisiblePrice: asPositiveNumber(visualReview?.latestVisiblePrice),
+    activeEntryAreas: rankedRawAreas.map((candidate, index) => ({
+      rank: index + 1,
+      role: index === 0 ? "primary" : index === 1 ? "secondary" : "alternative",
+      direction: candidate.direction,
+      areaType: candidate.areaType,
+      zoneLow: candidate.zoneLow,
+      zoneHigh: candidate.zoneHigh,
+      zoneText: candidate.zoneText,
+      state: candidate.state,
+      sourceReason: safeUserText(candidate.sourceReason || ""),
+      distanceFromPrice:
+        Number.isFinite(Number(candidate.distance))
+          ? Number(candidate.distance)
+          : null,
+    })),
+    secondaryEntryArea: secondaryRawArea
+      ? {
+          direction: secondaryRawArea.direction,
+          areaType: secondaryRawArea.areaType,
+          zoneLow: secondaryRawArea.zoneLow,
+          zoneHigh: secondaryRawArea.zoneHigh,
+          zoneText: secondaryRawArea.zoneText,
+          state: secondaryRawArea.state,
+          sourceReason: safeUserText(secondaryRawArea.sourceReason || ""),
+        }
+      : null,
     preferredEntryArea: {
       direction:
         direction === "bearish"
@@ -6167,10 +6412,25 @@ function buildValidatedAnalysisFacts({
   };
 }
 
+function formatRankedArea(area, fallbackType = "entry") {
+  if (!area) return "";
+  const base = area.areaType || fallbackType;
+  return area.zoneText ? `${base} around ${area.zoneText}` : `marked ${base}`;
+}
+
 function areaDisplay(facts) {
   const area = facts.preferredEntryArea;
-  const base = area.areaType || (facts.direction === "bearish" ? "supply" : "demand");
-  return area.zoneText ? `${base} area around ${area.zoneText}` : `marked ${base} area`;
+  return formatRankedArea(
+    area,
+    facts.direction === "bearish" ? "supply area" : "demand area"
+  );
+}
+
+function secondaryAreaDisplay(facts) {
+  return formatRankedArea(
+    facts.secondaryEntryArea,
+    facts.direction === "bearish" ? "supply area" : "demand area"
+  );
 }
 
 function directionDisplay(facts) {
@@ -6262,6 +6522,7 @@ function buildControlledFeedback({
 }) {
   const area = facts.preferredEntryArea;
   const areaText = areaDisplay(facts);
+  const secondaryAreaText = secondaryAreaDisplay(facts);
   const directionText = directionDisplay(facts);
   const action = area.direction === "sell" ? "sell" : area.direction === "buy" ? "buy" : "trade";
   const opposingLevel = facts.direction === "bearish" ? "support" : "resistance";
@@ -6278,8 +6539,23 @@ function buildControlledFeedback({
   }
 
   if (!area.invalidated) {
+    if (
+      area.areaType === "converted resistance" ||
+      area.areaType === "converted support"
+    ) {
+      strengths.push(
+        `The ${areaText} is the nearest important area to monitor for a possible ${action}.`
+      );
+    } else {
+      strengths.push(
+        `The ${areaText} gives a clear ${action} location to monitor.`
+      );
+    }
+  }
+
+  if (secondaryAreaText) {
     strengths.push(
-      `The ${areaText} gives a clear ${action} location to monitor.`
+      `The ${secondaryAreaText} provides a secondary ${action} area if price moves beyond the primary area.`
     );
   }
 
@@ -6372,10 +6648,18 @@ function buildControlledFeedback({
     }
   } else if (facts.direction === "bearish") {
     nextAction =
-      `Wait for price to retrace towards the ${areaText} and show a clear bearish trigger before considering a sell. Make sure there is enough room to the next support for a reasonable risk-to-reward ratio. Do not chase a sell while price remains close to support.`;
+      `Wait for price to retrace towards the ${areaText} and show a clear bearish rejection before considering a sell.` +
+      (secondaryAreaText
+        ? ` If price breaks above the primary area, monitor the ${secondaryAreaText}.`
+        : "") +
+      ` Make sure there is enough room to the next support for a reasonable risk-to-reward ratio. Do not chase a sell while price remains close to support.`;
   } else if (facts.direction === "bullish") {
     nextAction =
-      `Wait for price to return towards the ${areaText} and show a clear bullish trigger before considering a buy. Make sure there is enough room to the next resistance for a reasonable risk-to-reward ratio. Do not chase a buy while price remains close to resistance.`;
+      `Wait for price to return towards the ${areaText} and show a clear bullish hold before considering a buy.` +
+      (secondaryAreaText
+        ? ` If price breaks below the primary area, monitor the ${secondaryAreaText}.`
+        : "") +
+      ` Make sure there is enough room to the next resistance for a reasonable risk-to-reward ratio. Do not chase a buy while price remains close to resistance.`;
   } else {
     nextAction =
       "Wait for price to reach a clearly defined support or resistance area and show a valid trigger before considering a trade. Avoid entering in the middle of the range.";
@@ -6402,6 +6686,9 @@ function buildControlledFeedback({
     "",
     "CHART LEVELS:",
     `- Primary area: ${areaText}.`,
+    secondaryAreaText
+      ? `- Secondary area: ${secondaryAreaText}.`
+      : "- No separate secondary area was confirmed.",
     `- Area status: ${area.lifecycleStatus.replace(/_/g, " ")}.`,
     facts.convertedLevel.detected
       ? `- Converted level: ${facts.convertedLevel.state.replace(/_/g, " ")}.`
