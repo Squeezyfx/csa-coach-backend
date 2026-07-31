@@ -5714,7 +5714,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "2.9.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "3.0.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6148,6 +6148,66 @@ function rankRawEntryAreas({
   }).slice(0, 3);
 }
 
+
+function normalizeBreakoutState(visualReview = {}, chartDetection = {}) {
+  const combined = [
+    visualReview?.visualSummary,
+    visualReview?.plainMarketDirection,
+    visualReview?.shortTermDirection,
+    visualReview?.entryEvidence,
+    visualReview?.mainWarning,
+    visualReview?.coachVerdict,
+    chartDetection?.visibleTrigger,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const bullishBreakout =
+    /bullish breakout|breakout above|broke above|clean break above|strong bullish continuation|bullish continuation/.test(combined);
+
+  const bearishBreakdown =
+    /bearish breakdown|breakdown below|broke below|clean break below|strong bearish continuation|bearish continuation/.test(combined);
+
+  const extended =
+    /extended|already moved|already rallied|already dropped|close to resistance|near resistance|close to support|near support/.test(combined);
+
+  return {
+    bullishBreakout,
+    bearishBreakdown,
+    extended,
+    state: bullishBreakout
+      ? "bullish_breakout"
+      : bearishBreakdown
+      ? "bearish_breakdown"
+      : "none",
+  };
+}
+
+function breakoutOverridesRange({
+  verifiedMarketDirection,
+  visualDirection,
+  breakoutState,
+}) {
+  if (
+    breakoutState?.bullishBreakout &&
+    verifiedMarketDirection === "range" &&
+    ["range", "bullish"].includes(visualDirection)
+  ) {
+    return "bullish";
+  }
+
+  if (
+    breakoutState?.bearishBreakdown &&
+    verifiedMarketDirection === "range" &&
+    ["range", "bearish"].includes(visualDirection)
+  ) {
+    return "bearish";
+  }
+
+  return null;
+}
+
 function buildValidatedAnalysisFacts({
   visualReview = {},
   marketReference = {},
@@ -6184,10 +6244,22 @@ function buildValidatedAnalysisFacts({
   // The verified historical framework controls the broader directional bias.
   // Visual review may describe a short-term range or pullback, but it must not
   // turn a verified bullish/bearish structure into a range-bound verdict.
-  const direction =
-    ["bullish", "bearish"].includes(verifiedMarketDirection)
-      ? verifiedMarketDirection
-      : visualDirection;
+  const breakoutState = normalizeBreakoutState(
+    visualReview,
+    chartDetection
+  );
+
+  const breakoutDirectionOverride = breakoutOverridesRange({
+    verifiedMarketDirection,
+    visualDirection,
+    breakoutState,
+  });
+
+  const direction = breakoutDirectionOverride
+    ? breakoutDirectionOverride
+    : ["bullish", "bearish"].includes(verifiedMarketDirection)
+    ? verifiedMarketDirection
+    : visualDirection;
   const currentPrice =
     asPositiveNumber(visualReview?.latestVisiblePrice) ||
     extractLastMarketPrice(marketReference);
@@ -6409,6 +6481,9 @@ function buildValidatedAnalysisFacts({
         : "visual_review",
     visualDirection,
     verifiedMarketDirection,
+    breakoutState,
+    directionOverride:
+      breakoutDirectionOverride ? "recent_breakout_override" : null,
     shortTermCondition,
     currentPrice,
     latestVisiblePrice: asPositiveNumber(visualReview?.latestVisiblePrice),
@@ -6510,19 +6585,33 @@ function secondaryAreaDisplay(facts) {
 
 function directionDisplay(facts) {
   if (facts.direction === "bearish") {
+    if (facts.breakoutState?.bearishBreakdown) {
+      return facts.breakoutState.extended
+        ? "Bearish after a strong breakdown, with price approaching support"
+        : "Bearish after a strong breakdown";
+    }
+
     return facts.shortTermCondition === "consolidation"
       ? "Bearish with short-term consolidation"
       : facts.shortTermCondition === "pullback"
       ? "Bearish with a short-term pullback"
       : "Bearish";
   }
+
   if (facts.direction === "bullish") {
+    if (facts.breakoutState?.bullishBreakout) {
+      return facts.breakoutState.extended
+        ? "Bullish after a strong breakout, with price approaching resistance"
+        : "Bullish after a strong breakout";
+    }
+
     return facts.shortTermCondition === "consolidation"
       ? "Bullish with short-term consolidation"
       : facts.shortTermCondition === "pullback"
       ? "Bullish with a short-term pullback"
       : "Bullish";
   }
+
   return "Range-bound";
 }
 
@@ -6610,9 +6699,17 @@ function buildControlledFeedback({
   const strengths = [];
 
   if (facts.direction === "bearish") {
-    strengths.push("The bearish market direction is identified correctly.");
+    strengths.push(
+      facts.breakoutState?.bearishBreakdown
+        ? "The strong bearish breakdown and continuation are identified correctly."
+        : "The bearish market direction is identified correctly."
+    );
   } else if (facts.direction === "bullish") {
-    strengths.push("The bullish market direction is identified correctly.");
+    strengths.push(
+      facts.breakoutState?.bullishBreakout
+        ? "The strong bullish breakout and continuation are identified correctly."
+        : "The bullish market direction is identified correctly."
+    );
   } else {
     strengths.push("The chart correctly shows that price is currently range-bound.");
   }
@@ -6692,6 +6789,22 @@ function buildControlledFeedback({
     }
   }
 
+  if (
+    facts.breakoutState?.extended &&
+    facts.direction === "bullish"
+  ) {
+    weaknesses.push(
+      "Price is already close to resistance after the sharp bullish move, so buying now may offer poor risk-to-reward."
+    );
+  } else if (
+    facts.breakoutState?.extended &&
+    facts.direction === "bearish"
+  ) {
+    weaknesses.push(
+      "Price is already close to support after the sharp bearish move, so selling now may offer poor risk-to-reward."
+    );
+  }
+
   if (!facts.risk.assessable) {
     weaknesses.push(
       "A stop loss and target are not both clearly shown, so the planned risk cannot yet be fully assessed."
@@ -6724,7 +6837,21 @@ function buildControlledFeedback({
 
   let nextAction;
 
-  if (area.invalidated) {
+  if (
+    facts.breakoutState?.bullishBreakout &&
+    facts.breakoutState?.extended &&
+    !area.invalidated
+  ) {
+    nextAction =
+      `Do not chase the current bullish move near resistance. Wait for price to pull back towards the ${areaText} and show a clear bullish hold before considering a buy. Alternatively, wait for a clean breakout and hold above the upper resistance before looking for continuation.`;
+  } else if (
+    facts.breakoutState?.bearishBreakdown &&
+    facts.breakoutState?.extended &&
+    !area.invalidated
+  ) {
+    nextAction =
+      `Do not chase the current bearish move near support. Wait for price to retrace towards the ${areaText} and show a clear bearish rejection before considering a sell. Alternatively, wait for a clean breakdown and hold below the lower support before looking for continuation.`;
+  } else if (area.invalidated) {
     if (facts.direction === "bearish") {
       nextAction =
         `Do not reuse the failed ${area.areaType} area for another sell. Wait for a new supply or confirmed resistance area to form, then require a fresh bearish trigger before considering the next setup.`;
