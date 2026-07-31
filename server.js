@@ -5721,7 +5721,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "3.3.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "3.4.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6419,6 +6419,41 @@ function periodBreakState({
   };
 }
 
+
+function findMostRecentStructuralBreak({
+  levels = [],
+  beforeIndex,
+  symbol = "",
+  side = "bearish",
+  maxLookback = 5,
+}) {
+  if (!Array.isArray(levels) || beforeIndex <= 0) return null;
+
+  const startIndex = Math.max(1, beforeIndex - maxLookback);
+
+  for (let index = beforeIndex; index >= startIndex; index -= 1) {
+    const state = periodBreakState({ levels, index, symbol });
+
+    if (side === "bearish" && state.bearishBreakdown) {
+      return {
+        index,
+        level: state.priorSupport,
+        period: levels[index],
+      };
+    }
+
+    if (side === "bullish" && state.bullishBreakout) {
+      return {
+        index,
+        level: state.priorResistance,
+        period: levels[index],
+      };
+    }
+  }
+
+  return null;
+}
+
 function deriveHistoricalPhaseFromLevels({
   marketReference = {},
   symbol = "",
@@ -6473,6 +6508,22 @@ function deriveHistoricalPhaseFromLevels({
     symbol,
   });
 
+  const recentBearishBreak = findMostRecentStructuralBreak({
+    levels,
+    beforeIndex: currentIndex - 1,
+    symbol,
+    side: "bearish",
+    maxLookback: 5,
+  });
+
+  const recentBullishBreak = findMostRecentStructuralBreak({
+    levels,
+    beforeIndex: currentIndex - 1,
+    symbol,
+    side: "bullish",
+    maxLookback: 5,
+  });
+
   const currentClose = Number(current.close);
   const previousClose = Number(previous.close);
   const currentOpen = Number(current.open);
@@ -6480,6 +6531,20 @@ function deriveHistoricalPhaseFromLevels({
   const previousHigh = Number(previous.high);
   const moveThreshold = historicalMoveThreshold(symbol, currentClose);
   const rangePosition = periodRangePosition(current);
+  const currentLow = Number(current.low);
+  const currentHigh = Number(current.high);
+  const currentRange =
+    Number.isFinite(currentHigh) && Number.isFinite(currentLow)
+      ? Math.max(0, currentHigh - currentLow)
+      : 0;
+  const recoveryFromLow =
+    Number.isFinite(currentClose) && Number.isFinite(currentLow)
+      ? currentClose - currentLow
+      : 0;
+  const rejectionFromHigh =
+    Number.isFinite(currentHigh) && Number.isFinite(currentClose)
+      ? currentHigh - currentClose
+      : 0;
 
   // A close beyond the earlier structure confirms a new directional break.
   if (currentBreak.bullishBreakout) {
@@ -6494,6 +6559,52 @@ function deriveHistoricalPhaseFromLevels({
       confirmedReversal: true,
       latestClose: currentClose,
       brokenLevel: currentBreak.priorResistance,
+      source: "cutoff_period_levels",
+    };
+  }
+
+  // A candle can break support intraperiod and still finish as a strong
+  // recovery. In that case, classify the phase as transitional rather than
+  // treating the close as simple bearish continuation.
+  const samePeriodBullishRecovery =
+    currentBreak.bearishBreakdown &&
+    currentClose > currentOpen &&
+    rangePosition >= 0.55 &&
+    recoveryFromLow >= Math.max(moveThreshold * 1.5, currentRange * 0.45) &&
+    !currentBreak.bullishBreakout;
+
+  const priorBreakBullishRecovery =
+    Boolean(recentBearishBreak) &&
+    currentIndex - recentBearishBreak.index <= 5 &&
+    currentClose > Number(recentBearishBreak.period?.close) + moveThreshold &&
+    rangePosition >= 0.55 &&
+    recoveryFromLow >= Math.max(moveThreshold, currentRange * 0.35) &&
+    !currentBreak.bullishBreakout;
+
+  const bullishRecovery =
+    samePeriodBullishRecovery || priorBreakBullishRecovery;
+
+  if (bullishRecovery) {
+    return {
+      direction: "bearish",
+      phase: "bullish_recovery_after_bearish_breakdown",
+      state: "bullish_recovery_after_bearish_breakdown",
+      bullishBreakout: false,
+      bearishBreakdown: false,
+      bullishRecoveryAfterBreakdown: true,
+      bearishPullbackAfterBreakout: false,
+      confirmedReversal: false,
+      latestClose: currentClose,
+      brokenLevel:
+        recentBearishBreak?.level ??
+        currentBreak.priorSupport ??
+        previousBreak.priorSupport ??
+        minFinite(levels.slice(0, currentIndex).map((item) => item?.low)),
+      recoveryFrom: currentLow,
+      recoveryResistance: currentBreak.priorResistance,
+      recoveryEvidence: samePeriodBullishRecovery
+        ? "same_period_break_and_recovery"
+        : "recovery_after_recent_breakdown",
       source: "cutoff_period_levels",
     };
   }
@@ -6514,42 +6625,24 @@ function deriveHistoricalPhaseFromLevels({
     };
   }
 
-  // A recovery after the preceding bearish break remains structurally bearish
-  // until the earlier resistance is actually broken and held.
-  const bullishRecovery =
-    previousBreak.bearishBreakdown &&
-    currentClose > previousClose + moveThreshold &&
-    currentClose > currentOpen &&
-    rangePosition >= 0.55 &&
-    !currentBreak.bullishBreakout;
-
-  if (bullishRecovery) {
-    return {
-      direction: "bearish",
-      phase: "bullish_recovery_after_bearish_breakdown",
-      state: "bullish_recovery_after_bearish_breakdown",
-      bullishBreakout: false,
-      bearishBreakdown: false,
-      bullishRecoveryAfterBreakdown: true,
-      bearishPullbackAfterBreakout: false,
-      confirmedReversal: false,
-      latestClose: currentClose,
-      brokenLevel:
-        previousBreak.priorSupport ??
-        minFinite(levels.slice(0, currentIndex).map((item) => item?.low)),
-      recoveryFrom: previousLow,
-      recoveryResistance: currentBreak.priorResistance,
-      source: "cutoff_period_levels",
-    };
-  }
-
   // The opposite transitional state is handled symmetrically.
-  const bearishPullback =
-    previousBreak.bullishBreakout &&
-    currentClose < previousClose - moveThreshold &&
+  const samePeriodBearishPullback =
+    currentBreak.bullishBreakout &&
     currentClose < currentOpen &&
     rangePosition <= 0.45 &&
+    rejectionFromHigh >= Math.max(moveThreshold * 1.5, currentRange * 0.45) &&
     !currentBreak.bearishBreakdown;
+
+  const priorBreakBearishPullback =
+    Boolean(recentBullishBreak) &&
+    currentIndex - recentBullishBreak.index <= 5 &&
+    currentClose < Number(recentBullishBreak.period?.close) - moveThreshold &&
+    rangePosition <= 0.45 &&
+    rejectionFromHigh >= Math.max(moveThreshold, currentRange * 0.35) &&
+    !currentBreak.bearishBreakdown;
+
+  const bearishPullback =
+    samePeriodBearishPullback || priorBreakBearishPullback;
 
   if (bearishPullback) {
     return {
@@ -6563,9 +6656,14 @@ function deriveHistoricalPhaseFromLevels({
       confirmedReversal: false,
       latestClose: currentClose,
       brokenLevel:
+        recentBullishBreak?.level ??
+        currentBreak.priorResistance ??
         previousBreak.priorResistance ??
         maxFinite(levels.slice(0, currentIndex).map((item) => item?.high)),
-      pullbackFrom: previousHigh,
+      pullbackFrom: currentHigh,
+      pullbackEvidence: samePeriodBearishPullback
+        ? "same_period_break_and_pullback"
+        : "pullback_after_recent_breakout",
       pullbackSupport: currentBreak.priorSupport,
       source: "cutoff_period_levels",
     };
