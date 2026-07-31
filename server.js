@@ -5714,7 +5714,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "2.7.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "2.8.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6595,7 +6595,9 @@ function buildControlledFeedback({
       area.areaType === "converted support"
     ) {
       strengths.push(
-        `The ${areaText} is the nearest important area to monitor for a possible ${action}.`
+        area.areaType === "converted resistance"
+          ? `The broken support around ${area.zoneText || "the identified level"} is the nearest area to monitor as potential resistance.`
+          : `The broken resistance around ${area.zoneText || "the identified level"} is the nearest area to monitor as potential support.`
       );
     } else {
       strengths.push(
@@ -6606,7 +6608,7 @@ function buildControlledFeedback({
 
   if (secondaryAreaText) {
     strengths.push(
-      `The ${secondaryAreaText} provides a secondary ${action} area if price moves beyond the primary area.`
+      `The ${secondaryAreaText} provides a secondary ${action} location if price retraces further.`
     );
   }
 
@@ -6653,7 +6655,11 @@ function buildControlledFeedback({
 
     if (!area.triggerPresent) {
       weaknesses.push(
-        `No fresh ${triggerSide} trigger is visible at the planned ${area.areaType} area yet.`
+        area.areaType === "converted resistance"
+          ? "No fresh bearish rejection is visible at the potential resistance area yet."
+          : area.areaType === "converted support"
+          ? "No fresh bullish hold is visible at the potential support area yet."
+          : `No fresh ${triggerSide} trigger is visible at the planned ${area.areaType} area yet.`
       );
     }
   }
