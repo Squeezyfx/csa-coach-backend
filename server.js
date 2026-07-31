@@ -2124,6 +2124,7 @@ async function fetchTwelveDataStructureLevels({
     ok: false,
     error,
     dailyLevels: [],
+    timeframeCandles: [],
     csaAreas: [],
     directionalBias: calculateCsaDirectionalBias([], symbol, profile),
     rawCandleCount: 0,
@@ -2215,6 +2216,24 @@ async function fetchTwelveDataStructureLevels({
     );
   });
 
+  const timeframeCandles = filteredCandles
+    .map((bar) => ({
+      datetime: String(bar?.datetime || ""),
+      open: Number(bar?.open),
+      high: Number(bar?.high),
+      low: Number(bar?.low),
+      close: Number(bar?.close),
+    }))
+    .filter(
+      (bar) =>
+        bar.datetime &&
+        Number.isFinite(bar.open) &&
+        Number.isFinite(bar.high) &&
+        Number.isFinite(bar.low) &&
+        Number.isFinite(bar.close)
+    )
+    .sort((a, b) => a.datetime.localeCompare(b.datetime));
+
   const dailyLevels = buildStructureLevelsFromCandles(
     filteredCandles,
     structureRange,
@@ -2250,6 +2269,7 @@ async function fetchTwelveDataStructureLevels({
         ? ""
         : `No usable ${profile.sourceUnitPlural} were returned before the chart cutoff.`,
     dailyLevels,
+    timeframeCandles,
     csaAreas,
     approvedAreas,
     directionalBias,
@@ -5721,7 +5741,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "3.4.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "3.5.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6454,6 +6474,308 @@ function findMostRecentStructuralBreak({
   return null;
 }
 
+
+function candleTrueRange(candle = {}, previousClose = null) {
+  const high = Number(candle?.high);
+  const low = Number(candle?.low);
+  const close = Number(previousClose);
+
+  if (!Number.isFinite(high) || !Number.isFinite(low)) return 0;
+  if (!Number.isFinite(close)) return Math.max(0, high - low);
+
+  return Math.max(
+    high - low,
+    Math.abs(high - close),
+    Math.abs(low - close)
+  );
+}
+
+function averageTrueRange(candles = [], period = 14) {
+  if (!Array.isArray(candles) || candles.length < 2) return 0;
+
+  const start = Math.max(1, candles.length - period);
+  const ranges = [];
+
+  for (let index = start; index < candles.length; index += 1) {
+    ranges.push(
+      candleTrueRange(candles[index], candles[index - 1]?.close)
+    );
+  }
+
+  if (!ranges.length) return 0;
+  return ranges.reduce((sum, value) => sum + value, 0) / ranges.length;
+}
+
+function rollingBoundary(candles = [], endIndex, lookback, side = "high") {
+  const start = Math.max(0, endIndex - lookback);
+  const subset = candles.slice(start, endIndex);
+
+  if (!subset.length) return null;
+
+  return side === "low"
+    ? minFinite(subset.map((candle) => candle?.low))
+    : maxFinite(subset.map((candle) => candle?.high));
+}
+
+function recentCloseSlope(candles = [], count = 5) {
+  const recent = candles.slice(-Math.max(2, count));
+  if (recent.length < 2) return 0;
+
+  const first = Number(recent[0]?.close);
+  const last = Number(recent[recent.length - 1]?.close);
+
+  return Number.isFinite(first) && Number.isFinite(last)
+    ? last - first
+    : 0;
+}
+
+function deriveHistoricalPhaseFromTimeframeCandles({
+  marketReference = {},
+  symbol = "",
+  timeframe = "H1",
+}) {
+  const candles = Array.isArray(marketReference?.timeframeCandles)
+    ? marketReference.timeframeCandles
+        .filter(
+          (candle) =>
+            candle?.datetime &&
+            Number.isFinite(Number(candle?.open)) &&
+            Number.isFinite(Number(candle?.high)) &&
+            Number.isFinite(Number(candle?.low)) &&
+            Number.isFinite(Number(candle?.close))
+        )
+        .sort((a, b) =>
+          String(a.datetime).localeCompare(String(b.datetime))
+        )
+    : [];
+
+  if (candles.length < 20) return null;
+
+  const latestIndex = candles.length - 1;
+  const latest = candles[latestIndex];
+  const latestClose = Number(latest.close);
+  const atr = averageTrueRange(candles, 14);
+  const baseTolerance = getCleanBreakTolerance(symbol);
+  const breakTolerance = Math.max(baseTolerance, atr * 0.18);
+  const structuralLookback =
+    normalizeTimeframe(timeframe) === "M30"
+      ? 32
+      : normalizeTimeframe(timeframe) === "H4"
+      ? 18
+      : 24;
+
+  const searchStart = Math.max(
+    structuralLookback,
+    candles.length - structuralLookback * 4
+  );
+
+  let latestBearishBreak = null;
+  let latestBullishBreak = null;
+
+  for (let index = searchStart; index <= latestIndex; index += 1) {
+    const candle = candles[index];
+    const close = Number(candle.close);
+    const priorSupport = rollingBoundary(
+      candles,
+      index,
+      structuralLookback,
+      "low"
+    );
+    const priorResistance = rollingBoundary(
+      candles,
+      index,
+      structuralLookback,
+      "high"
+    );
+
+    if (
+      Number.isFinite(priorSupport) &&
+      close < priorSupport - breakTolerance
+    ) {
+      latestBearishBreak = {
+        index,
+        level: priorSupport,
+        close,
+        low: Number(candle.low),
+      };
+    }
+
+    if (
+      Number.isFinite(priorResistance) &&
+      close > priorResistance + breakTolerance
+    ) {
+      latestBullishBreak = {
+        index,
+        level: priorResistance,
+        close,
+        high: Number(candle.high),
+      };
+    }
+  }
+
+  const latestBreak =
+    latestBearishBreak &&
+    latestBullishBreak
+      ? latestBearishBreak.index > latestBullishBreak.index
+        ? { side: "bearish", ...latestBearishBreak }
+        : { side: "bullish", ...latestBullishBreak }
+      : latestBearishBreak
+      ? { side: "bearish", ...latestBearishBreak }
+      : latestBullishBreak
+      ? { side: "bullish", ...latestBullishBreak }
+      : null;
+
+  if (!latestBreak) return null;
+
+  const afterBreak = candles.slice(latestBreak.index);
+  const postBreakLow = minFinite(afterBreak.map((candle) => candle?.low));
+  const postBreakHigh = maxFinite(afterBreak.map((candle) => candle?.high));
+  const closeSlope = recentCloseSlope(candles, 5);
+  const recentThree = candles.slice(-3);
+  const twoClosesAbove =
+    recentThree.filter(
+      (candle) =>
+        Number(candle?.close) >
+        Number(latestBreak.level) + breakTolerance
+    ).length >= 2;
+  const twoClosesBelow =
+    recentThree.filter(
+      (candle) =>
+        Number(candle?.close) <
+        Number(latestBreak.level) - breakTolerance
+    ).length >= 2;
+
+  if (latestBreak.side === "bearish") {
+    const breakdownDepth =
+      Number(latestBreak.level) - Number(postBreakLow);
+    const recoveryDistance =
+      latestClose - Number(postBreakLow);
+    const recoveryRatio =
+      breakdownDepth > 0 ? recoveryDistance / breakdownDepth : 0;
+
+    const recoveryStrong =
+      recoveryDistance >= Math.max(atr * 2.2, breakTolerance * 5) &&
+      recoveryRatio >= 0.45 &&
+      closeSlope > Math.max(atr * 0.35, breakTolerance);
+
+    const bullishReversalConfirmed =
+      latestClose > latestBreak.level + breakTolerance &&
+      twoClosesAbove;
+
+    if (bullishReversalConfirmed) {
+      return {
+        direction: "bullish",
+        phase: "bullish_breakout",
+        state: "bullish_breakout",
+        bullishBreakout: true,
+        bearishBreakdown: false,
+        bullishRecoveryAfterBreakdown: false,
+        bearishPullbackAfterBreakout: false,
+        confirmedReversal: true,
+        latestClose,
+        brokenLevel: latestBreak.level,
+        source: "cutoff_timeframe_candles",
+      };
+    }
+
+    if (recoveryStrong) {
+      return {
+        direction: "bearish",
+        phase: "bullish_recovery_after_bearish_breakdown",
+        state: "bullish_recovery_after_bearish_breakdown",
+        bullishBreakout: false,
+        bearishBreakdown: false,
+        bullishRecoveryAfterBreakdown: true,
+        bearishPullbackAfterBreakout: false,
+        confirmedReversal: false,
+        latestClose,
+        brokenLevel: latestBreak.level,
+        recoveryFrom: postBreakLow,
+        recoveryRatio,
+        source: "cutoff_timeframe_candles",
+      };
+    }
+
+    return {
+      direction: "bearish",
+      phase: "bearish_breakdown",
+      state: "bearish_breakdown",
+      bullishBreakout: false,
+      bearishBreakdown: true,
+      bullishRecoveryAfterBreakdown: false,
+      bearishPullbackAfterBreakout: false,
+      confirmedReversal: true,
+      latestClose,
+      brokenLevel: latestBreak.level,
+      source: "cutoff_timeframe_candles",
+    };
+  }
+
+  const breakoutHeight =
+    Number(postBreakHigh) - Number(latestBreak.level);
+  const pullbackDistance =
+    Number(postBreakHigh) - latestClose;
+  const pullbackRatio =
+    breakoutHeight > 0 ? pullbackDistance / breakoutHeight : 0;
+
+  const pullbackStrong =
+    pullbackDistance >= Math.max(atr * 2.2, breakTolerance * 5) &&
+    pullbackRatio >= 0.45 &&
+    closeSlope < -Math.max(atr * 0.35, breakTolerance);
+
+  const bearishReversalConfirmed =
+    latestClose < latestBreak.level - breakTolerance &&
+    twoClosesBelow;
+
+  if (bearishReversalConfirmed) {
+    return {
+      direction: "bearish",
+      phase: "bearish_breakdown",
+      state: "bearish_breakdown",
+      bullishBreakout: false,
+      bearishBreakdown: true,
+      bullishRecoveryAfterBreakdown: false,
+      bearishPullbackAfterBreakout: false,
+      confirmedReversal: true,
+      latestClose,
+      brokenLevel: latestBreak.level,
+      source: "cutoff_timeframe_candles",
+    };
+  }
+
+  if (pullbackStrong) {
+    return {
+      direction: "bullish",
+      phase: "bearish_pullback_after_bullish_breakout",
+      state: "bearish_pullback_after_bullish_breakout",
+      bullishBreakout: false,
+      bearishBreakdown: false,
+      bullishRecoveryAfterBreakdown: false,
+      bearishPullbackAfterBreakout: true,
+      confirmedReversal: false,
+      latestClose,
+      brokenLevel: latestBreak.level,
+      pullbackFrom: postBreakHigh,
+      pullbackRatio,
+      source: "cutoff_timeframe_candles",
+    };
+  }
+
+  return {
+    direction: "bullish",
+    phase: "bullish_breakout",
+    state: "bullish_breakout",
+    bullishBreakout: true,
+    bearishBreakdown: false,
+    bullishRecoveryAfterBreakdown: false,
+    bearishPullbackAfterBreakout: false,
+    confirmedReversal: true,
+    latestClose,
+    brokenLevel: latestBreak.level,
+    source: "cutoff_timeframe_candles",
+  };
+}
+
 function deriveHistoricalPhaseFromLevels({
   marketReference = {},
   symbol = "",
@@ -6754,10 +7076,16 @@ function buildValidatedAnalysisFacts({
     chartDetection
   );
 
-  const historicalPhase = deriveHistoricalPhaseFromLevels({
-    marketReference,
-    symbol: submittedInstrument,
-  });
+  const historicalPhase =
+    deriveHistoricalPhaseFromTimeframeCandles({
+      marketReference,
+      symbol: submittedInstrument,
+      timeframe,
+    }) ||
+    deriveHistoricalPhaseFromLevels({
+      marketReference,
+      symbol: submittedInstrument,
+    });
 
   // When the selected date is earlier than the final date visible in the
   // screenshot, the independent period-level classifier becomes authoritative.
@@ -9155,7 +9483,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       journalTags: ["setup review", "directional bias", "entry area", "visual csa comparison", "uploaded chart comparison", "risk reward", marketReference.profile?.selectedTimeframe || selectedTimeframeProfile.selectedTimeframe, marketReference.profile?.structureMode || selectedTimeframeProfile.structureMode, marketReference.ok ? "market-data-backed" : "vision-only fallback", visualReview?.frameworkMatch || "visual-not-reviewed", bias.biasCode || "bias-unavailable"],
       visualReview,
       chartDetection,
-      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, weekRange: marketReference.weekRange, dailyLevels: marketReference.dailyLevels, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
+      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, filteredCandleCount: marketReference.filteredCandleCount, weekRange: marketReference.weekRange, dailyLevels: marketReference.dailyLevels, timeframeCandles: marketReference.timeframeCandles, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
     };
 
     const finalClientResponse = applyPlanToAnalysisResponse({
