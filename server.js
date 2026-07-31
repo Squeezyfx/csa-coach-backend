@@ -2125,13 +2125,15 @@ function resolveTwelveDataChartCutoff({
     return {
       endDateTime: `${selected} 23:59:59`,
       resolvedDate: selected,
-      source: "user-selected-day-end",
+      source: "user-selected-day-end-utc",
       mode,
       precision: "day",
+      timezone: "UTC",
+      dayBoundary: "UTC",
       exactVisibleCutoff: false,
       allowMarketDirectionalBias: true,
       reason:
-        "The review uses the final completed candle available on the selected trading day.",
+        "The review uses the final completed candle available on the selected trading day using a stable UTC day boundary.",
     };
   }
 
@@ -2265,6 +2267,8 @@ async function fetchTwelveDataStructureLevels({
     startDate: `${structureRange.startDate} 00:00:00`,
     endDate: endDateTime,
     cutoffSource: chartCutoff?.source || "legacy-date-end",
+    cutoffTimezone: timezone,
+    dayBoundary: chartCutoff?.dayBoundary || timezone,
     exactVisibleCutoff: chartCutoff?.exactVisibleCutoff === true,
     allowMarketDirectionalBias:
       chartCutoff?.allowMarketDirectionalBias !== false,
@@ -5832,7 +5836,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "4.0.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "4.0.1";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -9248,11 +9252,19 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const mimeType = req.file.mimetype || "image/png";
     const selectedDateText = chartDate || tradeDate || "";
     const selectedDate = parseISODateOnly(selectedDateText);
-    const resolvedTimezone = normalizeRequestedTimezone({
-      timezone,
-      timezoneMode,
-      browserTimezone,
-    });
+    const normalizedRequestedCutoffMode = normalizeCutoffMode(cutoffMode);
+
+    // Selected-day reviews use a stable UTC day boundary.
+    // Never allow the browser/device timezone to silently move the cutoff
+    // into the previous or next trading day.
+    const resolvedTimezone =
+      normalizedRequestedCutoffMode === "selected_day"
+        ? "UTC"
+        : normalizeRequestedTimezone({
+            timezone,
+            timezoneMode,
+            browserTimezone,
+          });
 
     const analysisFingerprint = createAnalysisFingerprint({
       userId: requestAuth.user.id,
@@ -9262,10 +9274,16 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       analysisType: mode,
       chartDate: selectedDateText,
       timezone: resolvedTimezone,
-      cutoffMode,
+      cutoffMode: normalizedRequestedCutoffMode,
       cutoffTime,
-      timezoneMode,
-      browserTimezone,
+      timezoneMode:
+        normalizedRequestedCutoffMode === "selected_day"
+          ? "utc"
+          : timezoneMode,
+      browserTimezone:
+        normalizedRequestedCutoffMode === "selected_day"
+          ? ""
+          : browserTimezone,
       analysisFramework: selectedStrategy.analysisFramework,
       strategyId:
         selectedStrategy.analysisFramework === "personal_strategy"
@@ -9361,11 +9379,17 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       chartDetection,
       dateDecision,
       selectedDateText,
-      cutoffMode,
+      cutoffMode: normalizedRequestedCutoffMode,
       cutoffTime,
       timeframe,
       analysisType: mode,
     });
+
+    chartCutoff.timezone = resolvedTimezone;
+    chartCutoff.dayBoundary =
+      chartCutoff.mode === "selected_day"
+        ? "UTC"
+        : chartCutoff.dayBoundary || resolvedTimezone;
 
     if (!chartCutoff.endDateTime || !chartCutoff.resolvedDate) {
       return res.status(400).json({
