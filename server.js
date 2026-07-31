@@ -5721,7 +5721,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "3.1.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "3.2.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6277,6 +6277,121 @@ function normalizeTransitionState(visualReview = {}, chartDetection = {}) {
   };
 }
 
+
+function normalizeDateOnlyValue(value = "") {
+  const text = String(value || "").trim();
+  const match = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+  return match ? match[1] : null;
+}
+
+function isSelectedDateBeforeVisibleEnd({
+  selectedDate,
+  latestVisibleDate,
+}) {
+  const selected = normalizeDateOnlyValue(selectedDate);
+  const visible = normalizeDateOnlyValue(latestVisibleDate);
+
+  return Boolean(selected && visible && selected < visible);
+}
+
+function getHistoricalCutoffState({
+  analysisType = "post-trade",
+  selectedDate = "",
+  chartDetection = {},
+  marketReference = {},
+}) {
+  const latestVisibleDate =
+    normalizeDateOnlyValue(chartDetection?.latestVisibleDate) ||
+    normalizeDateOnlyValue(marketReference?.chartCutoff?.latestVisibleDate) ||
+    null;
+
+  const selectedDateOnly = normalizeDateOnlyValue(selectedDate);
+  const active = isSelectedDateBeforeVisibleEnd({
+    selectedDate: selectedDateOnly,
+    latestVisibleDate,
+  });
+
+  return {
+    active,
+    mode: String(analysisType || "").toLowerCase() === "pre-trade"
+      ? "pre_trade_decision_cutoff"
+      : "post_trade_historical_cutoff",
+    selectedDate: selectedDateOnly,
+    latestVisibleDate,
+    reason: active
+      ? "The selected historical date is earlier than the final date visible in the screenshot."
+      : null,
+  };
+}
+
+function deriveCutoffMarketPhase({
+  marketReference = {},
+  direction = "range",
+}) {
+  const bias = String(
+    marketReference?.directionalBias?.biasCode ||
+      marketReference?.directionalBias?.bias ||
+      ""
+  ).toLowerCase();
+
+  const reason = [
+    marketReference?.directionalBias?.reason,
+    marketReference?.directionalBias?.timeframeView,
+    marketReference?.directionalBias?.higherTimeframeView,
+    marketReference?.directionalBias?.traderBias,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const breakdown =
+    /breakdown|broke below|lower low|bearish continuation|strong bearish/.test(
+      `${bias} ${reason}`
+    );
+
+  const breakout =
+    /breakout|broke above|higher high|bullish continuation|strong bullish/.test(
+      `${bias} ${reason}`
+    );
+
+  const bullishRecovery =
+    /bullish recovery|strong recovery|rebounded|recovery from|sharp recovery/.test(
+      reason
+    );
+
+  const bearishPullback =
+    /bearish pullback|sharp pullback|sold off|pullback from/.test(reason);
+
+  if (direction === "bearish" && bullishRecovery) {
+    return {
+      state: "bullish_recovery_after_bearish_breakdown",
+      bullishRecoveryAfterBreakdown: true,
+      bearishPullbackAfterBreakout: false,
+      source: "cutoff_market_data",
+    };
+  }
+
+  if (direction === "bullish" && bearishPullback) {
+    return {
+      state: "bearish_pullback_after_bullish_breakout",
+      bullishRecoveryAfterBreakdown: false,
+      bearishPullbackAfterBreakout: true,
+      source: "cutoff_market_data",
+    };
+  }
+
+  return {
+    state: breakout
+      ? "bullish_breakout"
+      : breakdown
+      ? "bearish_breakdown"
+      : "none",
+    bullishRecoveryAfterBreakdown: false,
+    bearishPullbackAfterBreakout: false,
+    source: "cutoff_market_data",
+  };
+}
+
 function buildValidatedAnalysisFacts({
   visualReview = {},
   marketReference = {},
@@ -6285,6 +6400,7 @@ function buildValidatedAnalysisFacts({
   submittedInstrument = "",
   timeframe = "",
   analysisType = "post-trade",
+  selectedDate = "",
   submittedNotes = "",
 }) {
   const fallbackPreferredArea =
@@ -6292,6 +6408,13 @@ function buildValidatedAnalysisFacts({
     typeof visualReview.preferredEntryArea === "object"
       ? visualReview.preferredEntryArea
       : {};
+
+  const historicalCutoff = getHistoricalCutoffState({
+    analysisType,
+    selectedDate,
+    chartDetection,
+    marketReference,
+  });
 
   const verifiedMarketDirection =
     normalizedDirectionCode(
@@ -6313,23 +6436,61 @@ function buildValidatedAnalysisFacts({
   // The verified historical framework controls the broader directional bias.
   // Visual review may describe a short-term range or pullback, but it must not
   // turn a verified bullish/bearish structure into a range-bound verdict.
-  const breakoutState = normalizeBreakoutState(
+  const visualBreakoutState = normalizeBreakoutState(
     visualReview,
     chartDetection
   );
 
-  const transitionState = normalizeTransitionState(
+  const visualTransitionState = normalizeTransitionState(
     visualReview,
     chartDetection
   );
 
-  const breakoutDirectionOverride = breakoutOverridesRange({
-    verifiedMarketDirection,
-    visualDirection,
-    breakoutState,
+  const cutoffDirection =
+    ["bullish", "bearish"].includes(verifiedMarketDirection)
+      ? verifiedMarketDirection
+      : visualDirection;
+
+  const cutoffPhase = deriveCutoffMarketPhase({
+    marketReference,
+    direction: cutoffDirection,
   });
 
-  let direction = breakoutDirectionOverride
+  // When the selected date is earlier than the final date visible in the
+  // screenshot, later candles must not influence direction, breakout,
+  // transition, retest, trigger, or entry readiness.
+  const breakoutState = historicalCutoff.active
+    ? {
+        bullishBreakout: cutoffPhase.state === "bullish_breakout",
+        bearishBreakdown: cutoffPhase.state === "bearish_breakdown",
+        extended: false,
+        state: cutoffPhase.state,
+        source: "cutoff_market_data",
+      }
+    : visualBreakoutState;
+
+  const transitionState = historicalCutoff.active
+    ? {
+        bullishRecoveryAfterBreakdown:
+          cutoffPhase.bullishRecoveryAfterBreakdown,
+        bearishPullbackAfterBreakout:
+          cutoffPhase.bearishPullbackAfterBreakout,
+        state: cutoffPhase.state,
+        source: "cutoff_market_data",
+      }
+    : visualTransitionState;
+
+  const breakoutDirectionOverride = historicalCutoff.active
+    ? null
+    : breakoutOverridesRange({
+        verifiedMarketDirection,
+        visualDirection,
+        breakoutState,
+      });
+
+  let direction = historicalCutoff.active
+    ? cutoffDirection
+    : breakoutDirectionOverride
     ? breakoutDirectionOverride
     : ["bullish", "bearish"].includes(verifiedMarketDirection)
     ? verifiedMarketDirection
@@ -6397,11 +6558,13 @@ function buildValidatedAnalysisFacts({
     /candle|wick|body|high|low|closed|entered|touched|traded into/i;
 
   const areaReachVisuallyProven =
-    preferredArea?.areaVisuallyReached === true &&
-    candleReachEvidence.test(areaReachEvidence) &&
-    !annotationOnlyEvidence.test(areaReachEvidence) &&
-    priceTouchesZone(areaReachPrice, zone.zoneLow, zone.zoneHigh) &&
-    hasSpecificVisibleTime(areaReachTime);
+    historicalCutoff.active
+      ? false
+      : preferredArea?.areaVisuallyReached === true &&
+        candleReachEvidence.test(areaReachEvidence) &&
+        !annotationOnlyEvidence.test(areaReachEvidence) &&
+        priceTouchesZone(areaReachPrice, zone.zoneLow, zone.zoneHigh) &&
+        hasSpecificVisibleTime(areaReachTime);
 
   // Market-reference price can be later than the screenshot's exact final
   // intraday candle when the chart time is unreadable. It must not prove that
@@ -6452,6 +6615,7 @@ function buildValidatedAnalysisFacts({
   ).trim();
 
   let triggerPresent =
+    !historicalCutoff.active &&
     preferredArea?.triggerPresent === true &&
     preferredArea?.triggerAtAreaVisible === true &&
     areaRetested &&
@@ -6563,10 +6727,12 @@ function buildValidatedAnalysisFacts({
         "unclear"
     ).toLowerCase(),
     direction,
-    directionSource:
-      ["bullish", "bearish"].includes(verifiedMarketDirection)
-        ? "verified_market_framework"
-        : "visual_review",
+    directionSource: historicalCutoff.active
+      ? "historical_cutoff_market_framework"
+      : ["bullish", "bearish"].includes(verifiedMarketDirection)
+      ? "verified_market_framework"
+      : "visual_review",
+    historicalCutoff,
     visualDirection,
     verifiedMarketDirection,
     breakoutState,
@@ -6801,6 +6967,12 @@ function buildControlledFeedback({
 
   const strengths = [];
 
+  if (facts.historicalCutoff?.active) {
+    strengths.push(
+      `The analysis is restricted to market information available up to ${facts.historicalCutoff.selectedDate}.`
+    );
+  }
+
   if (facts.direction === "bearish") {
     strengths.push(
       facts.transitionState?.bullishRecoveryAfterBreakdown
@@ -7008,6 +7180,11 @@ function buildControlledFeedback({
   } else {
     nextAction =
       "Wait for price to reach a clearly defined support or resistance area and show a valid trigger before considering a trade. Avoid entering in the middle of the range.";
+  }
+
+  if (facts.historicalCutoff?.active) {
+    nextAction =
+      `${nextAction} This review excludes candles formed after ${facts.historicalCutoff.selectedDate}.`;
   }
 
   const scores = controlledScores(facts);
@@ -8527,6 +8704,12 @@ ${(visualReview?.strategyMissingInformation || []).length
       submittedInstrument,
       timeframe,
       analysisType: mode,
+      selectedDate:
+        dateDecision?.effectiveDate ||
+        dateDecision?.selectedDate ||
+        chartDate ||
+        tradeDate ||
+        "",
       submittedNotes,
     });
 
