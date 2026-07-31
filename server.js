@@ -5714,7 +5714,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "2.6.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "2.7.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6001,10 +6001,59 @@ function areaCenter(area = {}) {
 
 function rankRawEntryAreas({
   visualReview = {},
+  marketReference = {},
   direction = "range",
   currentPrice = null,
   symbol = "",
 }) {
+  const marketDerivedAreas = [];
+  const marketAreas = Array.isArray(marketReference?.csaAreas)
+    ? marketReference.csaAreas
+    : [];
+  const conversionTolerance = getApprovedPriceTolerance(symbol);
+
+  marketAreas.forEach((area) => {
+    const price = asPositiveNumber(area?.price);
+    const originalType = String(area?.type || "").toLowerCase();
+    if (price === null || currentPrice === null) return;
+
+    if (
+      direction === "bearish" &&
+      ["support", "demand"].includes(originalType) &&
+      price > currentPrice + conversionTolerance
+    ) {
+      marketDerivedAreas.push({
+        direction: "sell",
+        areaType: "converted resistance",
+        zoneLow: price,
+        zoneHigh: price,
+        zoneText: formatPrice(price),
+        state: "potential_conversion",
+        sourceReason:
+          "A previously calculated support/demand level is now above price after bearish continuation, so it is the nearest potential resistance on a retest.",
+        source: "market_structure_conversion",
+      });
+    }
+
+    if (
+      direction === "bullish" &&
+      ["resistance", "supply"].includes(originalType) &&
+      price < currentPrice - conversionTolerance
+    ) {
+      marketDerivedAreas.push({
+        direction: "buy",
+        areaType: "converted support",
+        zoneLow: price,
+        zoneHigh: price,
+        zoneText: formatPrice(price),
+        state: "potential_conversion",
+        sourceReason:
+          "A previously calculated resistance/supply level is now below price after bullish continuation, so it is the nearest potential support on a retest.",
+        source: "market_structure_conversion",
+      });
+    }
+  });
+
   const raw = [
     ...(Array.isArray(visualReview?.activeEntryAreas)
       ? visualReview.activeEntryAreas
@@ -6012,6 +6061,7 @@ function rankRawEntryAreas({
     ...(visualReview?.preferredEntryArea
       ? [visualReview.preferredEntryArea]
       : []),
+    ...marketDerivedAreas,
   ];
 
   const wantedDirection =
@@ -6129,6 +6179,7 @@ function buildValidatedAnalysisFacts({
 
   const rankedRawAreas = rankRawEntryAreas({
     visualReview,
+    marketReference,
     direction,
     currentPrice,
     symbol: submittedInstrument,
@@ -6592,7 +6643,11 @@ function buildControlledFeedback({
   } else {
     if (!area.areaRetested) {
       weaknesses.push(
-        `Price has not yet retested the planned ${area.areaType} area, so there is no confirmed entry yet.`
+        area.areaType === "converted resistance"
+          ? "The broken support has not yet been confirmed as resistance through a retest from below."
+          : area.areaType === "converted support"
+          ? "The broken resistance has not yet been confirmed as support through a retest from above."
+          : `Price has not yet retested the planned ${area.areaType} area, so there is no confirmed entry yet.`
       );
     }
 
