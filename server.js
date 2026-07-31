@@ -5870,7 +5870,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "4.1.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "4.1.1";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -9860,7 +9860,7 @@ ${(visualReview?.strategyMissingInformation || []).length
         excludedCandleCount:
           Number(marketReference?.chartCutoff?.excludedCandleCount || 0),
         structureEngine:
-          deterministicFacts?.historicalPhase?.diagnostics || null,
+          analysisFacts?.historicalPhase?.diagnostics || null,
       },
       dashboard: dashboardFeedback,
       contextStatus: marketReference.ok ? `Market-data-backed CSA setup review completed using ${structureLabel} and visual chart comparison.` : `Setup review completed without market data: ${marketReference.error}`,
