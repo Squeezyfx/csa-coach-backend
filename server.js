@@ -5870,7 +5870,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "4.0.2";
+const CSA_FEEDBACK_ENGINE_VERSION = "4.1.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6670,6 +6670,183 @@ function recentCloseSlope(candles = [], count = 5) {
     : 0;
 }
 
+function getStructureEngineConfig(timeframe = "H1") {
+  const tf = comparableTimeframe(timeframe) || "H1";
+
+  const configs = {
+    M1:  { pivotLeft: 3, pivotRight: 3, atrPeriod: 20, eventLookback: 220, recoveryBars: 30, confirmationCloses: 2 },
+    M5:  { pivotLeft: 3, pivotRight: 3, atrPeriod: 18, eventLookback: 200, recoveryBars: 26, confirmationCloses: 2 },
+    M15: { pivotLeft: 3, pivotRight: 3, atrPeriod: 16, eventLookback: 180, recoveryBars: 22, confirmationCloses: 2 },
+    M30: { pivotLeft: 3, pivotRight: 3, atrPeriod: 16, eventLookback: 160, recoveryBars: 20, confirmationCloses: 2 },
+    H1:  { pivotLeft: 3, pivotRight: 3, atrPeriod: 14, eventLookback: 140, recoveryBars: 18, confirmationCloses: 2 },
+    H4:  { pivotLeft: 2, pivotRight: 2, atrPeriod: 14, eventLookback: 110, recoveryBars: 14, confirmationCloses: 2 },
+    D1:  { pivotLeft: 2, pivotRight: 2, atrPeriod: 14, eventLookback: 90,  recoveryBars: 10, confirmationCloses: 2 },
+    W1:  { pivotLeft: 1, pivotRight: 1, atrPeriod: 12, eventLookback: 70,  recoveryBars: 8,  confirmationCloses: 1 },
+    MN:  { pivotLeft: 1, pivotRight: 1, atrPeriod: 12, eventLookback: 60,  recoveryBars: 6,  confirmationCloses: 1 },
+  };
+
+  return { timeframe: tf, ...(configs[tf] || configs.H1) };
+}
+
+function detectConfirmedSwingPivots(candles = [], config = {}) {
+  const left = Math.max(1, Number(config.pivotLeft || 2));
+  const right = Math.max(1, Number(config.pivotRight || 2));
+  const pivots = [];
+
+  for (let index = left; index < candles.length - right; index += 1) {
+    const high = Number(candles[index]?.high);
+    const low = Number(candles[index]?.low);
+    if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
+
+    let isHigh = true;
+    let isLow = true;
+
+    for (let offset = 1; offset <= left; offset += 1) {
+      isHigh = isHigh && high > Number(candles[index - offset]?.high);
+      isLow = isLow && low < Number(candles[index - offset]?.low);
+    }
+
+    for (let offset = 1; offset <= right; offset += 1) {
+      isHigh = isHigh && high >= Number(candles[index + offset]?.high);
+      isLow = isLow && low <= Number(candles[index + offset]?.low);
+    }
+
+    // The pivot only becomes usable after the right-side confirmation bars.
+    const confirmedAtIndex = index + right;
+
+    if (isHigh) {
+      pivots.push({
+        type: "resistance",
+        pivotIndex: index,
+        confirmedAtIndex,
+        price: high,
+        datetime: candles[index]?.datetime || null,
+      });
+    }
+
+    if (isLow) {
+      pivots.push({
+        type: "support",
+        pivotIndex: index,
+        confirmedAtIndex,
+        price: low,
+        datetime: candles[index]?.datetime || null,
+      });
+    }
+  }
+
+  return pivots.sort(
+    (a, b) =>
+      a.confirmedAtIndex - b.confirmedAtIndex ||
+      a.pivotIndex - b.pivotIndex
+  );
+}
+
+function countConsecutiveBreakCloses({
+  candles = [],
+  index,
+  level,
+  tolerance,
+  side,
+  count = 2,
+}) {
+  const required = Math.max(1, Number(count || 1));
+  if (index - required + 1 < 0) return false;
+
+  for (let offset = 0; offset < required; offset += 1) {
+    const close = Number(candles[index - offset]?.close);
+    if (!Number.isFinite(close)) return false;
+
+    if (side === "bullish" && close <= level + tolerance) return false;
+    if (side === "bearish" && close >= level - tolerance) return false;
+  }
+
+  return true;
+}
+
+function buildOrderedStructureEvents({
+  candles = [],
+  pivots = [],
+  tolerance = 0,
+  confirmationCloses = 2,
+  searchStart = 0,
+}) {
+  const events = [];
+  const brokenPivotKeys = new Set();
+
+  for (let index = Math.max(1, searchStart); index < candles.length; index += 1) {
+    const usablePivots = pivots.filter(
+      (pivot) =>
+        pivot.confirmedAtIndex < index &&
+        pivot.pivotIndex < index
+    );
+
+    const activeSupport = usablePivots
+      .filter((pivot) => pivot.type === "support")
+      .sort((a, b) => b.pivotIndex - a.pivotIndex)[0] || null;
+
+    const activeResistance = usablePivots
+      .filter((pivot) => pivot.type === "resistance")
+      .sort((a, b) => b.pivotIndex - a.pivotIndex)[0] || null;
+
+    if (activeSupport) {
+      const pivotKey = `support:${activeSupport.pivotIndex}:${activeSupport.price}`;
+      const confirmed = countConsecutiveBreakCloses({
+        candles,
+        index,
+        level: Number(activeSupport.price),
+        tolerance,
+        side: "bearish",
+        count: confirmationCloses,
+      });
+
+      if (confirmed && !brokenPivotKeys.has(pivotKey)) {
+        events.push({
+          side: "bearish",
+          index,
+          datetime: candles[index]?.datetime || null,
+          level: Number(activeSupport.price),
+          pivotIndex: activeSupport.pivotIndex,
+          pivotDatetime: activeSupport.datetime,
+          close: Number(candles[index]?.close),
+          high: Number(candles[index]?.high),
+          low: Number(candles[index]?.low),
+        });
+        brokenPivotKeys.add(pivotKey);
+      }
+    }
+
+    if (activeResistance) {
+      const pivotKey = `resistance:${activeResistance.pivotIndex}:${activeResistance.price}`;
+      const confirmed = countConsecutiveBreakCloses({
+        candles,
+        index,
+        level: Number(activeResistance.price),
+        tolerance,
+        side: "bullish",
+        count: confirmationCloses,
+      });
+
+      if (confirmed && !brokenPivotKeys.has(pivotKey)) {
+        events.push({
+          side: "bullish",
+          index,
+          datetime: candles[index]?.datetime || null,
+          level: Number(activeResistance.price),
+          pivotIndex: activeResistance.pivotIndex,
+          pivotDatetime: activeResistance.datetime,
+          close: Number(candles[index]?.close),
+          high: Number(candles[index]?.high),
+          low: Number(candles[index]?.low),
+        });
+        brokenPivotKeys.add(pivotKey);
+      }
+    }
+  }
+
+  return events.sort((a, b) => a.index - b.index);
+}
+
 function deriveHistoricalPhaseFromTimeframeCandles({
   marketReference = {},
   symbol = "",
@@ -6690,120 +6867,117 @@ function deriveHistoricalPhaseFromTimeframeCandles({
         )
     : [];
 
-  if (candles.length < 20) return null;
+  const config = getStructureEngineConfig(timeframe);
+  const minimumCandles =
+    config.pivotLeft + config.pivotRight + config.confirmationCloses + 8;
+
+  if (candles.length < minimumCandles) return null;
 
   const latestIndex = candles.length - 1;
   const latest = candles[latestIndex];
   const latestClose = Number(latest.close);
-  const atr = averageTrueRange(candles, 14);
+  const atr = averageTrueRange(candles, config.atrPeriod);
   const baseTolerance = getCleanBreakTolerance(symbol);
-  const breakTolerance = Math.max(baseTolerance, atr * 0.18);
-  const structuralLookback =
-    normalizeTimeframe(timeframe) === "M30"
-      ? 32
-      : normalizeTimeframe(timeframe) === "H4"
-      ? 18
-      : 24;
 
-  const searchStart = Math.max(
-    structuralLookback,
-    candles.length - structuralLookback * 4
+  // ATR makes the same engine scale correctly from M1 through monthly charts.
+  // The fixed symbol tolerance prevents tiny floating-point moves becoming breaks.
+  const breakTolerance = Math.max(
+    baseTolerance,
+    atr * 0.12
   );
 
-  let latestBearishBreak = null;
-  let latestBullishBreak = null;
+  const pivots = detectConfirmedSwingPivots(candles, config);
+  const searchStart = Math.max(
+    1,
+    candles.length - Number(config.eventLookback || 140)
+  );
 
-  for (let index = searchStart; index <= latestIndex; index += 1) {
-    const candle = candles[index];
-    const close = Number(candle.close);
-    const priorSupport = rollingBoundary(
-      candles,
-      index,
-      structuralLookback,
-      "low"
-    );
-    const priorResistance = rollingBoundary(
-      candles,
-      index,
-      structuralLookback,
-      "high"
-    );
+  const events = buildOrderedStructureEvents({
+    candles,
+    pivots,
+    tolerance: breakTolerance,
+    confirmationCloses: config.confirmationCloses,
+    searchStart,
+  });
 
-    if (
-      Number.isFinite(priorSupport) &&
-      close < priorSupport - breakTolerance
-    ) {
-      latestBearishBreak = {
-        index,
-        level: priorSupport,
-        close,
-        low: Number(candle.low),
-      };
-    }
+  if (!events.length) return null;
 
-    if (
-      Number.isFinite(priorResistance) &&
-      close > priorResistance + breakTolerance
-    ) {
-      latestBullishBreak = {
-        index,
-        level: priorResistance,
-        close,
-        high: Number(candle.high),
-      };
-    }
-  }
+  // Event order is authoritative. An older breakout can never override a newer
+  // breakdown, and an older breakdown can never override a newer breakout.
+  const latestEvent = events[events.length - 1];
+  const latestBullishEvent =
+    [...events].reverse().find((event) => event.side === "bullish") || null;
+  const latestBearishEvent =
+    [...events].reverse().find((event) => event.side === "bearish") || null;
 
-  const latestBreak =
-    latestBearishBreak &&
-    latestBullishBreak
-      ? latestBearishBreak.index > latestBullishBreak.index
-        ? { side: "bearish", ...latestBearishBreak }
-        : { side: "bullish", ...latestBullishBreak }
-      : latestBearishBreak
-      ? { side: "bearish", ...latestBearishBreak }
-      : latestBullishBreak
-      ? { side: "bullish", ...latestBullishBreak }
-      : null;
+  const barsAfterEvent = candles.slice(latestEvent.index);
+  const postEventLow = minFinite(
+    barsAfterEvent.map((candle) => candle?.low)
+  );
+  const postEventHigh = maxFinite(
+    barsAfterEvent.map((candle) => candle?.high)
+  );
 
-  if (!latestBreak) return null;
+  const recoveryWindow = candles.slice(
+    Math.max(latestEvent.index, candles.length - config.recoveryBars)
+  );
+  const closeSlope = recentCloseSlope(
+    recoveryWindow,
+    Math.min(5, recoveryWindow.length)
+  );
 
-  const afterBreak = candles.slice(latestBreak.index);
-  const postBreakLow = minFinite(afterBreak.map((candle) => candle?.low));
-  const postBreakHigh = maxFinite(afterBreak.map((candle) => candle?.high));
-  const closeSlope = recentCloseSlope(candles, 5);
-  const recentThree = candles.slice(-3);
-  const twoClosesAbove =
-    recentThree.filter(
-      (candle) =>
-        Number(candle?.close) >
-        Number(latestBreak.level) + breakTolerance
-    ).length >= 2;
-  const twoClosesBelow =
-    recentThree.filter(
-      (candle) =>
-        Number(candle?.close) <
-        Number(latestBreak.level) - breakTolerance
-    ).length >= 2;
+  const eventDiagnostics = {
+    engine: "confirmed_swing_event_sequence",
+    timeframe: config.timeframe,
+    breakTolerance,
+    atr,
+    latestEvent: {
+      side: latestEvent.side,
+      datetime: latestEvent.datetime,
+      level: latestEvent.level,
+      close: latestEvent.close,
+    },
+    latestBullishEvent: latestBullishEvent
+      ? {
+          datetime: latestBullishEvent.datetime,
+          level: latestBullishEvent.level,
+          close: latestBullishEvent.close,
+        }
+      : null,
+    latestBearishEvent: latestBearishEvent
+      ? {
+          datetime: latestBearishEvent.datetime,
+          level: latestBearishEvent.level,
+          close: latestBearishEvent.close,
+        }
+      : null,
+    eventCount: events.length,
+    finalCandle: latest.datetime || null,
+    finalClose: latestClose,
+  };
 
-  if (latestBreak.side === "bearish") {
+  if (latestEvent.side === "bearish") {
     const breakdownDepth =
-      Number(latestBreak.level) - Number(postBreakLow);
+      Number(latestEvent.level) - Number(postEventLow);
     const recoveryDistance =
-      latestClose - Number(postBreakLow);
+      latestClose - Number(postEventLow);
     const recoveryRatio =
       breakdownDepth > 0 ? recoveryDistance / breakdownDepth : 0;
 
     const recoveryStrong =
-      recoveryDistance >= Math.max(atr * 2.2, breakTolerance * 5) &&
-      recoveryRatio >= 0.45 &&
-      closeSlope > Math.max(atr * 0.35, breakTolerance);
+      recoveryWindow.length >= 3 &&
+      recoveryDistance >= Math.max(atr * 1.6, breakTolerance * 4) &&
+      recoveryRatio >= 0.42 &&
+      closeSlope > Math.max(atr * 0.20, breakTolerance);
 
-    const bullishReversalConfirmed =
-      latestClose > latestBreak.level + breakTolerance &&
-      twoClosesAbove;
+    // A recovery becomes a confirmed bullish reversal only after a newer
+    // bullish structure event exists. Price merely returning above the broken
+    // support does not erase the controlling bearish breakdown.
+    const newerBullishReversal =
+      latestBullishEvent &&
+      latestBullishEvent.index > latestEvent.index;
 
-    if (bullishReversalConfirmed) {
+    if (newerBullishReversal) {
       return {
         direction: "bullish",
         phase: "bullish_breakout",
@@ -6814,8 +6988,9 @@ function deriveHistoricalPhaseFromTimeframeCandles({
         bearishPullbackAfterBreakout: false,
         confirmedReversal: true,
         latestClose,
-        brokenLevel: latestBreak.level,
-        source: "cutoff_timeframe_candles",
+        brokenLevel: latestBullishEvent.level,
+        source: "cutoff_timeframe_swing_events",
+        diagnostics: eventDiagnostics,
       };
     }
 
@@ -6830,10 +7005,11 @@ function deriveHistoricalPhaseFromTimeframeCandles({
         bearishPullbackAfterBreakout: false,
         confirmedReversal: false,
         latestClose,
-        brokenLevel: latestBreak.level,
-        recoveryFrom: postBreakLow,
+        brokenLevel: latestEvent.level,
+        recoveryFrom: postEventLow,
         recoveryRatio,
-        source: "cutoff_timeframe_candles",
+        source: "cutoff_timeframe_swing_events",
+        diagnostics: eventDiagnostics,
       };
     }
 
@@ -6847,28 +7023,30 @@ function deriveHistoricalPhaseFromTimeframeCandles({
       bearishPullbackAfterBreakout: false,
       confirmedReversal: true,
       latestClose,
-      brokenLevel: latestBreak.level,
-      source: "cutoff_timeframe_candles",
+      brokenLevel: latestEvent.level,
+      source: "cutoff_timeframe_swing_events",
+      diagnostics: eventDiagnostics,
     };
   }
 
   const breakoutHeight =
-    Number(postBreakHigh) - Number(latestBreak.level);
+    Number(postEventHigh) - Number(latestEvent.level);
   const pullbackDistance =
-    Number(postBreakHigh) - latestClose;
+    Number(postEventHigh) - latestClose;
   const pullbackRatio =
     breakoutHeight > 0 ? pullbackDistance / breakoutHeight : 0;
 
   const pullbackStrong =
-    pullbackDistance >= Math.max(atr * 2.2, breakTolerance * 5) &&
-    pullbackRatio >= 0.45 &&
-    closeSlope < -Math.max(atr * 0.35, breakTolerance);
+    recoveryWindow.length >= 3 &&
+    pullbackDistance >= Math.max(atr * 1.6, breakTolerance * 4) &&
+    pullbackRatio >= 0.42 &&
+    closeSlope < -Math.max(atr * 0.20, breakTolerance);
 
-  const bearishReversalConfirmed =
-    latestClose < latestBreak.level - breakTolerance &&
-    twoClosesBelow;
+  const newerBearishReversal =
+    latestBearishEvent &&
+    latestBearishEvent.index > latestEvent.index;
 
-  if (bearishReversalConfirmed) {
+  if (newerBearishReversal) {
     return {
       direction: "bearish",
       phase: "bearish_breakdown",
@@ -6879,8 +7057,9 @@ function deriveHistoricalPhaseFromTimeframeCandles({
       bearishPullbackAfterBreakout: false,
       confirmedReversal: true,
       latestClose,
-      brokenLevel: latestBreak.level,
-      source: "cutoff_timeframe_candles",
+      brokenLevel: latestBearishEvent.level,
+      source: "cutoff_timeframe_swing_events",
+      diagnostics: eventDiagnostics,
     };
   }
 
@@ -6895,10 +7074,11 @@ function deriveHistoricalPhaseFromTimeframeCandles({
       bearishPullbackAfterBreakout: true,
       confirmedReversal: false,
       latestClose,
-      brokenLevel: latestBreak.level,
-      pullbackFrom: postBreakHigh,
+      brokenLevel: latestEvent.level,
+      pullbackFrom: postEventHigh,
       pullbackRatio,
-      source: "cutoff_timeframe_candles",
+      source: "cutoff_timeframe_swing_events",
+      diagnostics: eventDiagnostics,
     };
   }
 
@@ -6912,8 +7092,9 @@ function deriveHistoricalPhaseFromTimeframeCandles({
     bearishPullbackAfterBreakout: false,
     confirmedReversal: true,
     latestClose,
-    brokenLevel: latestBreak.level,
-    source: "cutoff_timeframe_candles",
+    brokenLevel: latestEvent.level,
+    source: "cutoff_timeframe_swing_events",
+    diagnostics: eventDiagnostics,
   };
 }
 
@@ -9678,6 +9859,8 @@ ${(visualReview?.strategyMissingInformation || []).length
           Number(marketReference?.chartCutoff?.includedCandleCount || 0),
         excludedCandleCount:
           Number(marketReference?.chartCutoff?.excludedCandleCount || 0),
+        structureEngine:
+          deterministicFacts?.historicalPhase?.diagnostics || null,
       },
       dashboard: dashboardFeedback,
       contextStatus: marketReference.ok ? `Market-data-backed CSA setup review completed using ${structureLabel} and visual chart comparison.` : `Setup review completed without market data: ${marketReference.error}`,
