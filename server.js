@@ -5870,7 +5870,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "4.1.1";
+const CSA_FEEDBACK_ENGINE_VERSION = "4.2.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6764,10 +6764,86 @@ function countConsecutiveBreakCloses({
   return true;
 }
 
+
+function isStrongDisplacementBreak({
+  candles = [],
+  index,
+  level,
+  tolerance,
+  atr,
+  side,
+  timeframe = "H1",
+}) {
+  const candle = candles[index];
+  if (!candle) return false;
+
+  const open = Number(candle.open);
+  const high = Number(candle.high);
+  const low = Number(candle.low);
+  const close = Number(candle.close);
+
+  if (![open, high, low, close, level].every(Number.isFinite)) {
+    return false;
+  }
+
+  const range = Math.max(0, high - low);
+  const body = Math.abs(close - open);
+
+  if (range <= 0 || !Number.isFinite(atr) || atr <= 0) {
+    return false;
+  }
+
+  const tf = comparableTimeframe(timeframe) || "H1";
+
+  // Higher timeframes need to recognise decisive displacement promptly,
+  // while lower timeframes use stricter body/extension requirements.
+  const settings = {
+    M1:  { bodyAtr: 1.10, extensionAtr: 0.42, closeExtreme: 0.82 },
+    M5:  { bodyAtr: 1.05, extensionAtr: 0.40, closeExtreme: 0.80 },
+    M15: { bodyAtr: 1.00, extensionAtr: 0.38, closeExtreme: 0.79 },
+    M30: { bodyAtr: 0.95, extensionAtr: 0.36, closeExtreme: 0.78 },
+    H1:  { bodyAtr: 0.90, extensionAtr: 0.34, closeExtreme: 0.77 },
+    H4:  { bodyAtr: 0.80, extensionAtr: 0.30, closeExtreme: 0.75 },
+    D1:  { bodyAtr: 0.78, extensionAtr: 0.28, closeExtreme: 0.74 },
+    W1:  { bodyAtr: 0.75, extensionAtr: 0.26, closeExtreme: 0.72 },
+    MN:  { bodyAtr: 0.72, extensionAtr: 0.24, closeExtreme: 0.70 },
+  };
+
+  const config = settings[tf] || settings.H1;
+  const extensionRequired = Math.max(
+    tolerance * 2,
+    atr * config.extensionAtr
+  );
+
+  if (side === "bullish") {
+    const closePosition =
+      range > 0 ? (close - low) / range : 0;
+
+    return (
+      close > open &&
+      body >= atr * config.bodyAtr &&
+      close > level + extensionRequired &&
+      closePosition >= config.closeExtreme
+    );
+  }
+
+  const closePositionFromLow =
+    range > 0 ? (high - close) / range : 0;
+
+  return (
+    close < open &&
+    body >= atr * config.bodyAtr &&
+    close < level - extensionRequired &&
+    closePositionFromLow >= config.closeExtreme
+  );
+}
+
 function buildOrderedStructureEvents({
   candles = [],
   pivots = [],
   tolerance = 0,
+  atr = 0,
+  timeframe = "H1",
   confirmationCloses = 2,
   searchStart = 0,
 }) {
@@ -6791,7 +6867,7 @@ function buildOrderedStructureEvents({
 
     if (activeSupport) {
       const pivotKey = `support:${activeSupport.pivotIndex}:${activeSupport.price}`;
-      const confirmed = countConsecutiveBreakCloses({
+      const standardConfirmed = countConsecutiveBreakCloses({
         candles,
         index,
         level: Number(activeSupport.price),
@@ -6799,6 +6875,18 @@ function buildOrderedStructureEvents({
         side: "bearish",
         count: confirmationCloses,
       });
+
+      const displacementConfirmed = isStrongDisplacementBreak({
+        candles,
+        index,
+        level: Number(activeSupport.price),
+        tolerance,
+        atr,
+        side: "bearish",
+        timeframe,
+      });
+
+      const confirmed = standardConfirmed || displacementConfirmed;
 
       if (confirmed && !brokenPivotKeys.has(pivotKey)) {
         events.push({
@@ -6811,6 +6899,9 @@ function buildOrderedStructureEvents({
           close: Number(candles[index]?.close),
           high: Number(candles[index]?.high),
           low: Number(candles[index]?.low),
+          confirmationPath: displacementConfirmed
+            ? "strong_displacement"
+            : "multiple_closes",
         });
         brokenPivotKeys.add(pivotKey);
       }
@@ -6818,7 +6909,7 @@ function buildOrderedStructureEvents({
 
     if (activeResistance) {
       const pivotKey = `resistance:${activeResistance.pivotIndex}:${activeResistance.price}`;
-      const confirmed = countConsecutiveBreakCloses({
+      const standardConfirmed = countConsecutiveBreakCloses({
         candles,
         index,
         level: Number(activeResistance.price),
@@ -6826,6 +6917,18 @@ function buildOrderedStructureEvents({
         side: "bullish",
         count: confirmationCloses,
       });
+
+      const displacementConfirmed = isStrongDisplacementBreak({
+        candles,
+        index,
+        level: Number(activeResistance.price),
+        tolerance,
+        atr,
+        side: "bullish",
+        timeframe,
+      });
+
+      const confirmed = standardConfirmed || displacementConfirmed;
 
       if (confirmed && !brokenPivotKeys.has(pivotKey)) {
         events.push({
@@ -6838,6 +6941,9 @@ function buildOrderedStructureEvents({
           close: Number(candles[index]?.close),
           high: Number(candles[index]?.high),
           low: Number(candles[index]?.low),
+          confirmationPath: displacementConfirmed
+            ? "strong_displacement"
+            : "multiple_closes",
         });
         brokenPivotKeys.add(pivotKey);
       }
@@ -6896,6 +7002,8 @@ function deriveHistoricalPhaseFromTimeframeCandles({
     candles,
     pivots,
     tolerance: breakTolerance,
+    atr,
+    timeframe: config.timeframe,
     confirmationCloses: config.confirmationCloses,
     searchStart,
   });
@@ -6936,6 +7044,7 @@ function deriveHistoricalPhaseFromTimeframeCandles({
       datetime: latestEvent.datetime,
       level: latestEvent.level,
       close: latestEvent.close,
+      confirmationPath: latestEvent.confirmationPath || "multiple_closes",
     },
     latestBullishEvent: latestBullishEvent
       ? {
