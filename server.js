@@ -5721,7 +5721,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "3.2.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "3.3.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6324,71 +6324,281 @@ function getHistoricalCutoffState({
   };
 }
 
-function deriveCutoffMarketPhase({
-  marketReference = {},
-  direction = "range",
+function historicalMoveThreshold(symbol = "", referencePrice = 0) {
+  const tolerance = getCleanBreakTolerance(symbol);
+  const price = Number(referencePrice);
+
+  if (!Number.isFinite(price) || price <= 0) {
+    return tolerance * 3;
+  }
+
+  const compact = comparableInstrument(symbol);
+
+  if (compact.includes("XAU")) return Math.max(tolerance * 3, price * 0.0012);
+  if (compact.includes("BTC")) return Math.max(tolerance * 3, price * 0.004);
+  if (compact.includes("JPY")) return Math.max(tolerance * 3, price * 0.0007);
+
+  return Math.max(tolerance * 3, price * 0.0007);
+}
+
+function periodRangePosition(period = {}) {
+  const high = Number(period?.high);
+  const low = Number(period?.low);
+  const close = Number(period?.close);
+
+  if (
+    !Number.isFinite(high) ||
+    !Number.isFinite(low) ||
+    !Number.isFinite(close) ||
+    high <= low
+  ) {
+    return 0.5;
+  }
+
+  return Math.max(0, Math.min(1, (close - low) / (high - low)));
+}
+
+function maxFinite(values = []) {
+  const valid = values.map(Number).filter(Number.isFinite);
+  return valid.length ? Math.max(...valid) : null;
+}
+
+function minFinite(values = []) {
+  const valid = values.map(Number).filter(Number.isFinite);
+  return valid.length ? Math.min(...valid) : null;
+}
+
+function priorPeriodBoundary(levels = [], currentIndex, side = "high") {
+  if (!Array.isArray(levels) || currentIndex <= 0) return null;
+
+  const prior = levels.slice(0, currentIndex);
+  return side === "low"
+    ? minFinite(prior.map((item) => item?.low))
+    : maxFinite(prior.map((item) => item?.high));
+}
+
+function periodBreakState({
+  levels = [],
+  index,
+  symbol = "",
 }) {
-  const bias = String(
-    marketReference?.directionalBias?.biasCode ||
-      marketReference?.directionalBias?.bias ||
-      ""
-  ).toLowerCase();
+  const current = levels[index];
 
-  const reason = [
-    marketReference?.directionalBias?.reason,
-    marketReference?.directionalBias?.timeframeView,
-    marketReference?.directionalBias?.higherTimeframeView,
-    marketReference?.directionalBias?.traderBias,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-  const breakdown =
-    /breakdown|broke below|lower low|bearish continuation|strong bearish/.test(
-      `${bias} ${reason}`
-    );
-
-  const breakout =
-    /breakout|broke above|higher high|bullish continuation|strong bullish/.test(
-      `${bias} ${reason}`
-    );
-
-  const bullishRecovery =
-    /bullish recovery|strong recovery|rebounded|recovery from|sharp recovery/.test(
-      reason
-    );
-
-  const bearishPullback =
-    /bearish pullback|sharp pullback|sold off|pullback from/.test(reason);
-
-  if (direction === "bearish" && bullishRecovery) {
+  if (!current || index <= 0) {
     return {
-      state: "bullish_recovery_after_bearish_breakdown",
-      bullishRecoveryAfterBreakdown: true,
-      bearishPullbackAfterBreakout: false,
-      source: "cutoff_market_data",
+      bullishBreakout: false,
+      bearishBreakdown: false,
+      priorResistance: null,
+      priorSupport: null,
     };
   }
 
-  if (direction === "bullish" && bearishPullback) {
-    return {
-      state: "bearish_pullback_after_bullish_breakout",
-      bullishRecoveryAfterBreakdown: false,
-      bearishPullbackAfterBreakout: true,
-      source: "cutoff_market_data",
-    };
-  }
+  const priorResistance = priorPeriodBoundary(levels, index, "high");
+  const priorSupport = priorPeriodBoundary(levels, index, "low");
+  const tolerance = getCleanBreakTolerance(symbol);
+
+  const high = Number(current.high);
+  const low = Number(current.low);
+  const close = Number(current.close);
 
   return {
-    state: breakout
-      ? "bullish_breakout"
-      : breakdown
-      ? "bearish_breakdown"
-      : "none",
+    bullishBreakout:
+      Number.isFinite(priorResistance) &&
+      Number.isFinite(high) &&
+      Number.isFinite(close) &&
+      high > priorResistance + tolerance &&
+      close > priorResistance + tolerance * 0.25,
+    bearishBreakdown:
+      Number.isFinite(priorSupport) &&
+      Number.isFinite(low) &&
+      Number.isFinite(close) &&
+      low < priorSupport - tolerance &&
+      close < priorSupport - tolerance * 0.25,
+    priorResistance,
+    priorSupport,
+  };
+}
+
+function deriveHistoricalPhaseFromLevels({
+  marketReference = {},
+  symbol = "",
+}) {
+  const levels = Array.isArray(marketReference?.dailyLevels)
+    ? marketReference.dailyLevels
+        .filter(
+          (item) =>
+            Number.isFinite(Number(item?.open)) &&
+            Number.isFinite(Number(item?.high)) &&
+            Number.isFinite(Number(item?.low)) &&
+            Number.isFinite(Number(item?.close))
+        )
+        .sort((a, b) => String(a?.key || a?.date || "").localeCompare(
+          String(b?.key || b?.date || "")
+        ))
+    : [];
+
+  if (levels.length < 2) {
+    const fallbackDirection = normalizedDirectionCode(
+      marketReference?.directionalBias?.biasCode ||
+        marketReference?.directionalBias?.bias ||
+        ""
+    );
+
+    return {
+      direction: fallbackDirection,
+      phase: "insufficient_period_data",
+      state: "none",
+      bullishBreakout: false,
+      bearishBreakdown: false,
+      bullishRecoveryAfterBreakdown: false,
+      bearishPullbackAfterBreakout: false,
+      confirmedReversal: false,
+      latestClose: extractLastMarketPrice(marketReference),
+      brokenLevel: null,
+      source: "cutoff_period_levels_fallback",
+    };
+  }
+
+  const currentIndex = levels.length - 1;
+  const current = levels[currentIndex];
+  const previous = levels[currentIndex - 1];
+  const currentBreak = periodBreakState({
+    levels,
+    index: currentIndex,
+    symbol,
+  });
+  const previousBreak = periodBreakState({
+    levels,
+    index: currentIndex - 1,
+    symbol,
+  });
+
+  const currentClose = Number(current.close);
+  const previousClose = Number(previous.close);
+  const currentOpen = Number(current.open);
+  const previousLow = Number(previous.low);
+  const previousHigh = Number(previous.high);
+  const moveThreshold = historicalMoveThreshold(symbol, currentClose);
+  const rangePosition = periodRangePosition(current);
+
+  // A close beyond the earlier structure confirms a new directional break.
+  if (currentBreak.bullishBreakout) {
+    return {
+      direction: "bullish",
+      phase: "bullish_breakout",
+      state: "bullish_breakout",
+      bullishBreakout: true,
+      bearishBreakdown: false,
+      bullishRecoveryAfterBreakdown: false,
+      bearishPullbackAfterBreakout: false,
+      confirmedReversal: true,
+      latestClose: currentClose,
+      brokenLevel: currentBreak.priorResistance,
+      source: "cutoff_period_levels",
+    };
+  }
+
+  if (currentBreak.bearishBreakdown) {
+    return {
+      direction: "bearish",
+      phase: "bearish_breakdown",
+      state: "bearish_breakdown",
+      bullishBreakout: false,
+      bearishBreakdown: true,
+      bullishRecoveryAfterBreakdown: false,
+      bearishPullbackAfterBreakout: false,
+      confirmedReversal: true,
+      latestClose: currentClose,
+      brokenLevel: currentBreak.priorSupport,
+      source: "cutoff_period_levels",
+    };
+  }
+
+  // A recovery after the preceding bearish break remains structurally bearish
+  // until the earlier resistance is actually broken and held.
+  const bullishRecovery =
+    previousBreak.bearishBreakdown &&
+    currentClose > previousClose + moveThreshold &&
+    currentClose > currentOpen &&
+    rangePosition >= 0.55 &&
+    !currentBreak.bullishBreakout;
+
+  if (bullishRecovery) {
+    return {
+      direction: "bearish",
+      phase: "bullish_recovery_after_bearish_breakdown",
+      state: "bullish_recovery_after_bearish_breakdown",
+      bullishBreakout: false,
+      bearishBreakdown: false,
+      bullishRecoveryAfterBreakdown: true,
+      bearishPullbackAfterBreakout: false,
+      confirmedReversal: false,
+      latestClose: currentClose,
+      brokenLevel:
+        previousBreak.priorSupport ??
+        minFinite(levels.slice(0, currentIndex).map((item) => item?.low)),
+      recoveryFrom: previousLow,
+      recoveryResistance: currentBreak.priorResistance,
+      source: "cutoff_period_levels",
+    };
+  }
+
+  // The opposite transitional state is handled symmetrically.
+  const bearishPullback =
+    previousBreak.bullishBreakout &&
+    currentClose < previousClose - moveThreshold &&
+    currentClose < currentOpen &&
+    rangePosition <= 0.45 &&
+    !currentBreak.bearishBreakdown;
+
+  if (bearishPullback) {
+    return {
+      direction: "bullish",
+      phase: "bearish_pullback_after_bullish_breakout",
+      state: "bearish_pullback_after_bullish_breakout",
+      bullishBreakout: false,
+      bearishBreakdown: false,
+      bullishRecoveryAfterBreakdown: false,
+      bearishPullbackAfterBreakout: true,
+      confirmedReversal: false,
+      latestClose: currentClose,
+      brokenLevel:
+        previousBreak.priorResistance ??
+        maxFinite(levels.slice(0, currentIndex).map((item) => item?.high)),
+      pullbackFrom: previousHigh,
+      pullbackSupport: currentBreak.priorSupport,
+      source: "cutoff_period_levels",
+    };
+  }
+
+  // When no new break or transition exists, use the completed period closes,
+  // not the future candles visible to the right of the selected date.
+  const firstClose = Number(levels[0].close);
+  const netMove = currentClose - firstClose;
+  const direction =
+    netMove > moveThreshold
+      ? "bullish"
+      : netMove < -moveThreshold
+      ? "bearish"
+      : "range";
+
+  return {
+    direction,
+    phase:
+      direction === "bullish"
+        ? "bullish_structure"
+        : direction === "bearish"
+        ? "bearish_structure"
+        : "range",
+    state: "none",
+    bullishBreakout: false,
+    bearishBreakdown: false,
     bullishRecoveryAfterBreakdown: false,
     bearishPullbackAfterBreakout: false,
-    source: "cutoff_market_data",
+    confirmedReversal: false,
+    latestClose: currentClose,
+    brokenLevel: null,
+    source: "cutoff_period_levels",
   };
 }
 
@@ -6446,37 +6656,32 @@ function buildValidatedAnalysisFacts({
     chartDetection
   );
 
-  const cutoffDirection =
-    ["bullish", "bearish"].includes(verifiedMarketDirection)
-      ? verifiedMarketDirection
-      : visualDirection;
-
-  const cutoffPhase = deriveCutoffMarketPhase({
+  const historicalPhase = deriveHistoricalPhaseFromLevels({
     marketReference,
-    direction: cutoffDirection,
+    symbol: submittedInstrument,
   });
 
   // When the selected date is earlier than the final date visible in the
-  // screenshot, later candles must not influence direction, breakout,
-  // transition, retest, trigger, or entry readiness.
+  // screenshot, the independent period-level classifier becomes authoritative.
+  // It uses only data already filtered to the selected cutoff.
   const breakoutState = historicalCutoff.active
     ? {
-        bullishBreakout: cutoffPhase.state === "bullish_breakout",
-        bearishBreakdown: cutoffPhase.state === "bearish_breakdown",
+        bullishBreakout: historicalPhase.bullishBreakout === true,
+        bearishBreakdown: historicalPhase.bearishBreakdown === true,
         extended: false,
-        state: cutoffPhase.state,
-        source: "cutoff_market_data",
+        state: historicalPhase.state,
+        source: historicalPhase.source,
       }
     : visualBreakoutState;
 
   const transitionState = historicalCutoff.active
     ? {
         bullishRecoveryAfterBreakdown:
-          cutoffPhase.bullishRecoveryAfterBreakdown,
+          historicalPhase.bullishRecoveryAfterBreakdown === true,
         bearishPullbackAfterBreakout:
-          cutoffPhase.bearishPullbackAfterBreakout,
-        state: cutoffPhase.state,
-        source: "cutoff_market_data",
+          historicalPhase.bearishPullbackAfterBreakout === true,
+        state: historicalPhase.state,
+        source: historicalPhase.source,
       }
     : visualTransitionState;
 
@@ -6489,7 +6694,7 @@ function buildValidatedAnalysisFacts({
       });
 
   let direction = historicalCutoff.active
-    ? cutoffDirection
+    ? historicalPhase.direction
     : breakoutDirectionOverride
     ? breakoutDirectionOverride
     : ["bullish", "bearish"].includes(verifiedMarketDirection)
@@ -6509,9 +6714,11 @@ function buildValidatedAnalysisFacts({
   ) {
     direction = "bullish";
   }
-  const currentPrice =
-    asPositiveNumber(visualReview?.latestVisiblePrice) ||
-    extractLastMarketPrice(marketReference);
+  const currentPrice = historicalCutoff.active
+    ? asPositiveNumber(historicalPhase.latestClose) ||
+      extractLastMarketPrice(marketReference)
+    : asPositiveNumber(visualReview?.latestVisiblePrice) ||
+      extractLastMarketPrice(marketReference);
 
   const rankedRawAreas = rankRawEntryAreas({
     visualReview,
@@ -6728,11 +6935,12 @@ function buildValidatedAnalysisFacts({
     ).toLowerCase(),
     direction,
     directionSource: historicalCutoff.active
-      ? "historical_cutoff_market_framework"
+      ? "historical_cutoff_period_classifier"
       : ["bullish", "bearish"].includes(verifiedMarketDirection)
       ? "verified_market_framework"
       : "visual_review",
     historicalCutoff,
+    historicalPhase: historicalCutoff.active ? historicalPhase : null,
     visualDirection,
     verifiedMarketDirection,
     breakoutState,
@@ -6845,6 +7053,36 @@ function secondaryAreaDisplay(facts) {
 }
 
 function directionDisplay(facts) {
+  if (
+    facts.historicalCutoff?.active &&
+    facts.historicalPhase?.phase === "bearish_breakdown"
+  ) {
+    return "Bearish after a strong breakdown";
+  }
+
+  if (
+    facts.historicalCutoff?.active &&
+    facts.historicalPhase?.phase ===
+      "bullish_recovery_after_bearish_breakdown"
+  ) {
+    return "Bearish structure with a strong bullish recovery";
+  }
+
+  if (
+    facts.historicalCutoff?.active &&
+    facts.historicalPhase?.phase === "bullish_breakout"
+  ) {
+    return "Bullish after a strong breakout";
+  }
+
+  if (
+    facts.historicalCutoff?.active &&
+    facts.historicalPhase?.phase ===
+      "bearish_pullback_after_bullish_breakout"
+  ) {
+    return "Bullish structure with a strong bearish pullback";
+  }
+
   if (facts.direction === "bearish") {
     if (facts.transitionState?.bullishRecoveryAfterBreakdown) {
       return "Bearish structure with a strong bullish recovery";
