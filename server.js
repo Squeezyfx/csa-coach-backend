@@ -1255,7 +1255,9 @@ AREA RANKING RULES:
 - Fibonacci retracement is confluence only. It must never create an entry area by itself.
 - Rank structural quality first, but sequence valid entry areas by the order price would reach them from the current price.
 - Preserve the true area type: converted resistance/support, resistance/support, or supply/demand.
-- Keep the exact timeframe-framework high or low as the centre of the area. Pivots, reactions and Fibonacci may confirm it but must never shift that price.
+- Use the timeframe-framework high or low to identify the correct structural period first.
+- If the uploaded chart clearly shows the matching broker level within a reasonable ATR-scaled tolerance, reconcile the final displayed price to that visible chart level. Do not switch to a different structural period.
+- Pivots, reactions and Fibonacci may confirm the chosen period/level but must never replace it.
 - Keep zones compact and tied to the authoritative framework price; do not merge unrelated levels into a wide band.
 - Reject any secondary sell area below the primary sell area, or any secondary buy area above the primary buy area.
 - Rank structural quality and Fibonacci overlap before proximity to price.
@@ -5881,7 +5883,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "7.2.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "7.3.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6750,8 +6752,101 @@ function periodLevelBreakEvidence({
   };
 }
 
+
+function reconcileFrameworkLevelWithVisibleChart({
+  frameworkPrice,
+  frameworkType,
+  visualReview = {},
+  symbol = "",
+  atr = 0,
+}) {
+  const basePrice = asPositiveNumber(frameworkPrice);
+  if (basePrice === null) {
+    return {
+      price: null,
+      source: "framework_data",
+      reconciled: false,
+    };
+  }
+
+  const candidates = [
+    ...(Array.isArray(visualReview?.activeEntryAreas)
+      ? visualReview.activeEntryAreas
+      : []),
+    ...(visualReview?.preferredEntryArea
+      ? [visualReview.preferredEntryArea]
+      : []),
+  ];
+
+  const allowedVisualTypes =
+    frameworkType === "converted resistance"
+      ? new Set(["converted resistance", "resistance", "support"])
+      : frameworkType === "converted support"
+      ? new Set(["converted support", "support", "resistance"])
+      : frameworkType === "supply"
+      ? new Set(["supply", "resistance"])
+      : frameworkType === "demand"
+      ? new Set(["demand", "support"])
+      : frameworkType === "resistance"
+      ? new Set(["resistance", "supply"])
+      : frameworkType === "support"
+      ? new Set(["support", "demand"])
+      : new Set();
+
+  const tolerance = Math.max(
+    getApprovedPriceTolerance(symbol) * 5,
+    Number(atr || 0) * 0.18
+  );
+
+  const matching = candidates
+    .map((area) => {
+      const type = String(
+        normalizedAreaType(area?.areaType, frameworkType.includes("support") ? "bullish" : "bearish")
+      ).toLowerCase();
+
+      const zone = normalizeZone(area, symbol);
+      const center = areaCenter(zone);
+
+      return {
+        type,
+        center,
+        area,
+      };
+    })
+    .filter(
+      (candidate) =>
+        candidate.center !== null &&
+        allowedVisualTypes.has(candidate.type) &&
+        Math.abs(Number(candidate.center) - basePrice) <= tolerance
+    )
+    .sort(
+      (a, b) =>
+        Math.abs(Number(a.center) - basePrice) -
+        Math.abs(Number(b.center) - basePrice)
+    );
+
+  if (!matching.length) {
+    return {
+      price: basePrice,
+      source: "framework_data",
+      reconciled: false,
+      difference: 0,
+    };
+  }
+
+  const selected = matching[0];
+  return {
+    price: Number(selected.center),
+    source: "visible_chart_reconciled",
+    reconciled: true,
+    frameworkPrice: basePrice,
+    difference: Math.abs(Number(selected.center) - basePrice),
+  };
+}
+
 function buildAuthoritativeFrameworkCandidates({
   marketReference = {},
+  visualReview = {},
   direction = "range",
   currentPrice = null,
   symbol = "",
@@ -6805,10 +6900,21 @@ function buildAuthoritativeFrameworkCandidates({
           });
 
           if (conversion.broken && conversion.heldBeyond) {
+            const reconciled = reconcileFrameworkLevelWithVisibleChart({
+              frameworkPrice: low,
+              frameworkType: "converted resistance",
+              visualReview,
+              symbol,
+              atr,
+            });
+
             candidates.push({
-              price: low,
+              price: reconciled.price,
+              frameworkPrice: low,
               type: "converted resistance",
               source: "authoritative_framework_conversion",
+              priceSource: reconciled.source,
+              chartReconciled: reconciled.reconciled === true,
               period: periodLabel,
               date: period?.date || period?.key || null,
               conversionConfirmed: true,
@@ -6837,13 +6943,26 @@ function buildAuthoritativeFrameworkCandidates({
           );
         });
 
+        const highType =
+          String(matchingArea?.type || "").toLowerCase() === "supply"
+            ? "supply"
+            : "resistance";
+
+        const reconciled = reconcileFrameworkLevelWithVisibleChart({
+          frameworkPrice: high,
+          frameworkType: highType,
+          visualReview,
+          symbol,
+          atr,
+        });
+
         candidates.push({
-          price: high,
-          type:
-            String(matchingArea?.type || "").toLowerCase() === "supply"
-              ? "supply"
-              : "resistance",
+          price: reconciled.price,
+          frameworkPrice: high,
+          type: highType,
           source: "authoritative_framework_high",
+          priceSource: reconciled.source,
+          chartReconciled: reconciled.reconciled === true,
           period: periodLabel,
           date: period?.date || period?.key || null,
           conversionConfirmed: false,
@@ -6876,10 +6995,21 @@ function buildAuthoritativeFrameworkCandidates({
           });
 
           if (conversion.broken && conversion.heldBeyond) {
+            const reconciled = reconcileFrameworkLevelWithVisibleChart({
+              frameworkPrice: high,
+              frameworkType: "converted support",
+              visualReview,
+              symbol,
+              atr,
+            });
+
             candidates.push({
-              price: high,
+              price: reconciled.price,
+              frameworkPrice: high,
               type: "converted support",
               source: "authoritative_framework_conversion",
+              priceSource: reconciled.source,
+              chartReconciled: reconciled.reconciled === true,
               period: periodLabel,
               date: period?.date || period?.key || null,
               conversionConfirmed: true,
@@ -6908,13 +7038,26 @@ function buildAuthoritativeFrameworkCandidates({
           );
         });
 
+        const lowType =
+          String(matchingArea?.type || "").toLowerCase() === "demand"
+            ? "demand"
+            : "support";
+
+        const reconciled = reconcileFrameworkLevelWithVisibleChart({
+          frameworkPrice: low,
+          frameworkType: lowType,
+          visualReview,
+          symbol,
+          atr,
+        });
+
         candidates.push({
-          price: low,
-          type:
-            String(matchingArea?.type || "").toLowerCase() === "demand"
-              ? "demand"
-              : "support",
+          price: reconciled.price,
+          frameworkPrice: low,
+          type: lowType,
           source: "authoritative_framework_low",
+          priceSource: reconciled.source,
+          chartReconciled: reconciled.reconciled === true,
           period: periodLabel,
           date: period?.date || period?.key || null,
           conversionConfirmed: false,
@@ -7058,6 +7201,7 @@ function rankRawEntryAreas({
   const frameworkCandidates = attachPivotConfirmationToFrameworkCandidates({
     frameworkCandidates: buildAuthoritativeFrameworkCandidates({
       marketReference,
+      visualReview,
       direction,
       currentPrice,
       symbol,
@@ -7253,6 +7397,12 @@ function rankRawEntryAreas({
         rawZone?.breakPeriod ||
         rawZone?.members?.[0]?.breakPeriod ||
         null,
+      frameworkPrice:
+        asPositiveNumber(rawZone?.members?.[0]?.frameworkPrice),
+      priceSource:
+        safeUserText(rawZone?.members?.[0]?.priceSource || "framework_data"),
+      chartReconciled:
+        rawZone?.members?.[0]?.chartReconciled === true,
       authoritativeFrameworkLevel: true,
       conversionSourceRule:
         ["converted resistance", "converted support"].includes(areaType)
