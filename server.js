@@ -1259,6 +1259,7 @@ AREA RANKING RULES:
 - If the uploaded chart clearly shows the matching broker level within a reasonable ATR-scaled tolerance, reconcile the final displayed price to that visible chart level.
 - An exact displayedPrice/platform price label has priority over every approximate visual estimate. Approximate prices may be used only when no exact printed price is readable.
 - The chart price may adjust only the displayed price of the already-selected framework period; it must never cause the engine to switch to a different day/week/month/quarter/year.
+- Period identity is mandatory for reconciliation: a January chart level can only reconcile the January framework record, a June chart level can only reconcile June, and the same rule applies to days, weeks, quarters and years.
 - Pivots, reactions and Fibonacci may confirm the chosen period/level but must never replace it.
 - Keep zones compact and tied to the authoritative framework price; do not merge unrelated levels into a wide band.
 - Reject any secondary sell area below the primary sell area, or any secondary buy area above the primary buy area.
@@ -1792,6 +1793,12 @@ function sanitizeVisualReviewMarketPrices({
             extractNumericPriceFromLabel(item?.description),
           approximatePrice: nullablePositiveNumber(item?.approximatePrice),
           platformLabel: String(item?.platformLabel || "").trim(),
+          frameworkPeriodHint: safeUserText(
+            item?.frameworkPeriodHint ||
+            item?.periodHint ||
+            item?.sourcePeriod ||
+            ""
+          ),
         }))
       : [],
     visibleHorizontalLines: Array.isArray(visualReview.visibleHorizontalLines)
@@ -1804,6 +1811,12 @@ function sanitizeVisualReviewMarketPrices({
             extractNumericPriceFromLabel(item?.description),
           approximatePrice: nullablePositiveNumber(item?.approximatePrice),
           platformLabel: String(item?.platformLabel || "").trim(),
+          frameworkPeriodHint: safeUserText(
+            item?.frameworkPeriodHint ||
+            item?.periodHint ||
+            item?.sourcePeriod ||
+            ""
+          ),
         }))
       : [],
     activeEntryAreas: Array.isArray(visualReview.activeEntryAreas)
@@ -3332,7 +3345,9 @@ MANDATORY PRICE-READING PASS — DO THIS BEFORE ANALYSING DIRECTION OR ENTRY ARE
 - Also copy the exact visible label text into platformLabel.
 - approximatePrice is only a fallback when the line is visible but no exact printed price can be read.
 - Return every clearly visible relevant horizontal level, even when you are not yet certain whether it is support, resistance, supply, demand, or a converted level.
+- For every returned visible level, identify the framework period that created it from the chart's time axis and structure: for D1 use the source month (for example "January 2026" or "June 2026"), for H4 use the source week, for M1-H1 use the source trading day, for W1 use the source quarter, and for MN use the source year. Put this in frameworkPeriodHint.
 - Do not infer or invent a displayedPrice. If the digits are not readable, use null.
+- If the source period cannot be identified confidently, set frameworkPeriodHint to null rather than guessing.
 - The later CSA engine will decide which day/week/month/quarter/year the level belongs to. Your job here is to faithfully capture the chart-visible prices.
 
 CSA ENTRY-ZONE RULES:
@@ -3381,6 +3396,7 @@ Return exactly this JSON shape:
       "description": "exact visible object proving the chart is marked",
       "displayedPrice": "exact numeric price copied from the visible chart/platform label when readable, otherwise null",
       "platformLabel": "exact visible price/line label text when readable, otherwise null",
+      "frameworkPeriodHint": "source CSA period identified from chart time-axis/structure, e.g. January 2026, week of 2026-07-20, 2026-07-28, Q2 2026, or 2025; null if uncertain",
       "approximatePrice": "fallback visual estimate only when no exact printed price is readable, otherwise null"
     }
   ],
@@ -3390,7 +3406,8 @@ Return exactly this JSON shape:
       "description": "every clearly visible horizontal line, even if its purpose is uncertain",
       "displayedPrice": "exact numeric price copied from the visible price-axis/line label when readable, otherwise null",
       "approximatePrice": "fallback visual estimate only when no exact printed price is readable, otherwise null",
-      "platformLabel": "exact visible line/price label text or null"
+      "platformLabel": "exact visible line/price label text or null",
+      "frameworkPeriodHint": "source CSA period identified from chart time-axis/structure; null if uncertain"
     }
   ],
   "csaSimilarities": ["simple similarity between visible chart markings and internal areas"],
@@ -5945,7 +5962,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "7.5.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "7.6.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6838,6 +6855,7 @@ function collectVisibleChartPriceEvidence({
     type = "",
     source = "",
     description = "",
+    periodHint = "",
     confidence = 1,
   }) => {
     const numericPrice = asPositiveNumber(price);
@@ -6848,6 +6866,8 @@ function collectVisibleChartPriceEvidence({
       type: String(type || "").toLowerCase(),
       source,
       description: safeUserText(description || ""),
+      periodHint: safeUserText(periodHint || ""),
+      periodIdentity: normalizeFrameworkPeriodIdentity(periodHint),
       confidence,
     });
   };
@@ -6875,6 +6895,11 @@ function collectVisibleChartPriceEvidence({
       type: normalizedType,
       source: "visual_area",
       description: area?.zoneText || area?.sourceReason || "",
+      periodHint:
+        area?.frameworkPeriodHint ||
+        area?.periodHint ||
+        area?.sourcePeriod ||
+        "",
       confidence: 4,
     });
   });
@@ -6895,6 +6920,11 @@ function collectVisibleChartPriceEvidence({
         item?.platformLabel ||
         item?.description ||
         "",
+      periodHint:
+        item?.frameworkPeriodHint ||
+        item?.periodHint ||
+        item?.sourcePeriod ||
+        "",
       confidence: 10,
     });
 
@@ -6904,6 +6934,11 @@ function collectVisibleChartPriceEvidence({
         type: String(item?.type || "").toLowerCase(),
         source: "visible_marked_level_estimate",
         description: item?.description || "",
+        periodHint:
+          item?.frameworkPeriodHint ||
+          item?.periodHint ||
+          item?.sourcePeriod ||
+          "",
         confidence: 4,
       });
     }
@@ -6925,6 +6960,11 @@ function collectVisibleChartPriceEvidence({
         item?.platformLabel ||
         item?.description ||
         `visible ${item?.colour || ""} line`,
+      periodHint:
+        item?.frameworkPeriodHint ||
+        item?.periodHint ||
+        item?.sourcePeriod ||
+        "",
       confidence: 12,
     });
 
@@ -6936,6 +6976,11 @@ function collectVisibleChartPriceEvidence({
         description:
           item?.description ||
           `visible ${item?.colour || ""} line`,
+        periodHint:
+          item?.frameworkPeriodHint ||
+          item?.periodHint ||
+          item?.sourcePeriod ||
+          "",
         confidence: 3,
       });
     }
@@ -6944,9 +6989,90 @@ function collectVisibleChartPriceEvidence({
   return evidence;
 }
 
+
+function normalizeFrameworkPeriodIdentity(value = "") {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return "";
+
+  const monthMap = [
+    ["january", "01"], ["jan", "01"],
+    ["february", "02"], ["feb", "02"],
+    ["march", "03"], ["mar", "03"],
+    ["april", "04"], ["apr", "04"],
+    ["may", "05"],
+    ["june", "06"], ["jun", "06"],
+    ["july", "07"], ["jul", "07"],
+    ["august", "08"], ["aug", "08"],
+    ["september", "09"], ["sep", "09"], ["sept", "09"],
+    ["october", "10"], ["oct", "10"],
+    ["november", "11"], ["nov", "11"],
+    ["december", "12"], ["dec", "12"],
+  ];
+
+  const yearMatch = text.match(/\b(20\d{2}|19\d{2})\b/);
+  const year = yearMatch ? yearMatch[1] : "";
+
+  for (const [name, number] of monthMap) {
+    if (new RegExp(`\\b${name}\\b`, "i").test(text)) {
+      return year ? `${year}-${number}` : `month-${number}`;
+    }
+  }
+
+  const isoMonth = text.match(/\b(20\d{2}|19\d{2})[-/](0?[1-9]|1[0-2])\b/);
+  if (isoMonth) {
+    return `${isoMonth[1]}-${String(isoMonth[2]).padStart(2, "0")}`;
+  }
+
+  const quarter = text.match(/\bq([1-4])\b/i);
+  if (quarter) return year ? `${year}-q${quarter[1]}` : `q${quarter[1]}`;
+
+  const week = text.match(/\b(?:week|wk)\s*([0-5]?\d)\b/i);
+  if (week) return year ? `${year}-w${String(week[1]).padStart(2, "0")}` : `w${String(week[1]).padStart(2, "0")}`;
+
+  const dateMatch = text.match(/\b(20\d{2}|19\d{2})-(\d{2})-(\d{2})\b/);
+  if (dateMatch) return `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
+
+  return text.replace(/\s+/g, " ");
+}
+
+function frameworkPeriodIdentityFromRecord(period = {}) {
+  return normalizeFrameworkPeriodIdentity(
+    period?.periodLabel ||
+    period?.day ||
+    period?.date ||
+    period?.key ||
+    ""
+  );
+}
+
+function periodHintsCompatible(candidateHint = "", frameworkHint = "") {
+  const candidate = normalizeFrameworkPeriodIdentity(candidateHint);
+  const framework = normalizeFrameworkPeriodIdentity(frameworkHint);
+
+  if (!candidate || !framework) return false;
+  if (candidate === framework) return true;
+
+  // Allow "January" to match "January 2026" when the visible chart does not
+  // print the year, but never allow one named month/week/quarter to match another.
+  const candidateMonth = candidate.match(/(?:\d{4}-|month-)(\d{2})$/);
+  const frameworkMonth = framework.match(/(?:\d{4}-|month-)(\d{2})$/);
+  if (candidateMonth && frameworkMonth) {
+    return candidateMonth[1] === frameworkMonth[1];
+  }
+
+  const candidateQuarter = candidate.match(/(?:\d{4}-)?q([1-4])$/);
+  const frameworkQuarter = framework.match(/(?:\d{4}-)?q([1-4])$/);
+  if (candidateQuarter && frameworkQuarter) {
+    return candidateQuarter[1] === frameworkQuarter[1];
+  }
+
+  return false;
+}
+
 function reconcileFrameworkLevelWithVisibleChart({
   frameworkPrice,
   frameworkType,
+  frameworkPeriod = "",
   visualReview = {},
   symbol = "",
   atr = 0,
@@ -6999,22 +7125,30 @@ function reconcileFrameworkLevelWithVisibleChart({
     return true;
   };
 
+  const normalizedFrameworkPeriod =
+    normalizeFrameworkPeriodIdentity(frameworkPeriod);
+
   const evidence = collectVisibleChartPriceEvidence({
     visualReview,
     frameworkType,
     symbol,
   })
-    .filter(
-      (candidate) =>
-        typeCompatible(candidate.type) &&
-        Math.abs(Number(candidate.price) - basePrice) <= tolerance
-    )
+    .filter((candidate) => {
+      if (!typeCompatible(candidate.type)) return false;
+      if (Math.abs(Number(candidate.price) - basePrice) > tolerance) return false;
+
+      // A visible broker price is allowed to replace the market-data price only
+      // when the chart reader associates it with the same authoritative period.
+      return periodHintsCompatible(
+        candidate.periodIdentity || candidate.periodHint,
+        normalizedFrameworkPeriod
+      );
+    })
     .map((candidate) => ({
       ...candidate,
       distance: Math.abs(Number(candidate.price) - basePrice),
     }))
     .sort((a, b) => {
-      // Prefer explicit platform labels and visible marked levels first.
       if (b.confidence !== a.confidence) {
         return b.confidence - a.confidence;
       }
@@ -7040,6 +7174,8 @@ function reconcileFrameworkLevelWithVisibleChart({
     frameworkPrice: basePrice,
     difference: selected.distance,
     evidence: selected.description || null,
+    periodHint: selected.periodHint || null,
+    frameworkPeriod: frameworkPeriod || null,
     confidence: selected.confidence,
   };
 }
@@ -7103,6 +7239,7 @@ function buildAuthoritativeFrameworkCandidates({
             const reconciled = reconcileFrameworkLevelWithVisibleChart({
               frameworkPrice: low,
               frameworkType: "converted resistance",
+              frameworkPeriod: periodLabel,
               visualReview,
               symbol,
               atr,
@@ -7116,6 +7253,7 @@ function buildAuthoritativeFrameworkCandidates({
               priceSource: reconciled.source,
               chartReconciled: reconciled.reconciled === true,
               reconciliationEvidence: reconciled.evidence || null,
+              reconciliationPeriodHint: reconciled.periodHint || null,
               reconciliationConfidence: Number(reconciled.confidence || 0),
               period: periodLabel,
               date: period?.date || period?.key || null,
@@ -7153,6 +7291,7 @@ function buildAuthoritativeFrameworkCandidates({
         const reconciled = reconcileFrameworkLevelWithVisibleChart({
           frameworkPrice: high,
           frameworkType: highType,
+          frameworkPeriod: periodLabel,
           visualReview,
           symbol,
           atr,
@@ -7166,6 +7305,7 @@ function buildAuthoritativeFrameworkCandidates({
           priceSource: reconciled.source,
           chartReconciled: reconciled.reconciled === true,
           reconciliationEvidence: reconciled.evidence || null,
+          reconciliationPeriodHint: reconciled.periodHint || null,
           reconciliationConfidence: Number(reconciled.confidence || 0),
           period: periodLabel,
           date: period?.date || period?.key || null,
@@ -7202,6 +7342,7 @@ function buildAuthoritativeFrameworkCandidates({
             const reconciled = reconcileFrameworkLevelWithVisibleChart({
               frameworkPrice: high,
               frameworkType: "converted support",
+              frameworkPeriod: periodLabel,
               visualReview,
               symbol,
               atr,
@@ -7215,6 +7356,7 @@ function buildAuthoritativeFrameworkCandidates({
               priceSource: reconciled.source,
               chartReconciled: reconciled.reconciled === true,
               reconciliationEvidence: reconciled.evidence || null,
+              reconciliationPeriodHint: reconciled.periodHint || null,
               reconciliationConfidence: Number(reconciled.confidence || 0),
               period: periodLabel,
               date: period?.date || period?.key || null,
@@ -7252,6 +7394,7 @@ function buildAuthoritativeFrameworkCandidates({
         const reconciled = reconcileFrameworkLevelWithVisibleChart({
           frameworkPrice: low,
           frameworkType: lowType,
+          frameworkPeriod: periodLabel,
           visualReview,
           symbol,
           atr,
@@ -7265,6 +7408,7 @@ function buildAuthoritativeFrameworkCandidates({
           priceSource: reconciled.source,
           chartReconciled: reconciled.reconciled === true,
           reconciliationEvidence: reconciled.evidence || null,
+          reconciliationPeriodHint: reconciled.periodHint || null,
           reconciliationConfidence: Number(reconciled.confidence || 0),
           period: periodLabel,
           date: period?.date || period?.key || null,
@@ -7614,6 +7758,10 @@ function rankRawEntryAreas({
       reconciliationEvidence:
         safeUserText(
           rawZone?.members?.[0]?.reconciliationEvidence || ""
+        ),
+      reconciliationPeriodHint:
+        safeUserText(
+          rawZone?.members?.[0]?.reconciliationPeriodHint || ""
         ),
       reconciliationConfidence:
         Number(rawZone?.members?.[0]?.reconciliationConfidence || 0),
