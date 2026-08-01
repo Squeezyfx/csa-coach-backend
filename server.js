@@ -1249,6 +1249,7 @@ AREA RANKING RULES:
 - The deterministic OHLC market direction and phase supplied by the backend are immutable. Do not rewrite them.
 - Identify up to 3 active entry areas that agree with the locked directional bias.
 - The timeframe-specific CSA framework levels are authoritative: M1-H1 daily, H4 weekly, D1 monthly, W1 quarterly, MN yearly/multi-year.
+- A converted resistance may only come from a level originally classified by the CSA period engine as support; a converted support may only come from original resistance. Do not convert demand or supply levels.
 - Generic pivots and chart markings may only confirm or refine an authoritative framework level; they must never create or replace the primary area.
 - Validate genuine support/resistance or supply/demand structure before considering distance.
 - Fibonacci retracement is confluence only. It must never create an entry area by itself.
@@ -5879,7 +5880,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "7.0.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "7.1.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6768,30 +6769,41 @@ function buildAuthoritativeFrameworkCandidates({
       // A prior framework support that has been broken and held below becomes
       // authoritative converted resistance.
       if (low !== null && low > Number(currentPrice) + tolerance) {
-        const conversion = periodLevelBreakEvidence({
-          levels,
-          sourceIndex: index,
-          levelPrice: low,
-          direction: "bearish",
-          tolerance,
+        const originalArea = csaAreas.find((area) => {
+          const areaPrice = asPositiveNumber(area?.price);
+          return (
+            areaPrice !== null &&
+            Math.abs(areaPrice - low) <= tolerance &&
+            String(area?.type || "").toLowerCase() === "support"
+          );
         });
 
-        if (conversion.broken && conversion.heldBeyond) {
-          candidates.push({
-            price: low,
-            type: "converted resistance",
-            source: "authoritative_framework_conversion",
-            period: periodLabel,
-            date: period?.date || period?.key || null,
-            conversionConfirmed: true,
-            originalType: "support",
-            breakPeriod:
-              conversion.breakPeriod?.periodLabel ||
-              conversion.breakPeriod?.day ||
-              conversion.breakPeriod?.key ||
-              null,
-            authorityRank: 1,
+        if (originalArea) {
+          const conversion = periodLevelBreakEvidence({
+            levels,
+            sourceIndex: index,
+            levelPrice: low,
+            direction: "bearish",
+            tolerance,
           });
+
+          if (conversion.broken && conversion.heldBeyond) {
+            candidates.push({
+              price: low,
+              type: "converted resistance",
+              source: "authoritative_framework_conversion",
+              period: periodLabel,
+              date: period?.date || period?.key || null,
+              conversionConfirmed: true,
+              originalType: "support",
+              breakPeriod:
+                conversion.breakPeriod?.periodLabel ||
+                conversion.breakPeriod?.day ||
+                conversion.breakPeriod?.key ||
+                null,
+              authorityRank: 1,
+            });
+          }
         }
       }
 
@@ -6828,30 +6840,41 @@ function buildAuthoritativeFrameworkCandidates({
       // A prior framework resistance that has been broken and held above
       // becomes authoritative converted support.
       if (high !== null && high < Number(currentPrice) - tolerance) {
-        const conversion = periodLevelBreakEvidence({
-          levels,
-          sourceIndex: index,
-          levelPrice: high,
-          direction: "bullish",
-          tolerance,
+        const originalArea = csaAreas.find((area) => {
+          const areaPrice = asPositiveNumber(area?.price);
+          return (
+            areaPrice !== null &&
+            Math.abs(areaPrice - high) <= tolerance &&
+            String(area?.type || "").toLowerCase() === "resistance"
+          );
         });
 
-        if (conversion.broken && conversion.heldBeyond) {
-          candidates.push({
-            price: high,
-            type: "converted support",
-            source: "authoritative_framework_conversion",
-            period: periodLabel,
-            date: period?.date || period?.key || null,
-            conversionConfirmed: true,
-            originalType: "resistance",
-            breakPeriod:
-              conversion.breakPeriod?.periodLabel ||
-              conversion.breakPeriod?.day ||
-              conversion.breakPeriod?.key ||
-              null,
-            authorityRank: 1,
+        if (originalArea) {
+          const conversion = periodLevelBreakEvidence({
+            levels,
+            sourceIndex: index,
+            levelPrice: high,
+            direction: "bullish",
+            tolerance,
           });
+
+          if (conversion.broken && conversion.heldBeyond) {
+            candidates.push({
+              price: high,
+              type: "converted support",
+              source: "authoritative_framework_conversion",
+              period: periodLabel,
+              date: period?.date || period?.key || null,
+              conversionConfirmed: true,
+              originalType: "resistance",
+              breakPeriod:
+                conversion.breakPeriod?.periodLabel ||
+                conversion.breakPeriod?.day ||
+                conversion.breakPeriod?.key ||
+                null,
+              authorityRank: 1,
+            });
+          }
         }
       }
 
@@ -7211,6 +7234,10 @@ function rankRawEntryAreas({
         rawZone?.members?.[0]?.breakPeriod ||
         null,
       authoritativeFrameworkLevel: true,
+      conversionSourceRule:
+        ["converted resistance", "converted support"].includes(areaType)
+          ? "original_csa_support_or_resistance_only"
+          : "not_applicable",
     };
   });
 
