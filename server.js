@@ -5870,7 +5870,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "4.2.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "4.3.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6167,18 +6167,331 @@ function areaCenter(area = {}) {
   return low ?? high;
 }
 
+
+function timeframeAreaLookback(timeframe = "H1") {
+  const tf = comparableTimeframe(timeframe) || "H1";
+  const map = {
+    M1: 180,
+    M5: 160,
+    M15: 140,
+    M30: 120,
+    H1: 110,
+    H4: 85,
+    D1: 70,
+    W1: 50,
+    MN: 36,
+  };
+  return map[tf] || map.H1;
+}
+
+function findCandleIndexByDatetime(candles = [], datetime = "") {
+  const target = String(datetime || "").trim();
+  if (!target) return -1;
+
+  const exact = candles.findIndex(
+    (candle) => String(candle?.datetime || "").trim() === target
+  );
+  if (exact >= 0) return exact;
+
+  const targetDate = target.slice(0, 16);
+  return candles.findIndex(
+    (candle) =>
+      String(candle?.datetime || "").trim().slice(0, 16) === targetDate
+  );
+}
+
+function buildFibonacciContext({
+  marketReference = {},
+  historicalPhase = null,
+  direction = "range",
+  timeframe = "H1",
+}) {
+  const candles = Array.isArray(marketReference?.timeframeCandles)
+    ? marketReference.timeframeCandles
+        .filter(
+          (candle) =>
+            candle?.datetime &&
+            Number.isFinite(Number(candle?.high)) &&
+            Number.isFinite(Number(candle?.low))
+        )
+        .sort((a, b) =>
+          String(a.datetime).localeCompare(String(b.datetime))
+        )
+    : [];
+
+  if (candles.length < 10 || !["bullish", "bearish"].includes(direction)) {
+    return null;
+  }
+
+  const eventDatetime =
+    historicalPhase?.diagnostics?.latestEvent?.datetime || "";
+  let eventIndex = findCandleIndexByDatetime(candles, eventDatetime);
+
+  if (eventIndex < 0) {
+    eventIndex = Math.max(1, candles.length - Math.ceil(timeframeAreaLookback(timeframe) / 3));
+  }
+
+  const impulseLookback = Math.max(
+    8,
+    Math.min(timeframeAreaLookback(timeframe), eventIndex + 1)
+  );
+  const beforeEvent = candles.slice(
+    Math.max(0, eventIndex - impulseLookback + 1),
+    eventIndex + 1
+  );
+  const afterEvent = candles.slice(eventIndex);
+
+  let swingStart = null;
+  let swingEnd = null;
+
+  if (direction === "bearish") {
+    swingStart = maxFinite(beforeEvent.map((candle) => candle?.high));
+    swingEnd = minFinite(afterEvent.map((candle) => candle?.low));
+  } else {
+    swingStart = minFinite(beforeEvent.map((candle) => candle?.low));
+    swingEnd = maxFinite(afterEvent.map((candle) => candle?.high));
+  }
+
+  if (
+    !Number.isFinite(Number(swingStart)) ||
+    !Number.isFinite(Number(swingEnd)) ||
+    Number(swingStart) === Number(swingEnd)
+  ) {
+    return null;
+  }
+
+  const high = Math.max(Number(swingStart), Number(swingEnd));
+  const low = Math.min(Number(swingStart), Number(swingEnd));
+  const range = high - low;
+  if (!(range > 0)) return null;
+
+  const ratios = [0.382, 0.5, 0.618, 0.786];
+  const levels = ratios.map((ratio) => ({
+    ratio,
+    label: `${(ratio * 100).toFixed(ratio === 0.5 ? 0 : 1)}%`,
+    price:
+      direction === "bearish"
+        ? low + range * ratio
+        : high - range * ratio,
+  }));
+
+  return {
+    direction,
+    swingHigh: high,
+    swingLow: low,
+    range,
+    levels,
+    source: "latest_confirmed_impulse",
+  };
+}
+
+function countIndependentAreaReactions({
+  candles = [],
+  zoneLow,
+  zoneHigh,
+  tolerance = 0,
+  atr = 0,
+  timeframe = "H1",
+}) {
+  const lower = Math.min(Number(zoneLow), Number(zoneHigh)) - tolerance;
+  const upper = Math.max(Number(zoneLow), Number(zoneHigh)) + tolerance;
+
+  if (
+    !Number.isFinite(lower) ||
+    !Number.isFinite(upper) ||
+    !Array.isArray(candles) ||
+    !candles.length
+  ) {
+    return { touches: 0, reactions: 0 };
+  }
+
+  const lookback = timeframeAreaLookback(timeframe);
+  const selected = candles.slice(-lookback);
+  const touchedIndexes = [];
+
+  selected.forEach((candle, index) => {
+    const high = Number(candle?.high);
+    const low = Number(candle?.low);
+    if (!Number.isFinite(high) || !Number.isFinite(low)) return;
+
+    if (high >= lower && low <= upper) {
+      touchedIndexes.push(index);
+    }
+  });
+
+  const clusters = [];
+  touchedIndexes.forEach((index) => {
+    const previous = clusters[clusters.length - 1];
+    if (!previous || index - previous.end > 2) {
+      clusters.push({ start: index, end: index });
+    } else {
+      previous.end = index;
+    }
+  });
+
+  let reactions = 0;
+  const departureRequired = Math.max(
+    Number(atr || 0) * 0.45,
+    Math.max(upper - lower, tolerance) * 1.5
+  );
+
+  clusters.forEach((cluster) => {
+    const inspectionEnd = Math.min(
+      selected.length,
+      cluster.end + 5
+    );
+    const later = selected.slice(cluster.end + 1, inspectionEnd);
+    const departed = later.some((candle) => {
+      const high = Number(candle?.high);
+      const low = Number(candle?.low);
+      return (
+        (Number.isFinite(high) && high >= upper + departureRequired) ||
+        (Number.isFinite(low) && low <= lower - departureRequired)
+      );
+    });
+    if (departed) reactions += 1;
+  });
+
+  return {
+    touches: clusters.length,
+    reactions,
+  };
+}
+
+function evaluateAreaConfluence({
+  area = {},
+  marketReference = {},
+  fibonacciContext = null,
+  direction = "range",
+  timeframe = "H1",
+  symbol = "",
+}) {
+  const zone = normalizeZone(area, symbol);
+  const center = areaCenter(zone);
+  const candles = Array.isArray(marketReference?.timeframeCandles)
+    ? marketReference.timeframeCandles
+    : [];
+  const atr = averageTrueRange(
+    candles,
+    getStructureEngineConfig(timeframe).atrPeriod
+  );
+  const baseTolerance = getApprovedPriceTolerance(symbol);
+  const zoneWidth =
+    zone.zoneLow !== null && zone.zoneHigh !== null
+      ? Math.abs(zone.zoneHigh - zone.zoneLow)
+      : 0;
+  const reactionTolerance = Math.max(
+    baseTolerance,
+    atr * 0.16,
+    zoneWidth * 0.12
+  );
+
+  const reactionStats =
+    center === null
+      ? { touches: 0, reactions: 0 }
+      : countIndependentAreaReactions({
+          candles,
+          zoneLow: zone.zoneLow ?? center,
+          zoneHigh: zone.zoneHigh ?? center,
+          tolerance: reactionTolerance,
+          atr,
+          timeframe,
+        });
+
+  const sourceText = [
+    area?.sourceReason,
+    area?.areaType,
+    area?.zoneText,
+    area?.state,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const explicitStructuralZone =
+    /supply|demand|resistance|support|converted|former/.test(sourceText);
+
+  let structuralScore = 0;
+  if (explicitStructuralZone) structuralScore += 2;
+  if (zoneWidth > Math.max(baseTolerance, atr * 0.08)) structuralScore += 1;
+  structuralScore += Math.min(3, reactionStats.reactions);
+  if (reactionStats.touches >= 2) structuralScore += 1;
+
+  const fibMatches = [];
+  if (fibonacciContext && center !== null) {
+    const fibTolerance = Math.max(
+      baseTolerance * 2,
+      atr * 0.22,
+      zoneWidth * 0.25
+    );
+
+    fibonacciContext.levels.forEach((level) => {
+      const withinZone =
+        level.price >= (zone.zoneLow ?? center) - fibTolerance &&
+        level.price <= (zone.zoneHigh ?? center) + fibTolerance;
+
+      if (withinZone) {
+        fibMatches.push(level);
+      }
+    });
+  }
+
+  let fibonacciScore = 0;
+  fibMatches.forEach((match) => {
+    if (match.ratio === 0.618) fibonacciScore = Math.max(fibonacciScore, 3);
+    else if (match.ratio === 0.5) fibonacciScore = Math.max(fibonacciScore, 2);
+    else fibonacciScore = Math.max(fibonacciScore, 1);
+  });
+
+  // Fibonacci is only a bonus. It cannot rescue an area that has no
+  // independently validated structural evidence.
+  const structurallyValid =
+    structuralScore >= 4 &&
+    (reactionStats.reactions >= 1 || zoneWidth > Math.max(baseTolerance, atr * 0.10));
+
+  const qualityScore =
+    structurallyValid
+      ? structuralScore * 10 + fibonacciScore * 6
+      : structuralScore * 4;
+
+  return {
+    structurallyValid,
+    structuralScore,
+    fibonacciScore,
+    qualityScore,
+    fibMatches,
+    reactionStats,
+    atr,
+    zoneWidth,
+    confluenceLabel:
+      structurallyValid && fibonacciScore >= 2
+        ? "high"
+        : structurallyValid
+        ? "valid_structure"
+        : "weak",
+  };
+}
+
 function rankRawEntryAreas({
   visualReview = {},
   marketReference = {},
+  historicalPhase = null,
   direction = "range",
   currentPrice = null,
   symbol = "",
+  timeframe = "H1",
 }) {
   const marketDerivedAreas = [];
   const marketAreas = Array.isArray(marketReference?.csaAreas)
     ? marketReference.csaAreas
     : [];
   const conversionTolerance = getApprovedPriceTolerance(symbol);
+  const fibonacciContext = buildFibonacciContext({
+    marketReference,
+    historicalPhase,
+    direction,
+    timeframe,
+  });
 
   marketAreas.forEach((area) => {
     const price = asPositiveNumber(area?.price);
@@ -6273,11 +6586,36 @@ function rankRawEntryAreas({
         currentPrice === null ? Number.MAX_SAFE_INTEGER : Math.abs(center - currentPrice);
 
       const typePriority =
-        areaType === "converted resistance" || areaType === "converted support"
+        areaType === "supply" || areaType === "demand"
           ? 0
-          : areaType === "supply" || areaType === "demand"
+          : areaType === "resistance" || areaType === "support"
           ? 1
-          : 2;
+          : areaType === "converted resistance" || areaType === "converted support"
+          ? 2
+          : 3;
+
+      const confluence = evaluateAreaConfluence({
+        area: {
+          ...area,
+          areaType,
+          zoneLow: zone.zoneLow,
+          zoneHigh: zone.zoneHigh,
+          zoneText: zone.zoneText,
+        },
+        marketReference,
+        fibonacciContext,
+        direction,
+        timeframe,
+        symbol,
+      });
+
+      if (!confluence.structurallyValid) return null;
+
+      const fibText = confluence.fibMatches.length
+        ? ` Fibonacci confluence: ${confluence.fibMatches
+            .map((match) => match.label)
+            .join(", ")}.`
+        : "";
 
       return {
         ...area,
@@ -6289,21 +6627,35 @@ function rankRawEntryAreas({
         state,
         distance,
         typePriority,
+        structuralScore: confluence.structuralScore,
+        fibonacciScore: confluence.fibonacciScore,
+        qualityScore: confluence.qualityScore,
+        fibonacciMatches: confluence.fibMatches,
+        reactionCount: confluence.reactionStats.reactions,
+        touchCount: confluence.reactionStats.touches,
+        confluenceLabel: confluence.confluenceLabel,
+        sourceReason: `${safeUserText(area.sourceReason || "")}${fibText}`.trim(),
       };
     })
     .filter(Boolean)
     .sort((a, b) => {
-      const distanceDifference = a.distance - b.distance;
-      const tolerance = Math.max(
-        Math.abs(Number(currentPrice || 0)) * 0.0005,
-        direction === "bearish" || direction === "bullish" ? 0.0005 : 0
-      );
-
-      if (Math.abs(distanceDifference) > tolerance) {
-        return distanceDifference;
+      if (b.qualityScore !== a.qualityScore) {
+        return b.qualityScore - a.qualityScore;
       }
 
-      return a.typePriority - b.typePriority;
+      if (b.fibonacciScore !== a.fibonacciScore) {
+        return b.fibonacciScore - a.fibonacciScore;
+      }
+
+      if (b.structuralScore !== a.structuralScore) {
+        return b.structuralScore - a.structuralScore;
+      }
+
+      if (a.typePriority !== b.typePriority) {
+        return a.typePriority - b.typePriority;
+      }
+
+      return a.distance - b.distance;
     });
 
   const seen = new Set();
@@ -7580,9 +7932,11 @@ function buildValidatedAnalysisFacts({
   const rankedRawAreas = rankRawEntryAreas({
     visualReview,
     marketReference,
+    historicalPhase,
     direction,
     currentPrice,
     symbol: submittedInstrument,
+    timeframe,
   });
 
   const preferredArea = rankedRawAreas[0] || fallbackPreferredArea;
@@ -7827,6 +8181,13 @@ function buildValidatedAnalysisFacts({
         Number.isFinite(Number(candidate.distance))
           ? Number(candidate.distance)
           : null,
+      structuralScore: Number(candidate.structuralScore || 0),
+      fibonacciScore: Number(candidate.fibonacciScore || 0),
+      fibonacciMatches: Array.isArray(candidate.fibonacciMatches)
+        ? candidate.fibonacciMatches
+        : [],
+      reactionCount: Number(candidate.reactionCount || 0),
+      confluenceLabel: candidate.confluenceLabel || "valid_structure",
     })),
     secondaryEntryArea: secondaryRawArea
       ? {
@@ -7863,6 +8224,13 @@ function buildValidatedAnalysisFacts({
       lifecycleStatus,
       invalidated: areaInvalidated,
       directionMatch: areaDirectionMatches(areaType, direction),
+      structuralScore: Number(preferredArea?.structuralScore || 0),
+      fibonacciScore: Number(preferredArea?.fibonacciScore || 0),
+      fibonacciMatches: Array.isArray(preferredArea?.fibonacciMatches)
+        ? preferredArea.fibonacciMatches
+        : [],
+      reactionCount: Number(preferredArea?.reactionCount || 0),
+      confluenceLabel: preferredArea?.confluenceLabel || "valid_structure",
     },
     convertedLevel: {
       detected: convertedLevelDetected,
