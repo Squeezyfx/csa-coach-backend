@@ -1256,7 +1256,8 @@ AREA RANKING RULES:
 - Rank structural quality first, but sequence valid entry areas by the order price would reach them from the current price.
 - Preserve the true area type: converted resistance/support, resistance/support, or supply/demand.
 - Use the timeframe-framework high or low to identify the correct structural period first.
-- If the uploaded chart clearly shows the matching broker level within a reasonable ATR-scaled tolerance, reconcile the final displayed price to that visible chart level. Prefer an explicit platform price label or clearly marked horizontal-line price over a loose visual estimate.
+- If the uploaded chart clearly shows the matching broker level within a reasonable ATR-scaled tolerance, reconcile the final displayed price to that visible chart level.
+- An exact displayedPrice/platform price label has priority over every approximate visual estimate. Approximate prices may be used only when no exact printed price is readable.
 - The chart price may adjust only the displayed price of the already-selected framework period; it must never cause the engine to switch to a different day/week/month/quarter/year.
 - Pivots, reactions and Fibonacci may confirm the chosen period/level but must never replace it.
 - Keep zones compact and tied to the authoritative framework price; do not merge unrelated levels into a wide band.
@@ -1785,13 +1786,22 @@ function sanitizeVisualReviewMarketPrices({
       ? visualReview.visibleMarkedLevels.slice(0, 12).map((item) => ({
           type: String(item?.type || "").toLowerCase(),
           description: safeUserText(item?.description || ""),
+          displayedPrice:
+            nullablePositiveNumber(item?.displayedPrice) ||
+            extractNumericPriceFromLabel(item?.platformLabel) ||
+            extractNumericPriceFromLabel(item?.description),
           approximatePrice: nullablePositiveNumber(item?.approximatePrice),
+          platformLabel: String(item?.platformLabel || "").trim(),
         }))
       : [],
     visibleHorizontalLines: Array.isArray(visualReview.visibleHorizontalLines)
       ? visualReview.visibleHorizontalLines.slice(0, 16).map((item) => ({
           colour: String(item?.colour || "other").toLowerCase(),
           description: safeUserText(item?.description || ""),
+          displayedPrice:
+            nullablePositiveNumber(item?.displayedPrice) ||
+            extractNumericPriceFromLabel(item?.platformLabel) ||
+            extractNumericPriceFromLabel(item?.description),
           approximatePrice: nullablePositiveNumber(item?.approximatePrice),
           platformLabel: String(item?.platformLabel || "").trim(),
         }))
@@ -3316,6 +3326,15 @@ Initial image validation:
 - Cutoff rule: ${marketReference?.chartCutoff?.reason || "The uploaded chart remains the primary source of truth."}
 - Detected trigger: ${chartDetection?.visibleTrigger || "none confirmed"}
 
+MANDATORY PRICE-READING PASS — DO THIS BEFORE ANALYSING DIRECTION OR ENTRY AREAS:
+- Inspect the chart's price axis, every horizontal line, rectangle boundary, and any printed platform price label.
+- When a price is visibly printed beside a line/level/zone boundary, copy that exact printed number into displayedPrice. Do not replace it with an estimate.
+- Also copy the exact visible label text into platformLabel.
+- approximatePrice is only a fallback when the line is visible but no exact printed price can be read.
+- Return every clearly visible relevant horizontal level, even when you are not yet certain whether it is support, resistance, supply, demand, or a converted level.
+- Do not infer or invent a displayedPrice. If the digits are not readable, use null.
+- The later CSA engine will decide which day/week/month/quarter/year the level belongs to. Your job here is to faithfully capture the chart-visible prices.
+
 CSA ENTRY-ZONE RULES:
 - Supply and demand are zones, not single price points.
 - When a rectangle or shaded zone is visible, return zoneLow and zoneHigh when its boundaries are clearly readable.
@@ -3360,15 +3379,18 @@ Return exactly this JSON shape:
     {
       "type": "support | resistance | zone | label",
       "description": "exact visible object proving the chart is marked",
-      "approximatePrice": "internal visual estimate only; never repeat this value in user-facing text, or null"
+      "displayedPrice": "exact numeric price copied from the visible chart/platform label when readable, otherwise null",
+      "platformLabel": "exact visible price/line label text when readable, otherwise null",
+      "approximatePrice": "fallback visual estimate only when no exact printed price is readable, otherwise null"
     }
   ],
   "visibleHorizontalLines": [
     {
       "colour": "blue | red | green | orange | other",
       "description": "every clearly visible horizontal line, even if its purpose is uncertain",
-      "approximatePrice": "internal visual estimate only; never repeat this value in user-facing text, or null",
-      "platformLabel": "visible line label or null"
+      "displayedPrice": "exact numeric price copied from the visible price-axis/line label when readable, otherwise null",
+      "approximatePrice": "fallback visual estimate only when no exact printed price is readable, otherwise null",
+      "platformLabel": "exact visible line/price label text or null"
     }
   ],
   "csaSimilarities": ["simple similarity between visible chart markings and internal areas"],
@@ -3478,6 +3500,12 @@ Return exactly this JSON shape:
       marketReferenceAvailable,
       shortTermDirection: parsed.shortTermDirection || null,
       chartMarkingStatus: parsed.chartMarkingStatus || null,
+      visibleMarkedLevels: Array.isArray(parsed.visibleMarkedLevels)
+        ? parsed.visibleMarkedLevels.slice(0, 12)
+        : [],
+      visibleHorizontalLines: Array.isArray(parsed.visibleHorizontalLines)
+        ? parsed.visibleHorizontalLines.slice(0, 16)
+        : [],
       preferredEntryArea: normalizedPreferredEntryArea,
       visualQualityWarning,
     });
@@ -3495,10 +3523,28 @@ Return exactly this JSON shape:
         ? "unmarked"
         : "unclear",
       visibleMarkedLevels: Array.isArray(parsed.visibleMarkedLevels)
-        ? parsed.visibleMarkedLevels.slice(0, 12)
+        ? parsed.visibleMarkedLevels.slice(0, 12).map((item) => ({
+            type: String(item?.type || "").toLowerCase(),
+            description: safeUserText(item?.description || ""),
+            displayedPrice:
+              nullablePositiveNumber(item?.displayedPrice) ||
+              extractNumericPriceFromLabel(item?.platformLabel) ||
+              extractNumericPriceFromLabel(item?.description),
+            approximatePrice: nullablePositiveNumber(item?.approximatePrice),
+            platformLabel: String(item?.platformLabel || "").trim(),
+          }))
         : [],
       visibleHorizontalLines: Array.isArray(parsed.visibleHorizontalLines)
-        ? parsed.visibleHorizontalLines.slice(0, 12)
+        ? parsed.visibleHorizontalLines.slice(0, 16).map((item) => ({
+            colour: String(item?.colour || "other").toLowerCase(),
+            description: safeUserText(item?.description || ""),
+            displayedPrice:
+              nullablePositiveNumber(item?.displayedPrice) ||
+              extractNumericPriceFromLabel(item?.platformLabel) ||
+              extractNumericPriceFromLabel(item?.description),
+            approximatePrice: nullablePositiveNumber(item?.approximatePrice),
+            platformLabel: String(item?.platformLabel || "").trim(),
+          }))
         : [],
       csaSimilarities: normalizeArrayOfStrings(parsed.csaSimilarities, []).map(safeUserText).slice(0, 8),
       csaDifferences: normalizeArrayOfStrings(parsed.csaDifferences, []).map(safeUserText).slice(0, 8),
@@ -5899,7 +5945,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "7.4.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "7.5.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6837,33 +6883,62 @@ function collectVisibleChartPriceEvidence({
     ? visualReview.visibleMarkedLevels
     : []
   ).forEach((item) => {
+    const exactPrice =
+      nullablePositiveNumber(item?.displayedPrice) ||
+      extractNumericPriceFromLabel(item?.platformLabel);
+
     addEvidence({
-      price: item?.approximatePrice,
+      price: exactPrice,
       type: String(item?.type || "").toLowerCase(),
-      source: "visible_marked_level",
-      description: item?.description || "",
-      confidence: 5,
+      source: "visible_exact_marked_price",
+      description:
+        item?.platformLabel ||
+        item?.description ||
+        "",
+      confidence: 10,
     });
+
+    if (exactPrice === null) {
+      addEvidence({
+        price: item?.approximatePrice,
+        type: String(item?.type || "").toLowerCase(),
+        source: "visible_marked_level_estimate",
+        description: item?.description || "",
+        confidence: 4,
+      });
+    }
   });
 
   (Array.isArray(visualReview?.visibleHorizontalLines)
     ? visualReview.visibleHorizontalLines
     : []
   ).forEach((item) => {
+    const exactPrice =
+      nullablePositiveNumber(item?.displayedPrice) ||
+      extractNumericPriceFromLabel(item?.platformLabel);
+
     addEvidence({
-      price:
-        nullablePositiveNumber(item?.approximatePrice) ||
-        extractNumericPriceFromLabel(item?.platformLabel),
+      price: exactPrice,
       type: "line",
-      source: item?.platformLabel
-        ? "visible_platform_label"
-        : "visible_horizontal_line",
+      source: "visible_exact_platform_price",
       description:
         item?.platformLabel ||
         item?.description ||
         `visible ${item?.colour || ""} line`,
-      confidence: item?.platformLabel ? 6 : 3,
+      confidence: 12,
     });
+
+    if (exactPrice === null) {
+      addEvidence({
+        price: item?.approximatePrice,
+        type: "line",
+        source: "visible_horizontal_line_estimate",
+        description:
+          item?.description ||
+          `visible ${item?.colour || ""} line`,
+        confidence: 3,
+      });
+    }
   });
 
   return evidence;
