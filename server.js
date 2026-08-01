@@ -1255,7 +1255,8 @@ AREA RANKING RULES:
 - Fibonacci retracement is confluence only. It must never create an entry area by itself.
 - Rank structural quality first, but sequence valid entry areas by the order price would reach them from the current price.
 - Preserve the true area type: converted resistance/support, resistance/support, or supply/demand.
-- Keep zones compact and tied to actual reaction prices; do not merge unrelated levels into a wide band.
+- Keep the exact timeframe-framework high or low as the centre of the area. Pivots, reactions and Fibonacci may confirm it but must never shift that price.
+- Keep zones compact and tied to the authoritative framework price; do not merge unrelated levels into a wide band.
 - Reject any secondary sell area below the primary sell area, or any secondary buy area above the primary buy area.
 - Rank structural quality and Fibonacci overlap before proximity to price.
 - For a bearish plan, a broken support below an older supply zone becomes potential converted resistance and should normally be the primary area when it is the nearest valid sell area above price.
@@ -5880,7 +5881,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "7.1.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "7.2.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6454,42 +6455,48 @@ function compactZoneBounds({
   atr = 0,
   priceTolerance = 0,
 }) {
-  const memberPrices = members
-    .map((member) => Number(member?.price))
-    .filter(Number.isFinite)
-    .sort((a, b) => a - b);
+  const authoritativeMember =
+    members.find((member) =>
+      String(member?.source || "").startsWith("authoritative_framework_")
+    ) || members[0] || null;
 
-  const center =
-    memberPrices.length
-      ? memberPrices.reduce((sum, price) => sum + price, 0) /
-        memberPrices.length
-      : (Number(rawLow) + Number(rawHigh)) / 2;
+  const authoritativePrice = Number(authoritativeMember?.price);
 
-  const memberSpread =
-    memberPrices.length >= 2
-      ? memberPrices[memberPrices.length - 1] - memberPrices[0]
-      : 0;
+  const fallbackCenter =
+    Number.isFinite(Number(rawLow)) && Number.isFinite(Number(rawHigh))
+      ? (Number(rawLow) + Number(rawHigh)) / 2
+      : Number.isFinite(Number(rawLow))
+      ? Number(rawLow)
+      : Number.isFinite(Number(rawHigh))
+      ? Number(rawHigh)
+      : null;
 
-  const minimumWidth = Math.max(
-    priceTolerance * 2,
-    Number(atr || 0) * 0.04
+  const center = Number.isFinite(authoritativePrice)
+    ? authoritativePrice
+    : fallbackCenter;
+
+  if (!Number.isFinite(center)) {
+    return {
+      zoneLow: null,
+      zoneHigh: null,
+      center: null,
+      halfWidth: null,
+    };
+  }
+
+  // Universal rule: keep the exact daily/weekly/monthly/quarterly/yearly
+  // framework price at the centre. Other evidence may validate the level but
+  // must never move it.
+  const halfWidth = Math.max(
+    priceTolerance,
+    Number(atr || 0) * 0.025
   );
-
-  const maximumWidth = Math.max(
-    priceTolerance * 6,
-    Number(atr || 0) * 0.20
-  );
-
-  let desiredWidth = Math.max(
-    minimumWidth,
-    memberSpread + Math.max(priceTolerance * 2, Number(atr || 0) * 0.035)
-  );
-
-  desiredWidth = Math.min(desiredWidth, maximumWidth);
 
   return {
-    zoneLow: center - desiredWidth / 2,
-    zoneHigh: center + desiredWidth / 2,
+    zoneLow: center - halfWidth,
+    zoneHigh: center + halfWidth,
+    center,
+    halfWidth,
   };
 }
 
@@ -6548,6 +6555,16 @@ function validateAndSequenceEntryAreas({
 
     if (!Number.isFinite(low) || !Number.isFinite(high) || low >= high) {
       errors.push("invalid_zone_bounds");
+      return false;
+    }
+
+    const authoritativeCenter = Number(area?.authoritativeCenter);
+    if (
+      !Number.isFinite(authoritativeCenter) ||
+      Math.abs(((low + high) / 2) - authoritativeCenter) >
+        Math.max(Number(atr || 0) * 0.001, Number.EPSILON * 100)
+    ) {
+      errors.push("framework_level_not_zone_center");
       return false;
     }
 
@@ -7083,6 +7100,7 @@ function rankRawEntryAreas({
 
     const zoneLow = compacted.zoneLow;
     const zoneHigh = compacted.zoneHigh;
+    const authoritativeCenter = compacted.center;
 
     const reactionTolerance = Math.max(
       priceTolerance,
@@ -7196,7 +7214,9 @@ function rankRawEntryAreas({
       areaType,
       zoneLow,
       zoneHigh,
+      authoritativeCenter,
       zoneText: `${formatPrice(zoneLow, symbol)}–${formatPrice(zoneHigh, symbol)}`,
+      levelText: formatPrice(authoritativeCenter, symbol),
       state: "active",
       source: rawZone.source,
       sourceReason:
@@ -8803,6 +8823,10 @@ function buildValidatedAnalysisFacts({
           sourceReason: safeUserText(secondaryRawArea.sourceReason || ""),
           executionOrder: Number(secondaryRawArea.executionOrder || 2),
           conversionConfirmed: secondaryRawArea.conversionConfirmed === true,
+          authoritativeCenter: asPositiveNumber(
+            secondaryRawArea.authoritativeCenter
+          ),
+          levelText: safeUserText(secondaryRawArea.levelText || ""),
         }
       : null,
     preferredEntryArea: {
@@ -8844,6 +8868,10 @@ function buildValidatedAnalysisFacts({
       executionOrder: Number(preferredArea?.executionOrder || 1),
       conversionConfirmed: preferredArea?.conversionConfirmed === true,
       brokenLevel: asPositiveNumber(preferredArea?.brokenLevel),
+      authoritativeCenter: asPositiveNumber(
+        preferredArea?.authoritativeCenter
+      ),
+      levelText: safeUserText(preferredArea?.levelText || ""),
     },
     convertedLevel: {
       detected: convertedLevelDetected,
@@ -8888,7 +8916,17 @@ function buildValidatedAnalysisFacts({
 
 function formatRankedArea(area, fallbackType = "entry") {
   if (!area) return "";
+
   const base = area.areaType || fallbackType;
+  const exactLevel =
+    safeUserText(area.levelText || "") ||
+    (
+      Number.isFinite(Number(area.authoritativeCenter))
+        ? formatPrice(area.authoritativeCenter)
+        : ""
+    );
+
+  if (exactLevel) return `${base} around ${exactLevel}`;
   return area.zoneText ? `${base} around ${area.zoneText}` : `marked ${base}`;
 }
 
