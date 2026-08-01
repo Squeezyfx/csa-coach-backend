@@ -1248,6 +1248,8 @@ Bounce, pullback, reaction, retracement, ranging, or consolidation alone is not 
 AREA RANKING RULES:
 - The deterministic OHLC market direction and phase supplied by the backend are immutable. Do not rewrite them.
 - Identify up to 3 active entry areas that agree with the locked directional bias.
+- The timeframe-specific CSA framework levels are authoritative: M1-H1 daily, H4 weekly, D1 monthly, W1 quarterly, MN yearly/multi-year.
+- Generic pivots and chart markings may only confirm or refine an authoritative framework level; they must never create or replace the primary area.
 - Validate genuine support/resistance or supply/demand structure before considering distance.
 - Fibonacci retracement is confluence only. It must never create an entry area by itself.
 - Rank structural quality first, but sequence valid entry areas by the order price would reach them from the current price.
@@ -5877,7 +5879,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "6.0.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "7.0.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6381,6 +6383,23 @@ function classifyValidatedArea({
   reactionStats,
   atr,
 }) {
+  const authoritativeType = String(
+    rawZone?.authoritativeType || ""
+  ).toLowerCase();
+
+  if (
+    [
+      "converted resistance",
+      "converted support",
+      "resistance",
+      "support",
+      "supply",
+      "demand",
+    ].includes(authoritativeType)
+  ) {
+    return authoritativeType;
+  }
+
   const brokenLevel = asPositiveNumber(historicalPhase?.brokenLevel);
   const conversionTolerance = Math.max(
     Number(atr || 0) * 0.12,
@@ -6452,17 +6471,17 @@ function compactZoneBounds({
 
   const minimumWidth = Math.max(
     priceTolerance * 2,
-    Number(atr || 0) * 0.06
+    Number(atr || 0) * 0.04
   );
 
   const maximumWidth = Math.max(
-    priceTolerance * 8,
-    Number(atr || 0) * 0.32
+    priceTolerance * 6,
+    Number(atr || 0) * 0.20
   );
 
   let desiredWidth = Math.max(
     minimumWidth,
-    memberSpread + Math.max(priceTolerance * 2, Number(atr || 0) * 0.05)
+    memberSpread + Math.max(priceTolerance * 2, Number(atr || 0) * 0.035)
   );
 
   desiredWidth = Math.min(desiredWidth, maximumWidth);
@@ -6519,6 +6538,11 @@ function validateAndSequenceEntryAreas({
   const errors = [];
   const valid = areas.filter((area) => {
     const low = Number(area?.zoneLow);
+
+    if (area?.authoritativeFrameworkLevel !== true) {
+      errors.push("non_framework_area_rejected");
+      return false;
+    }
     const high = Number(area?.zoneHigh);
 
     if (!Number.isFinite(low) || !Number.isFinite(high) || low >= high) {
@@ -6624,6 +6648,303 @@ function validateAndSequenceEntryAreas({
   };
 }
 
+
+function frameworkLevelTolerance({
+  symbol = "",
+  atr = 0,
+}) {
+  return Math.max(
+    getApprovedPriceTolerance(symbol) * 2,
+    Number(atr || 0) * 0.05
+  );
+}
+
+function periodLevelBreakEvidence({
+  levels = [],
+  sourceIndex,
+  levelPrice,
+  direction,
+  tolerance,
+}) {
+  const later = levels.slice(sourceIndex + 1);
+  if (!later.length) {
+    return {
+      broken: false,
+      heldBeyond: false,
+      breakIndex: -1,
+      breakPeriod: null,
+    };
+  }
+
+  let breakIndex = -1;
+
+  for (let index = 0; index < later.length; index += 1) {
+    const period = later[index];
+    const close = Number(period?.close);
+    if (!Number.isFinite(close)) continue;
+
+    const broke =
+      direction === "bearish"
+        ? close < Number(levelPrice) - tolerance
+        : close > Number(levelPrice) + tolerance;
+
+    if (broke) {
+      breakIndex = index;
+      break;
+    }
+  }
+
+  if (breakIndex < 0) {
+    return {
+      broken: false,
+      heldBeyond: false,
+      breakIndex: -1,
+      breakPeriod: null,
+    };
+  }
+
+  const afterBreak = later.slice(breakIndex);
+  const latestClose = Number(levels[levels.length - 1]?.close);
+
+  const continuationCount = afterBreak.filter((period) => {
+    const close = Number(period?.close);
+    if (!Number.isFinite(close)) return false;
+
+    return direction === "bearish"
+      ? close < Number(levelPrice) - tolerance * 0.35
+      : close > Number(levelPrice) + tolerance * 0.35;
+  }).length;
+
+  const heldBeyond =
+    Number.isFinite(latestClose) &&
+    (
+      direction === "bearish"
+        ? latestClose < Number(levelPrice) - tolerance * 0.35
+        : latestClose > Number(levelPrice) + tolerance * 0.35
+    ) &&
+    continuationCount >= 1;
+
+  return {
+    broken: true,
+    heldBeyond,
+    breakIndex: sourceIndex + 1 + breakIndex,
+    breakPeriod: later[breakIndex] || null,
+  };
+}
+
+function buildAuthoritativeFrameworkCandidates({
+  marketReference = {},
+  direction = "range",
+  currentPrice = null,
+  symbol = "",
+  atr = 0,
+}) {
+  const levels = Array.isArray(marketReference?.dailyLevels)
+    ? [...marketReference.dailyLevels].sort((a, b) =>
+        String(a?.key || a?.date || "").localeCompare(
+          String(b?.key || b?.date || "")
+        )
+      )
+    : [];
+
+  const csaAreas = Array.isArray(marketReference?.csaAreas)
+    ? marketReference.csaAreas
+    : [];
+
+  const tolerance = frameworkLevelTolerance({ symbol, atr });
+  const candidates = [];
+
+  levels.forEach((period, index) => {
+    const periodLabel =
+      period?.periodLabel ||
+      period?.day ||
+      period?.key ||
+      `Period ${index + 1}`;
+
+    const high = asPositiveNumber(period?.high);
+    const low = asPositiveNumber(period?.low);
+
+    if (direction === "bearish") {
+      // A prior framework support that has been broken and held below becomes
+      // authoritative converted resistance.
+      if (low !== null && low > Number(currentPrice) + tolerance) {
+        const conversion = periodLevelBreakEvidence({
+          levels,
+          sourceIndex: index,
+          levelPrice: low,
+          direction: "bearish",
+          tolerance,
+        });
+
+        if (conversion.broken && conversion.heldBeyond) {
+          candidates.push({
+            price: low,
+            type: "converted resistance",
+            source: "authoritative_framework_conversion",
+            period: periodLabel,
+            date: period?.date || period?.key || null,
+            conversionConfirmed: true,
+            originalType: "support",
+            breakPeriod:
+              conversion.breakPeriod?.periodLabel ||
+              conversion.breakPeriod?.day ||
+              conversion.breakPeriod?.key ||
+              null,
+            authorityRank: 1,
+          });
+        }
+      }
+
+      // Period highs remain the authoritative source for resistance/supply.
+      if (high !== null && high > Number(currentPrice) + tolerance) {
+        const matchingArea = csaAreas.find((area) => {
+          const areaPrice = asPositiveNumber(area?.price);
+          return (
+            areaPrice !== null &&
+            Math.abs(areaPrice - high) <= tolerance &&
+            ["resistance", "supply"].includes(
+              String(area?.type || "").toLowerCase()
+            )
+          );
+        });
+
+        candidates.push({
+          price: high,
+          type:
+            String(matchingArea?.type || "").toLowerCase() === "supply"
+              ? "supply"
+              : "resistance",
+          source: "authoritative_framework_high",
+          period: periodLabel,
+          date: period?.date || period?.key || null,
+          conversionConfirmed: false,
+          originalType: "high",
+          authorityRank: 2,
+        });
+      }
+    }
+
+    if (direction === "bullish") {
+      // A prior framework resistance that has been broken and held above
+      // becomes authoritative converted support.
+      if (high !== null && high < Number(currentPrice) - tolerance) {
+        const conversion = periodLevelBreakEvidence({
+          levels,
+          sourceIndex: index,
+          levelPrice: high,
+          direction: "bullish",
+          tolerance,
+        });
+
+        if (conversion.broken && conversion.heldBeyond) {
+          candidates.push({
+            price: high,
+            type: "converted support",
+            source: "authoritative_framework_conversion",
+            period: periodLabel,
+            date: period?.date || period?.key || null,
+            conversionConfirmed: true,
+            originalType: "resistance",
+            breakPeriod:
+              conversion.breakPeriod?.periodLabel ||
+              conversion.breakPeriod?.day ||
+              conversion.breakPeriod?.key ||
+              null,
+            authorityRank: 1,
+          });
+        }
+      }
+
+      // Period lows remain the authoritative source for support/demand.
+      if (low !== null && low < Number(currentPrice) - tolerance) {
+        const matchingArea = csaAreas.find((area) => {
+          const areaPrice = asPositiveNumber(area?.price);
+          return (
+            areaPrice !== null &&
+            Math.abs(areaPrice - low) <= tolerance &&
+            ["support", "demand"].includes(
+              String(area?.type || "").toLowerCase()
+            )
+          );
+        });
+
+        candidates.push({
+          price: low,
+          type:
+            String(matchingArea?.type || "").toLowerCase() === "demand"
+              ? "demand"
+              : "support",
+          source: "authoritative_framework_low",
+          period: periodLabel,
+          date: period?.date || period?.key || null,
+          conversionConfirmed: false,
+          originalType: "low",
+          authorityRank: 2,
+        });
+      }
+    }
+  });
+
+  // Remove exact duplicates while preserving converted levels over ordinary
+  // highs/lows at the same price.
+  const sorted = [...candidates].sort((a, b) => {
+    if (a.price !== b.price) return a.price - b.price;
+    return Number(a.authorityRank || 99) - Number(b.authorityRank || 99);
+  });
+
+  const unique = [];
+
+  sorted.forEach((candidate) => {
+    const duplicateIndex = unique.findIndex(
+      (existing) =>
+        Math.abs(Number(existing.price) - Number(candidate.price)) <= tolerance
+    );
+
+    if (duplicateIndex < 0) {
+      unique.push(candidate);
+      return;
+    }
+
+    const existing = unique[duplicateIndex];
+    if (
+      Number(candidate.authorityRank || 99) <
+      Number(existing.authorityRank || 99)
+    ) {
+      unique[duplicateIndex] = candidate;
+    }
+  });
+
+  return unique;
+}
+
+function attachPivotConfirmationToFrameworkCandidates({
+  frameworkCandidates = [],
+  pivots = [],
+  atr = 0,
+  symbol = "",
+}) {
+  const tolerance = Math.max(
+    getApprovedPriceTolerance(symbol) * 3,
+    Number(atr || 0) * 0.12
+  );
+
+  return frameworkCandidates.map((candidate) => {
+    const matchingPivots = pivots.filter(
+      (pivot) =>
+        Number.isFinite(Number(pivot?.price)) &&
+        Math.abs(Number(pivot.price) - Number(candidate.price)) <= tolerance
+    );
+
+    return {
+      ...candidate,
+      pivotConfirmationCount: matchingPivots.length,
+      confirmingPivotPrices: matchingPivots.map((pivot) =>
+        Number(pivot.price)
+      ),
+    };
+  });
+}
+
 function rankRawEntryAreas({
   visualReview = {},
   marketReference = {},
@@ -6681,73 +7002,31 @@ function rankRawEntryAreas({
     Number(atr || 0) * 0.22
   );
 
-  const allowedTypes =
-    direction === "bearish"
-      ? new Set(["resistance", "supply"])
-      : new Set(["support", "demand"]);
-
-  const structuralPrices = [];
-
-  (Array.isArray(marketReference?.csaAreas)
-    ? marketReference.csaAreas
-    : []
-  ).forEach((area) => {
-    const price = asPositiveNumber(area?.price);
-    const type = String(area?.type || "").toLowerCase();
-    if (price === null || !allowedTypes.has(type)) return;
-
-    const onCorrectSide =
-      direction === "bearish"
-        ? price > Number(currentPrice) + sideGap
-        : price < Number(currentPrice) - sideGap;
-
-    if (!onCorrectSide) return;
-
-    structuralPrices.push({
-      price,
-      type,
-      source: "framework_level",
-      date: area?.date || null,
-    });
-  });
-
   const pivotConfig = {
     pivotLeft: config.pivotLeft,
     pivotRight: config.pivotRight,
   };
 
-  detectConfirmedSwingPivots(candles, pivotConfig).forEach((pivot) => {
-    const type =
-      pivot.type === "resistance" ? "resistance" : "support";
+  const confirmedPivots = detectConfirmedSwingPivots(
+    candles,
+    pivotConfig
+  );
 
-    if (!allowedTypes.has(type)) return;
-
-    const price = asPositiveNumber(pivot.price);
-    if (price === null) return;
-
-    const onCorrectSide =
-      direction === "bearish"
-        ? price > Number(currentPrice) + sideGap
-        : price < Number(currentPrice) - sideGap;
-
-    if (!onCorrectSide) return;
-
-    structuralPrices.push({
-      price,
-      type,
-      source: "confirmed_swing",
-      date: pivot.datetime || null,
-    });
+  // Authoritative framework periods are the only source allowed to create
+  // entry candidates. Generic pivots and chart markings may confirm/refine
+  // them, but may not replace them.
+  const frameworkCandidates = attachPivotConfirmationToFrameworkCandidates({
+    frameworkCandidates: buildAuthoritativeFrameworkCandidates({
+      marketReference,
+      direction,
+      currentPrice,
+      symbol,
+      atr,
+    }),
+    pivots: confirmedPivots,
+    atr,
+    symbol,
   });
-
-  const visualCandidates = [
-    ...(Array.isArray(visualReview?.activeEntryAreas)
-      ? visualReview.activeEntryAreas
-      : []),
-    ...(visualReview?.preferredEntryArea
-      ? [visualReview.preferredEntryArea]
-      : []),
-  ];
 
   const fibonacci = buildLatestImpulseFibonacci({
     candles,
@@ -6756,48 +7035,19 @@ function rankRawEntryAreas({
     timeframe,
   });
 
-  const rawZones = clusterStructuralPrices({
-    prices: structuralPrices,
-    clusterDistance,
-  }).map((cluster) => ({
-    zoneLow: cluster.low,
-    zoneHigh: cluster.high,
-    members: cluster.members,
-    source: "calculated_structure_cluster",
+  const rawZones = frameworkCandidates.map((candidate) => ({
+    zoneLow: candidate.price,
+    zoneHigh: candidate.price,
+    members: [candidate],
+    source: candidate.source,
+    authoritativeType: candidate.type,
+    conversionConfirmed: candidate.conversionConfirmed === true,
+    period: candidate.period || null,
+    breakPeriod: candidate.breakPeriod || null,
+    pivotConfirmationCount: Number(
+      candidate.pivotConfirmationCount || 0
+    ),
   }));
-
-  visualCandidates.forEach((area) => {
-    const areaType = normalizedAreaType(area?.areaType, direction);
-    const validType =
-      direction === "bearish"
-        ? ["resistance", "supply", "converted resistance"].includes(areaType)
-        : ["support", "demand", "converted support"].includes(areaType);
-
-    if (!validType) return;
-
-    const zone = normalizeZone(area, symbol);
-    const center = areaCenter(zone);
-    if (center === null) return;
-
-    const onCorrectSide =
-      direction === "bearish"
-        ? center > Number(currentPrice) + sideGap
-        : center < Number(currentPrice) - sideGap;
-
-    if (!onCorrectSide) return;
-
-    rawZones.push({
-      zoneLow: zone.zoneLow ?? center,
-      zoneHigh: zone.zoneHigh ?? center,
-      members: [{
-        price: center,
-        type: areaType,
-        source: "visual_candidate",
-      }],
-      source: "visual_candidate",
-      visualArea: area,
-    });
-  });
 
   const evaluated = rawZones.map((rawZone) => {
     const compacted = compactZoneBounds({
@@ -6844,11 +7094,23 @@ function rankRawEntryAreas({
     ).size;
     const memberCount = (rawZone.members || []).length;
 
+    const isAuthoritativeFrameworkLevel =
+      String(rawZone?.source || "").startsWith(
+        "authoritative_framework_"
+      );
+
+    const isConfirmedConversion =
+      rawZone?.authoritativeType === "converted resistance" ||
+      rawZone?.authoritativeType === "converted support";
+
     const structurallyValid =
-      reactionStats.reactions >= 2 ||
-      reactionStats.strongDepartures >= 1 ||
-      (memberCount >= 2 && reactionStats.reactions >= 1) ||
-      (distinctSources >= 2 && reactionStats.reactions >= 1);
+      isAuthoritativeFrameworkLevel &&
+      (
+        isConfirmedConversion ||
+        reactionStats.reactions >= 1 ||
+        reactionStats.strongDepartures >= 1 ||
+        Number(rawZone?.pivotConfirmationCount || 0) >= 1
+      );
 
     if (!structurallyValid) return null;
 
@@ -6860,10 +7122,17 @@ function rankRawEntryAreas({
     });
 
     const structuralScore =
+      20 +
       reactionStats.reactions * 8 +
       reactionStats.strongDepartures * 6 +
-      Math.min(4, memberCount) * 3 +
-      Math.min(2, distinctSources) * 4;
+      Number(rawZone?.pivotConfirmationCount || 0) * 3 +
+      (
+        ["converted resistance", "converted support"].includes(
+          String(rawZone?.authoritativeType || "")
+        )
+          ? 8
+          : 0
+      );
 
     const areaType = classifyValidatedArea({
       direction,
@@ -6883,6 +7152,7 @@ function rankRawEntryAreas({
 
     const conversionConfirmed =
       !["converted resistance", "converted support"].includes(areaType) ||
+      rawZone?.conversionConfirmed === true ||
       (
         brokenLevel !== null &&
         brokenLevel >= zoneLow - conversionTolerance &&
@@ -6927,8 +7197,20 @@ function rankRawEntryAreas({
       conversionConfirmed,
       brokenLevel:
         ["converted resistance", "converted support"].includes(areaType)
-          ? brokenLevel
+          ? (
+              asPositiveNumber(rawZone?.members?.[0]?.price) ||
+              brokenLevel
+            )
           : null,
+      frameworkPeriod:
+        rawZone?.period ||
+        rawZone?.members?.[0]?.period ||
+        null,
+      breakPeriod:
+        rawZone?.breakPeriod ||
+        rawZone?.members?.[0]?.breakPeriod ||
+        null,
+      authoritativeFrameworkLevel: true,
     };
   });
 
@@ -8475,7 +8757,14 @@ function buildValidatedAnalysisFacts({
       executionOrder: Number(candidate.executionOrder || index + 1),
       conversionConfirmed: candidate.conversionConfirmed === true,
     })),
-    entryAreaValidation,
+    entryAreaValidation: {
+      ...entryAreaValidation,
+      frameworkMode:
+        marketReference?.profile?.structureMode || null,
+      frameworkLabel:
+        marketReference?.profile?.structureLabel || null,
+      authoritativeLevelsOnly: true,
+    },
     secondaryEntryArea: secondaryRawArea
       ? {
           direction: secondaryRawArea.direction,
