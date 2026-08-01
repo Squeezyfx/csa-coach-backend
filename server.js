@@ -1252,6 +1252,9 @@ AREA RANKING RULES:
 - Prefer a strong structural zone with meaningful reactions and Fibonacci overlap over a nearer weak pivot.
 - A converted support/resistance level may be used only when the original level was structurally meaningful before it broke.
 - Do not automatically promote the nearest broken pivot as the primary area.
+- For bearish plans, a recommended entry area must be resistance, supply, or converted resistance above current price. Support or demand below current price may only be discussed as a target or as a reason not to chase a late sell.
+- For bullish plans, a recommended entry area must be support, demand, or converted support below current price. Resistance or supply above current price may only be discussed as a target or as a reason not to chase a late buy.
+- Never describe support as a sell-entry area and never describe resistance as a buy-entry area.
 - For a converted level to qualify, require either two clearly separated prior reactions plus Fibonacci overlap, or one strong rejection/departure from a meaningful zone plus Fibonacci overlap.
 - Keep a farther high-quality supply/demand zone as the primary area when the nearer converted level is weak.
 - Do not include an invalidated area as an active entry area.
@@ -5873,7 +5876,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "4.4.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "4.5.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6616,10 +6619,30 @@ function rankRawEntryAreas({
       if (wantedDirection !== "none" && normalizedDirection !== wantedDirection) return null;
       if (!areaDirectionMatches(areaType, direction)) return null;
 
+      const bearishEntryTypes = new Set([
+        "resistance",
+        "supply",
+        "converted resistance",
+      ]);
+      const bullishEntryTypes = new Set([
+        "support",
+        "demand",
+        "converted support",
+      ]);
+
+      if (direction === "bearish" && !bearishEntryTypes.has(areaType)) {
+        return null;
+      }
+
+      if (direction === "bullish" && !bullishEntryTypes.has(areaType)) {
+        return null;
+      }
+
+      const sideTolerance = getApprovedPriceTolerance(symbol);
       const onCorrectSide =
         currentPrice === null ||
-        (direction === "bearish" && center >= currentPrice) ||
-        (direction === "bullish" && center <= currentPrice) ||
+        (direction === "bearish" && center > currentPrice + sideTolerance) ||
+        (direction === "bullish" && center < currentPrice - sideTolerance) ||
         direction === "range";
 
       if (!onCorrectSide) return null;
@@ -7983,10 +8006,64 @@ function buildValidatedAnalysisFacts({
     timeframe,
   });
 
-  const preferredArea = rankedRawAreas[0] || fallbackPreferredArea;
+  const fallbackAreaType = normalizedAreaType(
+    fallbackPreferredArea?.areaType,
+    direction
+  );
+  const fallbackZone = normalizeZone(
+    fallbackPreferredArea,
+    submittedInstrument
+  );
+  const fallbackCenter =
+    fallbackZone.zoneLow !== null && fallbackZone.zoneHigh !== null
+      ? (fallbackZone.zoneLow + fallbackZone.zoneHigh) / 2
+      : fallbackZone.zoneLow ?? fallbackZone.zoneHigh;
+  const fallbackTolerance = getApprovedPriceTolerance(submittedInstrument);
+
+  const fallbackTypeValid =
+    direction === "bearish"
+      ? ["resistance", "supply", "converted resistance"].includes(
+          fallbackAreaType
+        )
+      : direction === "bullish"
+      ? ["support", "demand", "converted support"].includes(
+          fallbackAreaType
+        )
+      : false;
+
+  const fallbackPositionValid =
+    fallbackCenter !== null &&
+    currentPrice !== null &&
+    (
+      direction === "bearish"
+        ? fallbackCenter > currentPrice + fallbackTolerance
+        : direction === "bullish"
+        ? fallbackCenter < currentPrice - fallbackTolerance
+        : false
+    );
+
+  const preferredArea =
+    rankedRawAreas[0] ||
+    (fallbackTypeValid && fallbackPositionValid
+      ? fallbackPreferredArea
+      : {});
   const secondaryRawArea = rankedRawAreas[1] || null;
-  const areaType = normalizedAreaType(preferredArea?.areaType, direction);
+  let areaType = normalizedAreaType(preferredArea?.areaType, direction);
   const zone = normalizeZone(preferredArea, submittedInstrument);
+
+  if (
+    direction === "bearish" &&
+    !["resistance", "supply", "converted resistance"].includes(areaType)
+  ) {
+    areaType = "none";
+  }
+
+  if (
+    direction === "bullish" &&
+    !["support", "demand", "converted support"].includes(areaType)
+  ) {
+    areaType = "none";
+  }
   let priceStatus = normalizePriceStatus(preferredArea?.priceStatus);
   const combinedAreaEvidence = [
     preferredArea?.priceStatus,
