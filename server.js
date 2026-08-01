@@ -1247,10 +1247,13 @@ Bounce, pullback, reaction, retracement, ranging, or consolidation alone is not 
 
 AREA RANKING RULES:
 - Identify up to 3 active entry areas that agree with the directional bias.
-- Rank the nearest valid area first, not merely the largest or highest visible zone.
-- For a bearish plan, a broken support below an older supply zone becomes potential converted resistance and should normally be the primary area when it is the nearest valid sell area above price.
-- For a bullish plan, a broken resistance above an older demand zone becomes potential converted support and should normally be the primary area when it is the nearest valid buy area below price.
-- Keep a farther supply/demand zone as a secondary area when it remains valid.
+- Validate genuine support/resistance or supply/demand structure before considering distance from price.
+- A Fibonacci level must never create an entry area by itself. Fibonacci may only strengthen an independently valid structural zone.
+- Prefer a strong structural zone with meaningful reactions and Fibonacci overlap over a nearer weak pivot.
+- A converted support/resistance level may be used only when the original level was structurally meaningful before it broke.
+- Do not automatically promote the nearest broken pivot as the primary area.
+- For a converted level to qualify, require either two clearly separated prior reactions plus Fibonacci overlap, or one strong rejection/departure from a meaningful zone plus Fibonacci overlap.
+- Keep a farther high-quality supply/demand zone as the primary area when the nearer converted level is weak.
 - Do not include an invalidated area as an active entry area.
 - Each area must have a state: active, potential conversion, confirmed conversion, or invalidated.
 - The primary and secondary areas must use visible/approved prices only.
@@ -5870,7 +5873,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "4.3.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "4.4.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6443,16 +6446,40 @@ function evaluateAreaConfluence({
     else fibonacciScore = Math.max(fibonacciScore, 1);
   });
 
+  const isConvertedArea =
+    area?.isAutoConvertedLevel === true ||
+    /converted resistance|converted support/.test(
+      String(area?.areaType || "").toLowerCase()
+    );
+
+  const meaningfulZoneWidth =
+    zoneWidth > Math.max(baseTolerance, atr * 0.10);
+
   // Fibonacci is only a bonus. It cannot rescue an area that has no
   // independently validated structural evidence.
-  const structurallyValid =
+  const ordinaryStructureValid =
     structuralScore >= 4 &&
-    (reactionStats.reactions >= 1 || zoneWidth > Math.max(baseTolerance, atr * 0.10));
+    (reactionStats.reactions >= 1 || meaningfulZoneWidth);
+
+  // Auto-generated converted point levels are deliberately held to a
+  // much higher standard. A single calculated pivot cannot become the
+  // preferred entry area merely because price broke it and it is nearby.
+  const convertedStructureValid =
+    reactionStats.reactions >= 2 &&
+    reactionStats.touches >= 2 &&
+    fibonacciScore >= 2;
+
+  const structurallyValid = isConvertedArea
+    ? convertedStructureValid
+    : ordinaryStructureValid;
 
   const qualityScore =
     structurallyValid
-      ? structuralScore * 10 + fibonacciScore * 6
-      : structuralScore * 4;
+      ? structuralScore * 10 +
+        fibonacciScore * 8 +
+        reactionStats.reactions * 4 +
+        (meaningfulZoneWidth ? 5 : 0)
+      : structuralScore * 3;
 
   return {
     structurallyValid,
@@ -6463,6 +6490,17 @@ function evaluateAreaConfluence({
     reactionStats,
     atr,
     zoneWidth,
+    isConvertedArea,
+    meaningfulZoneWidth,
+    validationReason: structurallyValid
+      ? isConvertedArea
+        ? "converted_level_has_repeated_structure_and_fibonacci"
+        : fibonacciScore >= 2
+        ? "structural_zone_with_fibonacci"
+        : "validated_structural_zone"
+      : isConvertedArea
+      ? "weak_converted_level_rejected"
+      : "insufficient_structural_evidence",
     confluenceLabel:
       structurallyValid && fibonacciScore >= 2
         ? "high"
@@ -6513,6 +6551,8 @@ function rankRawEntryAreas({
         sourceReason:
           "A previously calculated support/demand level is now above price after bearish continuation, so it is the nearest potential resistance on a retest.",
         source: "market_structure_conversion",
+        isAutoConvertedLevel: true,
+        originalStructuralType: originalType,
       });
     }
 
@@ -6531,6 +6571,8 @@ function rankRawEntryAreas({
         sourceReason:
           "A previously calculated resistance/supply level is now below price after bullish continuation, so it is the nearest potential support on a retest.",
         source: "market_structure_conversion",
+        isAutoConvertedLevel: true,
+        originalStructuralType: originalType,
       });
     }
   });
@@ -6591,7 +6633,7 @@ function rankRawEntryAreas({
           : areaType === "resistance" || areaType === "support"
           ? 1
           : areaType === "converted resistance" || areaType === "converted support"
-          ? 2
+          ? 4
           : 3;
 
       const confluence = evaluateAreaConfluence({
@@ -6634,6 +6676,8 @@ function rankRawEntryAreas({
         reactionCount: confluence.reactionStats.reactions,
         touchCount: confluence.reactionStats.touches,
         confluenceLabel: confluence.confluenceLabel,
+        validationReason: confluence.validationReason,
+        isConvertedArea: confluence.isConvertedArea,
         sourceReason: `${safeUserText(area.sourceReason || "")}${fibText}`.trim(),
       };
     })
@@ -8188,6 +8232,8 @@ function buildValidatedAnalysisFacts({
         : [],
       reactionCount: Number(candidate.reactionCount || 0),
       confluenceLabel: candidate.confluenceLabel || "valid_structure",
+      validationReason: candidate.validationReason || "",
+      isConvertedArea: candidate.isConvertedArea === true,
     })),
     secondaryEntryArea: secondaryRawArea
       ? {
@@ -8231,6 +8277,8 @@ function buildValidatedAnalysisFacts({
         : [],
       reactionCount: Number(preferredArea?.reactionCount || 0),
       confluenceLabel: preferredArea?.confluenceLabel || "valid_structure",
+      validationReason: preferredArea?.validationReason || "",
+      isConvertedArea: preferredArea?.isConvertedArea === true,
     },
     convertedLevel: {
       detected: convertedLevelDetected,
