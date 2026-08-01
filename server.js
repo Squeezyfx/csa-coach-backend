@@ -1246,17 +1246,14 @@ Only return visibleTrigger if there is real confirmation such as engulfing, pin 
 Bounce, pullback, reaction, retracement, ranging, or consolidation alone is not a trigger.
 
 AREA RANKING RULES:
-- Identify up to 3 active entry areas that agree with the directional bias.
-- Validate genuine support/resistance or supply/demand structure before considering distance from price.
-- A Fibonacci level must never create an entry area by itself. Fibonacci may only strengthen an independently valid structural zone.
-- Prefer a strong structural zone with meaningful reactions and Fibonacci overlap over a nearer weak pivot.
-- A converted support/resistance level may be used only when the original level was structurally meaningful before it broke.
-- Do not automatically promote the nearest broken pivot as the primary area.
-- For bearish plans, a recommended entry area must be resistance, supply, or converted resistance above current price. Support or demand below current price may only be discussed as a target or as a reason not to chase a late sell.
-- For bullish plans, a recommended entry area must be support, demand, or converted support below current price. Resistance or supply above current price may only be discussed as a target or as a reason not to chase a late buy.
-- Never describe support as a sell-entry area and never describe resistance as a buy-entry area.
-- For a converted level to qualify, require either two clearly separated prior reactions plus Fibonacci overlap, or one strong rejection/departure from a meaningful zone plus Fibonacci overlap.
-- Keep a farther high-quality supply/demand zone as the primary area when the nearer converted level is weak.
+- The deterministic OHLC market direction and phase supplied by the backend are immutable. Do not rewrite them.
+- Identify up to 3 active entry areas that agree with the locked directional bias.
+- Validate genuine support/resistance or supply/demand structure before considering distance.
+- Fibonacci retracement is confluence only. It must never create an entry area by itself.
+- Rank structural quality and Fibonacci overlap before proximity to price.
+- For a bearish plan, a broken support below an older supply zone becomes potential converted resistance and should normally be the primary area when it is the nearest valid sell area above price.
+- For a bullish plan, a broken resistance above an older demand zone becomes potential converted support and should normally be the primary area when it is the nearest valid buy area below price.
+- Keep a farther supply/demand zone as a secondary area when it remains valid.
 - Do not include an invalidated area as an active entry area.
 - Each area must have a state: active, potential conversion, confirmed conversion, or invalidated.
 - The primary and secondary areas must use visible/approved prices only.
@@ -5876,7 +5873,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "4.6.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "5.0.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6033,23 +6030,28 @@ function normalizeLevelState(value = "") {
 }
 
 function extractLastMarketPrice(marketReference) {
-  const candidates = [];
+  const sourceGroups = [
+    marketReference?.timeframeCandles,
+    marketReference?.candles,
+    marketReference?.dailyLevels,
+  ];
 
-  if (Array.isArray(marketReference?.dailyLevels)) {
-    for (const level of marketReference.dailyLevels) {
-      const close = asPositiveNumber(level?.close);
-      if (close !== null) candidates.push(close);
+  for (const source of sourceGroups) {
+    if (!Array.isArray(source) || !source.length) continue;
+
+    const ordered = [...source].sort((a, b) =>
+      String(a?.datetime || a?.date || a?.key || "").localeCompare(
+        String(b?.datetime || b?.date || b?.key || "")
+      )
+    );
+
+    for (let index = ordered.length - 1; index >= 0; index -= 1) {
+      const close = asPositiveNumber(ordered[index]?.close);
+      if (close !== null) return close;
     }
   }
 
-  if (Array.isArray(marketReference?.candles)) {
-    for (const candle of marketReference.candles) {
-      const close = asPositiveNumber(candle?.close);
-      if (close !== null) candidates.push(close);
-    }
-  }
-
-  return candidates.length ? candidates[candidates.length - 1] : null;
+  return null;
 }
 
 function normalizeZone(preferredArea = {}, symbol = "") {
@@ -6173,439 +6175,197 @@ function areaCenter(area = {}) {
   return low ?? high;
 }
 
-
-function timeframeAreaLookback(timeframe = "H1") {
+function getAreaEngineConfig(timeframe = "H1") {
   const tf = comparableTimeframe(timeframe) || "H1";
-  const map = {
-    M1: 180,
-    M5: 160,
-    M15: 140,
-    M30: 120,
-    H1: 110,
-    H4: 85,
-    D1: 70,
-    W1: 50,
-    MN: 36,
+  const configs = {
+    M1:  { pivotLeft: 3, pivotRight: 3, lookback: 260, reactionBars: 8 },
+    M5:  { pivotLeft: 3, pivotRight: 3, lookback: 230, reactionBars: 8 },
+    M15: { pivotLeft: 3, pivotRight: 3, lookback: 200, reactionBars: 7 },
+    M30: { pivotLeft: 3, pivotRight: 3, lookback: 180, reactionBars: 7 },
+    H1:  { pivotLeft: 3, pivotRight: 3, lookback: 160, reactionBars: 6 },
+    H4:  { pivotLeft: 2, pivotRight: 2, lookback: 120, reactionBars: 5 },
+    D1:  { pivotLeft: 2, pivotRight: 2, lookback: 100, reactionBars: 4 },
+    W1:  { pivotLeft: 1, pivotRight: 1, lookback: 80, reactionBars: 3 },
+    MN:  { pivotLeft: 1, pivotRight: 1, lookback: 60, reactionBars: 2 },
   };
-  return map[tf] || map.H1;
+  return { timeframe: tf, ...(configs[tf] || configs.H1) };
 }
 
-function findCandleIndexByDatetime(candles = [], datetime = "") {
-  const target = String(datetime || "").trim();
-  if (!target) return -1;
-
-  const exact = candles.findIndex(
-    (candle) => String(candle?.datetime || "").trim() === target
-  );
-  if (exact >= 0) return exact;
-
-  const targetDate = target.slice(0, 16);
-  return candles.findIndex(
-    (candle) =>
-      String(candle?.datetime || "").trim().slice(0, 16) === targetDate
-  );
-}
-
-function buildFibonacciContext({
-  marketReference = {},
+function buildLatestImpulseFibonacci({
+  candles = [],
   historicalPhase = null,
   direction = "range",
   timeframe = "H1",
 }) {
-  const candles = Array.isArray(marketReference?.timeframeCandles)
-    ? marketReference.timeframeCandles
-        .filter(
-          (candle) =>
-            candle?.datetime &&
-            Number.isFinite(Number(candle?.high)) &&
-            Number.isFinite(Number(candle?.low))
-        )
-        .sort((a, b) =>
-          String(a.datetime).localeCompare(String(b.datetime))
-        )
-    : [];
+  if (!Array.isArray(candles) || candles.length < 10) return null;
+  if (!["bullish", "bearish"].includes(direction)) return null;
 
-  if (candles.length < 10 || !["bullish", "bearish"].includes(direction)) {
-    return null;
-  }
-
+  const config = getAreaEngineConfig(timeframe);
   const eventDatetime =
     historicalPhase?.diagnostics?.latestEvent?.datetime || "";
-  let eventIndex = findCandleIndexByDatetime(candles, eventDatetime);
+
+  let eventIndex = eventDatetime
+    ? candles.findIndex(
+        (candle) =>
+          String(candle?.datetime || "").slice(0, 16) ===
+          String(eventDatetime).slice(0, 16)
+      )
+    : -1;
 
   if (eventIndex < 0) {
-    eventIndex = Math.max(1, candles.length - Math.ceil(timeframeAreaLookback(timeframe) / 3));
+    eventIndex = Math.max(1, candles.length - Math.ceil(config.lookback / 3));
   }
 
-  const impulseLookback = Math.max(
-    8,
-    Math.min(timeframeAreaLookback(timeframe), eventIndex + 1)
-  );
-  const beforeEvent = candles.slice(
-    Math.max(0, eventIndex - impulseLookback + 1),
+  const before = candles.slice(
+    Math.max(0, eventIndex - Math.ceil(config.lookback / 2)),
     eventIndex + 1
   );
-  const afterEvent = candles.slice(eventIndex);
+  const after = candles.slice(eventIndex);
 
-  let swingStart = null;
-  let swingEnd = null;
+  let swingHigh = null;
+  let swingLow = null;
 
   if (direction === "bearish") {
-    swingStart = maxFinite(beforeEvent.map((candle) => candle?.high));
-    swingEnd = minFinite(afterEvent.map((candle) => candle?.low));
+    swingHigh = maxFinite(before.map((candle) => candle?.high));
+    swingLow = minFinite(after.map((candle) => candle?.low));
   } else {
-    swingStart = minFinite(beforeEvent.map((candle) => candle?.low));
-    swingEnd = maxFinite(afterEvent.map((candle) => candle?.high));
+    swingLow = minFinite(before.map((candle) => candle?.low));
+    swingHigh = maxFinite(after.map((candle) => candle?.high));
   }
 
   if (
-    !Number.isFinite(Number(swingStart)) ||
-    !Number.isFinite(Number(swingEnd)) ||
-    Number(swingStart) === Number(swingEnd)
+    !Number.isFinite(Number(swingHigh)) ||
+    !Number.isFinite(Number(swingLow)) ||
+    Number(swingHigh) <= Number(swingLow)
   ) {
     return null;
   }
 
-  const high = Math.max(Number(swingStart), Number(swingEnd));
-  const low = Math.min(Number(swingStart), Number(swingEnd));
-  const range = high - low;
-  if (!(range > 0)) return null;
-
+  const range = Number(swingHigh) - Number(swingLow);
   const ratios = [0.382, 0.5, 0.618, 0.786];
-  const levels = ratios.map((ratio) => ({
-    ratio,
-    label: `${(ratio * 100).toFixed(ratio === 0.5 ? 0 : 1)}%`,
-    price:
-      direction === "bearish"
-        ? low + range * ratio
-        : high - range * ratio,
-  }));
 
   return {
     direction,
-    swingHigh: high,
-    swingLow: low,
-    range,
-    levels,
+    swingHigh: Number(swingHigh),
+    swingLow: Number(swingLow),
+    levels: ratios.map((ratio) => ({
+      ratio,
+      label: ratio === 0.5 ? "50%" : `${(ratio * 100).toFixed(1)}%`,
+      price:
+        direction === "bearish"
+          ? Number(swingLow) + range * ratio
+          : Number(swingHigh) - range * ratio,
+    })),
     source: "latest_confirmed_impulse",
   };
 }
 
-function countIndependentAreaReactions({
+function countZoneReactions({
   candles = [],
   zoneLow,
   zoneHigh,
-  tolerance = 0,
   atr = 0,
-  timeframe = "H1",
+  tolerance = 0,
+  reactionBars = 5,
 }) {
-  const lower = Math.min(Number(zoneLow), Number(zoneHigh)) - tolerance;
-  const upper = Math.max(Number(zoneLow), Number(zoneHigh)) + tolerance;
-
-  if (
-    !Number.isFinite(lower) ||
-    !Number.isFinite(upper) ||
-    !Array.isArray(candles) ||
-    !candles.length
-  ) {
-    return { touches: 0, reactions: 0 };
+  if (!Array.isArray(candles) || !candles.length) {
+    return { touches: 0, reactions: 0, strongDepartures: 0 };
   }
 
-  const lookback = timeframeAreaLookback(timeframe);
-  const selected = candles.slice(-lookback);
-  const touchedIndexes = [];
+  const lowBoundary = Math.min(Number(zoneLow), Number(zoneHigh)) - tolerance;
+  const highBoundary = Math.max(Number(zoneLow), Number(zoneHigh)) + tolerance;
 
-  selected.forEach((candle, index) => {
+  if (!Number.isFinite(lowBoundary) || !Number.isFinite(highBoundary)) {
+    return { touches: 0, reactions: 0, strongDepartures: 0 };
+  }
+
+  const touchIndexes = [];
+  candles.forEach((candle, index) => {
     const high = Number(candle?.high);
     const low = Number(candle?.low);
     if (!Number.isFinite(high) || !Number.isFinite(low)) return;
-
-    if (high >= lower && low <= upper) {
-      touchedIndexes.push(index);
-    }
+    if (high >= lowBoundary && low <= highBoundary) touchIndexes.push(index);
   });
 
   const clusters = [];
-  touchedIndexes.forEach((index) => {
-    const previous = clusters[clusters.length - 1];
-    if (!previous || index - previous.end > 2) {
+  touchIndexes.forEach((index) => {
+    const latest = clusters[clusters.length - 1];
+    if (!latest || index - latest.end > 2) {
       clusters.push({ start: index, end: index });
     } else {
-      previous.end = index;
+      latest.end = index;
     }
   });
 
-  let reactions = 0;
-  const departureRequired = Math.max(
-    Number(atr || 0) * 0.45,
-    Math.max(upper - lower, tolerance) * 1.5
+  const departureThreshold = Math.max(
+    Number(atr || 0) * 0.55,
+    (highBoundary - lowBoundary) * 1.5,
+    tolerance * 3
   );
 
+  let reactions = 0;
+  let strongDepartures = 0;
+
   clusters.forEach((cluster) => {
-    const inspectionEnd = Math.min(
-      selected.length,
-      cluster.end + 5
+    const later = candles.slice(
+      cluster.end + 1,
+      Math.min(candles.length, cluster.end + 1 + reactionBars)
     );
-    const later = selected.slice(cluster.end + 1, inspectionEnd);
-    const departed = later.some((candle) => {
+
+    let maxDeparture = 0;
+    later.forEach((candle) => {
       const high = Number(candle?.high);
       const low = Number(candle?.low);
-      return (
-        (Number.isFinite(high) && high >= upper + departureRequired) ||
-        (Number.isFinite(low) && low <= lower - departureRequired)
-      );
+      if (Number.isFinite(high)) {
+        maxDeparture = Math.max(maxDeparture, high - highBoundary);
+      }
+      if (Number.isFinite(low)) {
+        maxDeparture = Math.max(maxDeparture, lowBoundary - low);
+      }
     });
-    if (departed) reactions += 1;
+
+    if (maxDeparture >= departureThreshold) reactions += 1;
+    if (maxDeparture >= departureThreshold * 1.75) strongDepartures += 1;
   });
 
   return {
     touches: clusters.length,
     reactions,
+    strongDepartures,
   };
 }
 
-function evaluateAreaConfluence({
-  area = {},
-  marketReference = {},
-  fibonacciContext = null,
-  direction = "range",
-  timeframe = "H1",
-  symbol = "",
+function clusterStructuralPrices({
+  prices = [],
+  clusterDistance = 0,
 }) {
-  const zone = normalizeZone(area, symbol);
-  const center = areaCenter(zone);
-  const candles = Array.isArray(marketReference?.timeframeCandles)
-    ? marketReference.timeframeCandles
-    : [];
-  const atr = averageTrueRange(
-    candles,
-    getStructureEngineConfig(timeframe).atrPeriod
-  );
-  const baseTolerance = getApprovedPriceTolerance(symbol);
-  const zoneWidth =
-    zone.zoneLow !== null && zone.zoneHigh !== null
-      ? Math.abs(zone.zoneHigh - zone.zoneLow)
-      : 0;
-  const reactionTolerance = Math.max(
-    baseTolerance,
-    atr * 0.16,
-    zoneWidth * 0.12
-  );
-
-  const reactionStats =
-    center === null
-      ? { touches: 0, reactions: 0 }
-      : countIndependentAreaReactions({
-          candles,
-          zoneLow: zone.zoneLow ?? center,
-          zoneHigh: zone.zoneHigh ?? center,
-          tolerance: reactionTolerance,
-          atr,
-          timeframe,
-        });
-
-  const sourceText = [
-    area?.sourceReason,
-    area?.areaType,
-    area?.zoneText,
-    area?.state,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-  const explicitStructuralZone =
-    /supply|demand|resistance|support|converted|former/.test(sourceText);
-
-  let structuralScore = 0;
-  if (explicitStructuralZone) structuralScore += 2;
-  if (zoneWidth > Math.max(baseTolerance, atr * 0.08)) structuralScore += 1;
-  if (area?.source === "clustered_market_structure") {
-    structuralScore += Math.min(
-      3,
-      Math.max(0, Number(area?.clusteredLevelCount || 0) - 1)
-    );
-  }
-  structuralScore += Math.min(3, reactionStats.reactions);
-  if (reactionStats.touches >= 2) structuralScore += 1;
-
-  const fibMatches = [];
-  if (fibonacciContext && center !== null) {
-    const fibTolerance = Math.max(
-      baseTolerance * 2,
-      atr * 0.22,
-      zoneWidth * 0.25
-    );
-
-    fibonacciContext.levels.forEach((level) => {
-      const withinZone =
-        level.price >= (zone.zoneLow ?? center) - fibTolerance &&
-        level.price <= (zone.zoneHigh ?? center) + fibTolerance;
-
-      if (withinZone) {
-        fibMatches.push(level);
-      }
-    });
-  }
-
-  let fibonacciScore = 0;
-  fibMatches.forEach((match) => {
-    if (match.ratio === 0.618) fibonacciScore = Math.max(fibonacciScore, 3);
-    else if (match.ratio === 0.5) fibonacciScore = Math.max(fibonacciScore, 2);
-    else fibonacciScore = Math.max(fibonacciScore, 1);
-  });
-
-  const isConvertedArea =
-    area?.isAutoConvertedLevel === true ||
-    /converted resistance|converted support/.test(
-      String(area?.areaType || "").toLowerCase()
-    );
-
-  const meaningfulZoneWidth =
-    zoneWidth > Math.max(baseTolerance, atr * 0.10);
-
-  // Fibonacci is only a bonus. It cannot rescue an area that has no
-  // independently validated structural evidence.
-  const ordinaryStructureValid =
-    structuralScore >= 4 &&
-    (reactionStats.reactions >= 1 || meaningfulZoneWidth);
-
-  // Auto-generated converted point levels are deliberately held to a
-  // much higher standard. A single calculated pivot cannot become the
-  // preferred entry area merely because price broke it and it is nearby.
-  const convertedStructureValid =
-    reactionStats.reactions >= 2 &&
-    reactionStats.touches >= 2 &&
-    fibonacciScore >= 2;
-
-  const structurallyValid = isConvertedArea
-    ? convertedStructureValid
-    : ordinaryStructureValid;
-
-  const qualityScore =
-    structurallyValid
-      ? structuralScore * 10 +
-        fibonacciScore * 8 +
-        reactionStats.reactions * 4 +
-        (meaningfulZoneWidth ? 5 : 0)
-      : structuralScore * 3;
-
-  return {
-    structurallyValid,
-    structuralScore,
-    fibonacciScore,
-    qualityScore,
-    fibMatches,
-    reactionStats,
-    atr,
-    zoneWidth,
-    isConvertedArea,
-    meaningfulZoneWidth,
-    validationReason: structurallyValid
-      ? isConvertedArea
-        ? "converted_level_has_repeated_structure_and_fibonacci"
-        : fibonacciScore >= 2
-        ? "structural_zone_with_fibonacci"
-        : "validated_structural_zone"
-      : isConvertedArea
-      ? "weak_converted_level_rejected"
-      : "insufficient_structural_evidence",
-    confluenceLabel:
-      structurallyValid && fibonacciScore >= 2
-        ? "high"
-        : structurallyValid
-        ? "valid_structure"
-        : "weak",
-  };
-}
-
-
-function buildClusteredDirectionalZones({
-  marketReference = {},
-  direction = "range",
-  currentPrice = null,
-  symbol = "",
-  timeframe = "H1",
-}) {
-  const candles = Array.isArray(marketReference?.timeframeCandles)
-    ? marketReference.timeframeCandles
-    : [];
-  const atr = averageTrueRange(
-    candles,
-    getStructureEngineConfig(timeframe).atrPeriod
-  );
-  const tolerance = getApprovedPriceTolerance(symbol);
-  const clusterGap = Math.max(tolerance * 6, Number(atr || 0) * 0.85);
-
-  const allowedTypes =
-    direction === "bearish"
-      ? new Set(["resistance", "supply"])
-      : direction === "bullish"
-      ? new Set(["support", "demand"])
-      : new Set();
-
-  const levels = (Array.isArray(marketReference?.csaAreas)
-    ? marketReference.csaAreas
-    : []
-  )
-    .map((area) => ({
-      price: asPositiveNumber(area?.price),
-      type: String(area?.type || "").toLowerCase(),
-      date: area?.date || null,
-    }))
-    .filter((area) => {
-      if (area.price === null || !allowedTypes.has(area.type)) return false;
-      if (!Number.isFinite(Number(currentPrice))) return false;
-
-      return direction === "bearish"
-        ? area.price > Number(currentPrice) + tolerance
-        : area.price < Number(currentPrice) - tolerance;
-    })
-    .sort((a, b) => a.price - b.price);
+  const sorted = prices
+    .filter((item) => Number.isFinite(Number(item?.price)))
+    .sort((a, b) => Number(a.price) - Number(b.price));
 
   const clusters = [];
 
-  levels.forEach((level) => {
+  sorted.forEach((item) => {
     const current = clusters[clusters.length - 1];
 
-    if (!current || level.price - current.high > clusterGap) {
+    if (
+      !current ||
+      Number(item.price) - Number(current.high) > clusterDistance
+    ) {
       clusters.push({
-        low: level.price,
-        high: level.price,
-        members: [level],
+        low: Number(item.price),
+        high: Number(item.price),
+        members: [item],
       });
-    } else {
-      current.low = Math.min(current.low, level.price);
-      current.high = Math.max(current.high, level.price);
-      current.members.push(level);
+      return;
     }
+
+    current.low = Math.min(current.low, Number(item.price));
+    current.high = Math.max(current.high, Number(item.price));
+    current.members.push(item);
   });
 
-  return clusters
-    .filter((cluster) => {
-      const width = cluster.high - cluster.low;
-      return (
-        cluster.members.length >= 2 &&
-        width <= Math.max(clusterGap * 1.8, Number(atr || 0) * 1.6)
-      );
-    })
-    .map((cluster) => {
-      const areaType = direction === "bearish" ? "supply" : "demand";
-
-      return {
-        direction: direction === "bearish" ? "sell" : "buy",
-        areaType,
-        zoneLow: cluster.low,
-        zoneHigh: cluster.high,
-        zoneText: `${formatPrice(cluster.low)}–${formatPrice(cluster.high)}`,
-        state: "active",
-        source: "clustered_market_structure",
-        sourceReason:
-          `A broader ${areaType} zone was formed from ${cluster.members.length} nearby validated structural levels.`,
-        clusteredLevelCount: cluster.members.length,
-        clusteredLevels: cluster.members.map((member) => member.price),
-      };
-    });
+  return clusters;
 }
 
 function rankRawEntryAreas({
@@ -6617,228 +6377,271 @@ function rankRawEntryAreas({
   symbol = "",
   timeframe = "H1",
 }) {
-  const marketDerivedAreas = [];
-  const marketAreas = Array.isArray(marketReference?.csaAreas)
-    ? marketReference.csaAreas
+  if (!["bullish", "bearish"].includes(direction)) return [];
+
+  const candles = Array.isArray(marketReference?.timeframeCandles)
+    ? marketReference.timeframeCandles
+        .filter(
+          (candle) =>
+            candle?.datetime &&
+            Number.isFinite(Number(candle?.open)) &&
+            Number.isFinite(Number(candle?.high)) &&
+            Number.isFinite(Number(candle?.low)) &&
+            Number.isFinite(Number(candle?.close))
+        )
+        .sort((a, b) =>
+          String(a.datetime).localeCompare(String(b.datetime))
+        )
     : [];
-  const conversionTolerance = getApprovedPriceTolerance(symbol);
-  const fibonacciContext = buildFibonacciContext({
-    marketReference,
-    historicalPhase,
-    direction,
-    timeframe,
-  });
 
-  const clusteredStructuralZones = buildClusteredDirectionalZones({
-    marketReference,
-    direction,
-    currentPrice,
-    symbol,
-    timeframe,
-  });
+  if (!candles.length || !Number.isFinite(Number(currentPrice))) return [];
 
-  marketAreas.forEach((area) => {
+  const config = getAreaEngineConfig(timeframe);
+  const recentCandles = candles.slice(-config.lookback);
+  const atr = averageTrueRange(
+    candles,
+    getStructureEngineConfig(timeframe).atrPeriod
+  );
+  const priceTolerance = getApprovedPriceTolerance(symbol);
+  const sideGap = Math.max(priceTolerance, Number(atr || 0) * 0.08);
+  const clusterDistance = Math.max(
+    priceTolerance * 4,
+    Number(atr || 0) * 0.42
+  );
+
+  const allowedTypes =
+    direction === "bearish"
+      ? new Set(["resistance", "supply"])
+      : new Set(["support", "demand"]);
+
+  const structuralPrices = [];
+
+  (Array.isArray(marketReference?.csaAreas)
+    ? marketReference.csaAreas
+    : []
+  ).forEach((area) => {
     const price = asPositiveNumber(area?.price);
-    const originalType = String(area?.type || "").toLowerCase();
-    if (price === null || currentPrice === null) return;
+    const type = String(area?.type || "").toLowerCase();
+    if (price === null || !allowedTypes.has(type)) return;
 
-    if (
-      direction === "bearish" &&
-      ["support", "demand"].includes(originalType) &&
-      price > currentPrice + conversionTolerance
-    ) {
-      marketDerivedAreas.push({
-        direction: "sell",
-        areaType: "converted resistance",
-        zoneLow: price,
-        zoneHigh: price,
-        zoneText: formatPrice(price),
-        state: "potential_conversion",
-        sourceReason:
-          "A previously calculated support/demand level is now above price after bearish continuation, so it is the nearest potential resistance on a retest.",
-        source: "market_structure_conversion",
-        isAutoConvertedLevel: true,
-        originalStructuralType: originalType,
-      });
-    }
+    const onCorrectSide =
+      direction === "bearish"
+        ? price > Number(currentPrice) + sideGap
+        : price < Number(currentPrice) - sideGap;
 
-    if (
-      direction === "bullish" &&
-      ["resistance", "supply"].includes(originalType) &&
-      price < currentPrice - conversionTolerance
-    ) {
-      marketDerivedAreas.push({
-        direction: "buy",
-        areaType: "converted support",
-        zoneLow: price,
-        zoneHigh: price,
-        zoneText: formatPrice(price),
-        state: "potential_conversion",
-        sourceReason:
-          "A previously calculated resistance/supply level is now below price after bullish continuation, so it is the nearest potential support on a retest.",
-        source: "market_structure_conversion",
-        isAutoConvertedLevel: true,
-        originalStructuralType: originalType,
-      });
-    }
+    if (!onCorrectSide) return;
+
+    structuralPrices.push({
+      price,
+      type,
+      source: "framework_level",
+      date: area?.date || null,
+    });
   });
 
-  const raw = [
+  const pivotConfig = {
+    pivotLeft: config.pivotLeft,
+    pivotRight: config.pivotRight,
+  };
+
+  detectConfirmedSwingPivots(candles, pivotConfig).forEach((pivot) => {
+    const type =
+      pivot.type === "resistance" ? "resistance" : "support";
+    if (!allowedTypes.has(type)) return;
+
+    const price = asPositiveNumber(pivot.price);
+    if (price === null) return;
+
+    const onCorrectSide =
+      direction === "bearish"
+        ? price > Number(currentPrice) + sideGap
+        : price < Number(currentPrice) - sideGap;
+
+    if (!onCorrectSide) return;
+
+    structuralPrices.push({
+      price,
+      type,
+      source: "confirmed_swing",
+      date: pivot.datetime || null,
+    });
+  });
+
+  const visualCandidates = [
     ...(Array.isArray(visualReview?.activeEntryAreas)
       ? visualReview.activeEntryAreas
       : []),
     ...(visualReview?.preferredEntryArea
       ? [visualReview.preferredEntryArea]
       : []),
-    ...clusteredStructuralZones,
-    ...marketDerivedAreas,
   ];
 
-  const wantedDirection =
-    direction === "bearish" ? "sell" : direction === "bullish" ? "buy" : "none";
+  const fibonacci = buildLatestImpulseFibonacci({
+    candles,
+    historicalPhase,
+    direction,
+    timeframe,
+  });
 
-  const candidates = raw
-    .map((area) => {
-      if (!area || typeof area !== "object") return null;
+  const rawZones = clusterStructuralPrices({
+    prices: structuralPrices,
+    clusterDistance,
+  }).map((cluster) => ({
+    zoneLow: cluster.low,
+    zoneHigh: cluster.high,
+    members: cluster.members,
+    source: "calculated_structure_cluster",
+  }));
 
-      const normalizedDirection = String(area.direction || wantedDirection).toLowerCase();
-      const areaType = normalizedAreaType(area.areaType, direction);
-      const zone = normalizeZone(area, symbol);
-      const stateText = String(area.state || "active").toLowerCase();
-      const state =
-        /confirmed/.test(stateText)
-          ? "confirmed_conversion"
-          : /potential/.test(stateText)
-          ? "potential_conversion"
-          : /invalid/.test(stateText)
-          ? "invalidated"
-          : "active";
+  visualCandidates.forEach((area) => {
+    const areaType = normalizedAreaType(area?.areaType, direction);
+    const validType =
+      direction === "bearish"
+        ? ["resistance", "supply", "converted resistance"].includes(areaType)
+        : ["support", "demand", "converted support"].includes(areaType);
 
-      const center =
-        zone.zoneLow !== null && zone.zoneHigh !== null
-          ? (zone.zoneLow + zone.zoneHigh) / 2
-          : zone.zoneLow ?? zone.zoneHigh;
+    if (!validType) return;
 
-      if (center === null || state === "invalidated") return null;
-      if (wantedDirection !== "none" && normalizedDirection !== wantedDirection) return null;
-      if (!areaDirectionMatches(areaType, direction)) return null;
+    const zone = normalizeZone(area, symbol);
+    const center = areaCenter(zone);
+    if (center === null) return;
 
-      const bearishEntryTypes = new Set([
-        "resistance",
-        "supply",
-        "converted resistance",
-      ]);
-      const bullishEntryTypes = new Set([
-        "support",
-        "demand",
-        "converted support",
-      ]);
+    const onCorrectSide =
+      direction === "bearish"
+        ? center > Number(currentPrice) + sideGap
+        : center < Number(currentPrice) - sideGap;
 
-      if (direction === "bearish" && !bearishEntryTypes.has(areaType)) {
-        return null;
-      }
+    if (!onCorrectSide) return;
 
-      if (direction === "bullish" && !bullishEntryTypes.has(areaType)) {
-        return null;
-      }
+    rawZones.push({
+      zoneLow: zone.zoneLow ?? center,
+      zoneHigh: zone.zoneHigh ?? center,
+      members: [{
+        price: center,
+        type: areaType,
+        source: "visual_candidate",
+      }],
+      source: "visual_candidate",
+      visualArea: area,
+    });
+  });
 
-      const sideTolerance = getApprovedPriceTolerance(symbol);
-      const onCorrectSide =
-        currentPrice === null ||
-        (direction === "bearish" && center > currentPrice + sideTolerance) ||
-        (direction === "bullish" && center < currentPrice - sideTolerance) ||
-        direction === "range";
+  const evaluated = rawZones.map((rawZone) => {
+    let zoneLow = Number(rawZone.zoneLow);
+    let zoneHigh = Number(rawZone.zoneHigh);
+    if (zoneLow > zoneHigh) [zoneLow, zoneHigh] = [zoneHigh, zoneLow];
 
-      if (!onCorrectSide) return null;
+    const minimumHalfWidth = Math.max(
+      priceTolerance,
+      Number(atr || 0) * 0.10
+    );
 
-      const distance =
-        currentPrice === null ? Number.MAX_SAFE_INTEGER : Math.abs(center - currentPrice);
+    if (Math.abs(zoneHigh - zoneLow) < minimumHalfWidth) {
+      const center = (zoneLow + zoneHigh) / 2;
+      zoneLow = center - minimumHalfWidth;
+      zoneHigh = center + minimumHalfWidth;
+    }
 
-      const typePriority =
-        areaType === "supply" || areaType === "demand"
-          ? 0
-          : areaType === "resistance" || areaType === "support"
-          ? 1
-          : areaType === "converted resistance" || areaType === "converted support"
-          ? 4
-          : 3;
+    const reactionTolerance = Math.max(
+      priceTolerance,
+      Number(atr || 0) * 0.12
+    );
 
-      const confluence = evaluateAreaConfluence({
-        area: {
-          ...area,
-          areaType,
-          zoneLow: zone.zoneLow,
-          zoneHigh: zone.zoneHigh,
-          zoneText: zone.zoneText,
-        },
-        marketReference,
-        fibonacciContext,
-        direction,
-        timeframe,
-        symbol,
-      });
+    const reactionStats = countZoneReactions({
+      candles: recentCandles,
+      zoneLow,
+      zoneHigh,
+      atr,
+      tolerance: reactionTolerance,
+      reactionBars: config.reactionBars,
+    });
 
-      if (!confluence.structurallyValid) return null;
+    const fibMatches = Array.isArray(fibonacci?.levels)
+      ? fibonacci.levels.filter((level) => {
+          const fibTolerance = Math.max(
+            priceTolerance * 2,
+            Number(atr || 0) * 0.20,
+            Math.abs(zoneHigh - zoneLow) * 0.25
+          );
+          return (
+            level.price >= zoneLow - fibTolerance &&
+            level.price <= zoneHigh + fibTolerance
+          );
+        })
+      : [];
 
-      const fibText = confluence.fibMatches.length
-        ? ` Fibonacci confluence: ${confluence.fibMatches
-            .map((match) => match.label)
-            .join(", ")}.`
-        : "";
+    const distinctSources = new Set(
+      (rawZone.members || []).map((member) => member.source)
+    ).size;
+    const memberCount = (rawZone.members || []).length;
 
-      return {
-        ...area,
-        direction: normalizedDirection,
-        areaType,
-        zoneLow: zone.zoneLow,
-        zoneHigh: zone.zoneHigh,
-        zoneText: zone.zoneText,
-        state,
-        distance,
-        typePriority,
-        structuralScore: confluence.structuralScore,
-        fibonacciScore: confluence.fibonacciScore,
-        qualityScore: confluence.qualityScore,
-        fibonacciMatches: confluence.fibMatches,
-        reactionCount: confluence.reactionStats.reactions,
-        touchCount: confluence.reactionStats.touches,
-        confluenceLabel: confluence.confluenceLabel,
-        validationReason: confluence.validationReason,
-        isConvertedArea: confluence.isConvertedArea,
-        sourceReason: `${safeUserText(area.sourceReason || "")}${fibText}`.trim(),
-      };
-    })
+    const structurallyValid =
+      reactionStats.reactions >= 2 ||
+      reactionStats.strongDepartures >= 1 ||
+      (memberCount >= 2 && reactionStats.reactions >= 1) ||
+      (distinctSources >= 2 && reactionStats.reactions >= 1);
+
+    if (!structurallyValid) return null;
+
+    let fibonacciScore = 0;
+    fibMatches.forEach((match) => {
+      if (match.ratio === 0.618) fibonacciScore = Math.max(fibonacciScore, 3);
+      else if (match.ratio === 0.5) fibonacciScore = Math.max(fibonacciScore, 2);
+      else fibonacciScore = Math.max(fibonacciScore, 1);
+    });
+
+    const structuralScore =
+      reactionStats.reactions * 8 +
+      reactionStats.strongDepartures * 6 +
+      Math.min(4, memberCount) * 3 +
+      Math.min(2, distinctSources) * 4;
+
+    const center = (zoneLow + zoneHigh) / 2;
+    const distance = Math.abs(center - Number(currentPrice));
+
+    return {
+      direction: direction === "bearish" ? "sell" : "buy",
+      areaType: direction === "bearish" ? "supply" : "demand",
+      zoneLow,
+      zoneHigh,
+      zoneText: `${formatPrice(zoneLow, symbol)}–${formatPrice(zoneHigh, symbol)}`,
+      state: "active",
+      source: rawZone.source,
+      sourceReason:
+        `Validated by ${reactionStats.reactions} separated reaction(s)` +
+        (fibonacciScore
+          ? ` with ${fibMatches.map((match) => match.label).join(", ")} Fibonacci confluence.`
+          : "."),
+      distance,
+      structuralScore,
+      fibonacciScore,
+      qualityScore:
+        structuralScore +
+        fibonacciScore * 7 -
+        Math.min(8, distance / Math.max(Number(atr || 1), 1e-12)),
+      reactionCount: reactionStats.reactions,
+      strongDepartureCount: reactionStats.strongDepartures,
+      fibonacciMatches: fibMatches,
+      validated: true,
+    };
+  });
+
+  return evaluated
     .filter(Boolean)
     .sort((a, b) => {
       if (b.qualityScore !== a.qualityScore) {
         return b.qualityScore - a.qualityScore;
       }
-
-      if (b.fibonacciScore !== a.fibonacciScore) {
-        return b.fibonacciScore - a.fibonacciScore;
-      }
-
       if (b.structuralScore !== a.structuralScore) {
         return b.structuralScore - a.structuralScore;
       }
-
-      if (a.typePriority !== b.typePriority) {
-        return a.typePriority - b.typePriority;
+      if (b.fibonacciScore !== a.fibonacciScore) {
+        return b.fibonacciScore - a.fibonacciScore;
       }
-
       return a.distance - b.distance;
-    });
-
-  const seen = new Set();
-
-  return candidates.filter((area) => {
-    const key = `${area.areaType}|${area.zoneLow}|${area.zoneHigh}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).slice(0, 3);
+    })
+    .slice(0, 3);
 }
-
 
 function normalizeBreakoutState(visualReview = {}, chartDetection = {}) {
   const combined = [
@@ -8041,10 +7844,11 @@ function buildValidatedAnalysisFacts({
       symbol: submittedInstrument,
     });
 
-  // When the selected date is earlier than the final date visible in the
-  // screenshot, the independent period-level classifier becomes authoritative.
-  // It uses only data already filtered to the selected cutoff.
-  const breakoutState = historicalCutoff.active
+  const deterministicMarketStateAvailable =
+    historicalPhase &&
+    ["bullish", "bearish", "range"].includes(historicalPhase.direction);
+
+  const breakoutState = deterministicMarketStateAvailable
     ? {
         bullishBreakout: historicalPhase.bullishBreakout === true,
         bearishBreakdown: historicalPhase.bearishBreakdown === true,
@@ -8054,7 +7858,7 @@ function buildValidatedAnalysisFacts({
       }
     : visualBreakoutState;
 
-  const transitionState = historicalCutoff.active
+  const transitionState = deterministicMarketStateAvailable
     ? {
         bullishRecoveryAfterBreakdown:
           historicalPhase.bullishRecoveryAfterBreakdown === true,
@@ -8065,7 +7869,7 @@ function buildValidatedAnalysisFacts({
       }
     : visualTransitionState;
 
-  const breakoutDirectionOverride = historicalCutoff.active
+  const breakoutDirectionOverride = deterministicMarketStateAvailable
     ? null
     : breakoutOverridesRange({
         verifiedMarketDirection,
@@ -8073,7 +7877,7 @@ function buildValidatedAnalysisFacts({
         breakoutState,
       });
 
-  let direction = historicalCutoff.active
+  let direction = deterministicMarketStateAvailable
     ? historicalPhase.direction
     : breakoutDirectionOverride
     ? breakoutDirectionOverride
@@ -8094,80 +7898,34 @@ function buildValidatedAnalysisFacts({
   ) {
     direction = "bullish";
   }
-  const currentPrice = historicalCutoff.active
-    ? asPositiveNumber(historicalPhase.latestClose) ||
-      extractLastMarketPrice(marketReference)
-    : asPositiveNumber(visualReview?.latestVisiblePrice) ||
-      extractLastMarketPrice(marketReference);
+  const currentPrice =
+    asPositiveNumber(historicalPhase?.latestClose) ||
+    extractLastMarketPrice(marketReference) ||
+    asPositiveNumber(visualReview?.latestVisiblePrice);
+
+  const lockedMarketState = Object.freeze({
+    direction,
+    phase: historicalPhase?.phase || "unknown",
+    breakoutState: Object.freeze({ ...breakoutState }),
+    transitionState: Object.freeze({ ...transitionState }),
+    controllingEvent:
+      historicalPhase?.diagnostics?.latestEvent || null,
+  });
 
   const rankedRawAreas = rankRawEntryAreas({
     visualReview,
     marketReference,
     historicalPhase,
-    direction,
+    direction: lockedMarketState.direction,
     currentPrice,
     symbol: submittedInstrument,
     timeframe,
   });
 
-  const fallbackAreaType = normalizedAreaType(
-    fallbackPreferredArea?.areaType,
-    direction
-  );
-  const fallbackZone = normalizeZone(
-    fallbackPreferredArea,
-    submittedInstrument
-  );
-  const fallbackCenter =
-    fallbackZone.zoneLow !== null && fallbackZone.zoneHigh !== null
-      ? (fallbackZone.zoneLow + fallbackZone.zoneHigh) / 2
-      : fallbackZone.zoneLow ?? fallbackZone.zoneHigh;
-  const fallbackTolerance = getApprovedPriceTolerance(submittedInstrument);
-
-  const fallbackTypeValid =
-    direction === "bearish"
-      ? ["resistance", "supply", "converted resistance"].includes(
-          fallbackAreaType
-        )
-      : direction === "bullish"
-      ? ["support", "demand", "converted support"].includes(
-          fallbackAreaType
-        )
-      : false;
-
-  const fallbackPositionValid =
-    fallbackCenter !== null &&
-    currentPrice !== null &&
-    (
-      direction === "bearish"
-        ? fallbackCenter > currentPrice + fallbackTolerance
-        : direction === "bullish"
-        ? fallbackCenter < currentPrice - fallbackTolerance
-        : false
-    );
-
-  const preferredArea =
-    rankedRawAreas[0] ||
-    (fallbackTypeValid && fallbackPositionValid
-      ? fallbackPreferredArea
-      : {});
+  const preferredArea = rankedRawAreas[0] || {};
   const secondaryRawArea = rankedRawAreas[1] || null;
-  let areaType = normalizedAreaType(preferredArea?.areaType, direction);
+  const areaType = normalizedAreaType(preferredArea?.areaType, direction);
   const zone = normalizeZone(preferredArea, submittedInstrument);
-
-  if (
-    direction === "bearish" &&
-    !["resistance", "supply", "converted resistance"].includes(areaType)
-  ) {
-    areaType = "none";
-  }
-
-  if (
-    direction === "bullish" &&
-    !["support", "demand", "converted support"].includes(areaType)
-  ) {
-    areaType = "none";
-  }
   let priceStatus = normalizePriceStatus(preferredArea?.priceStatus);
   const combinedAreaEvidence = [
     preferredArea?.priceStatus,
@@ -8376,7 +8134,7 @@ function buildValidatedAnalysisFacts({
       ? "verified_market_framework"
       : "visual_review",
     historicalCutoff,
-    historicalPhase: historicalCutoff.active ? historicalPhase : null,
+    historicalPhase: historicalPhase || null,
     visualDirection,
     verifiedMarketDirection,
     breakoutState,
@@ -8406,15 +8164,6 @@ function buildValidatedAnalysisFacts({
         Number.isFinite(Number(candidate.distance))
           ? Number(candidate.distance)
           : null,
-      structuralScore: Number(candidate.structuralScore || 0),
-      fibonacciScore: Number(candidate.fibonacciScore || 0),
-      fibonacciMatches: Array.isArray(candidate.fibonacciMatches)
-        ? candidate.fibonacciMatches
-        : [],
-      reactionCount: Number(candidate.reactionCount || 0),
-      confluenceLabel: candidate.confluenceLabel || "valid_structure",
-      validationReason: candidate.validationReason || "",
-      isConvertedArea: candidate.isConvertedArea === true,
     })),
     secondaryEntryArea: secondaryRawArea
       ? {
@@ -8429,7 +8178,7 @@ function buildValidatedAnalysisFacts({
       : null,
     preferredEntryArea: {
       validated:
-        areaType !== "none" &&
+        preferredArea?.validated === true &&
         zone.zoneLow !== null &&
         zone.zoneHigh !== null,
       direction:
@@ -8454,23 +8203,39 @@ function buildValidatedAnalysisFacts({
       triggerDescription: triggerPresent ? triggerDescription : "",
       lifecycleStatus,
       invalidated: areaInvalidated,
-      directionMatch: areaDirectionMatches(areaType, direction),
+      directionMatch:
+        preferredArea?.validated === true &&
+        areaDirectionMatches(areaType, direction),
       structuralScore: Number(preferredArea?.structuralScore || 0),
       fibonacciScore: Number(preferredArea?.fibonacciScore || 0),
       fibonacciMatches: Array.isArray(preferredArea?.fibonacciMatches)
         ? preferredArea.fibonacciMatches
         : [],
       reactionCount: Number(preferredArea?.reactionCount || 0),
-      confluenceLabel: preferredArea?.confluenceLabel || "valid_structure",
-      validationReason: preferredArea?.validationReason || "",
-      isConvertedArea: preferredArea?.isConvertedArea === true,
     },
     convertedLevel: {
       detected: convertedLevelDetected,
       state: convertedLevelState,
       assessment: convertedLevelDetected ? convertedText : "",
     },
-    confluence: inferConfluence(visualReview),
+    confluence: {
+      fibonacci:
+        Number(preferredArea?.fibonacciScore || 0) > 0,
+      fibonacciMatches: Array.isArray(preferredArea?.fibonacciMatches)
+        ? preferredArea.fibonacciMatches
+        : [],
+      structuralScore: Number(preferredArea?.structuralScore || 0),
+      count:
+        Number(preferredArea?.reactionCount || 0) +
+        (Number(preferredArea?.fibonacciScore || 0) > 0 ? 1 : 0),
+      strength:
+        Number(preferredArea?.fibonacciScore || 0) >= 2 &&
+        Number(preferredArea?.structuralScore || 0) >= 18
+          ? "high"
+          : Number(preferredArea?.structuralScore || 0) >= 12
+          ? "medium"
+          : "low",
+    },
     risk: {
       stopShown: risk.stopShown,
       targetShown: risk.targetShown,
@@ -8590,7 +8355,7 @@ function controlledScores(facts) {
     facts.preferredEntryArea.directionMatch
   ) {
     setup += 6;
-  } else if (facts.preferredEntryArea.validated !== true) {
+  } else {
     setup -= 8;
   }
   if (facts.confluence.strength === "high") setup += 8;
@@ -8707,20 +8472,9 @@ function buildControlledFeedback({
       "The analysis avoids forcing a weak or contradictory entry area."
     );
   } else if (!area.invalidated) {
-    if (
-      area.areaType === "converted resistance" ||
-      area.areaType === "converted support"
-    ) {
-      strengths.push(
-        area.areaType === "converted resistance"
-          ? `The broken support around ${area.zoneText || "the identified level"} is the nearest area to monitor as potential resistance.`
-          : `The broken resistance around ${area.zoneText || "the identified level"} is the nearest area to monitor as potential support.`
-      );
-    } else {
-      strengths.push(
-        `The ${areaText} gives a clear ${action} location to monitor.`
-      );
-    }
+    strengths.push(
+      `The ${areaText} gives a clear ${action} location to monitor.`
+    );
   }
 
   if (secondaryAreaText) {
@@ -8850,9 +8604,9 @@ function buildControlledFeedback({
   if (!hasValidatedArea) {
     nextAction =
       facts.direction === "bearish"
-        ? "No high-quality resistance or supply entry area is confirmed yet. Avoid forcing a sell location. Wait for price to retrace into a clearly validated resistance or supply zone with structural reactions and Fibonacci confluence, then require a fresh bearish rejection."
+        ? "No high-quality resistance or supply entry area is confirmed yet. Avoid forcing a sell location. Wait for price to retrace into a clearly validated resistance or supply zone, then require a fresh bearish rejection."
         : facts.direction === "bullish"
-        ? "No high-quality support or demand entry area is confirmed yet. Avoid forcing a buy location. Wait for price to return into a clearly validated support or demand zone with structural reactions and Fibonacci confluence, then require a fresh bullish hold."
+        ? "No high-quality support or demand entry area is confirmed yet. Avoid forcing a buy location. Wait for price to return into a clearly validated support or demand zone, then require a fresh bullish hold."
         : "No high-quality entry area is confirmed yet. Wait for a clearly validated support or resistance zone and a fresh trigger.";
   } else if (
     facts.transitionState?.bullishRecoveryAfterBreakdown &&
@@ -8935,9 +8689,7 @@ function buildControlledFeedback({
     ...starterSections,
     "",
     "CHART LEVELS:",
-    hasValidatedArea
-      ? `- Primary area: ${areaText}.`
-      : "- No high-quality primary entry area was confirmed.",
+    `- Primary area: ${areaText}.`,
     secondaryAreaText
       ? `- Secondary area: ${secondaryAreaText}.`
       : "- No separate secondary area was confirmed.",
