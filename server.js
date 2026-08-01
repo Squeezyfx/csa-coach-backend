@@ -5876,7 +5876,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "4.5.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "4.6.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6420,6 +6420,12 @@ function evaluateAreaConfluence({
   let structuralScore = 0;
   if (explicitStructuralZone) structuralScore += 2;
   if (zoneWidth > Math.max(baseTolerance, atr * 0.08)) structuralScore += 1;
+  if (area?.source === "clustered_market_structure") {
+    structuralScore += Math.min(
+      3,
+      Math.max(0, Number(area?.clusteredLevelCount || 0) - 1)
+    );
+  }
   structuralScore += Math.min(3, reactionStats.reactions);
   if (reactionStats.touches >= 2) structuralScore += 1;
 
@@ -6513,6 +6519,95 @@ function evaluateAreaConfluence({
   };
 }
 
+
+function buildClusteredDirectionalZones({
+  marketReference = {},
+  direction = "range",
+  currentPrice = null,
+  symbol = "",
+  timeframe = "H1",
+}) {
+  const candles = Array.isArray(marketReference?.timeframeCandles)
+    ? marketReference.timeframeCandles
+    : [];
+  const atr = averageTrueRange(
+    candles,
+    getStructureEngineConfig(timeframe).atrPeriod
+  );
+  const tolerance = getApprovedPriceTolerance(symbol);
+  const clusterGap = Math.max(tolerance * 6, Number(atr || 0) * 0.85);
+
+  const allowedTypes =
+    direction === "bearish"
+      ? new Set(["resistance", "supply"])
+      : direction === "bullish"
+      ? new Set(["support", "demand"])
+      : new Set();
+
+  const levels = (Array.isArray(marketReference?.csaAreas)
+    ? marketReference.csaAreas
+    : []
+  )
+    .map((area) => ({
+      price: asPositiveNumber(area?.price),
+      type: String(area?.type || "").toLowerCase(),
+      date: area?.date || null,
+    }))
+    .filter((area) => {
+      if (area.price === null || !allowedTypes.has(area.type)) return false;
+      if (!Number.isFinite(Number(currentPrice))) return false;
+
+      return direction === "bearish"
+        ? area.price > Number(currentPrice) + tolerance
+        : area.price < Number(currentPrice) - tolerance;
+    })
+    .sort((a, b) => a.price - b.price);
+
+  const clusters = [];
+
+  levels.forEach((level) => {
+    const current = clusters[clusters.length - 1];
+
+    if (!current || level.price - current.high > clusterGap) {
+      clusters.push({
+        low: level.price,
+        high: level.price,
+        members: [level],
+      });
+    } else {
+      current.low = Math.min(current.low, level.price);
+      current.high = Math.max(current.high, level.price);
+      current.members.push(level);
+    }
+  });
+
+  return clusters
+    .filter((cluster) => {
+      const width = cluster.high - cluster.low;
+      return (
+        cluster.members.length >= 2 &&
+        width <= Math.max(clusterGap * 1.8, Number(atr || 0) * 1.6)
+      );
+    })
+    .map((cluster) => {
+      const areaType = direction === "bearish" ? "supply" : "demand";
+
+      return {
+        direction: direction === "bearish" ? "sell" : "buy",
+        areaType,
+        zoneLow: cluster.low,
+        zoneHigh: cluster.high,
+        zoneText: `${formatPrice(cluster.low)}–${formatPrice(cluster.high)}`,
+        state: "active",
+        source: "clustered_market_structure",
+        sourceReason:
+          `A broader ${areaType} zone was formed from ${cluster.members.length} nearby validated structural levels.`,
+        clusteredLevelCount: cluster.members.length,
+        clusteredLevels: cluster.members.map((member) => member.price),
+      };
+    });
+}
+
 function rankRawEntryAreas({
   visualReview = {},
   marketReference = {},
@@ -6531,6 +6626,14 @@ function rankRawEntryAreas({
     marketReference,
     historicalPhase,
     direction,
+    timeframe,
+  });
+
+  const clusteredStructuralZones = buildClusteredDirectionalZones({
+    marketReference,
+    direction,
+    currentPrice,
+    symbol,
     timeframe,
   });
 
@@ -6587,6 +6690,7 @@ function rankRawEntryAreas({
     ...(visualReview?.preferredEntryArea
       ? [visualReview.preferredEntryArea]
       : []),
+    ...clusteredStructuralZones,
     ...marketDerivedAreas,
   ];
 
@@ -8324,6 +8428,10 @@ function buildValidatedAnalysisFacts({
         }
       : null,
     preferredEntryArea: {
+      validated:
+        areaType !== "none" &&
+        zone.zoneLow !== null &&
+        zone.zoneHigh !== null,
       direction:
         direction === "bearish"
           ? "sell"
@@ -8477,7 +8585,14 @@ function controlledScores(facts) {
   let entry = facts.trade.visible ? 58 : 48;
   let risk = 35;
 
-  if (facts.preferredEntryArea.directionMatch) setup += 6;
+  if (
+    facts.preferredEntryArea.validated === true &&
+    facts.preferredEntryArea.directionMatch
+  ) {
+    setup += 6;
+  } else if (facts.preferredEntryArea.validated !== true) {
+    setup -= 8;
+  }
   if (facts.confluence.strength === "high") setup += 8;
   else if (facts.confluence.strength === "medium") setup += 4;
 
@@ -8546,7 +8661,13 @@ function buildControlledFeedback({
   personalStrategyAssessment = null,
 }) {
   const area = facts.preferredEntryArea;
-  const areaText = areaDisplay(facts);
+  const hasValidatedArea =
+    area?.validated === true &&
+    area?.areaType &&
+    area.areaType !== "none" &&
+    Number.isFinite(Number(area?.zoneLow)) &&
+    Number.isFinite(Number(area?.zoneHigh));
+  const areaText = hasValidatedArea ? areaDisplay(facts) : "";
   const secondaryAreaText = secondaryAreaDisplay(facts);
   const directionText = directionDisplay(facts);
   const action = area.direction === "sell" ? "sell" : area.direction === "buy" ? "buy" : "trade";
@@ -8581,7 +8702,11 @@ function buildControlledFeedback({
     strengths.push("The chart correctly shows that price is currently range-bound.");
   }
 
-  if (!area.invalidated) {
+  if (!hasValidatedArea) {
+    strengths.push(
+      "The analysis avoids forcing a weak or contradictory entry area."
+    );
+  } else if (!area.invalidated) {
     if (
       area.areaType === "converted resistance" ||
       area.areaType === "converted support"
@@ -8630,7 +8755,15 @@ function buildControlledFeedback({
 
   const weaknesses = [];
 
-  if (area.invalidated) {
+  if (!hasValidatedArea) {
+    weaknesses.push(
+      facts.direction === "bearish"
+        ? "No sufficiently strong resistance or supply area has been validated for the planned sell yet."
+        : facts.direction === "bullish"
+        ? "No sufficiently strong support or demand area has been validated for the planned buy yet."
+        : "No sufficiently strong entry area has been validated yet."
+    );
+  } else if (area.invalidated) {
     weaknesses.push(
       `The previous ${area.areaType} area has failed and should no longer be used for the original ${action} idea.`
     );
@@ -8714,7 +8847,14 @@ function buildControlledFeedback({
 
   let nextAction;
 
-  if (
+  if (!hasValidatedArea) {
+    nextAction =
+      facts.direction === "bearish"
+        ? "No high-quality resistance or supply entry area is confirmed yet. Avoid forcing a sell location. Wait for price to retrace into a clearly validated resistance or supply zone with structural reactions and Fibonacci confluence, then require a fresh bearish rejection."
+        : facts.direction === "bullish"
+        ? "No high-quality support or demand entry area is confirmed yet. Avoid forcing a buy location. Wait for price to return into a clearly validated support or demand zone with structural reactions and Fibonacci confluence, then require a fresh bullish hold."
+        : "No high-quality entry area is confirmed yet. Wait for a clearly validated support or resistance zone and a fresh trigger.";
+  } else if (
     facts.transitionState?.bullishRecoveryAfterBreakdown &&
     !area.invalidated
   ) {
@@ -8795,7 +8935,9 @@ function buildControlledFeedback({
     ...starterSections,
     "",
     "CHART LEVELS:",
-    `- Primary area: ${areaText}.`,
+    hasValidatedArea
+      ? `- Primary area: ${areaText}.`
+      : "- No high-quality primary entry area was confirmed.",
     secondaryAreaText
       ? `- Secondary area: ${secondaryAreaText}.`
       : "- No separate secondary area was confirmed.",
