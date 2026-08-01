@@ -1250,6 +1250,10 @@ AREA RANKING RULES:
 - Identify up to 3 active entry areas that agree with the locked directional bias.
 - Validate genuine support/resistance or supply/demand structure before considering distance.
 - Fibonacci retracement is confluence only. It must never create an entry area by itself.
+- Rank structural quality first, but sequence valid entry areas by the order price would reach them from the current price.
+- Preserve the true area type: converted resistance/support, resistance/support, or supply/demand.
+- Keep zones compact and tied to actual reaction prices; do not merge unrelated levels into a wide band.
+- Reject any secondary sell area below the primary sell area, or any secondary buy area above the primary buy area.
 - Rank structural quality and Fibonacci overlap before proximity to price.
 - For a bearish plan, a broken support below an older supply zone becomes potential converted resistance and should normally be the primary area when it is the nearest valid sell area above price.
 - For a bullish plan, a broken resistance above an older demand zone becomes potential converted support and should normally be the primary area when it is the nearest valid buy area below price.
@@ -5873,7 +5877,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "5.0.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "6.0.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6298,8 +6302,8 @@ function countZoneReactions({
   });
 
   const departureThreshold = Math.max(
-    Number(atr || 0) * 0.55,
-    (highBoundary - lowBoundary) * 1.5,
+    Number(atr || 0) * 0.50,
+    (highBoundary - lowBoundary) * 1.25,
     tolerance * 3
   );
 
@@ -6325,7 +6329,7 @@ function countZoneReactions({
     });
 
     if (maxDeparture >= departureThreshold) reactions += 1;
-    if (maxDeparture >= departureThreshold * 1.75) strongDepartures += 1;
+    if (maxDeparture >= departureThreshold * 1.7) strongDepartures += 1;
   });
 
   return {
@@ -6368,6 +6372,258 @@ function clusterStructuralPrices({
   return clusters;
 }
 
+function classifyValidatedArea({
+  direction,
+  zoneLow,
+  zoneHigh,
+  rawZone,
+  historicalPhase,
+  reactionStats,
+  atr,
+}) {
+  const brokenLevel = asPositiveNumber(historicalPhase?.brokenLevel);
+  const conversionTolerance = Math.max(
+    Number(atr || 0) * 0.12,
+    Math.abs(Number(zoneHigh) - Number(zoneLow)) * 0.75
+  );
+
+  const brokenLevelInside =
+    brokenLevel !== null &&
+    brokenLevel >= Number(zoneLow) - conversionTolerance &&
+    brokenLevel <= Number(zoneHigh) + conversionTolerance;
+
+  if (direction === "bearish" && brokenLevelInside) {
+    return "converted resistance";
+  }
+
+  if (direction === "bullish" && brokenLevelInside) {
+    return "converted support";
+  }
+
+  const memberTypes = new Set(
+    (rawZone?.members || [])
+      .map((member) => String(member?.type || "").toLowerCase())
+      .filter(Boolean)
+  );
+
+  if (direction === "bearish") {
+    if (memberTypes.has("supply")) return "supply";
+    if (
+      reactionStats.strongDepartures >= 1 &&
+      reactionStats.reactions <= 1
+    ) {
+      return "supply";
+    }
+    return "resistance";
+  }
+
+  if (memberTypes.has("demand")) return "demand";
+  if (
+    reactionStats.strongDepartures >= 1 &&
+    reactionStats.reactions <= 1
+  ) {
+    return "demand";
+  }
+  return "support";
+}
+
+function compactZoneBounds({
+  rawLow,
+  rawHigh,
+  members = [],
+  atr = 0,
+  priceTolerance = 0,
+}) {
+  const memberPrices = members
+    .map((member) => Number(member?.price))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+
+  const center =
+    memberPrices.length
+      ? memberPrices.reduce((sum, price) => sum + price, 0) /
+        memberPrices.length
+      : (Number(rawLow) + Number(rawHigh)) / 2;
+
+  const memberSpread =
+    memberPrices.length >= 2
+      ? memberPrices[memberPrices.length - 1] - memberPrices[0]
+      : 0;
+
+  const minimumWidth = Math.max(
+    priceTolerance * 2,
+    Number(atr || 0) * 0.06
+  );
+
+  const maximumWidth = Math.max(
+    priceTolerance * 8,
+    Number(atr || 0) * 0.32
+  );
+
+  let desiredWidth = Math.max(
+    minimumWidth,
+    memberSpread + Math.max(priceTolerance * 2, Number(atr || 0) * 0.05)
+  );
+
+  desiredWidth = Math.min(desiredWidth, maximumWidth);
+
+  return {
+    zoneLow: center - desiredWidth / 2,
+    zoneHigh: center + desiredWidth / 2,
+  };
+}
+
+function zonesOverlap(a, b, tolerance = 0) {
+  return (
+    Number(a.zoneHigh) + tolerance >= Number(b.zoneLow) &&
+    Number(b.zoneHigh) + tolerance >= Number(a.zoneLow)
+  );
+}
+
+function dedupeValidatedAreas(areas = [], atr = 0) {
+  const result = [];
+  const tolerance = Math.max(Number(atr || 0) * 0.08, 0);
+
+  areas.forEach((candidate) => {
+    const duplicateIndex = result.findIndex((existing) =>
+      zonesOverlap(existing, candidate, tolerance)
+    );
+
+    if (duplicateIndex < 0) {
+      result.push(candidate);
+      return;
+    }
+
+    const existing = result[duplicateIndex];
+    const candidatePriority =
+      Number(candidate.structuralScore || 0) +
+      Number(candidate.fibonacciScore || 0) * 4;
+    const existingPriority =
+      Number(existing.structuralScore || 0) +
+      Number(existing.fibonacciScore || 0) * 4;
+
+    if (candidatePriority > existingPriority) {
+      result[duplicateIndex] = candidate;
+    }
+  });
+
+  return result;
+}
+
+function validateAndSequenceEntryAreas({
+  areas = [],
+  direction = "range",
+  currentPrice = null,
+  atr = 0,
+}) {
+  const errors = [];
+  const valid = areas.filter((area) => {
+    const low = Number(area?.zoneLow);
+    const high = Number(area?.zoneHigh);
+
+    if (!Number.isFinite(low) || !Number.isFinite(high) || low >= high) {
+      errors.push("invalid_zone_bounds");
+      return false;
+    }
+
+    if (direction === "bearish") {
+      const allowed = [
+        "resistance",
+        "converted resistance",
+        "supply",
+      ].includes(area.areaType);
+
+      if (!allowed) {
+        errors.push("bearish_area_type_conflict");
+        return false;
+      }
+
+      if (low <= Number(currentPrice)) {
+        errors.push("sell_area_not_above_price");
+        return false;
+      }
+    }
+
+    if (direction === "bullish") {
+      const allowed = [
+        "support",
+        "converted support",
+        "demand",
+      ].includes(area.areaType);
+
+      if (!allowed) {
+        errors.push("bullish_area_type_conflict");
+        return false;
+      }
+
+      if (high >= Number(currentPrice)) {
+        errors.push("buy_area_not_below_price");
+        return false;
+      }
+    }
+
+    if (
+      ["converted resistance", "converted support"].includes(area.areaType) &&
+      area.conversionConfirmed !== true
+    ) {
+      errors.push("unconfirmed_conversion");
+      return false;
+    }
+
+    if (
+      Number(area.structuralScore || 0) <= 0 &&
+      Number(area.fibonacciScore || 0) > 0
+    ) {
+      errors.push("fibonacci_only_area");
+      return false;
+    }
+
+    return true;
+  });
+
+  const deduped = dedupeValidatedAreas(valid, atr);
+
+  deduped.sort((a, b) => {
+    if (direction === "bearish") {
+      return Number(a.zoneLow) - Number(b.zoneLow);
+    }
+    return Number(b.zoneHigh) - Number(a.zoneHigh);
+  });
+
+  const sequenced = deduped.slice(0, 3).map((area, index) => ({
+    ...area,
+    executionOrder: index + 1,
+    role: index === 0 ? "primary" : index === 1 ? "secondary" : "alternative",
+  }));
+
+  for (let index = 1; index < sequenced.length; index += 1) {
+    const previous = sequenced[index - 1];
+    const current = sequenced[index];
+
+    if (
+      direction === "bearish" &&
+      Number(current.zoneLow) <= Number(previous.zoneLow)
+    ) {
+      errors.push("secondary_sell_area_not_higher");
+    }
+
+    if (
+      direction === "bullish" &&
+      Number(current.zoneHigh) >= Number(previous.zoneHigh)
+    ) {
+      errors.push("secondary_buy_area_not_lower");
+    }
+  }
+
+  return {
+    areas: sequenced,
+    validation: {
+      passed: errors.length === 0,
+      errors: [...new Set(errors)],
+    },
+  };
+}
+
 function rankRawEntryAreas({
   visualReview = {},
   marketReference = {},
@@ -6377,7 +6633,9 @@ function rankRawEntryAreas({
   symbol = "",
   timeframe = "H1",
 }) {
-  if (!["bullish", "bearish"].includes(direction)) return [];
+  if (!["bullish", "bearish"].includes(direction)) {
+    return { areas: [], validation: { passed: true, errors: [] } };
+  }
 
   const candles = Array.isArray(marketReference?.timeframeCandles)
     ? marketReference.timeframeCandles
@@ -6394,7 +6652,15 @@ function rankRawEntryAreas({
         )
     : [];
 
-  if (!candles.length || !Number.isFinite(Number(currentPrice))) return [];
+  if (!candles.length || !Number.isFinite(Number(currentPrice))) {
+    return {
+      areas: [],
+      validation: {
+        passed: false,
+        errors: ["missing_cutoff_filtered_market_data"],
+      },
+    };
+  }
 
   const config = getAreaEngineConfig(timeframe);
   const recentCandles = candles.slice(-config.lookback);
@@ -6403,10 +6669,16 @@ function rankRawEntryAreas({
     getStructureEngineConfig(timeframe).atrPeriod
   );
   const priceTolerance = getApprovedPriceTolerance(symbol);
-  const sideGap = Math.max(priceTolerance, Number(atr || 0) * 0.08);
+
+  const sideGap = Math.max(
+    priceTolerance,
+    Number(atr || 0) * 0.06
+  );
+
+  // Narrower clustering prevents unrelated levels from becoming one wide area.
   const clusterDistance = Math.max(
-    priceTolerance * 4,
-    Number(atr || 0) * 0.42
+    priceTolerance * 3,
+    Number(atr || 0) * 0.22
   );
 
   const allowedTypes =
@@ -6447,6 +6719,7 @@ function rankRawEntryAreas({
   detectConfirmedSwingPivots(candles, pivotConfig).forEach((pivot) => {
     const type =
       pivot.type === "resistance" ? "resistance" : "support";
+
     if (!allowedTypes.has(type)) return;
 
     const price = asPositiveNumber(pivot.price);
@@ -6527,24 +6800,20 @@ function rankRawEntryAreas({
   });
 
   const evaluated = rawZones.map((rawZone) => {
-    let zoneLow = Number(rawZone.zoneLow);
-    let zoneHigh = Number(rawZone.zoneHigh);
-    if (zoneLow > zoneHigh) [zoneLow, zoneHigh] = [zoneHigh, zoneLow];
-
-    const minimumHalfWidth = Math.max(
+    const compacted = compactZoneBounds({
+      rawLow: rawZone.zoneLow,
+      rawHigh: rawZone.zoneHigh,
+      members: rawZone.members,
+      atr,
       priceTolerance,
-      Number(atr || 0) * 0.10
-    );
+    });
 
-    if (Math.abs(zoneHigh - zoneLow) < minimumHalfWidth) {
-      const center = (zoneLow + zoneHigh) / 2;
-      zoneLow = center - minimumHalfWidth;
-      zoneHigh = center + minimumHalfWidth;
-    }
+    const zoneLow = compacted.zoneLow;
+    const zoneHigh = compacted.zoneHigh;
 
     const reactionTolerance = Math.max(
       priceTolerance,
-      Number(atr || 0) * 0.12
+      Number(atr || 0) * 0.08
     );
 
     const reactionStats = countZoneReactions({
@@ -6560,8 +6829,8 @@ function rankRawEntryAreas({
       ? fibonacci.levels.filter((level) => {
           const fibTolerance = Math.max(
             priceTolerance * 2,
-            Number(atr || 0) * 0.20,
-            Math.abs(zoneHigh - zoneLow) * 0.25
+            Number(atr || 0) * 0.12,
+            Math.abs(zoneHigh - zoneLow) * 0.20
           );
           return (
             level.price >= zoneLow - fibTolerance &&
@@ -6596,51 +6865,79 @@ function rankRawEntryAreas({
       Math.min(4, memberCount) * 3 +
       Math.min(2, distinctSources) * 4;
 
+    const areaType = classifyValidatedArea({
+      direction,
+      zoneLow,
+      zoneHigh,
+      rawZone,
+      historicalPhase,
+      reactionStats,
+      atr,
+    });
+
+    const brokenLevel = asPositiveNumber(historicalPhase?.brokenLevel);
+    const conversionTolerance = Math.max(
+      Number(atr || 0) * 0.12,
+      Math.abs(zoneHigh - zoneLow) * 0.75
+    );
+
+    const conversionConfirmed =
+      !["converted resistance", "converted support"].includes(areaType) ||
+      (
+        brokenLevel !== null &&
+        brokenLevel >= zoneLow - conversionTolerance &&
+        brokenLevel <= zoneHigh + conversionTolerance &&
+        (
+          historicalPhase?.bearishBreakdown === true ||
+          historicalPhase?.bullishBreakout === true ||
+          historicalPhase?.phase === "bearish_structure" ||
+          historicalPhase?.phase === "bullish_structure"
+        )
+      );
+
     const center = (zoneLow + zoneHigh) / 2;
     const distance = Math.abs(center - Number(currentPrice));
 
     return {
       direction: direction === "bearish" ? "sell" : "buy",
-      areaType: direction === "bearish" ? "supply" : "demand",
+      areaType,
       zoneLow,
       zoneHigh,
       zoneText: `${formatPrice(zoneLow, symbol)}–${formatPrice(zoneHigh, symbol)}`,
       state: "active",
       source: rawZone.source,
       sourceReason:
-        `Validated by ${reactionStats.reactions} separated reaction(s)` +
+        `${areaType} validated by ${reactionStats.reactions} separated reaction(s)` +
+        (reactionStats.strongDepartures
+          ? ` and ${reactionStats.strongDepartures} strong departure(s)`
+          : "") +
         (fibonacciScore
-          ? ` with ${fibMatches.map((match) => match.label).join(", ")} Fibonacci confluence.`
+          ? `, with ${fibMatches.map((match) => match.label).join(", ")} Fibonacci confluence.`
           : "."),
       distance,
       structuralScore,
       fibonacciScore,
       qualityScore:
         structuralScore +
-        fibonacciScore * 7 -
-        Math.min(8, distance / Math.max(Number(atr || 1), 1e-12)),
+        fibonacciScore * 7,
       reactionCount: reactionStats.reactions,
       strongDepartureCount: reactionStats.strongDepartures,
       fibonacciMatches: fibMatches,
       validated: true,
+      conversionConfirmed,
+      brokenLevel:
+        ["converted resistance", "converted support"].includes(areaType)
+          ? brokenLevel
+          : null,
     };
   });
 
-  return evaluated
-    .filter(Boolean)
-    .sort((a, b) => {
-      if (b.qualityScore !== a.qualityScore) {
-        return b.qualityScore - a.qualityScore;
-      }
-      if (b.structuralScore !== a.structuralScore) {
-        return b.structuralScore - a.structuralScore;
-      }
-      if (b.fibonacciScore !== a.fibonacciScore) {
-        return b.fibonacciScore - a.fibonacciScore;
-      }
-      return a.distance - b.distance;
-    })
-    .slice(0, 3);
+  return validateAndSequenceEntryAreas({
+    areas: evaluated.filter(Boolean),
+    direction,
+    currentPrice,
+    atr,
+  });
 }
 
 function normalizeBreakoutState(visualReview = {}, chartDetection = {}) {
@@ -7912,7 +8209,7 @@ function buildValidatedAnalysisFacts({
       historicalPhase?.diagnostics?.latestEvent || null,
   });
 
-  const rankedRawAreas = rankRawEntryAreas({
+  const rankedAreaResult = rankRawEntryAreas({
     visualReview,
     marketReference,
     historicalPhase,
@@ -7921,6 +8218,15 @@ function buildValidatedAnalysisFacts({
     symbol: submittedInstrument,
     timeframe,
   });
+
+  const rankedRawAreas = Array.isArray(rankedAreaResult?.areas)
+    ? rankedAreaResult.areas
+    : [];
+  const entryAreaValidation =
+    rankedAreaResult?.validation || {
+      passed: false,
+      errors: ["missing_area_validation_result"],
+    };
 
   const preferredArea = rankedRawAreas[0] || {};
   const secondaryRawArea = rankedRawAreas[1] || null;
@@ -8151,8 +8457,8 @@ function buildValidatedAnalysisFacts({
     currentPrice,
     latestVisiblePrice: asPositiveNumber(visualReview?.latestVisiblePrice),
     activeEntryAreas: rankedRawAreas.map((candidate, index) => ({
-      rank: index + 1,
-      role: index === 0 ? "primary" : index === 1 ? "secondary" : "alternative",
+      rank: candidate.executionOrder || index + 1,
+      role: candidate.role || (index === 0 ? "primary" : index === 1 ? "secondary" : "alternative"),
       direction: candidate.direction,
       areaType: candidate.areaType,
       zoneLow: candidate.zoneLow,
@@ -8164,7 +8470,12 @@ function buildValidatedAnalysisFacts({
         Number.isFinite(Number(candidate.distance))
           ? Number(candidate.distance)
           : null,
+      structuralScore: Number(candidate.structuralScore || 0),
+      fibonacciScore: Number(candidate.fibonacciScore || 0),
+      executionOrder: Number(candidate.executionOrder || index + 1),
+      conversionConfirmed: candidate.conversionConfirmed === true,
     })),
+    entryAreaValidation,
     secondaryEntryArea: secondaryRawArea
       ? {
           direction: secondaryRawArea.direction,
@@ -8174,6 +8485,8 @@ function buildValidatedAnalysisFacts({
           zoneText: secondaryRawArea.zoneText,
           state: secondaryRawArea.state,
           sourceReason: safeUserText(secondaryRawArea.sourceReason || ""),
+          executionOrder: Number(secondaryRawArea.executionOrder || 2),
+          conversionConfirmed: secondaryRawArea.conversionConfirmed === true,
         }
       : null,
     preferredEntryArea: {
@@ -8212,6 +8525,9 @@ function buildValidatedAnalysisFacts({
         ? preferredArea.fibonacciMatches
         : [],
       reactionCount: Number(preferredArea?.reactionCount || 0),
+      executionOrder: Number(preferredArea?.executionOrder || 1),
+      conversionConfirmed: preferredArea?.conversionConfirmed === true,
+      brokenLevel: asPositiveNumber(preferredArea?.brokenLevel),
     },
     convertedLevel: {
       detected: convertedLevelDetected,
@@ -8427,6 +8743,7 @@ function buildControlledFeedback({
 }) {
   const area = facts.preferredEntryArea;
   const hasValidatedArea =
+    facts.entryAreaValidation?.passed !== false &&
     area?.validated === true &&
     area?.areaType &&
     area.areaType !== "none" &&
@@ -8473,7 +8790,11 @@ function buildControlledFeedback({
     );
   } else if (!area.invalidated) {
     strengths.push(
-      `The ${areaText} gives a clear ${action} location to monitor.`
+      area.areaType === "converted resistance"
+        ? `The broken support around ${area.zoneText} has been correctly classified as converted resistance and is the first sell area to monitor.`
+        : area.areaType === "converted support"
+        ? `The broken resistance around ${area.zoneText} has been correctly classified as converted support and is the first buy area to monitor.`
+        : `The ${areaText} gives a clear ${action} location to monitor.`
     );
   }
 
@@ -8508,6 +8829,12 @@ function buildControlledFeedback({
   }
 
   const weaknesses = [];
+
+  if (facts.entryAreaValidation?.passed === false) {
+    weaknesses.push(
+      "The entry-area validation gates rejected one or more contradictory or incorrectly ordered levels, so no unverified area should be used."
+    );
+  }
 
   if (!hasValidatedArea) {
     weaknesses.push(
@@ -8649,14 +8976,14 @@ function buildControlledFeedback({
     nextAction =
       `Wait for price to retrace towards the ${areaText} and show a clear bearish rejection before considering a sell.` +
       (secondaryAreaText
-        ? ` If price breaks above the primary area, monitor the ${secondaryAreaText}.`
+        ? ` If price breaks above and holds beyond the primary area, the next higher sell area to monitor is the ${secondaryAreaText}.`
         : "") +
       ` Make sure there is enough room to the next support for a reasonable risk-to-reward ratio. Do not chase a sell while price remains close to support.`;
   } else if (facts.direction === "bullish") {
     nextAction =
       `Wait for price to return towards the ${areaText} and show a clear bullish hold before considering a buy.` +
       (secondaryAreaText
-        ? ` If price breaks below the primary area, monitor the ${secondaryAreaText}.`
+        ? ` If price breaks below and holds beyond the primary area, the next lower buy area to monitor is the ${secondaryAreaText}.`
         : "") +
       ` Make sure there is enough room to the next resistance for a reasonable risk-to-reward ratio. Do not chase a buy while price remains close to resistance.`;
   } else {
@@ -8689,7 +9016,9 @@ function buildControlledFeedback({
     ...starterSections,
     "",
     "CHART LEVELS:",
-    `- Primary area: ${areaText}.`,
+    hasValidatedArea
+      ? `- Primary area: ${areaText}.`
+      : "- No validated primary entry area was confirmed.",
     secondaryAreaText
       ? `- Secondary area: ${secondaryAreaText}.`
       : "- No separate secondary area was confirmed.",
