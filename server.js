@@ -1256,7 +1256,8 @@ AREA RANKING RULES:
 - Rank structural quality first, but sequence valid entry areas by the order price would reach them from the current price.
 - Preserve the true area type: converted resistance/support, resistance/support, or supply/demand.
 - Use the timeframe-framework high or low to identify the correct structural period first.
-- If the uploaded chart clearly shows the matching broker level within a reasonable ATR-scaled tolerance, reconcile the final displayed price to that visible chart level. Do not switch to a different structural period.
+- If the uploaded chart clearly shows the matching broker level within a reasonable ATR-scaled tolerance, reconcile the final displayed price to that visible chart level. Prefer an explicit platform price label or clearly marked horizontal-line price over a loose visual estimate.
+- The chart price may adjust only the displayed price of the already-selected framework period; it must never cause the engine to switch to a different day/week/month/quarter/year.
 - Pivots, reactions and Fibonacci may confirm the chosen period/level but must never replace it.
 - Keep zones compact and tied to the authoritative framework price; do not merge unrelated levels into a wide band.
 - Reject any secondary sell area below the primary sell area, or any secondary buy area above the primary buy area.
@@ -1780,6 +1781,21 @@ function sanitizeVisualReviewMarketPrices({
       visualReview.chartSpecificWeaknesses,
       []
     ).map(safeText),
+    visibleMarkedLevels: Array.isArray(visualReview.visibleMarkedLevels)
+      ? visualReview.visibleMarkedLevels.slice(0, 12).map((item) => ({
+          type: String(item?.type || "").toLowerCase(),
+          description: safeUserText(item?.description || ""),
+          approximatePrice: nullablePositiveNumber(item?.approximatePrice),
+        }))
+      : [],
+    visibleHorizontalLines: Array.isArray(visualReview.visibleHorizontalLines)
+      ? visualReview.visibleHorizontalLines.slice(0, 16).map((item) => ({
+          colour: String(item?.colour || "other").toLowerCase(),
+          description: safeUserText(item?.description || ""),
+          approximatePrice: nullablePositiveNumber(item?.approximatePrice),
+          platformLabel: String(item?.platformLabel || "").trim(),
+        }))
+      : [],
     activeEntryAreas: Array.isArray(visualReview.activeEntryAreas)
       ? visualReview.activeEntryAreas.slice(0, 5)
       : [],
@@ -5883,7 +5899,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "7.3.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "7.4.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6753,6 +6769,106 @@ function periodLevelBreakEvidence({
 }
 
 
+function extractNumericPriceFromLabel(value = "") {
+  const text = String(value || "").replace(/,/g, "");
+  const matches = text.match(/\b\d+(?:\.\d+)?\b/g) || [];
+
+  const candidates = matches
+    .map((match) => Number(match))
+    .filter((number) => Number.isFinite(number) && number > 0);
+
+  return candidates.length ? candidates[candidates.length - 1] : null;
+}
+
+function collectVisibleChartPriceEvidence({
+  visualReview = {},
+  frameworkType = "",
+  symbol = "",
+}) {
+  const evidence = [];
+
+  const addEvidence = ({
+    price,
+    type = "",
+    source = "",
+    description = "",
+    confidence = 1,
+  }) => {
+    const numericPrice = asPositiveNumber(price);
+    if (numericPrice === null) return;
+
+    evidence.push({
+      price: numericPrice,
+      type: String(type || "").toLowerCase(),
+      source,
+      description: safeUserText(description || ""),
+      confidence,
+    });
+  };
+
+  [
+    ...(Array.isArray(visualReview?.activeEntryAreas)
+      ? visualReview.activeEntryAreas
+      : []),
+    ...(visualReview?.preferredEntryArea
+      ? [visualReview.preferredEntryArea]
+      : []),
+  ].forEach((area) => {
+    const normalizedType = String(
+      normalizedAreaType(
+        area?.areaType,
+        /support|demand/i.test(frameworkType) ? "bullish" : "bearish"
+      ) || ""
+    ).toLowerCase();
+
+    const zone = normalizeZone(area, symbol);
+    const center = areaCenter(zone);
+
+    addEvidence({
+      price: center,
+      type: normalizedType,
+      source: "visual_area",
+      description: area?.zoneText || area?.sourceReason || "",
+      confidence: 4,
+    });
+  });
+
+  (Array.isArray(visualReview?.visibleMarkedLevels)
+    ? visualReview.visibleMarkedLevels
+    : []
+  ).forEach((item) => {
+    addEvidence({
+      price: item?.approximatePrice,
+      type: String(item?.type || "").toLowerCase(),
+      source: "visible_marked_level",
+      description: item?.description || "",
+      confidence: 5,
+    });
+  });
+
+  (Array.isArray(visualReview?.visibleHorizontalLines)
+    ? visualReview.visibleHorizontalLines
+    : []
+  ).forEach((item) => {
+    addEvidence({
+      price:
+        nullablePositiveNumber(item?.approximatePrice) ||
+        extractNumericPriceFromLabel(item?.platformLabel),
+      type: "line",
+      source: item?.platformLabel
+        ? "visible_platform_label"
+        : "visible_horizontal_line",
+      description:
+        item?.platformLabel ||
+        item?.description ||
+        `visible ${item?.colour || ""} line`,
+      confidence: item?.platformLabel ? 6 : 3,
+    });
+  });
+
+  return evidence;
+}
+
 function reconcileFrameworkLevelWithVisibleChart({
   frameworkPrice,
   frameworkType,
@@ -6769,78 +6885,87 @@ function reconcileFrameworkLevelWithVisibleChart({
     };
   }
 
-  const candidates = [
-    ...(Array.isArray(visualReview?.activeEntryAreas)
-      ? visualReview.activeEntryAreas
-      : []),
-    ...(visualReview?.preferredEntryArea
-      ? [visualReview.preferredEntryArea]
-      : []),
-  ];
-
-  const allowedVisualTypes =
-    frameworkType === "converted resistance"
-      ? new Set(["converted resistance", "resistance", "support"])
-      : frameworkType === "converted support"
-      ? new Set(["converted support", "support", "resistance"])
-      : frameworkType === "supply"
-      ? new Set(["supply", "resistance"])
-      : frameworkType === "demand"
-      ? new Set(["demand", "support"])
-      : frameworkType === "resistance"
-      ? new Set(["resistance", "supply"])
-      : frameworkType === "support"
-      ? new Set(["support", "demand"])
-      : new Set();
-
   const tolerance = Math.max(
-    getApprovedPriceTolerance(symbol) * 5,
-    Number(atr || 0) * 0.18
+    getApprovedPriceTolerance(symbol) * 8,
+    Number(atr || 0) * 0.22
   );
 
-  const matching = candidates
-    .map((area) => {
-      const type = String(
-        normalizedAreaType(area?.areaType, frameworkType.includes("support") ? "bullish" : "bearish")
-      ).toLowerCase();
+  const typeCompatible = (candidateType) => {
+    const type = String(candidateType || "").toLowerCase();
 
-      const zone = normalizeZone(area, symbol);
-      const center = areaCenter(zone);
+    if (type === "line" || type === "zone" || type === "label" || !type) {
+      return true;
+    }
 
-      return {
-        type,
-        center,
-        area,
-      };
-    })
+    if (frameworkType === "converted resistance") {
+      return ["converted resistance", "resistance", "support"].includes(type);
+    }
+
+    if (frameworkType === "converted support") {
+      return ["converted support", "support", "resistance"].includes(type);
+    }
+
+    if (frameworkType === "supply") {
+      return ["supply", "resistance"].includes(type);
+    }
+
+    if (frameworkType === "demand") {
+      return ["demand", "support"].includes(type);
+    }
+
+    if (frameworkType === "resistance") {
+      return ["resistance", "supply"].includes(type);
+    }
+
+    if (frameworkType === "support") {
+      return ["support", "demand"].includes(type);
+    }
+
+    return true;
+  };
+
+  const evidence = collectVisibleChartPriceEvidence({
+    visualReview,
+    frameworkType,
+    symbol,
+  })
     .filter(
       (candidate) =>
-        candidate.center !== null &&
-        allowedVisualTypes.has(candidate.type) &&
-        Math.abs(Number(candidate.center) - basePrice) <= tolerance
+        typeCompatible(candidate.type) &&
+        Math.abs(Number(candidate.price) - basePrice) <= tolerance
     )
-    .sort(
-      (a, b) =>
-        Math.abs(Number(a.center) - basePrice) -
-        Math.abs(Number(b.center) - basePrice)
-    );
+    .map((candidate) => ({
+      ...candidate,
+      distance: Math.abs(Number(candidate.price) - basePrice),
+    }))
+    .sort((a, b) => {
+      // Prefer explicit platform labels and visible marked levels first.
+      if (b.confidence !== a.confidence) {
+        return b.confidence - a.confidence;
+      }
+      return a.distance - b.distance;
+    });
 
-  if (!matching.length) {
+  if (!evidence.length) {
     return {
       price: basePrice,
       source: "framework_data",
       reconciled: false,
       difference: 0,
+      evidence: null,
     };
   }
 
-  const selected = matching[0];
+  const selected = evidence[0];
+
   return {
-    price: Number(selected.center),
-    source: "visible_chart_reconciled",
+    price: Number(selected.price),
+    source: selected.source,
     reconciled: true,
     frameworkPrice: basePrice,
-    difference: Math.abs(Number(selected.center) - basePrice),
+    difference: selected.distance,
+    evidence: selected.description || null,
+    confidence: selected.confidence,
   };
 }
 
@@ -6915,6 +7040,8 @@ function buildAuthoritativeFrameworkCandidates({
               source: "authoritative_framework_conversion",
               priceSource: reconciled.source,
               chartReconciled: reconciled.reconciled === true,
+              reconciliationEvidence: reconciled.evidence || null,
+              reconciliationConfidence: Number(reconciled.confidence || 0),
               period: periodLabel,
               date: period?.date || period?.key || null,
               conversionConfirmed: true,
@@ -6963,6 +7090,8 @@ function buildAuthoritativeFrameworkCandidates({
           source: "authoritative_framework_high",
           priceSource: reconciled.source,
           chartReconciled: reconciled.reconciled === true,
+          reconciliationEvidence: reconciled.evidence || null,
+          reconciliationConfidence: Number(reconciled.confidence || 0),
           period: periodLabel,
           date: period?.date || period?.key || null,
           conversionConfirmed: false,
@@ -7010,6 +7139,8 @@ function buildAuthoritativeFrameworkCandidates({
               source: "authoritative_framework_conversion",
               priceSource: reconciled.source,
               chartReconciled: reconciled.reconciled === true,
+              reconciliationEvidence: reconciled.evidence || null,
+              reconciliationConfidence: Number(reconciled.confidence || 0),
               period: periodLabel,
               date: period?.date || period?.key || null,
               conversionConfirmed: true,
@@ -7058,6 +7189,8 @@ function buildAuthoritativeFrameworkCandidates({
           source: "authoritative_framework_low",
           priceSource: reconciled.source,
           chartReconciled: reconciled.reconciled === true,
+          reconciliationEvidence: reconciled.evidence || null,
+          reconciliationConfidence: Number(reconciled.confidence || 0),
           period: periodLabel,
           date: period?.date || period?.key || null,
           conversionConfirmed: false,
@@ -7403,6 +7536,12 @@ function rankRawEntryAreas({
         safeUserText(rawZone?.members?.[0]?.priceSource || "framework_data"),
       chartReconciled:
         rawZone?.members?.[0]?.chartReconciled === true,
+      reconciliationEvidence:
+        safeUserText(
+          rawZone?.members?.[0]?.reconciliationEvidence || ""
+        ),
+      reconciliationConfidence:
+        Number(rawZone?.members?.[0]?.reconciliationConfidence || 0),
       authoritativeFrameworkLevel: true,
       conversionSourceRule:
         ["converted resistance", "converted support"].includes(areaType)
