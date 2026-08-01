@@ -1784,7 +1784,7 @@ function sanitizeVisualReviewMarketPrices({
       []
     ).map(safeText),
     visibleMarkedLevels: Array.isArray(visualReview.visibleMarkedLevels)
-      ? visualReview.visibleMarkedLevels.slice(0, 12).map((item) => ({
+      ? visualReview.visibleMarkedLevels.slice(0, 40).map((item) => ({
           type: String(item?.type || "").toLowerCase(),
           description: safeUserText(item?.description || ""),
           displayedPrice:
@@ -1811,7 +1811,7 @@ function sanitizeVisualReviewMarketPrices({
         }))
       : [],
     visibleHorizontalLines: Array.isArray(visualReview.visibleHorizontalLines)
-      ? visualReview.visibleHorizontalLines.slice(0, 16).map((item) => ({
+      ? visualReview.visibleHorizontalLines.slice(0, 24).map((item) => ({
           colour: String(item?.colour || "other").toLowerCase(),
           description: safeUserText(item?.description || ""),
           displayedPrice:
@@ -3308,6 +3308,8 @@ For each framework target:
 5. Never use a price from another period merely because it is close.
 6. If the period or price cannot be matched confidently, return null for displayedPrice and approximatePrice.
 7. displayedPrice must be copied from a visible chart/platform price label. Never invent digits.
+7a. Carefully zoom your visual attention to the price axis and any small printed price tags. Small digits are important in this task.
+7b. If a horizontal line extends from the source period to the right-side price axis, follow that same line to its printed price tag before answering.
 8. period must stay exactly the same as the target period supplied by the backend.
 9. side must stay exactly "high" or "low" as supplied.
 
@@ -3331,7 +3333,7 @@ Return one item for every supplied target.`;
 
   try {
     const response = await openai.responses.create({
-      model: "gpt-4.1-mini",
+      model: "gpt-5.6",
       input: [
         {
           role: "system",
@@ -3348,11 +3350,12 @@ Return one item for every supplied target.`;
             {
               type: "input_image",
               image_url: `data:${mimeType};base64,${imageBase64}`,
+              detail: "original",
             },
           ],
         },
       ],
-      max_output_tokens: 2600,
+      max_output_tokens: 3400,
       temperature: 0,
     });
 
@@ -3859,10 +3862,10 @@ Return exactly this JSON shape:
       shortTermDirection: parsed.shortTermDirection || null,
       chartMarkingStatus: parsed.chartMarkingStatus || null,
       visibleMarkedLevels: Array.isArray(parsed.visibleMarkedLevels)
-        ? parsed.visibleMarkedLevels.slice(0, 12)
+        ? parsed.visibleMarkedLevels.slice(0, 40)
         : [],
       visibleHorizontalLines: Array.isArray(parsed.visibleHorizontalLines)
-        ? parsed.visibleHorizontalLines.slice(0, 16)
+        ? parsed.visibleHorizontalLines.slice(0, 24)
         : [],
       preferredEntryArea: normalizedPreferredEntryArea,
       visualQualityWarning,
@@ -3881,7 +3884,7 @@ Return exactly this JSON shape:
         ? "unmarked"
         : "unclear",
       visibleMarkedLevels: Array.isArray(parsed.visibleMarkedLevels)
-        ? parsed.visibleMarkedLevels.slice(0, 12).map((item) => ({
+        ? parsed.visibleMarkedLevels.slice(0, 40).map((item) => ({
             type: String(item?.type || "").toLowerCase(),
             description: safeUserText(item?.description || ""),
             displayedPrice:
@@ -3893,7 +3896,7 @@ Return exactly this JSON shape:
           }))
         : [],
       visibleHorizontalLines: Array.isArray(parsed.visibleHorizontalLines)
-        ? parsed.visibleHorizontalLines.slice(0, 16).map((item) => ({
+        ? parsed.visibleHorizontalLines.slice(0, 24).map((item) => ({
             colour: String(item?.colour || "other").toLowerCase(),
             description: safeUserText(item?.description || ""),
             displayedPrice:
@@ -6303,7 +6306,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "7.7.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "7.8.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -7215,6 +7218,54 @@ function collectVisibleChartPriceEvidence({
     });
   };
 
+  // Highest-priority evidence: use the dedicated framework-price map
+  // directly. Do not depend on visibleMarkedLevels surviving later truncation.
+  (Array.isArray(visualReview?.frameworkPriceMapDiagnostics?.matches)
+    ? visualReview.frameworkPriceMapDiagnostics.matches
+    : []
+  ).forEach((match) => {
+    const exactPrice = nullablePositiveNumber(match?.displayedPrice);
+    const approximatePrice =
+      exactPrice === null
+        ? nullablePositiveNumber(match?.approximatePrice)
+        : null;
+
+    if (exactPrice !== null) {
+      addEvidence({
+        price: exactPrice,
+        type: "label",
+        source: "dedicated_framework_price_map_exact",
+        description:
+          match?.platformLabel ||
+          match?.evidence ||
+          `${match?.period || ""} ${match?.side || ""}`,
+        periodHint: match?.period || "",
+        sideHint: match?.side || "",
+        confidence: 40,
+      });
+      return;
+    }
+
+    if (approximatePrice !== null) {
+      addEvidence({
+        price: approximatePrice,
+        type: "label",
+        source: "dedicated_framework_price_map_estimate",
+        description:
+          match?.evidence ||
+          `${match?.period || ""} ${match?.side || ""}`,
+        periodHint: match?.period || "",
+        sideHint: match?.side || "",
+        confidence:
+          String(match?.confidence || "").toLowerCase() === "high"
+            ? 24
+            : String(match?.confidence || "").toLowerCase() === "medium"
+            ? 18
+            : 12,
+      });
+    }
+  });
+
   [
     ...(Array.isArray(visualReview?.activeEntryAreas)
       ? visualReview.activeEntryAreas
@@ -7523,6 +7574,14 @@ function reconcileFrameworkLevelWithVisibleChart({
     });
 
   if (!evidence.length) {
+    console.log("Framework level reconciliation fallback:", {
+      frameworkPeriod,
+      frameworkSide,
+      frameworkType,
+      frameworkPrice: basePrice,
+      reason: "No same-period/same-side chart price evidence survived validation.",
+    });
+
     return {
       price: basePrice,
       source: "framework_data",
@@ -7533,6 +7592,18 @@ function reconcileFrameworkLevelWithVisibleChart({
   }
 
   const selected = evidence[0];
+
+  console.log("Framework level reconciled:", {
+    frameworkPeriod,
+    frameworkSide,
+    frameworkType,
+    frameworkPrice: basePrice,
+    chartPrice: Number(selected.price),
+    source: selected.source,
+    periodHint: selected.periodHint || null,
+    sideHint: selected.sideHint || null,
+    confidence: selected.confidence,
+  });
 
   return {
     price: Number(selected.price),
