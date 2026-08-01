@@ -1784,7 +1784,7 @@ function sanitizeVisualReviewMarketPrices({
       []
     ).map(safeText),
     visibleMarkedLevels: Array.isArray(visualReview.visibleMarkedLevels)
-      ? visualReview.visibleMarkedLevels.slice(0, 40).map((item) => ({
+      ? visualReview.visibleMarkedLevels.slice(0, 12).map((item) => ({
           type: String(item?.type || "").toLowerCase(),
           description: safeUserText(item?.description || ""),
           displayedPrice:
@@ -1811,7 +1811,7 @@ function sanitizeVisualReviewMarketPrices({
         }))
       : [],
     visibleHorizontalLines: Array.isArray(visualReview.visibleHorizontalLines)
-      ? visualReview.visibleHorizontalLines.slice(0, 24).map((item) => ({
+      ? visualReview.visibleHorizontalLines.slice(0, 16).map((item) => ({
           colour: String(item?.colour || "other").toLowerCase(),
           description: safeUserText(item?.description || ""),
           displayedPrice:
@@ -3212,7 +3212,7 @@ EVIDENCE AND FEEDBACK
 `;
 
 
-function buildFrameworkPriceExtractionTargets(
+function buildFocusedFrameworkPriceTargets(
   marketReference = {},
   timeframe = ""
 ) {
@@ -3242,109 +3242,228 @@ function buildFrameworkPriceExtractionTargets(
     asPositiveNumber(historicalPhase?.latestClose) ||
     extractLastMarketPrice(marketReference);
 
-  if (direction && currentPrice !== null) {
-    const ranked = rankRawEntryAreas({
-      visualReview: {},
-      marketReference,
-      historicalPhase,
-      direction,
-      currentPrice,
-      symbol,
-      timeframe,
+  if (!direction || currentPrice === null) return [];
+
+  const ranked = rankRawEntryAreas({
+    visualReview: {},
+    marketReference,
+    historicalPhase,
+    direction,
+    currentPrice,
+    symbol,
+    timeframe,
+  });
+
+  const areas = Array.isArray(ranked?.areas)
+    ? ranked.areas.slice(0, 3)
+    : [];
+
+  return areas
+    .map((area) => {
+      const period = String(area?.frameworkPeriod || "").trim();
+      const frameworkPrice =
+        asPositiveNumber(area?.frameworkPrice) ||
+        asPositiveNumber(area?.authoritativeCenter);
+
+      if (!period || frameworkPrice === null) return null;
+
+      const areaType = String(area?.areaType || "").toLowerCase();
+
+      const side =
+        ["converted resistance", "support", "demand"].includes(areaType)
+          ? "low"
+          : ["converted support", "resistance", "supply"].includes(areaType)
+          ? "high"
+          : "";
+
+      if (!side) return null;
+
+      return {
+        period,
+        side,
+        frameworkPrice,
+        areaType,
+        executionOrder: Number(area?.executionOrder || 0),
+      };
+    })
+    .filter(Boolean);
+}
+
+async function readSingleFrameworkPriceFromChart({
+  imageBase64,
+  mimeType,
+  target,
+  timeframe,
+  structureLabel,
+  marketReference,
+}) {
+  const prompt = `
+You have ONE narrow visual task.
+
+Read the chart-visible price for one already-selected CSA framework level.
+
+TIMEFRAME: ${timeframe}
+FRAMEWORK RULE: ${structureLabel}
+TARGET PERIOD: ${target.period}
+TARGET SIDE: ${target.side}
+TARGET ROLE: ${target.areaType}
+MARKET-DATA REFERENCE PRICE: ${target.frameworkPrice}
+
+Instructions:
+1. Find the exact TARGET PERIOD on the chart time axis.
+2. Find only the TARGET SIDE for that same period.
+3. If a horizontal line/marked level belonging to that target is visible, follow that exact line to the right-side price axis.
+4. Carefully read the small printed price label for that line when one is present.
+5. If there is no marked line but the matching period high/low is clear, estimate it from the visible price scale only when confident.
+6. Never use a level from another period.
+7. Never swap high and low.
+8. Never invent digits.
+9. If the exact printed price cannot be read, displayedPrice must be null.
+10. If the price can be estimated with useful confidence, put it in approximatePrice; otherwise null.
+
+Return JSON only:
+{
+  "period": "${target.period}",
+  "side": "${target.side}",
+  "displayedPrice": null,
+  "approximatePrice": null,
+  "platformLabel": null,
+  "evidence": null,
+  "confidence": "high | medium | low"
+}`;
+
+  const runModel = async (model, detail = "high") => {
+    const response = await openai.responses.create({
+      model,
+      input: [
+        {
+          role: "system",
+          content: prompt,
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text:
+                `Read only the ${target.period} ${target.side} shown on this chart. Return JSON only.`,
+            },
+            {
+              type: "input_image",
+              image_url: `data:${mimeType};base64,${imageBase64}`,
+              detail,
+            },
+          ],
+        },
+      ],
+      max_output_tokens: 500,
+      temperature: 0,
     });
 
-    const focusedAreas = Array.isArray(ranked?.areas)
-      ? ranked.areas.slice(0, 3)
-      : [];
+    return extractJsonObject(response.output_text || "");
+  };
 
-    const focusedTargets = focusedAreas
-      .map((area) => {
-        const period = String(area?.frameworkPeriod || "").trim();
-        const frameworkPrice =
-          asPositiveNumber(area?.frameworkPrice) ||
-          asPositiveNumber(area?.authoritativeCenter);
+  let parsed = null;
+  let modelUsed = "gpt-4.1";
 
-        if (!period || frameworkPrice === null) return null;
+  try {
+    parsed = await runModel("gpt-4.1", "high");
+  } catch (error) {
+    console.warn(
+      "Primary dedicated price reader failed; trying fallback:",
+      error?.message || error
+    );
+  }
 
-        const areaType = String(area?.areaType || "").toLowerCase();
-
-        const side =
-          ["converted resistance", "support", "demand"].includes(areaType)
-            ? "low"
-            : ["converted support", "resistance", "supply"].includes(areaType)
-            ? "high"
-            : "";
-
-        if (!side) return null;
-
-        return {
-          period,
-          side,
-          frameworkPrice,
-          areaType,
-          executionOrder: Number(area?.executionOrder || 0),
-        };
-      })
-      .filter(Boolean);
-
-    if (focusedTargets.length) {
-      console.log("Focused framework price extraction targets:", {
-        timeframe,
-        direction,
-        currentPrice,
-        targets: focusedTargets,
-      });
-
-      return focusedTargets;
+  if (!parsed) {
+    modelUsed = "gpt-4.1-mini";
+    try {
+      parsed = await runModel("gpt-4.1-mini", "high");
+    } catch (error) {
+      console.warn(
+        "Fallback dedicated price reader failed:",
+        error?.message || error
+      );
+      return {
+        period: target.period,
+        side: target.side,
+        frameworkPrice: target.frameworkPrice,
+        areaType: target.areaType,
+        executionOrder: target.executionOrder,
+        displayedPrice: null,
+        approximatePrice: null,
+        platformLabel: "",
+        evidence: "",
+        confidence: "low",
+        withinTolerance: false,
+        modelUsed,
+        error: safeUserText(error?.message || "Price reader failed."),
+      };
     }
   }
 
-  // Safe fallback only when the deterministic area engine could not produce
-  // focused areas. This keeps the feature usable on incomplete charts.
-  const levels = Array.isArray(marketReference?.dailyLevels)
-    ? [...marketReference.dailyLevels]
-        .sort((a, b) =>
-          String(a?.key || a?.date || "").localeCompare(
-            String(b?.key || b?.date || "")
+  const displayedPrice =
+    nullablePositiveNumber(parsed?.displayedPrice) ||
+    extractNumericPriceFromLabel(parsed?.platformLabel);
+
+  const approximatePrice =
+    displayedPrice === null
+      ? nullablePositiveNumber(parsed?.approximatePrice)
+      : null;
+
+  const confidence = ["high", "medium", "low"].includes(
+    String(parsed?.confidence || "").toLowerCase()
+  )
+    ? String(parsed.confidence).toLowerCase()
+    : "low";
+
+  const candidatePrice = displayedPrice || approximatePrice;
+
+  const atr = averageTrueRange(
+    Array.isArray(marketReference?.timeframeCandles)
+      ? marketReference.timeframeCandles
+      : [],
+    getStructureEngineConfig(timeframe).atrPeriod
+  );
+
+  const tolerance = Math.max(
+    getApprovedPriceTolerance(marketReference?.symbol || "") * 12,
+    Number(atr || 0) * 0.35
+  );
+
+  const withinTolerance =
+    candidatePrice !== null &&
+    Math.abs(
+      Number(candidatePrice) - Number(target.frameworkPrice)
+    ) <= tolerance;
+
+  return {
+    period: target.period,
+    side: target.side,
+    frameworkPrice: target.frameworkPrice,
+    areaType: target.areaType,
+    executionOrder: target.executionOrder,
+    displayedPrice:
+      withinTolerance && displayedPrice !== null
+        ? displayedPrice
+        : null,
+    approximatePrice:
+      withinTolerance && displayedPrice === null
+        ? approximatePrice
+        : null,
+    platformLabel: String(parsed?.platformLabel || "").trim(),
+    evidence: safeUserText(parsed?.evidence || ""),
+    confidence,
+    withinTolerance,
+    modelUsed,
+    difference:
+      candidatePrice !== null
+        ? Math.abs(
+            Number(candidatePrice) -
+            Number(target.frameworkPrice)
           )
-        )
-        .slice(0, 20)
-    : [];
-
-  return levels.flatMap((level, index) => {
-    const period =
-      level?.periodLabel ||
-      level?.day ||
-      level?.key ||
-      level?.date ||
-      `Period ${index + 1}`;
-
-    const high = asPositiveNumber(level?.high);
-    const low = asPositiveNumber(level?.low);
-    const result = [];
-
-    if (high !== null) {
-      result.push({
-        period,
-        side: "high",
-        frameworkPrice: high,
-        areaType: "unclassified",
-        executionOrder: 0,
-      });
-    }
-
-    if (low !== null) {
-      result.push({
-        period,
-        side: "low",
-        frameworkPrice: low,
-        areaType: "unclassified",
-        executionOrder: 0,
-      });
-    }
-
-    return result;
-  });
+        : null,
+  };
 }
 
 async function extractVisibleFrameworkPriceMap({
@@ -3361,7 +3480,7 @@ async function extractVisibleFrameworkPriceMap({
     };
   }
 
-  const targets = buildFrameworkPriceExtractionTargets(
+  const targets = buildFocusedFrameworkPriceTargets(
     marketReference,
     timeframe
   );
@@ -3370,7 +3489,8 @@ async function extractVisibleFrameworkPriceMap({
     return {
       ok: false,
       matches: [],
-      reason: "No framework period levels were available.",
+      reason:
+        "No focused framework entry areas were available for price reconciliation.",
     };
   }
 
@@ -3379,208 +3499,58 @@ async function extractVisibleFrameworkPriceMap({
     getSupportedCsaTimeframeProfile(timeframe)?.structureLabel ||
     "CSA framework periods";
 
-  const prompt = `
-You are doing ONE narrow task: read exact visible prices from a trading-chart screenshot and associate them with already-known CSA framework periods.
+  console.log("Focused framework price targets:", {
+    timeframe,
+    targets,
+  });
 
-Do not analyse direction, entries, risk, or strategy quality.
-Do not choose new support/resistance levels.
-Do not replace one framework period with another.
+  const matches = [];
 
-TIMEFRAME: ${timeframe}
-FRAMEWORK SOURCE: ${structureLabel}
-
-The backend has already selected the authoritative framework areas that can actually be used in the final feedback:
-${JSON.stringify(targets, null, 2)}
-
-These targets are already filtered by the CSA timeframe hierarchy and deterministic market structure.
-Concentrate on these exact periods and sides only. Do not inspect or return unrelated highs/lows.
-
-For each supplied framework target:
-1. Locate that SAME period on the chart time axis.
-2. Locate the matching candle high/low or clearly marked horizontal level belonging to that SAME period.
-3. If the chart visibly prints an exact price for that matching level, copy the exact printed price into displayedPrice.
-4. If no exact printed price is readable but the matching price can be estimated confidently from the visible price axis, put that in approximatePrice.
-5. Never use a price from another period merely because it is close.
-6. If the period or price cannot be matched confidently, return null for displayedPrice and approximatePrice.
-7. displayedPrice must be copied from a visible chart/platform price label. Never invent digits.
-7a. Carefully zoom your visual attention to the price axis and any small printed price tags. Small digits are important in this task.
-7b. If a horizontal line extends from the source period to the right-side price axis, follow that same line to its printed price tag before answering.
-8. period must stay exactly the same as the target period supplied by the backend.
-9. side must stay exactly "high" or "low" as supplied.
-
-Return JSON only:
-{
-  "matches": [
-    {
-      "period": "exact period text from target",
-      "side": "high | low",
-      "frameworkPrice": 0,
-      "displayedPrice": null,
-      "approximatePrice": null,
-      "platformLabel": null,
-      "evidence": "short visible evidence or null",
-      "confidence": "high | medium | low"
-    }
-  ]
-}
-
-Return one item for every supplied target.`;
-
-  try {
-    const response = await openai.responses.create({
-      model: "gpt-5.6",
-      reasoning: { effort: "none" },
-      input: [
-        {
-          role: "system",
-          content: prompt,
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text:
-                "Read the chart price labels and map them only to the exact framework periods supplied. Return JSON only.",
-            },
-            {
-              type: "input_image",
-              image_url: `data:${mimeType};base64,${imageBase64}`,
-              detail: "original",
-            },
-          ],
-        },
-      ],
-      max_output_tokens: 3400,
-      temperature: 0,
-    });
-
-    const parsed = extractJsonObject(response.output_text || "");
-    const rawMatches = Array.isArray(parsed?.matches)
-      ? parsed.matches
-      : [];
-
-    const targetMap = new Map(
-      targets.map((target) => [
-        `${normalizeFrameworkPeriodIdentity(target.period)}|${target.side}`,
-        target,
-      ])
-    );
-
-    const matches = rawMatches
-      .map((item) => {
-        const period = String(item?.period || "").trim();
-        const side = String(item?.side || "").toLowerCase();
-        const key = `${normalizeFrameworkPeriodIdentity(period)}|${side}`;
-        const target = targetMap.get(key);
-
-        if (!target || !["high", "low"].includes(side)) return null;
-
-        const displayedPrice =
-          nullablePositiveNumber(item?.displayedPrice) ||
-          extractNumericPriceFromLabel(item?.platformLabel);
-
-        const approximatePrice =
-          displayedPrice === null
-            ? nullablePositiveNumber(item?.approximatePrice)
-            : null;
-
-        const confidence = ["high", "medium", "low"].includes(
-          String(item?.confidence || "").toLowerCase()
-        )
-          ? String(item.confidence).toLowerCase()
-          : "low";
-
-        const price = displayedPrice || approximatePrice;
-
-        const atr = averageTrueRange(
-          Array.isArray(marketReference?.timeframeCandles)
-            ? marketReference.timeframeCandles
-            : [],
-          getStructureEngineConfig(timeframe).atrPeriod
-        );
-
-        const maxDifference = Math.max(
-          getApprovedPriceTolerance(marketReference?.symbol || "") * 10,
-          Number(atr || 0) * 0.30
-        );
-
-        const withinTolerance =
-          price !== null &&
-          Math.abs(Number(price) - Number(target.frameworkPrice)) <=
-            maxDifference;
-
-        return {
-          period: target.period,
-          side: target.side,
-          frameworkPrice: target.frameworkPrice,
-          areaType: target.areaType || null,
-          executionOrder: Number(target.executionOrder || 0),
-          displayedPrice:
-            withinTolerance && displayedPrice !== null
-              ? displayedPrice
-              : null,
-          approximatePrice:
-            withinTolerance && displayedPrice === null
-              ? approximatePrice
-              : null,
-          platformLabel: String(item?.platformLabel || "").trim(),
-          evidence: safeUserText(item?.evidence || ""),
-          confidence,
-          withinTolerance,
-        };
-      })
-      .filter(Boolean);
-
-    console.log("Dedicated framework price extraction:", {
+  // Read each important level separately. This is intentionally sequential:
+  // accuracy is more important here than saving one model call.
+  for (const target of targets) {
+    const match = await readSingleFrameworkPriceFromChart({
+      imageBase64,
+      mimeType,
+      target,
       timeframe,
-      targets,
-      matches,
-      exactMatches: matches.filter(
-        (item) => item.displayedPrice !== null
-      ),
-      approximateMatches: matches.filter(
-        (item) =>
-          item.displayedPrice === null &&
-          item.approximatePrice !== null
-      ),
+      structureLabel,
+      marketReference,
     });
 
-    return {
-      ok: true,
-      matches,
-      reason: "",
-    };
-  } catch (error) {
-    console.warn(
-      "Dedicated framework price extraction failed:",
-      error?.message || error
-    );
-
-    return {
-      ok: false,
-      matches: [],
-      reason:
-        error?.message ||
-        "Dedicated framework price extraction failed.",
-    };
+    matches.push(match);
   }
+
+  console.log("Per-target framework price extraction:", {
+    timeframe,
+    matches,
+  });
+
+  return {
+    ok: true,
+    matches,
+    reason: "",
+  };
 }
 
 function mergeDedicatedFrameworkPriceMapIntoVisualReview({
   visualReview = {},
   priceMap = null,
 }) {
+  const diagnostics = {
+    extractionOk: Boolean(priceMap?.ok),
+    exactMatchCount: 0,
+    approximateMatchCount: 0,
+    matches: Array.isArray(priceMap?.matches)
+      ? priceMap.matches
+      : [],
+    reason: safeUserText(priceMap?.reason || ""),
+  };
+
   if (!priceMap?.ok || !Array.isArray(priceMap.matches)) {
     return {
       ...visualReview,
-      frameworkPriceMapDiagnostics: {
-        extractionOk: false,
-        exactMatchCount: 0,
-        approximateMatchCount: 0,
-        matches: [],
-        reason: safeUserText(priceMap?.reason || "Dedicated framework price extraction was unavailable."),
-      },
+      frameworkPriceMapDiagnostics: diagnostics,
     };
   }
 
@@ -3589,7 +3559,10 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
 
   priceMap.matches.forEach((match) => {
     const exact = nullablePositiveNumber(match?.displayedPrice);
-    const approximate = nullablePositiveNumber(match?.approximatePrice);
+    const approximate =
+      exact === null
+        ? nullablePositiveNumber(match?.approximatePrice)
+        : null;
 
     const description =
       `${match?.period || "framework period"} ${match?.side || "level"}` +
@@ -3606,8 +3579,10 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
           String(exact),
         frameworkPeriodHint: match?.period || null,
         frameworkSideHint: match?.side || null,
-        extractionSource: "dedicated_framework_price_reader",
-        extractionConfidence: match?.confidence || "high",
+        extractionSource:
+          "per_target_framework_price_reader",
+        extractionConfidence:
+          match?.confidence || "high",
       });
       return;
     }
@@ -3618,14 +3593,21 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
         description,
         displayedPrice: null,
         approximatePrice: approximate,
-        platformLabel: String(match?.platformLabel || "").trim(),
+        platformLabel:
+          String(match?.platformLabel || "").trim(),
         frameworkPeriodHint: match?.period || null,
         frameworkSideHint: match?.side || null,
-        extractionSource: "dedicated_framework_price_reader_estimate",
-        extractionConfidence: match?.confidence || "medium",
+        extractionSource:
+          "per_target_framework_price_reader_estimate",
+        extractionConfidence:
+          match?.confidence || "medium",
       });
     }
   });
+
+  diagnostics.exactMatchCount = exactLevels.length;
+  diagnostics.approximateMatchCount =
+    approximateLevels.length;
 
   return {
     ...visualReview,
@@ -3635,13 +3617,8 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
       ...(Array.isArray(visualReview?.visibleMarkedLevels)
         ? visualReview.visibleMarkedLevels
         : []),
-    ].slice(0, 30),
-    frameworkPriceMapDiagnostics: {
-      extractionOk: true,
-      exactMatchCount: exactLevels.length,
-      approximateMatchCount: approximateLevels.length,
-      matches: priceMap.matches,
-    },
+    ].slice(0, 40),
+    frameworkPriceMapDiagnostics: diagnostics,
   };
 }
 
@@ -3948,6 +3925,7 @@ Return exactly this JSON shape:
         ]},
       ],
       max_output_tokens: 3200,
+      temperature: 0,
     });
 
     const parsed = extractJsonObject(response.output_text || "");
@@ -3969,10 +3947,10 @@ Return exactly this JSON shape:
       shortTermDirection: parsed.shortTermDirection || null,
       chartMarkingStatus: parsed.chartMarkingStatus || null,
       visibleMarkedLevels: Array.isArray(parsed.visibleMarkedLevels)
-        ? parsed.visibleMarkedLevels.slice(0, 40)
+        ? parsed.visibleMarkedLevels.slice(0, 12)
         : [],
       visibleHorizontalLines: Array.isArray(parsed.visibleHorizontalLines)
-        ? parsed.visibleHorizontalLines.slice(0, 24)
+        ? parsed.visibleHorizontalLines.slice(0, 16)
         : [],
       preferredEntryArea: normalizedPreferredEntryArea,
       visualQualityWarning,
@@ -3991,7 +3969,7 @@ Return exactly this JSON shape:
         ? "unmarked"
         : "unclear",
       visibleMarkedLevels: Array.isArray(parsed.visibleMarkedLevels)
-        ? parsed.visibleMarkedLevels.slice(0, 40).map((item) => ({
+        ? parsed.visibleMarkedLevels.slice(0, 12).map((item) => ({
             type: String(item?.type || "").toLowerCase(),
             description: safeUserText(item?.description || ""),
             displayedPrice:
@@ -4003,7 +3981,7 @@ Return exactly this JSON shape:
           }))
         : [],
       visibleHorizontalLines: Array.isArray(parsed.visibleHorizontalLines)
-        ? parsed.visibleHorizontalLines.slice(0, 24).map((item) => ({
+        ? parsed.visibleHorizontalLines.slice(0, 16).map((item) => ({
             colour: String(item?.colour || "other").toLowerCase(),
             description: safeUserText(item?.description || ""),
             displayedPrice:
@@ -6413,7 +6391,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "7.9.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "8.0.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -7319,56 +7297,64 @@ function collectVisibleChartPriceEvidence({
       source,
       description: safeUserText(description || ""),
       periodHint: safeUserText(periodHint || ""),
-      periodIdentity: normalizeFrameworkPeriodIdentity(periodHint),
+      periodIdentity:
+        normalizeFrameworkPeriodIdentity(periodHint),
       sideHint: safeUserText(sideHint || ""),
       confidence,
     });
   };
 
-  // Highest-priority evidence: use the dedicated framework-price map
-  // directly. Do not depend on visibleMarkedLevels surviving later truncation.
-  (Array.isArray(visualReview?.frameworkPriceMapDiagnostics?.matches)
+  // Highest-priority evidence comes straight from the dedicated
+  // per-target reader. It cannot be lost by later array trimming.
+  (Array.isArray(
+    visualReview?.frameworkPriceMapDiagnostics?.matches
+  )
     ? visualReview.frameworkPriceMapDiagnostics.matches
     : []
   ).forEach((match) => {
-    const exactPrice = nullablePositiveNumber(match?.displayedPrice);
-    const approximatePrice =
-      exactPrice === null
+    const exact =
+      nullablePositiveNumber(match?.displayedPrice);
+    const approximate =
+      exact === null
         ? nullablePositiveNumber(match?.approximatePrice)
         : null;
 
-    if (exactPrice !== null) {
+    if (exact !== null) {
       addEvidence({
-        price: exactPrice,
+        price: exact,
         type: "label",
-        source: "dedicated_framework_price_map_exact",
+        source:
+          "per_target_framework_price_map_exact",
         description:
           match?.platformLabel ||
           match?.evidence ||
           `${match?.period || ""} ${match?.side || ""}`,
         periodHint: match?.period || "",
         sideHint: match?.side || "",
-        confidence: 40,
+        confidence: 50,
       });
       return;
     }
 
-    if (approximatePrice !== null) {
+    if (approximate !== null) {
       addEvidence({
-        price: approximatePrice,
+        price: approximate,
         type: "label",
-        source: "dedicated_framework_price_map_estimate",
+        source:
+          "per_target_framework_price_map_estimate",
         description:
           match?.evidence ||
           `${match?.period || ""} ${match?.side || ""}`,
         periodHint: match?.period || "",
         sideHint: match?.side || "",
         confidence:
-          String(match?.confidence || "").toLowerCase() === "high"
+          String(match?.confidence || "").toLowerCase() ===
+          "high"
+            ? 32
+            : String(match?.confidence || "").toLowerCase() ===
+              "medium"
             ? 24
-            : String(match?.confidence || "").toLowerCase() === "medium"
-            ? 18
-            : 12,
+            : 16,
       });
     }
   });
@@ -7428,8 +7414,9 @@ function collectVisibleChartPriceEvidence({
         "",
       sideHint: item?.frameworkSideHint || "",
       confidence:
-        item?.extractionSource === "dedicated_framework_price_reader"
-          ? 20
+        item?.extractionSource ===
+        "per_target_framework_price_reader"
+          ? 30
           : 10,
     });
 
@@ -7446,8 +7433,9 @@ function collectVisibleChartPriceEvidence({
           "",
         sideHint: item?.frameworkSideHint || "",
         confidence:
-          item?.extractionSource === "dedicated_framework_price_reader_estimate"
-            ? 8
+          item?.extractionSource ===
+          "per_target_framework_price_reader_estimate"
+            ? 18
             : 4,
       });
     }
@@ -7656,8 +7644,12 @@ function reconcileFrameworkLevelWithVisibleChart({
 
       if (!periodMatches) return false;
 
-      const candidateSide = String(candidate.sideHint || "").toLowerCase();
-      const expectedSide = String(frameworkSide || "").toLowerCase();
+      const candidateSide = String(
+        candidate.sideHint || ""
+      ).toLowerCase();
+      const expectedSide = String(
+        frameworkSide || ""
+      ).toLowerCase();
 
       if (
         candidateSide &&
@@ -7681,12 +7673,13 @@ function reconcileFrameworkLevelWithVisibleChart({
     });
 
   if (!evidence.length) {
-    console.log("Framework level reconciliation fallback:", {
+    console.log("Framework reconciliation fallback:", {
       frameworkPeriod,
       frameworkSide,
       frameworkType,
       frameworkPrice: basePrice,
-      reason: "No same-period/same-side chart price evidence survived validation.",
+      reason:
+        "No same-period/same-side chart price survived validation.",
     });
 
     return {
@@ -7700,7 +7693,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 
   const selected = evidence[0];
 
-  console.log("Framework level reconciled:", {
+  console.log("Framework reconciliation selected:", {
     frameworkPeriod,
     frameworkSide,
     frameworkType,
@@ -11891,10 +11884,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         timeframe,
       });
 
-    visualReview = mergeDedicatedFrameworkPriceMapIntoVisualReview({
-      visualReview,
-      priceMap: dedicatedFrameworkPriceMap,
-    });
+    visualReview =
+      mergeDedicatedFrameworkPriceMapIntoVisualReview({
+        visualReview,
+        priceMap: dedicatedFrameworkPriceMap,
+      });
 
     visualReview = resolveIntradayCsaChartMarking({
       visualReview,
