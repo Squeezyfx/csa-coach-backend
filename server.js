@@ -1432,6 +1432,13 @@ function parseISODateOnly(value) {
 function formatDateOnly(date) { return date.toISOString().slice(0, 10); }
 function addDays(date, days) { const next = new Date(date); next.setUTCDate(next.getUTCDate() + days); return next; }
 function safeNumber(value) { const n = Number(value); return Number.isFinite(n) ? n : null; }
+
+function nullablePositiveNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function candleDateOnly(datetimeValue = "") { return String(datetimeValue).slice(0, 10); }
 
 function formatPrice(value) {
@@ -6391,7 +6398,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "8.0.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "8.0.1";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
