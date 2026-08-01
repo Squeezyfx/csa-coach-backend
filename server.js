@@ -3212,7 +3212,95 @@ EVIDENCE AND FEEDBACK
 `;
 
 
-function buildFrameworkPriceExtractionTargets(marketReference = {}, timeframe = "") {
+function buildFrameworkPriceExtractionTargets(
+  marketReference = {},
+  timeframe = ""
+) {
+  const symbol =
+    marketReference?.symbol ||
+    marketReference?.normalizedSymbol ||
+    "";
+
+  const historicalPhase =
+    deriveHistoricalPhaseFromTimeframeCandles({
+      marketReference,
+      symbol,
+      timeframe,
+    }) ||
+    deriveHistoricalPhaseFromLevels({
+      marketReference,
+      symbol,
+    });
+
+  const direction =
+    historicalPhase &&
+    ["bullish", "bearish"].includes(historicalPhase.direction)
+      ? historicalPhase.direction
+      : null;
+
+  const currentPrice =
+    asPositiveNumber(historicalPhase?.latestClose) ||
+    extractLastMarketPrice(marketReference);
+
+  if (direction && currentPrice !== null) {
+    const ranked = rankRawEntryAreas({
+      visualReview: {},
+      marketReference,
+      historicalPhase,
+      direction,
+      currentPrice,
+      symbol,
+      timeframe,
+    });
+
+    const focusedAreas = Array.isArray(ranked?.areas)
+      ? ranked.areas.slice(0, 3)
+      : [];
+
+    const focusedTargets = focusedAreas
+      .map((area) => {
+        const period = String(area?.frameworkPeriod || "").trim();
+        const frameworkPrice =
+          asPositiveNumber(area?.frameworkPrice) ||
+          asPositiveNumber(area?.authoritativeCenter);
+
+        if (!period || frameworkPrice === null) return null;
+
+        const areaType = String(area?.areaType || "").toLowerCase();
+
+        const side =
+          ["converted resistance", "support", "demand"].includes(areaType)
+            ? "low"
+            : ["converted support", "resistance", "supply"].includes(areaType)
+            ? "high"
+            : "";
+
+        if (!side) return null;
+
+        return {
+          period,
+          side,
+          frameworkPrice,
+          areaType,
+          executionOrder: Number(area?.executionOrder || 0),
+        };
+      })
+      .filter(Boolean);
+
+    if (focusedTargets.length) {
+      console.log("Focused framework price extraction targets:", {
+        timeframe,
+        direction,
+        currentPrice,
+        targets: focusedTargets,
+      });
+
+      return focusedTargets;
+    }
+  }
+
+  // Safe fallback only when the deterministic area engine could not produce
+  // focused areas. This keeps the feature usable on incomplete charts.
   const levels = Array.isArray(marketReference?.dailyLevels)
     ? [...marketReference.dailyLevels]
         .sort((a, b) =>
@@ -3240,6 +3328,8 @@ function buildFrameworkPriceExtractionTargets(marketReference = {}, timeframe = 
         period,
         side: "high",
         frameworkPrice: high,
+        areaType: "unclassified",
+        executionOrder: 0,
       });
     }
 
@@ -3248,6 +3338,8 @@ function buildFrameworkPriceExtractionTargets(marketReference = {}, timeframe = 
         period,
         side: "low",
         frameworkPrice: low,
+        areaType: "unclassified",
+        executionOrder: 0,
       });
     }
 
@@ -3297,10 +3389,13 @@ Do not replace one framework period with another.
 TIMEFRAME: ${timeframe}
 FRAMEWORK SOURCE: ${structureLabel}
 
-The backend has already calculated these authoritative period highs/lows:
+The backend has already selected the authoritative framework areas that can actually be used in the final feedback:
 ${JSON.stringify(targets, null, 2)}
 
-For each framework target:
+These targets are already filtered by the CSA timeframe hierarchy and deterministic market structure.
+Concentrate on these exact periods and sides only. Do not inspect or return unrelated highs/lows.
+
+For each supplied framework target:
 1. Locate that SAME period on the chart time axis.
 2. Locate the matching candle high/low or clearly marked horizontal level belonging to that SAME period.
 3. If the chart visibly prints an exact price for that matching level, copy the exact printed price into displayedPrice.
@@ -3334,6 +3429,7 @@ Return one item for every supplied target.`;
   try {
     const response = await openai.responses.create({
       model: "gpt-5.6",
+      reasoning: { effort: "none" },
       input: [
         {
           role: "system",
@@ -3418,6 +3514,8 @@ Return one item for every supplied target.`;
           period: target.period,
           side: target.side,
           frameworkPrice: target.frameworkPrice,
+          areaType: target.areaType || null,
+          executionOrder: Number(target.executionOrder || 0),
           displayedPrice:
             withinTolerance && displayedPrice !== null
               ? displayedPrice
@@ -3436,7 +3534,8 @@ Return one item for every supplied target.`;
 
     console.log("Dedicated framework price extraction:", {
       timeframe,
-      targets: targets.length,
+      targets,
+      matches,
       exactMatches: matches.filter(
         (item) => item.displayedPrice !== null
       ),
@@ -3473,7 +3572,16 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
   priceMap = null,
 }) {
   if (!priceMap?.ok || !Array.isArray(priceMap.matches)) {
-    return visualReview;
+    return {
+      ...visualReview,
+      frameworkPriceMapDiagnostics: {
+        extractionOk: false,
+        exactMatchCount: 0,
+        approximateMatchCount: 0,
+        matches: [],
+        reason: safeUserText(priceMap?.reason || "Dedicated framework price extraction was unavailable."),
+      },
+    };
   }
 
   const exactLevels = [];
@@ -3840,7 +3948,6 @@ Return exactly this JSON shape:
         ]},
       ],
       max_output_tokens: 3200,
-      temperature: 0,
     });
 
     const parsed = extractJsonObject(response.output_text || "");
@@ -6306,7 +6413,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "7.8.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "7.9.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
