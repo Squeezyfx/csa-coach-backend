@@ -1254,6 +1254,8 @@ AREA RANKING RULES:
 - Validate genuine support/resistance or supply/demand structure before considering distance.
 - Fibonacci retracement is confluence only. It must never create an entry area by itself.
 - Before ranking, apply the full lifecycle of every authoritative timeframe level: active S/R stays usable, broken-and-held support/resistance converts, and broken-and-held supply/demand is invalidated.
+- After lifecycle validation, reject weak/intermediate framework levels that do not have enough structural evidence. Do not promote a nearer weak level merely because it is closer to price.
+- A confirmed converted support/resistance is a high-quality area. Supply/demand should show a meaningful departure or repeated reaction. Plain support/resistance should show repeated reaction, strong departure, or reaction plus Fibonacci confluence before it is used as an entry area.
 - Do not keep an old resistance/supply as a sell area after it has been cleanly broken and held above; do not keep an old support/demand as a buy area after it has been cleanly broken and held below.
 - Rank structural quality first, but after invalid levels are removed, sequence valid entry areas by the order price would reach them from the current price.
 - Preserve the true area type: converted resistance/support, resistance/support, or supply/demand.
@@ -6400,7 +6402,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "8.1.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "8.2.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -7056,6 +7058,61 @@ function dedupeValidatedAreas(areas = [], atr = 0) {
   return result;
 }
 
+
+function getValidatedEntryAreaQualityTier(area = {}) {
+  const areaType = String(area?.areaType || "").toLowerCase();
+  const reactions = Number(area?.reactionCount || 0);
+  const strongDepartures = Number(area?.strongDepartureCount || 0);
+  const fibonacciScore = Number(area?.fibonacciScore || 0);
+  const conversionConfirmed = area?.conversionConfirmed === true;
+
+  if (
+    ["converted resistance", "converted support"].includes(areaType) &&
+    conversionConfirmed
+  ) {
+    return 3;
+  }
+
+  if (["supply", "demand"].includes(areaType)) {
+    if (
+      strongDepartures >= 1 &&
+      (reactions >= 1 || fibonacciScore > 0)
+    ) {
+      return 3;
+    }
+
+    if (
+      strongDepartures >= 1 ||
+      reactions >= 2
+    ) {
+      return 2;
+    }
+
+    return 1;
+  }
+
+  if (["resistance", "support"].includes(areaType)) {
+    if (
+      reactions >= 2 &&
+      (strongDepartures >= 1 || fibonacciScore > 0)
+    ) {
+      return 3;
+    }
+
+    if (
+      reactions >= 2 ||
+      strongDepartures >= 1 ||
+      (reactions >= 1 && fibonacciScore > 0)
+    ) {
+      return 2;
+    }
+
+    return 1;
+  }
+
+  return 0;
+}
+
 function validateAndSequenceEntryAreas({
   areas = [],
   direction = "range",
@@ -7142,16 +7199,30 @@ function validateAndSequenceEntryAreas({
     return true;
   });
 
-  const deduped = dedupeValidatedAreas(valid, atr);
+  const deduped = dedupeValidatedAreas(valid, atr).map((area) => ({
+    ...area,
+    qualityTier: getValidatedEntryAreaQualityTier(area),
+  }));
 
-  deduped.sort((a, b) => {
+  // IMPORTANT:
+  // "Nearest" is not enough. A weak intermediate framework level must not
+  // outrank a genuinely validated converted S/R or supply/demand area.
+  //
+  // Tier 3 = confirmed conversion / strongest structural area
+  // Tier 2 = genuinely validated active S/R or supply/demand
+  // Tier 1 = weak/intermediate level; do not promote to an entry area
+  const qualityEligible = deduped.filter(
+    (area) => Number(area.qualityTier || 0) >= 2
+  );
+
+  qualityEligible.sort((a, b) => {
     if (direction === "bearish") {
       return Number(a.zoneLow) - Number(b.zoneLow);
     }
     return Number(b.zoneHigh) - Number(a.zoneHigh);
   });
 
-  const sequenced = deduped.slice(0, 3).map((area, index) => ({
+  const sequenced = qualityEligible.slice(0, 3).map((area, index) => ({
     ...area,
     executionOrder: index + 1,
     role: index === 0 ? "primary" : index === 1 ? "secondary" : "alternative",
@@ -7181,6 +7252,19 @@ function validateAndSequenceEntryAreas({
     validation: {
       passed: errors.length === 0,
       errors: [...new Set(errors)],
+      candidateCountBeforeQualityGate: deduped.length,
+      candidateCountAfterQualityGate: qualityEligible.length,
+      rejectedWeakCandidates: deduped
+        .filter((area) => Number(area.qualityTier || 0) < 2)
+        .map((area) => ({
+          areaType: area.areaType,
+          levelText: area.levelText,
+          frameworkPeriod: area.frameworkPeriod,
+          reactionCount: area.reactionCount,
+          strongDepartureCount: area.strongDepartureCount,
+          fibonacciScore: area.fibonacciScore,
+          qualityTier: area.qualityTier,
+        })),
     },
   };
 }
