@@ -1262,6 +1262,7 @@ AREA RANKING RULES:
 - A confirmed converted support/resistance is a high-quality area. Supply/demand should show a meaningful departure or repeated reaction. Plain support/resistance should show repeated reaction, strong departure, or reaction plus Fibonacci confluence before it is used as an entry area.
 - Do not keep an old resistance/supply as a sell area after it has been cleanly broken and held above; do not keep an old support/demand as a buy area after it has been cleanly broken and held below.
 - Framework support/resistance levels have memory and may flip repeatedly after confirmed break-and-hold events: resistance -> converted support -> converted resistance -> converted support, and support -> converted resistance -> converted support -> converted resistance. The final classification at the review cutoff must reflect the latest confirmed flip.
+- Classification and entry quality are separate. A level that has flipped back and forth repeatedly is structurally degraded/choppy: keep its latest classification for context, but reduce its entry-area quality. A clean single conversion remains high quality; repeated-flip converted S/R must not automatically outrank a cleaner supply/demand or S/R area with stronger structural evidence and Fibonacci confluence.
 - Supply/demand is different: once a supply/demand zone is cleanly broken and held through, treat that old zone as failed/invalidated rather than flipping it automatically.
 - Rank structural quality first, but after invalid levels are removed, sequence valid entry areas by the order price would reach them from the current price.
 - Preserve the true area type: converted resistance/support, resistance/support, or supply/demand.
@@ -6408,7 +6409,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "8.6.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "8.7.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -7065,18 +7066,70 @@ function dedupeValidatedAreas(areas = [], atr = 0) {
 }
 
 
+
+function getFrameworkLifecycleFlipCount(area = {}) {
+  if (Number.isFinite(Number(area?.lifecycleFlipCount))) {
+    return Math.max(0, Number(area.lifecycleFlipCount));
+  }
+
+  if (Array.isArray(area?.lifecycleEvents)) {
+    return area.lifecycleEvents.length;
+  }
+
+  return 0;
+}
+
+function isRepeatedFlipConvertedFrameworkArea(area = {}) {
+  return (
+    ["converted support", "converted resistance"].includes(
+      String(area?.areaType || "").toLowerCase()
+    ) &&
+    area?.conversionConfirmed === true &&
+    getFrameworkLifecycleFlipCount(area) >= 2
+  );
+}
+
+function isCleanConvertedFrameworkArea(area = {}) {
+  return (
+    ["converted support", "converted resistance"].includes(
+      String(area?.areaType || "").toLowerCase()
+    ) &&
+    area?.conversionConfirmed === true &&
+    getFrameworkLifecycleFlipCount(area) <= 1
+  );
+}
+
 function getValidatedEntryAreaQualityTier(area = {}) {
   const areaType = String(area?.areaType || "").toLowerCase();
   const reactions = Number(area?.reactionCount || 0);
   const strongDepartures = Number(area?.strongDepartureCount || 0);
   const fibonacciScore = Number(area?.fibonacciScore || 0);
   const conversionConfirmed = area?.conversionConfirmed === true;
+  const flipCount = getFrameworkLifecycleFlipCount(area);
 
   if (
     ["converted resistance", "converted support"].includes(areaType) &&
     conversionConfirmed
   ) {
-    return 3;
+    // One clean conversion is strong CSA evidence.
+    if (flipCount <= 1) {
+      return 3;
+    }
+
+    // Repeated flips mean the market has chopped through the same level.
+    // The level may still describe current structure, but it is no longer
+    // automatically a high-quality entry area.
+    if (
+      reactions >= 2 &&
+      (
+        strongDepartures >= 1 ||
+        fibonacciScore >= 2
+      )
+    ) {
+      return 2;
+    }
+
+    return 1;
   }
 
   if (["supply", "demand"].includes(areaType)) {
@@ -7127,12 +7180,7 @@ function isPlainFrameworkSupportResistance(area = {}) {
 }
 
 function isConfirmedConvertedFrameworkArea(area = {}) {
-  return (
-    ["converted support", "converted resistance"].includes(
-      String(area?.areaType || "").toLowerCase()
-    ) &&
-    area?.conversionConfirmed === true
-  );
+  return isCleanConvertedFrameworkArea(area);
 }
 
 function isMateriallyDominatedPlainFrameworkArea({
@@ -7342,6 +7390,8 @@ function validateAndSequenceEntryAreas({
         reactionCount: candidate.reactionCount,
         strongDepartureCount: candidate.strongDepartureCount,
         fibonacciScore: candidate.fibonacciScore,
+        lifecycleFlipCount: candidate.lifecycleFlipCount,
+        repeatedFlipPenalty: candidate.repeatedFlipPenalty,
         qualityTier: candidate.qualityTier,
         qualityScore: candidate.qualityScore,
       });
@@ -7395,6 +7445,8 @@ function validateAndSequenceEntryAreas({
           reactionCount: area.reactionCount,
           strongDepartureCount: area.strongDepartureCount,
           fibonacciScore: area.fibonacciScore,
+          lifecycleFlipCount: area.lifecycleFlipCount,
+          repeatedFlipPenalty: area.repeatedFlipPenalty,
           qualityTier: area.qualityTier,
         })),
     },
@@ -8859,6 +8911,12 @@ function rankRawEntryAreas({
     source: candidate.source,
     authoritativeType: candidate.type,
     conversionConfirmed: candidate.conversionConfirmed === true,
+    lifecycleEvents: Array.isArray(candidate.lifecycleEvents)
+      ? candidate.lifecycleEvents
+      : [],
+    lifecycleFlipCount: Array.isArray(candidate.lifecycleEvents)
+      ? candidate.lifecycleEvents.length
+      : 0,
     period: candidate.period || null,
     breakPeriod: candidate.breakPeriod || null,
     pivotConfirmationCount: Number(
@@ -8967,18 +9025,28 @@ function rankRawEntryAreas({
       else fibonacciScore = Math.max(fibonacciScore, 1);
     });
 
-    const structuralScore =
+    const lifecycleFlipCount = Number(
+      rawZone?.lifecycleFlipCount || 0
+    );
+
+    const repeatedFlipPenalty =
+      Math.max(0, lifecycleFlipCount - 1) * 12;
+
+    const structuralScore = Math.max(
+      1,
       20 +
-      reactionStats.reactions * 8 +
-      reactionStats.strongDepartures * 6 +
-      Number(rawZone?.pivotConfirmationCount || 0) * 3 +
-      (
-        ["converted resistance", "converted support"].includes(
-          String(rawZone?.authoritativeType || "")
-        )
-          ? 8
-          : 0
-      );
+        reactionStats.reactions * 8 +
+        reactionStats.strongDepartures * 6 +
+        Number(rawZone?.pivotConfirmationCount || 0) * 3 +
+        (
+          ["converted resistance", "converted support"].includes(
+            String(rawZone?.authoritativeType || "")
+          )
+            ? 8
+            : 0
+        ) -
+        repeatedFlipPenalty
+    );
 
     const areaType = classifyValidatedArea({
       direction,
@@ -9041,6 +9109,11 @@ function rankRawEntryAreas({
       reactionCount: reactionStats.reactions,
       strongDepartureCount: reactionStats.strongDepartures,
       fibonacciMatches: fibMatches,
+      lifecycleEvents: Array.isArray(rawZone?.lifecycleEvents)
+        ? rawZone.lifecycleEvents
+        : [],
+      lifecycleFlipCount,
+      repeatedFlipPenalty,
       validated: true,
       conversionConfirmed,
       brokenLevel:
