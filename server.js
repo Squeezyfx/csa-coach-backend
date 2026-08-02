@@ -1253,7 +1253,9 @@ AREA RANKING RULES:
 - Generic pivots and chart markings may only confirm or refine an authoritative framework level; they must never create or replace the primary area.
 - Validate genuine support/resistance or supply/demand structure before considering distance.
 - Fibonacci retracement is confluence only. It must never create an entry area by itself.
-- Rank structural quality first, but sequence valid entry areas by the order price would reach them from the current price.
+- Before ranking, apply the full lifecycle of every authoritative timeframe level: active S/R stays usable, broken-and-held support/resistance converts, and broken-and-held supply/demand is invalidated.
+- Do not keep an old resistance/supply as a sell area after it has been cleanly broken and held above; do not keep an old support/demand as a buy area after it has been cleanly broken and held below.
+- Rank structural quality first, but after invalid levels are removed, sequence valid entry areas by the order price would reach them from the current price.
 - Preserve the true area type: converted resistance/support, resistance/support, or supply/demand.
 - Use the timeframe-framework high or low to identify the correct structural period first.
 - If the uploaded chart clearly shows the matching broker level within a reasonable ATR-scaled tolerance, reconcile the final displayed price to that visible chart level.
@@ -6398,7 +6400,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "8.0.1";
+const CSA_FEEDBACK_ENGINE_VERSION = "8.1.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -7725,12 +7727,333 @@ function reconcileFrameworkLevelWithVisibleChart({
   };
 }
 
+
+function periodLevelBreakEvidenceFromCandles({
+  marketReference = {},
+  levels = [],
+  sourceIndex = -1,
+  levelPrice = null,
+  direction = "bearish",
+  tolerance = 0,
+  symbol = "",
+  timeframe = "H1",
+}) {
+  const candles = Array.isArray(marketReference?.timeframeCandles)
+    ? marketReference.timeframeCandles
+        .filter(
+          (candle) =>
+            candle?.datetime &&
+            Number.isFinite(Number(candle?.open)) &&
+            Number.isFinite(Number(candle?.high)) &&
+            Number.isFinite(Number(candle?.low)) &&
+            Number.isFinite(Number(candle?.close))
+        )
+        .sort((a, b) =>
+          String(a.datetime).localeCompare(String(b.datetime))
+        )
+    : [];
+
+  const profile =
+    marketReference?.profile ||
+    getSupportedCsaTimeframeProfile(timeframe);
+
+  if (
+    !candles.length ||
+    !Array.isArray(levels) ||
+    sourceIndex < 0 ||
+    sourceIndex >= levels.length ||
+    !Number.isFinite(Number(levelPrice))
+  ) {
+    return {
+      broken: false,
+      heldBeyond: false,
+      breakCandle: null,
+      confirmationPath: null,
+    };
+  }
+
+  const periodIndexByKey = new Map(
+    levels.map((period, index) => [
+      String(period?.key || period?.date || ""),
+      index,
+    ])
+  );
+
+  const laterCandles = candles.filter((candle) => {
+    const dateOnly = candleDateOnly(candle.datetime);
+    if (!dateOnly) return false;
+
+    const date = new Date(`${dateOnly}T00:00:00.000Z`);
+    if (Number.isNaN(date.getTime())) return false;
+
+    const period = getPeriodKeyAndLabel(date, profile);
+    const periodIndex = periodIndexByKey.get(
+      String(period?.key || "")
+    );
+
+    return Number.isInteger(periodIndex) && periodIndex > sourceIndex;
+  });
+
+  if (!laterCandles.length) {
+    return {
+      broken: false,
+      heldBeyond: false,
+      breakCandle: null,
+      confirmationPath: null,
+    };
+  }
+
+  const atr = averageTrueRange(
+    candles,
+    getStructureEngineConfig(timeframe).atrPeriod
+  );
+
+  const confirmationCloses =
+    getStructureEngineConfig(timeframe).confirmationCloses;
+
+  let breakIndex = -1;
+  let confirmationPath = null;
+
+  for (let index = 0; index < laterCandles.length; index += 1) {
+    const multipleCloses = countConsecutiveBreakCloses({
+      candles: laterCandles,
+      index,
+      level: Number(levelPrice),
+      tolerance,
+      side: direction,
+      count: confirmationCloses,
+    });
+
+    const displacement = isStrongDisplacementBreak({
+      candles: laterCandles,
+      index,
+      level: Number(levelPrice),
+      tolerance,
+      atr,
+      side: direction,
+      timeframe,
+    });
+
+    if (multipleCloses || displacement) {
+      breakIndex = index;
+      confirmationPath = displacement
+        ? "strong_displacement"
+        : "multiple_closes";
+      break;
+    }
+  }
+
+  if (breakIndex < 0) {
+    return {
+      broken: false,
+      heldBeyond: false,
+      breakCandle: null,
+      confirmationPath: null,
+    };
+  }
+
+  const latestClose = Number(
+    laterCandles[laterCandles.length - 1]?.close
+  );
+
+  const heldBeyond =
+    Number.isFinite(latestClose) &&
+    (
+      direction === "bearish"
+        ? latestClose < Number(levelPrice) - tolerance * 0.25
+        : latestClose > Number(levelPrice) + tolerance * 0.25
+    );
+
+  return {
+    broken: true,
+    heldBeyond,
+    breakCandle: laterCandles[breakIndex] || null,
+    confirmationPath,
+  };
+}
+
+function resolveFrameworkAreaLifecycle({
+  area = {},
+  levels = [],
+  sourceIndex = -1,
+  marketReference = {},
+  symbol = "",
+  timeframe = "H1",
+  atr = 0,
+}) {
+  const originalType = String(area?.type || "").toLowerCase();
+  const price = asPositiveNumber(area?.price);
+
+  if (
+    price === null ||
+    !["support", "resistance", "supply", "demand"].includes(
+      originalType
+    )
+  ) {
+    return {
+      state: "invalidated",
+      finalType: "invalidated",
+      breakEvidence: null,
+    };
+  }
+
+  const tolerance = frameworkLevelTolerance({ symbol, atr });
+
+  const breakDirection =
+    ["support", "demand"].includes(originalType)
+      ? "bearish"
+      : "bullish";
+
+  const periodEvidence = periodLevelBreakEvidence({
+    levels,
+    sourceIndex,
+    levelPrice: price,
+    direction: breakDirection,
+    tolerance,
+  });
+
+  const candleEvidence = periodLevelBreakEvidenceFromCandles({
+    marketReference,
+    levels,
+    sourceIndex,
+    levelPrice: price,
+    direction: breakDirection,
+    tolerance,
+    symbol,
+    timeframe,
+  });
+
+  const breakEvidence =
+    candleEvidence?.broken === true
+      ? candleEvidence
+      : periodEvidence;
+
+  if (breakEvidence?.broken && breakEvidence?.heldBeyond) {
+    if (originalType === "support") {
+      return {
+        state: "confirmed_conversion",
+        finalType: "converted resistance",
+        breakEvidence,
+      };
+    }
+
+    if (originalType === "resistance") {
+      return {
+        state: "confirmed_conversion",
+        finalType: "converted support",
+        breakEvidence,
+      };
+    }
+
+    // CSA supply/demand zones do not automatically flip. Once cleanly
+    // broken and held through, they are failed/invalidated zones.
+    return {
+      state: "invalidated",
+      finalType: "invalidated",
+      breakEvidence,
+    };
+  }
+
+  return {
+    state: "active",
+    finalType: originalType,
+    breakEvidence,
+  };
+}
+
+function findFrameworkSourceIndex({
+  levels = [],
+  area = {},
+  tolerance = 0,
+}) {
+  const areaPeriod = String(
+    area?.period || area?.day || ""
+  ).trim();
+  const areaDate = String(area?.date || "").trim();
+  const areaPrice = asPositiveNumber(area?.price);
+  const areaType = String(area?.type || "").toLowerCase();
+
+  return levels.findIndex((period) => {
+    const label = String(
+      period?.periodLabel ||
+      period?.day ||
+      period?.key ||
+      ""
+    ).trim();
+
+    const date = String(period?.date || "").trim();
+
+    if (
+      areaPeriod &&
+      label &&
+      areaPeriod !== label &&
+      (!areaDate || !date || areaDate !== date)
+    ) {
+      return false;
+    }
+
+    if (areaPrice === null) return true;
+
+    const expectedPrice =
+      ["resistance", "supply"].includes(areaType)
+        ? asPositiveNumber(period?.high)
+        : asPositiveNumber(period?.low);
+
+    return (
+      expectedPrice !== null &&
+      Math.abs(expectedPrice - areaPrice) <= tolerance
+    );
+  });
+}
+
+function frameworkCounterTrendReversalConfirmed({
+  marketReference = {},
+  direction = "bullish",
+  latestClose = null,
+  symbol = "",
+}) {
+  const price = asPositiveNumber(latestClose);
+  if (price === null) return false;
+
+  const areas = Array.isArray(marketReference?.csaAreas)
+    ? marketReference.csaAreas
+    : [];
+
+  const tolerance = getApprovedPriceTolerance(symbol);
+
+  if (direction === "bullish") {
+    // A counter-trend bullish swing event does not reverse a bearish CSA
+    // structure until price has also broken an authoritative resistance/supply
+    // level from the timeframe framework.
+    return areas.some((area) => {
+      const type = String(area?.type || "").toLowerCase();
+      const level = asPositiveNumber(area?.price);
+      return (
+        level !== null &&
+        ["resistance", "supply"].includes(type) &&
+        price > level + tolerance
+      );
+    });
+  }
+
+  return areas.some((area) => {
+    const type = String(area?.type || "").toLowerCase();
+    const level = asPositiveNumber(area?.price);
+    return (
+      level !== null &&
+      ["support", "demand"].includes(type) &&
+      price < level - tolerance
+    );
+  });
+}
+
 function buildAuthoritativeFrameworkCandidates({
   marketReference = {},
   visualReview = {},
   direction = "range",
   currentPrice = null,
   symbol = "",
+  timeframe = "H1",
   atr = 0,
 }) {
   const levels = Array.isArray(marketReference?.dailyLevels)
@@ -7748,229 +8071,113 @@ function buildAuthoritativeFrameworkCandidates({
   const tolerance = frameworkLevelTolerance({ symbol, atr });
   const candidates = [];
 
-  levels.forEach((period, index) => {
+  csaAreas.forEach((area) => {
+    const originalPrice = asPositiveNumber(area?.price);
+    if (originalPrice === null) return;
+
+    const sourceIndex = findFrameworkSourceIndex({
+      levels,
+      area,
+      tolerance,
+    });
+
+    if (sourceIndex < 0) return;
+
+    const lifecycle = resolveFrameworkAreaLifecycle({
+      area,
+      levels,
+      sourceIndex,
+      marketReference,
+      symbol,
+      timeframe,
+      atr,
+    });
+
+    if (
+      lifecycle.state === "invalidated" ||
+      lifecycle.finalType === "invalidated"
+    ) {
+      return;
+    }
+
+    const finalType = lifecycle.finalType;
+
+    const validForDirection =
+      direction === "bearish"
+        ? ["resistance", "supply", "converted resistance"].includes(
+            finalType
+          )
+        : ["support", "demand", "converted support"].includes(
+            finalType
+          );
+
+    if (!validForDirection) return;
+
+    const onCorrectSide =
+      direction === "bearish"
+        ? originalPrice > Number(currentPrice) + tolerance
+        : originalPrice < Number(currentPrice) - tolerance;
+
+    if (!onCorrectSide) return;
+
+    const period = levels[sourceIndex];
     const periodLabel =
       period?.periodLabel ||
       period?.day ||
       period?.key ||
-      `Period ${index + 1}`;
+      area?.period ||
+      area?.day ||
+      `Period ${sourceIndex + 1}`;
 
-    const high = asPositiveNumber(period?.high);
-    const low = asPositiveNumber(period?.low);
+    const frameworkSide =
+      ["resistance", "supply", "converted support"].includes(finalType)
+        ? "high"
+        : "low";
 
-    if (direction === "bearish") {
-      // A prior framework support that has been broken and held below becomes
-      // authoritative converted resistance.
-      if (low !== null && low > Number(currentPrice) + tolerance) {
-        const originalArea = csaAreas.find((area) => {
-          const areaPrice = asPositiveNumber(area?.price);
-          return (
-            areaPrice !== null &&
-            Math.abs(areaPrice - low) <= tolerance &&
-            String(area?.type || "").toLowerCase() === "support"
-          );
-        });
+    const reconciled = reconcileFrameworkLevelWithVisibleChart({
+      frameworkPrice: originalPrice,
+      frameworkType: finalType,
+      frameworkPeriod: periodLabel,
+      frameworkSide,
+      visualReview,
+      symbol,
+      atr,
+    });
 
-        if (originalArea) {
-          const conversion = periodLevelBreakEvidence({
-            levels,
-            sourceIndex: index,
-            levelPrice: low,
-            direction: "bearish",
-            tolerance,
-          });
-
-          if (conversion.broken && conversion.heldBeyond) {
-            const reconciled = reconcileFrameworkLevelWithVisibleChart({
-              frameworkPrice: low,
-              frameworkType: "converted resistance",
-              frameworkPeriod: periodLabel,
-              frameworkSide: "low",
-              visualReview,
-              symbol,
-              atr,
-            });
-
-            candidates.push({
-              price: reconciled.price,
-              frameworkPrice: low,
-              type: "converted resistance",
-              source: "authoritative_framework_conversion",
-              priceSource: reconciled.source,
-              chartReconciled: reconciled.reconciled === true,
-              reconciliationEvidence: reconciled.evidence || null,
-              reconciliationPeriodHint: reconciled.periodHint || null,
-              reconciliationConfidence: Number(reconciled.confidence || 0),
-              period: periodLabel,
-              date: period?.date || period?.key || null,
-              conversionConfirmed: true,
-              originalType: "support",
-              breakPeriod:
-                conversion.breakPeriod?.periodLabel ||
-                conversion.breakPeriod?.day ||
-                conversion.breakPeriod?.key ||
-                null,
-              authorityRank: 1,
-            });
-          }
-        }
-      }
-
-      // Period highs remain the authoritative source for resistance/supply.
-      if (high !== null && high > Number(currentPrice) + tolerance) {
-        const matchingArea = csaAreas.find((area) => {
-          const areaPrice = asPositiveNumber(area?.price);
-          return (
-            areaPrice !== null &&
-            Math.abs(areaPrice - high) <= tolerance &&
-            ["resistance", "supply"].includes(
-              String(area?.type || "").toLowerCase()
-            )
-          );
-        });
-
-        const highType =
-          String(matchingArea?.type || "").toLowerCase() === "supply"
-            ? "supply"
-            : "resistance";
-
-        const reconciled = reconcileFrameworkLevelWithVisibleChart({
-          frameworkPrice: high,
-          frameworkType: highType,
-          frameworkPeriod: periodLabel,
-          frameworkSide: "high",
-          visualReview,
-          symbol,
-          atr,
-        });
-
-        candidates.push({
-          price: reconciled.price,
-          frameworkPrice: high,
-          type: highType,
-          source: "authoritative_framework_high",
-          priceSource: reconciled.source,
-          chartReconciled: reconciled.reconciled === true,
-          reconciliationEvidence: reconciled.evidence || null,
-          reconciliationPeriodHint: reconciled.periodHint || null,
-          reconciliationConfidence: Number(reconciled.confidence || 0),
-          period: periodLabel,
-          date: period?.date || period?.key || null,
-          conversionConfirmed: false,
-          originalType: "high",
-          authorityRank: 2,
-        });
-      }
-    }
-
-    if (direction === "bullish") {
-      // A prior framework resistance that has been broken and held above
-      // becomes authoritative converted support.
-      if (high !== null && high < Number(currentPrice) - tolerance) {
-        const originalArea = csaAreas.find((area) => {
-          const areaPrice = asPositiveNumber(area?.price);
-          return (
-            areaPrice !== null &&
-            Math.abs(areaPrice - high) <= tolerance &&
-            String(area?.type || "").toLowerCase() === "resistance"
-          );
-        });
-
-        if (originalArea) {
-          const conversion = periodLevelBreakEvidence({
-            levels,
-            sourceIndex: index,
-            levelPrice: high,
-            direction: "bullish",
-            tolerance,
-          });
-
-          if (conversion.broken && conversion.heldBeyond) {
-            const reconciled = reconcileFrameworkLevelWithVisibleChart({
-              frameworkPrice: high,
-              frameworkType: "converted support",
-              frameworkPeriod: periodLabel,
-              frameworkSide: "high",
-              visualReview,
-              symbol,
-              atr,
-            });
-
-            candidates.push({
-              price: reconciled.price,
-              frameworkPrice: high,
-              type: "converted support",
-              source: "authoritative_framework_conversion",
-              priceSource: reconciled.source,
-              chartReconciled: reconciled.reconciled === true,
-              reconciliationEvidence: reconciled.evidence || null,
-              reconciliationPeriodHint: reconciled.periodHint || null,
-              reconciliationConfidence: Number(reconciled.confidence || 0),
-              period: periodLabel,
-              date: period?.date || period?.key || null,
-              conversionConfirmed: true,
-              originalType: "resistance",
-              breakPeriod:
-                conversion.breakPeriod?.periodLabel ||
-                conversion.breakPeriod?.day ||
-                conversion.breakPeriod?.key ||
-                null,
-              authorityRank: 1,
-            });
-          }
-        }
-      }
-
-      // Period lows remain the authoritative source for support/demand.
-      if (low !== null && low < Number(currentPrice) - tolerance) {
-        const matchingArea = csaAreas.find((area) => {
-          const areaPrice = asPositiveNumber(area?.price);
-          return (
-            areaPrice !== null &&
-            Math.abs(areaPrice - low) <= tolerance &&
-            ["support", "demand"].includes(
-              String(area?.type || "").toLowerCase()
-            )
-          );
-        });
-
-        const lowType =
-          String(matchingArea?.type || "").toLowerCase() === "demand"
-            ? "demand"
-            : "support";
-
-        const reconciled = reconcileFrameworkLevelWithVisibleChart({
-          frameworkPrice: low,
-          frameworkType: lowType,
-          frameworkPeriod: periodLabel,
-          frameworkSide: "low",
-          visualReview,
-          symbol,
-          atr,
-        });
-
-        candidates.push({
-          price: reconciled.price,
-          frameworkPrice: low,
-          type: lowType,
-          source: "authoritative_framework_low",
-          priceSource: reconciled.source,
-          chartReconciled: reconciled.reconciled === true,
-          reconciliationEvidence: reconciled.evidence || null,
-          reconciliationPeriodHint: reconciled.periodHint || null,
-          reconciliationConfidence: Number(reconciled.confidence || 0),
-          period: periodLabel,
-          date: period?.date || period?.key || null,
-          conversionConfirmed: false,
-          originalType: "low",
-          authorityRank: 2,
-        });
-      }
-    }
+    candidates.push({
+      price: reconciled.price,
+      frameworkPrice: originalPrice,
+      type: finalType,
+      source:
+        lifecycle.state === "confirmed_conversion"
+          ? "authoritative_framework_conversion"
+          : frameworkSide === "high"
+          ? "authoritative_framework_high"
+          : "authoritative_framework_low",
+      priceSource: reconciled.source,
+      chartReconciled: reconciled.reconciled === true,
+      reconciliationEvidence: reconciled.evidence || null,
+      reconciliationPeriodHint: reconciled.periodHint || null,
+      reconciliationConfidence: Number(reconciled.confidence || 0),
+      period: periodLabel,
+      date: period?.date || period?.key || area?.date || null,
+      conversionConfirmed:
+        lifecycle.state === "confirmed_conversion",
+      originalType: String(area?.type || "").toLowerCase(),
+      breakPeriod:
+        lifecycle?.breakEvidence?.breakPeriod?.periodLabel ||
+        lifecycle?.breakEvidence?.breakPeriod?.day ||
+        lifecycle?.breakEvidence?.breakPeriod?.key ||
+        lifecycle?.breakEvidence?.breakCandle?.datetime ||
+        null,
+      lifecycleState: lifecycle.state,
+      authorityRank:
+        lifecycle.state === "confirmed_conversion" ? 1 : 2,
+    });
   });
 
-  // Remove exact duplicates while preserving converted levels over ordinary
-  // highs/lows at the same price.
+  // Remove duplicates at the same framework price while preserving a confirmed
+  // conversion over an ordinary active level.
   const sorted = [...candidates].sort((a, b) => {
     if (a.price !== b.price) return a.price - b.price;
     return Number(a.authorityRank || 99) - Number(b.authorityRank || 99);
@@ -7981,7 +8188,9 @@ function buildAuthoritativeFrameworkCandidates({
   sorted.forEach((candidate) => {
     const duplicateIndex = unique.findIndex(
       (existing) =>
-        Math.abs(Number(existing.price) - Number(candidate.price)) <= tolerance
+        Math.abs(
+          Number(existing.price) - Number(candidate.price)
+        ) <= tolerance
     );
 
     if (duplicateIndex < 0) {
@@ -7990,6 +8199,7 @@ function buildAuthoritativeFrameworkCandidates({
     }
 
     const existing = unique[duplicateIndex];
+
     if (
       Number(candidate.authorityRank || 99) <
       Number(existing.authorityRank || 99)
@@ -8106,6 +8316,7 @@ function rankRawEntryAreas({
       direction,
       currentPrice,
       symbol,
+      timeframe,
       atr,
     }),
     pivots: confirmedPivots,
@@ -8189,13 +8400,41 @@ function rankRawEntryAreas({
       rawZone?.authoritativeType === "converted resistance" ||
       rawZone?.authoritativeType === "converted support";
 
+    const authoritativeType = String(
+      rawZone?.authoritativeType || ""
+    ).toLowerCase();
+
+    const isSupplyDemand =
+      ["supply", "demand"].includes(authoritativeType);
+
+    const isPlainSupportResistance =
+      ["support", "resistance"].includes(authoritativeType);
+
     const structurallyValid =
       isAuthoritativeFrameworkLevel &&
       (
         isConfirmedConversion ||
-        reactionStats.reactions >= 1 ||
-        reactionStats.strongDepartures >= 1 ||
-        Number(rawZone?.pivotConfirmationCount || 0) >= 1
+        (
+          isSupplyDemand &&
+          (
+            reactionStats.strongDepartures >= 1 ||
+            reactionStats.reactions >= 2 ||
+            (
+              reactionStats.reactions >= 1 &&
+              Number(rawZone?.pivotConfirmationCount || 0) >= 1
+            ) ||
+            fibMatches.length >= 1
+          )
+        ) ||
+        (
+          isPlainSupportResistance &&
+          reactionStats.reactions >= 1 &&
+          (
+            reactionStats.reactions >= 2 ||
+            Number(rawZone?.pivotConfirmationCount || 0) >= 1 ||
+            fibMatches.length >= 1
+          )
+        )
       );
 
     if (!structurallyValid) return null;
@@ -9047,6 +9286,27 @@ function deriveHistoricalPhaseFromTimeframeCandles({
     Math.min(5, recoveryWindow.length)
   );
 
+  const priorOppositeEvent =
+    latestEvent.side === "bullish"
+      ? [...events]
+          .slice(0, -1)
+          .reverse()
+          .find((event) => event.side === "bearish") || null
+      : [...events]
+          .slice(0, -1)
+          .reverse()
+          .find((event) => event.side === "bullish") || null;
+
+  const counterTrendFrameworkConfirmed =
+    priorOppositeEvent
+      ? frameworkCounterTrendReversalConfirmed({
+          marketReference,
+          direction: latestEvent.side,
+          latestClose,
+          symbol,
+        })
+      : true;
+
   const eventDiagnostics = {
     engine: "confirmed_swing_event_sequence",
     timeframe: config.timeframe,
@@ -9076,7 +9336,84 @@ function deriveHistoricalPhaseFromTimeframeCandles({
     eventCount: events.length,
     finalCandle: latest.datetime || null,
     finalClose: latestClose,
+    priorOppositeEvent: priorOppositeEvent
+      ? {
+          side: priorOppositeEvent.side,
+          datetime: priorOppositeEvent.datetime,
+          level: priorOppositeEvent.level,
+        }
+      : null,
+    counterTrendFrameworkConfirmed,
   };
+
+  if (
+    priorOppositeEvent &&
+    counterTrendFrameworkConfirmed !== true
+  ) {
+    if (latestEvent.side === "bullish") {
+      const barsAfterPriorBreak = candles.slice(
+        priorOppositeEvent.index
+      );
+      const recoveryLow = minFinite(
+        barsAfterPriorBreak.map((candle) => candle?.low)
+      );
+      const recoveryDistance =
+        latestClose - Number(recoveryLow);
+
+      return {
+        direction: "bearish",
+        phase: "bullish_recovery_after_bearish_breakdown",
+        state: "bullish_recovery_after_bearish_breakdown",
+        bullishBreakout: false,
+        bearishBreakdown: false,
+        bullishRecoveryAfterBreakdown: true,
+        bearishPullbackAfterBreakout: false,
+        confirmedReversal: false,
+        latestClose,
+        brokenLevel: priorOppositeEvent.level,
+        recoveryFrom: recoveryLow,
+        recoveryDistance,
+        source: "cutoff_timeframe_swing_events_framework_gate",
+        diagnostics: {
+          ...eventDiagnostics,
+          counterTrendFrameworkConfirmed: false,
+          counterTrendEvent: "bullish",
+          controllingPriorEvent: "bearish",
+        },
+      };
+    }
+
+    const barsAfterPriorBreak = candles.slice(
+      priorOppositeEvent.index
+    );
+    const pullbackHigh = maxFinite(
+      barsAfterPriorBreak.map((candle) => candle?.high)
+    );
+    const pullbackDistance =
+      Number(pullbackHigh) - latestClose;
+
+    return {
+      direction: "bullish",
+      phase: "bearish_pullback_after_bullish_breakout",
+      state: "bearish_pullback_after_bullish_breakout",
+      bullishBreakout: false,
+      bearishBreakdown: false,
+      bullishRecoveryAfterBreakdown: false,
+      bearishPullbackAfterBreakout: true,
+      confirmedReversal: false,
+      latestClose,
+      brokenLevel: priorOppositeEvent.level,
+      pullbackFrom: pullbackHigh,
+      pullbackDistance,
+      source: "cutoff_timeframe_swing_events_framework_gate",
+      diagnostics: {
+        ...eventDiagnostics,
+        counterTrendFrameworkConfirmed: false,
+        counterTrendEvent: "bearish",
+        controllingPriorEvent: "bullish",
+      },
+    };
+  }
 
   if (latestEvent.side === "bearish") {
     const breakdownDepth =
