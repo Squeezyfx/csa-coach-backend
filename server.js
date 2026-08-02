@@ -1254,6 +1254,8 @@ AREA RANKING RULES:
 - Validate genuine support/resistance or supply/demand structure before considering distance.
 - Fibonacci retracement is confluence only. It must never create an entry area by itself.
 - Before ranking, apply the full lifecycle of every authoritative timeframe level: active S/R stays usable, broken-and-held support/resistance converts, and broken-and-held supply/demand is invalidated.
+- Only completed source-period highs/lows may become finalized entry areas. A developing daily/weekly/monthly/quarterly/yearly level may describe current structure but must not be promoted as an authoritative entry level until that source period is complete.
+- For M1-H1, "End of selected day" completes that day's level. For H4, an unfinished current week is developing; for D1 an unfinished current month is developing; for W1 an unfinished quarter is developing; for MN an unfinished year is developing.
 - After lifecycle validation, reject weak/intermediate framework levels that do not have enough structural evidence. Do not promote a nearer weak level merely because it is closer to price.
 - A confirmed converted support/resistance is a high-quality area. Supply/demand should show a meaningful departure or repeated reaction. Plain support/resistance should show repeated reaction, strong departure, or reaction plus Fibonacci confluence before it is used as an entry area.
 - Do not keep an old resistance/supply as a sell area after it has been cleanly broken and held above; do not keep an old support/demand as a buy area after it has been cleanly broken and held below.
@@ -6402,7 +6404,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "8.2.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "8.3.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -7254,6 +7256,7 @@ function validateAndSequenceEntryAreas({
       errors: [...new Set(errors)],
       candidateCountBeforeQualityGate: deduped.length,
       candidateCountAfterQualityGate: qualityEligible.length,
+      completedFrameworkPeriodsOnly: true,
       rejectedWeakCandidates: deduped
         .filter((area) => Number(area.qualityTier || 0) < 2)
         .map((area) => ({
@@ -8131,6 +8134,143 @@ function frameworkCounterTrendReversalConfirmed({
   });
 }
 
+
+function parseFrameworkPeriodStartDate(period = {}, profile = null) {
+  const key = String(period?.key || "").trim();
+  const date = String(period?.date || "").trim();
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return parseISODateOnly(date);
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(key)) {
+    return parseISODateOnly(key);
+  }
+
+  const monthMatch = key.match(/^(\d{4})-(\d{2})$/);
+  if (monthMatch) {
+    return new Date(
+      Date.UTC(
+        Number(monthMatch[1]),
+        Number(monthMatch[2]) - 1,
+        1
+      )
+    );
+  }
+
+  const quarterMatch = key.match(/^(\d{4})-Q([1-4])$/i);
+  if (quarterMatch) {
+    const year = Number(quarterMatch[1]);
+    const quarter = Number(quarterMatch[2]);
+    return new Date(
+      Date.UTC(year, (quarter - 1) * 3, 1)
+    );
+  }
+
+  const yearMatch = key.match(/^(\d{4})$/);
+  if (yearMatch) {
+    return new Date(Date.UTC(Number(yearMatch[1]), 0, 1));
+  }
+
+  return null;
+}
+
+function getFrameworkPeriodTradingEndDate({
+  period = {},
+  profile = null,
+}) {
+  const start = parseFrameworkPeriodStartDate(period, profile);
+  if (!start || !profile) return null;
+
+  const sourceKey = String(
+    period?.key ||
+    getPeriodKeyAndLabel(start, profile)?.key ||
+    ""
+  );
+
+  if (!sourceKey) return null;
+
+  let lastTradingDate = null;
+
+  // 400 days safely covers the longest supported source period (year).
+  for (let offset = 0; offset <= 400; offset += 1) {
+    const date = addDays(start, offset);
+    const periodInfo = getPeriodKeyAndLabel(date, profile);
+
+    if (
+      offset > 0 &&
+      String(periodInfo?.key || "") !== sourceKey
+    ) {
+      break;
+    }
+
+    if (String(periodInfo?.key || "") !== sourceKey) {
+      continue;
+    }
+
+    const weekday = date.getUTCDay();
+
+    // CSA intraday/daily framework ignores weekends. For broader periods,
+    // use the final Monday-Friday date as the completed trading boundary.
+    if (weekday >= 1 && weekday <= 5) {
+      lastTradingDate = date;
+    }
+  }
+
+  return lastTradingDate;
+}
+
+function isAuthoritativeFrameworkPeriodComplete({
+  period = {},
+  marketReference = {},
+}) {
+  const profile =
+    marketReference?.profile ||
+    getSupportedCsaTimeframeProfile("H1");
+
+  const periodEnd = getFrameworkPeriodTradingEndDate({
+    period,
+    profile,
+  });
+
+  if (!periodEnd) return true;
+
+  const cutoffText = String(
+    marketReference?.chartCutoff?.endDateTime || ""
+  ).trim();
+
+  if (!cutoffText) return true;
+
+  const cutoffMatch = cutoffText.match(
+    /^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}):(\d{2}):?(\d{2})?)?/
+  );
+
+  if (!cutoffMatch) return true;
+
+  const cutoffDate = parseISODateOnly(cutoffMatch[1]);
+  if (!cutoffDate) return true;
+
+  const cutoffHour = Number(cutoffMatch[2] || 0);
+  const cutoffMinute = Number(cutoffMatch[3] || 0);
+  const cutoffSecond = Number(cutoffMatch[4] || 0);
+
+  const periodEndText = formatDateOnly(periodEnd);
+  const cutoffDateText = formatDateOnly(cutoffDate);
+
+  if (cutoffDateText > periodEndText) return true;
+  if (cutoffDateText < periodEndText) return false;
+
+  // Same trading date: only treat the source period as finalized when the
+  // review reaches the end of that trading day. This preserves H1
+  // "End of selected day" levels while preventing an unfinished H4 week,
+  // D1 month, W1 quarter or MN year from becoming a completed entry level.
+  return (
+    cutoffHour === 23 &&
+    cutoffMinute === 59 &&
+    cutoffSecond >= 0
+  );
+}
+
 function buildAuthoritativeFrameworkCandidates({
   marketReference = {},
   visualReview = {},
@@ -8166,6 +8306,17 @@ function buildAuthoritativeFrameworkCandidates({
     });
 
     if (sourceIndex < 0) return;
+
+    const sourcePeriod = levels[sourceIndex];
+
+    if (
+      !isAuthoritativeFrameworkPeriodComplete({
+        period: sourcePeriod,
+        marketReference,
+      })
+    ) {
+      return;
+    }
 
     const lifecycle = resolveFrameworkAreaLifecycle({
       area,
@@ -8204,7 +8355,7 @@ function buildAuthoritativeFrameworkCandidates({
 
     if (!onCorrectSide) return;
 
-    const period = levels[sourceIndex];
+    const period = sourcePeriod;
     const periodLabel =
       period?.periodLabel ||
       period?.day ||
