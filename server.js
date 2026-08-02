@@ -1261,6 +1261,7 @@ AREA RANKING RULES:
 - Fibonacci remains confluence only: it can strengthen an independently valid framework area but can never create an entry area by itself.
 - A confirmed converted support/resistance is a high-quality area. Supply/demand should show a meaningful departure or repeated reaction. Plain support/resistance should show repeated reaction, strong departure, or reaction plus Fibonacci confluence before it is used as an entry area.
 - Do not keep an old resistance/supply as a sell area after it has been cleanly broken and held above; do not keep an old support/demand as a buy area after it has been cleanly broken and held below.
+- Framework levels have memory. Once support/resistance has confirmed a conversion, it must never silently revert to its original classification just because price later returns to the other side. If the converted level later fails with another confirmed break-and-hold, treat the old level as stale/invalidated rather than resurrecting the original S/R.
 - Rank structural quality first, but after invalid levels are removed, sequence valid entry areas by the order price would reach them from the current price.
 - Preserve the true area type: converted resistance/support, resistance/support, or supply/demand.
 - Use the timeframe-framework high or low to identify the correct structural period first.
@@ -6406,7 +6407,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "8.4.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "8.5.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -7942,14 +7943,10 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-function periodLevelBreakEvidenceFromCandles({
+function getLaterFrameworkCandles({
   marketReference = {},
   levels = [],
   sourceIndex = -1,
-  levelPrice = null,
-  direction = "bearish",
-  tolerance = 0,
-  symbol = "",
   timeframe = "H1",
 }) {
   const candles = Array.isArray(marketReference?.timeframeCandles)
@@ -7975,15 +7972,9 @@ function periodLevelBreakEvidenceFromCandles({
     !candles.length ||
     !Array.isArray(levels) ||
     sourceIndex < 0 ||
-    sourceIndex >= levels.length ||
-    !Number.isFinite(Number(levelPrice))
+    sourceIndex >= levels.length
   ) {
-    return {
-      broken: false,
-      heldBeyond: false,
-      breakCandle: null,
-      confirmationPath: null,
-    };
+    return [];
   }
 
   const periodIndexByKey = new Map(
@@ -7993,7 +7984,7 @@ function periodLevelBreakEvidenceFromCandles({
     ])
   );
 
-  const laterCandles = candles.filter((candle) => {
+  return candles.filter((candle) => {
     const dateOnly = candleDateOnly(candle.datetime);
     if (!dateOnly) return false;
 
@@ -8007,14 +7998,22 @@ function periodLevelBreakEvidenceFromCandles({
 
     return Number.isInteger(periodIndex) && periodIndex > sourceIndex;
   });
+}
 
-  if (!laterCandles.length) {
-    return {
-      broken: false,
-      heldBeyond: false,
-      breakCandle: null,
-      confirmationPath: null,
-    };
+function findConfirmedFrameworkBreak({
+  candles = [],
+  startIndex = 0,
+  levelPrice = null,
+  direction = "bearish",
+  tolerance = 0,
+  timeframe = "H1",
+}) {
+  if (
+    !Array.isArray(candles) ||
+    !candles.length ||
+    !Number.isFinite(Number(levelPrice))
+  ) {
+    return null;
   }
 
   const atr = averageTrueRange(
@@ -8025,12 +8024,13 @@ function periodLevelBreakEvidenceFromCandles({
   const confirmationCloses =
     getStructureEngineConfig(timeframe).confirmationCloses;
 
-  let breakIndex = -1;
-  let confirmationPath = null;
-
-  for (let index = 0; index < laterCandles.length; index += 1) {
+  for (
+    let index = Math.max(0, Number(startIndex || 0));
+    index < candles.length;
+    index += 1
+  ) {
     const multipleCloses = countConsecutiveBreakCloses({
-      candles: laterCandles,
+      candles,
       index,
       level: Number(levelPrice),
       tolerance,
@@ -8039,7 +8039,7 @@ function periodLevelBreakEvidenceFromCandles({
     });
 
     const displacement = isStrongDisplacementBreak({
-      candles: laterCandles,
+      candles,
       index,
       level: Number(levelPrice),
       tolerance,
@@ -8049,40 +8049,106 @@ function periodLevelBreakEvidenceFromCandles({
     });
 
     if (multipleCloses || displacement) {
-      breakIndex = index;
-      confirmationPath = displacement
-        ? "strong_displacement"
-        : "multiple_closes";
-      break;
+      return {
+        index,
+        candle: candles[index] || null,
+        confirmationPath: displacement
+          ? "strong_displacement"
+          : "multiple_closes",
+      };
     }
   }
 
-  if (breakIndex < 0) {
+  return null;
+}
+
+function periodLevelLifecycleEvidenceFromCandles({
+  marketReference = {},
+  levels = [],
+  sourceIndex = -1,
+  levelPrice = null,
+  originalType = "",
+  tolerance = 0,
+  timeframe = "H1",
+}) {
+  const laterCandles = getLaterFrameworkCandles({
+    marketReference,
+    levels,
+    sourceIndex,
+    timeframe,
+  });
+
+  if (!laterCandles.length) {
     return {
-      broken: false,
-      heldBeyond: false,
-      breakCandle: null,
-      confirmationPath: null,
+      firstBreak: null,
+      secondBreak: null,
+      lifecycleState: "active",
     };
   }
 
-  const latestClose = Number(
-    laterCandles[laterCandles.length - 1]?.close
-  );
+  const type = String(originalType || "").toLowerCase();
 
-  const heldBeyond =
-    Number.isFinite(latestClose) &&
-    (
-      direction === "bearish"
-        ? latestClose < Number(levelPrice) - tolerance * 0.25
-        : latestClose > Number(levelPrice) + tolerance * 0.25
-    );
+  const firstBreakDirection =
+    ["support", "demand"].includes(type)
+      ? "bearish"
+      : "bullish";
+
+  const firstBreak = findConfirmedFrameworkBreak({
+    candles: laterCandles,
+    startIndex: 0,
+    levelPrice,
+    direction: firstBreakDirection,
+    tolerance,
+    timeframe,
+  });
+
+  if (!firstBreak) {
+    return {
+      firstBreak: null,
+      secondBreak: null,
+      lifecycleState: "active",
+    };
+  }
+
+  // Supply/demand does not flip in this engine. Once a clean break-and-hold
+  // occurs through the zone, that old zone is failed and removed.
+  if (["supply", "demand"].includes(type)) {
+    return {
+      firstBreak,
+      secondBreak: null,
+      lifecycleState: "invalidated",
+    };
+  }
+
+  const secondBreakDirection =
+    firstBreakDirection === "bullish"
+      ? "bearish"
+      : "bullish";
+
+  const secondBreak = findConfirmedFrameworkBreak({
+    candles: laterCandles,
+    startIndex: firstBreak.index + 1,
+    levelPrice,
+    direction: secondBreakDirection,
+    tolerance,
+    timeframe,
+  });
+
+  if (secondBreak) {
+    // Critical CSA lifecycle rule:
+    // once original S/R converted and that converted level later fails,
+    // do not resurrect the original classification. The old level is stale.
+    return {
+      firstBreak,
+      secondBreak,
+      lifecycleState: "converted_then_invalidated",
+    };
+  }
 
   return {
-    broken: true,
-    heldBeyond,
-    breakCandle: laterCandles[breakIndex] || null,
-    confirmationPath,
+    firstBreak,
+    secondBreak: null,
+    lifecycleState: "confirmed_conversion",
   };
 }
 
@@ -8108,11 +8174,64 @@ function resolveFrameworkAreaLifecycle({
       state: "invalidated",
       finalType: "invalidated",
       breakEvidence: null,
+      failureEvidence: null,
     };
   }
 
   const tolerance = frameworkLevelTolerance({ symbol, atr });
 
+  const chronological =
+    periodLevelLifecycleEvidenceFromCandles({
+      marketReference,
+      levels,
+      sourceIndex,
+      levelPrice: price,
+      originalType,
+      tolerance,
+      timeframe,
+    });
+
+  if (
+    chronological.lifecycleState === "converted_then_invalidated" ||
+    chronological.lifecycleState === "invalidated"
+  ) {
+    return {
+      state: "invalidated",
+      finalType: "invalidated",
+      breakEvidence: chronological.firstBreak,
+      failureEvidence: chronological.secondBreak,
+      lifecycleSource: "chronological_candle_state_machine",
+    };
+  }
+
+  if (
+    chronological.lifecycleState === "confirmed_conversion"
+  ) {
+    if (originalType === "support") {
+      return {
+        state: "confirmed_conversion",
+        finalType: "converted resistance",
+        breakEvidence: chronological.firstBreak,
+        failureEvidence: null,
+        lifecycleSource: "chronological_candle_state_machine",
+      };
+    }
+
+    if (originalType === "resistance") {
+      return {
+        state: "confirmed_conversion",
+        finalType: "converted support",
+        breakEvidence: chronological.firstBreak,
+        failureEvidence: null,
+        lifecycleSource: "chronological_candle_state_machine",
+      };
+    }
+  }
+
+  // Fallback for sparse higher-timeframe data where candle-level confirmation
+  // could not be established. This fallback is allowed to confirm the FIRST
+  // conversion only; it must never resurrect a level after candle history
+  // already identified a later failure.
   const breakDirection =
     ["support", "demand"].includes(originalType)
       ? "bearish"
@@ -8126,28 +8245,14 @@ function resolveFrameworkAreaLifecycle({
     tolerance,
   });
 
-  const candleEvidence = periodLevelBreakEvidenceFromCandles({
-    marketReference,
-    levels,
-    sourceIndex,
-    levelPrice: price,
-    direction: breakDirection,
-    tolerance,
-    symbol,
-    timeframe,
-  });
-
-  const breakEvidence =
-    candleEvidence?.broken === true
-      ? candleEvidence
-      : periodEvidence;
-
-  if (breakEvidence?.broken && breakEvidence?.heldBeyond) {
+  if (periodEvidence?.broken && periodEvidence?.heldBeyond) {
     if (originalType === "support") {
       return {
         state: "confirmed_conversion",
         finalType: "converted resistance",
-        breakEvidence,
+        breakEvidence: periodEvidence,
+        failureEvidence: null,
+        lifecycleSource: "period_close_fallback",
       };
     }
 
@@ -8155,23 +8260,27 @@ function resolveFrameworkAreaLifecycle({
       return {
         state: "confirmed_conversion",
         finalType: "converted support",
-        breakEvidence,
+        breakEvidence: periodEvidence,
+        failureEvidence: null,
+        lifecycleSource: "period_close_fallback",
       };
     }
 
-    // CSA supply/demand zones do not automatically flip. Once cleanly
-    // broken and held through, they are failed/invalidated zones.
     return {
       state: "invalidated",
       finalType: "invalidated",
-      breakEvidence,
+      breakEvidence: periodEvidence,
+      failureEvidence: null,
+      lifecycleSource: "period_close_fallback",
     };
   }
 
   return {
     state: "active",
     finalType: originalType,
-    breakEvidence,
+    breakEvidence: null,
+    failureEvidence: null,
+    lifecycleSource: "chronological_candle_state_machine",
   };
 }
 
@@ -8533,6 +8642,11 @@ function buildAuthoritativeFrameworkCandidates({
         lifecycle?.breakEvidence?.breakCandle?.datetime ||
         null,
       lifecycleState: lifecycle.state,
+      lifecycleSource: lifecycle.lifecycleSource || null,
+      failureCandle:
+        lifecycle?.failureEvidence?.candle?.datetime ||
+        lifecycle?.failureEvidence?.breakCandle?.datetime ||
+        null,
       authorityRank:
         lifecycle.state === "confirmed_conversion" ? 1 : 2,
     });
@@ -8568,6 +8682,22 @@ function buildAuthoritativeFrameworkCandidates({
     ) {
       unique[duplicateIndex] = candidate;
     }
+  });
+
+  console.log("Authoritative framework lifecycle candidates:", {
+    timeframe,
+    direction,
+    candidates: unique.map((candidate) => ({
+      period: candidate.period,
+      originalType: candidate.originalType,
+      finalType: candidate.type,
+      frameworkPrice: candidate.frameworkPrice,
+      price: candidate.price,
+      lifecycleState: candidate.lifecycleState,
+      lifecycleSource: candidate.lifecycleSource,
+      breakPeriod: candidate.breakPeriod,
+      failureCandle: candidate.failureCandle,
+    })),
   });
 
   return unique;
