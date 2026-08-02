@@ -1257,6 +1257,8 @@ AREA RANKING RULES:
 - Only completed source-period highs/lows may become finalized entry areas. A developing daily/weekly/monthly/quarterly/yearly level may describe current structure but must not be promoted as an authoritative entry level until that source period is complete.
 - For M1-H1, "End of selected day" completes that day's level. For H4, an unfinished current week is developing; for D1 an unfinished current month is developing; for W1 an unfinished quarter is developing; for MN an unfinished year is developing.
 - After lifecycle validation, reject weak/intermediate framework levels that do not have enough structural evidence. Do not promote a nearer weak level merely because it is closer to price.
+- A plain support/resistance level may be bypassed when a farther framework area is materially stronger by structural evidence and Fibonacci confluence. This exception applies only to plain S/R; confirmed converted S/R must not be demoted merely because a farther area scores higher.
+- Fibonacci remains confluence only: it can strengthen an independently valid framework area but can never create an entry area by itself.
 - A confirmed converted support/resistance is a high-quality area. Supply/demand should show a meaningful departure or repeated reaction. Plain support/resistance should show repeated reaction, strong departure, or reaction plus Fibonacci confluence before it is used as an entry area.
 - Do not keep an old resistance/supply as a sell area after it has been cleanly broken and held above; do not keep an old support/demand as a buy area after it has been cleanly broken and held below.
 - Rank structural quality first, but after invalid levels are removed, sequence valid entry areas by the order price would reach them from the current price.
@@ -6404,7 +6406,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "8.3.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "8.4.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -7115,6 +7117,92 @@ function getValidatedEntryAreaQualityTier(area = {}) {
   return 0;
 }
 
+
+function isPlainFrameworkSupportResistance(area = {}) {
+  return ["support", "resistance"].includes(
+    String(area?.areaType || "").toLowerCase()
+  );
+}
+
+function isConfirmedConvertedFrameworkArea(area = {}) {
+  return (
+    ["converted support", "converted resistance"].includes(
+      String(area?.areaType || "").toLowerCase()
+    ) &&
+    area?.conversionConfirmed === true
+  );
+}
+
+function isMateriallyDominatedPlainFrameworkArea({
+  candidate = {},
+  fartherAreas = [],
+}) {
+  if (!isPlainFrameworkSupportResistance(candidate)) {
+    return false;
+  }
+
+  // A plain S/R with only a weak reaction and no Fibonacci confluence is not
+  // strong enough to block a clearly better structural area farther along the
+  // intended retracement path.
+  const candidateReactions = Number(candidate?.reactionCount || 0);
+  const candidateFib = Number(candidate?.fibonacciScore || 0);
+  const candidateQuality = Number(candidate?.qualityScore || 0);
+  const candidateTier = Number(candidate?.qualityTier || 0);
+
+  if (candidateReactions <= 1 && candidateFib <= 0) {
+    return fartherAreas.some((other) => {
+      const otherQuality = Number(other?.qualityScore || 0);
+      const otherFib = Number(other?.fibonacciScore || 0);
+      const otherReactions = Number(other?.reactionCount || 0);
+      const otherDepartures = Number(other?.strongDepartureCount || 0);
+
+      return (
+        otherQuality >= candidateQuality + 6 &&
+        (
+          otherFib >= 1 ||
+          otherReactions >= 2 ||
+          otherDepartures >= 1 ||
+          isConfirmedConvertedFrameworkArea(other)
+        )
+      );
+    });
+  }
+
+  return fartherAreas.some((other) => {
+    const otherQuality = Number(other?.qualityScore || 0);
+    const otherFib = Number(other?.fibonacciScore || 0);
+    const otherTier = Number(other?.qualityTier || 0);
+    const otherReactions = Number(other?.reactionCount || 0);
+    const otherDepartures = Number(other?.strongDepartureCount || 0);
+
+    const qualityGap = otherQuality - candidateQuality;
+
+    // Fibonacci is confluence, never a standalone level. It may help a
+    // stronger structural area outrank a plain intermediate S/R only when
+    // that structural area is independently validated.
+    const fibDominance =
+      candidateFib === 0 &&
+      otherFib >= 2 &&
+      qualityGap >= 8 &&
+      (
+        otherReactions >= 1 ||
+        otherDepartures >= 1 ||
+        isConfirmedConvertedFrameworkArea(other)
+      );
+
+    const structuralDominance =
+      otherTier > candidateTier &&
+      qualityGap >= 10 &&
+      (
+        otherReactions >= 2 ||
+        otherDepartures >= 1 ||
+        isConfirmedConvertedFrameworkArea(other)
+      );
+
+    return fibDominance || structuralDominance;
+  });
+}
+
 function validateAndSequenceEntryAreas({
   areas = [],
   direction = "range",
@@ -7217,14 +7305,51 @@ function validateAndSequenceEntryAreas({
     (area) => Number(area.qualityTier || 0) >= 2
   );
 
-  qualityEligible.sort((a, b) => {
+  const pathOrdered = [...qualityEligible].sort((a, b) => {
     if (direction === "bearish") {
       return Number(a.zoneLow) - Number(b.zoneLow);
     }
     return Number(b.zoneHigh) - Number(a.zoneHigh);
   });
 
-  const sequenced = qualityEligible.slice(0, 3).map((area, index) => ({
+  // Protect confirmed converted S/R and true supply/demand areas, but do not
+  // let a materially weaker plain support/resistance level block a clearly
+  // stronger framework area farther along the retracement path.
+  const dominanceRejected = [];
+
+  const dominanceEligible = pathOrdered.filter((candidate, index) => {
+    if (
+      !isPlainFrameworkSupportResistance(candidate) ||
+      isConfirmedConvertedFrameworkArea(candidate)
+    ) {
+      return true;
+    }
+
+    const fartherAreas = pathOrdered.slice(index + 1);
+
+    const dominated = isMateriallyDominatedPlainFrameworkArea({
+      candidate,
+      fartherAreas,
+    });
+
+    if (dominated) {
+      dominanceRejected.push({
+        areaType: candidate.areaType,
+        levelText: candidate.levelText,
+        frameworkPeriod: candidate.frameworkPeriod,
+        reactionCount: candidate.reactionCount,
+        strongDepartureCount: candidate.strongDepartureCount,
+        fibonacciScore: candidate.fibonacciScore,
+        qualityTier: candidate.qualityTier,
+        qualityScore: candidate.qualityScore,
+      });
+      return false;
+    }
+
+    return true;
+  });
+
+  const sequenced = dominanceEligible.slice(0, 3).map((area, index) => ({
     ...area,
     executionOrder: index + 1,
     role: index === 0 ? "primary" : index === 1 ? "secondary" : "alternative",
@@ -7256,7 +7381,9 @@ function validateAndSequenceEntryAreas({
       errors: [...new Set(errors)],
       candidateCountBeforeQualityGate: deduped.length,
       candidateCountAfterQualityGate: qualityEligible.length,
+      candidateCountAfterDominanceGate: dominanceEligible.length,
       completedFrameworkPeriodsOnly: true,
+      dominanceRejectedPlainLevels: dominanceRejected,
       rejectedWeakCandidates: deduped
         .filter((area) => Number(area.qualityTier || 0) < 2)
         .map((area) => ({
