@@ -202,7 +202,7 @@ function normalizePublicUrl(value, fallback) {
     return parsed.toString().replace(/\/+$/, "");
   } catch {
     throw new Error(
-      "FRONTEND_URL is not valid. Enter only https://training.csaforex.com/version2web in Render."
+      "FRONTEND_URL is not valid. Enter only the full https:// URL of the GoHighLevel page connected to this Render service."
     );
   }
 }
@@ -11585,8 +11585,32 @@ function stoppedResponse({ res, errorType, error, analysis, submittedInstrument,
   });
 }
 
-app.get("/", (req, res) => res.json({ status: "ok", message: "CSA Coach backend is running" }));
-app.get("/health", (req, res) => res.json({ ok: true, service: "csa-coach-backend", time: new Date().toISOString() }));
+app.get("/", (req, res) =>
+  res.json({
+    status: "ok",
+    message: "CSA Coach backend is running",
+    aiProvider: getActiveAiProvider(),
+    aiModel:
+      getActiveAiProvider() === "claude"
+        ? CLAUDE_MODEL
+        : "OpenAI models configured by each analysis task",
+    aiConfigured: isAiProviderConfigured(),
+  })
+);
+app.get("/health", (req, res) =>
+  res.json({
+    ok: true,
+    service: "csa-coach-claude-test",
+    aiProvider: getActiveAiProvider(),
+    aiModel:
+      getActiveAiProvider() === "claude"
+        ? CLAUDE_MODEL
+        : "openai",
+    aiConfigured: isAiProviderConfigured(),
+    frontendUrl: FRONTEND_URL,
+    time: new Date().toISOString(),
+  })
+);
 
 
 app.get("/account-entitlements", async (req, res) => {
