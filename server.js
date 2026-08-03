@@ -1,17 +1,20 @@
-import anthropic
-import base64
-from pathlib import Path
+const express = require('express');
+const cors = require('cors');
+const Anthropic = require('@anthropic-ai/sdk');
 
-# uses ANTHROPIC_API_KEY or credentials from `ant auth login`
-client = anthropic.Anthropic()
+const app = express();
 
-image_24_data = base64.b64encode(Path("24.PNG").read_bytes()).decode("utf-8")
+// Enable CORS and body parsing for JSON / base64 images
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
 
-with client.messages.stream(
-    model="claude-opus-5",
-    max_tokens=4096,
-    temperature=1,
-    system="""<role>
+// Initialize Anthropic client using the environment variable set on Render
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
+
+const SYSTEM_PROMPT = `
+<role>
 You are the Vision Extraction & Analysis Engine for CSA Forex. Your sole duty is to inspect uploaded chart screenshots, extract visual evidence, evaluate market context strictly up to the final visible candle cutoff, and output a validated JSON schema. 
 
 You MUST NOT output generic conversational prose, introductory text, or markdown explanations. Your output must strictly adhere to the structured extraction contract.
@@ -69,7 +72,7 @@ You MUST return ONLY a JSON object adhering to this schema:
     "areaType": "support | resistance | demand | supply | converted support | converted resistance | none",
     "zoneLow": "number or null",
     "zoneHigh": "number or null",
-    "zoneText": "string (e.g., 'around 1.3304-1.3311')",
+    "zoneText": "string",
     "priceStatus": "not reached | approaching | inside | reacted | moved away | unclear",
     "triggerPresent": boolean,
     "triggerDescription": "string"
@@ -82,27 +85,67 @@ You MUST return ONLY a JSON object adhering to this schema:
   "latestVisibleTime": "HH:mm or null",
   "confidence": "high | medium | low"
 }
-</output_contract>""",
-    messages=[
+</output_contract>
+`;
+
+// Health check endpoint for Render
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
+// Primary trade analysis API route
+app.post('/api/analyze-trade', async (req, res) => {
+  try {
+    const { chartImageBase64, mediaType } = req.body;
+
+    if (!chartImageBase64) {
+      return res.status(400).json({ error: 'chartImageBase64 is required' });
+    }
+
+    const response = await anthropic.messages.create({
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 2048,
+      temperature: 0,
+      system: SYSTEM_PROMPT,
+      messages: [
         {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/png",
-                        "data": image_24_data,
-                    },
-                },
-                {
-                    "type": "text",
-                    "text": "Extract the structured analysis facts for this uploaded chart.",
-                },
-            ],
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: mediaType || 'image/png',
+                data: chartImageBase64.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, ''),
+              },
+            },
+            {
+              type: 'text',
+              text: 'Extract the structured analysis facts for this uploaded chart.',
+            },
+          ],
         },
-    ],
-    thinking={"type": "disabled"},
-) as stream:
-    for text in stream.text_stream:
-        print(text, end="", flush=True)
+      ],
+    });
+
+    const rawText = response.content[0].text;
+    
+    // Parse JSON output from Claude
+    try {
+      const extractedFacts = JSON.parse(rawText);
+      return res.json({ success: true, facts: extractedFacts });
+    } catch (parseError) {
+      return res.json({ success: true, rawOutput: rawText });
+    }
+
+  } catch (error) {
+    console.error('Analysis error:', error);
+    return res.status(500).json({ error: 'Failed to analyze chart', details: error.message });
+  }
+});
+
+// Bind to PORT provided by Render
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`CSA Coach backend running on port ${PORT}`);
+});
