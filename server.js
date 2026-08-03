@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import Stripe from "stripe";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
@@ -19,7 +20,153 @@ const upload = multer({
 });
 
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const AI_PROVIDER = String(process.env.AI_PROVIDER || "openai")
+  .trim()
+  .toLowerCase();
+
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-5";
+
+const openai = OPENAI_API_KEY
+  ? new OpenAI({ apiKey: OPENAI_API_KEY })
+  : null;
+
+const anthropic = ANTHROPIC_API_KEY
+  ? new Anthropic({ apiKey: ANTHROPIC_API_KEY })
+  : null;
+
+function getActiveAiProvider() {
+  return AI_PROVIDER === "claude" ? "claude" : "openai";
+}
+
+function isAiProviderConfigured() {
+  return getActiveAiProvider() === "claude"
+    ? Boolean(anthropic)
+    : Boolean(openai);
+}
+
+function getAiConfigurationError() {
+  if (getActiveAiProvider() === "claude" && !anthropic) {
+    return "ANTHROPIC_API_KEY is missing on the server.";
+  }
+  if (getActiveAiProvider() === "openai" && !openai) {
+    return "OPENAI_API_KEY is missing on the server.";
+  }
+  return "";
+}
+
+function getAnthropicText(message) {
+  return Array.isArray(message?.content)
+    ? message.content
+        .filter((block) => block?.type === "text")
+        .map((block) => String(block.text || ""))
+        .join("\n")
+        .trim()
+    : "";
+}
+
+/**
+ * Provider-neutral image + text request.
+ *
+ * The rest of the CSA backend continues to own:
+ * - Twelve Data calculations
+ * - deterministic framework logic
+ * - approved-price validation
+ * - Supabase / Stripe / journal behavior
+ *
+ * The model is used only for the same visual interpretation work the
+ * OpenAI calls were already doing.
+ */
+async function runVisionModel({
+  systemPrompt,
+  userText,
+  imageBase64,
+  mimeType,
+  maxTokens = 1200,
+  openaiModel = "gpt-4.1",
+  claudeModel = CLAUDE_MODEL,
+  temperature = 0,
+  imageDetail = "high",
+}) {
+  const provider = getActiveAiProvider();
+
+  if (provider === "claude") {
+    if (!anthropic) {
+      throw new Error("ANTHROPIC_API_KEY is missing on the server.");
+    }
+
+    const response = await anthropic.messages.create({
+      model: claudeModel,
+      max_tokens: maxTokens,
+      temperature,
+      system: systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: userText,
+            },
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: mimeType,
+                data: imageBase64,
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    return {
+      provider,
+      model: claudeModel,
+      text: getAnthropicText(response),
+      raw: response,
+    };
+  }
+
+  if (!openai) {
+    throw new Error("OPENAI_API_KEY is missing on the server.");
+  }
+
+  const response = await openai.responses.create({
+    model: openaiModel,
+    input: [
+      {
+        role: "system",
+        content: systemPrompt,
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: userText,
+          },
+          {
+            type: "input_image",
+            image_url: `data:${mimeType};base64,${imageBase64}`,
+            ...(imageDetail ? { detail: imageDetail } : {}),
+          },
+        ],
+      },
+    ],
+    max_output_tokens: maxTokens,
+    temperature,
+  });
+
+  return {
+    provider,
+    model: openaiModel,
+    text: response.output_text || "",
+    raw: response,
+  };
+}
 
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || "";
@@ -2562,23 +2709,22 @@ function buildFrameworkMistakeHub({ failedAreas = [], hasConfirmedTrigger = fals
 
 async function detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument = "", selectedTimeframe = "", selectedDateText = "", analysisType = "post-trade" }) {
   const fallback = (reason) => ({ ok: false, isTradingChart: false, chartValidityReason: reason, hasUsablePriceData: false, visibleCandleCount: 0, chartDataQuality: "unclear", chartOccupancyPercent: 0, isNestedChart: false, isChartReadableAtCurrentSize: false, selectedDateVisible: false, insufficientDataReason: reason, detectedInstrument: null, detectedTimeframe: null, latestVisibleDate: null, latestVisibleTime: null, latestVisibleTimeConfidence: "low", dateConfidence: "low", visibleTrigger: null, rejectedTriggerContext: null, triggerDirection: null, triggerConfidence: "low", notes: reason, raw: "" });
-  if (!process.env.OPENAI_API_KEY) return fallback("OPENAI_API_KEY is missing.");
+  if (!isAiProviderConfigured()) return fallback(getAiConfigurationError());
 
   try {
-    const response = await openai.responses.create({
-      model: "gpt-4.1",
-      input: [
-        { role: "system", content: CHART_DETECTION_PROMPT },
-        { role: "user", content: [
-          { type: "input_text", text: `Inspect this uploaded chart image.\nSelected instrument: ${submittedInstrument || "not provided"}\nSelected timeframe: ${selectedTimeframe || "not provided"}\nSelected chart/trade date: ${selectedDateText || "not provided"}\nAnalysis type: ${analysisType || "post-trade"}\nReturn only JSON.` },
-          { type: "input_image", image_url: `data:${mimeType};base64,${imageBase64}` },
-        ]},
-      ],
-      max_output_tokens: 700,
+    const response = await runVisionModel({
+      systemPrompt: CHART_DETECTION_PROMPT,
+      userText: `Inspect this uploaded chart image.\nSelected instrument: ${submittedInstrument || "not provided"}\nSelected timeframe: ${selectedTimeframe || "not provided"}\nSelected chart/trade date: ${selectedDateText || "not provided"}\nAnalysis type: ${analysisType || "post-trade"}\nReturn only JSON.`,
+      imageBase64,
+      mimeType,
+      maxTokens: 700,
+      openaiModel: "gpt-4.1",
+      claudeModel: CLAUDE_MODEL,
       temperature: 0,
+      imageDetail: "high",
     });
 
-    const parsed = extractJsonObject(response.output_text || "");
+    const parsed = extractJsonObject(response.text || "");
     if (!parsed) return fallback("Chart validation did not return usable JSON.");
     const visibleCandleCount = Number.isFinite(
       Number(parsed?.visibleCandleCount)
@@ -2669,7 +2815,7 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
       triggerDirection: isTradingChart && cleanTrigger ? parsed?.triggerDirection || null : null,
       triggerConfidence: isTradingChart && cleanTrigger ? triggerConfidence : "low",
       notes: parsed?.notes || "",
-      raw: response.output_text || "",
+      raw: response.text || "",
     };
   } catch (error) {
     console.error("Chart detection error:", error);
@@ -3341,42 +3487,34 @@ Return JSON only:
   "confidence": "high | medium | low"
 }`;
 
-  const runModel = async (model, detail = "high") => {
-    const response = await openai.responses.create({
-      model,
-      input: [
-        {
-          role: "system",
-          content: prompt,
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text:
-                `Read only the ${target.period} ${target.side} shown on this chart. Return JSON only.`,
-            },
-            {
-              type: "input_image",
-              image_url: `data:${mimeType};base64,${imageBase64}`,
-              detail,
-            },
-          ],
-        },
-      ],
-      max_output_tokens: 500,
+  const runModel = async (openaiModel, detail = "high") => {
+    const response = await runVisionModel({
+      systemPrompt: prompt,
+      userText: `Read only the ${target.period} ${target.side} shown on this chart. Return JSON only.`,
+      imageBase64,
+      mimeType,
+      maxTokens: 500,
+      openaiModel,
+      claudeModel: CLAUDE_MODEL,
       temperature: 0,
+      imageDetail: detail,
     });
 
-    return extractJsonObject(response.output_text || "");
+    return {
+      parsed: extractJsonObject(response.text || ""),
+      provider: response.provider,
+      model: response.model,
+    };
   };
 
   let parsed = null;
-  let modelUsed = "gpt-4.1";
+  let modelUsed =
+    getActiveAiProvider() === "claude" ? CLAUDE_MODEL : "gpt-4.1";
 
   try {
-    parsed = await runModel("gpt-4.1", "high");
+    const result = await runModel("gpt-4.1", "high");
+    parsed = result.parsed;
+    modelUsed = result.model;
   } catch (error) {
     console.warn(
       "Primary dedicated price reader failed; trying fallback:",
@@ -3385,9 +3523,10 @@ Return JSON only:
   }
 
   if (!parsed) {
-    modelUsed = "gpt-4.1-mini";
     try {
-      parsed = await runModel("gpt-4.1-mini", "high");
+      const result = await runModel("gpt-4.1-mini", "high");
+      parsed = result.parsed;
+      modelUsed = result.model;
     } catch (error) {
       console.warn(
         "Fallback dedicated price reader failed:",
@@ -3481,11 +3620,13 @@ async function extractVisibleFrameworkPriceMap({
   marketReference,
   timeframe = "",
 }) {
-  if (!process.env.OPENAI_API_KEY || !imageBase64) {
+  if (!isAiProviderConfigured() || !imageBase64) {
     return {
       ok: false,
       matches: [],
-      reason: "Missing image or OpenAI configuration.",
+      reason: imageBase64
+        ? getAiConfigurationError()
+        : "Missing chart image.",
     };
   }
 
@@ -3643,7 +3784,7 @@ async function compareUploadedChartWithCsaFramework({
   analysisFramework = "csa",
   personalStrategySnapshot = null,
 }) {
-  if (!process.env.OPENAI_API_KEY) return visualFallback("OPENAI_API_KEY is missing.");
+  if (!isAiProviderConfigured()) return visualFallback(getAiConfigurationError());
   if (!imageBase64) return visualFallback("Uploaded chart image was not available for visual comparison.");
 
   // The screenshot is the primary evidence. Twelve Data is optional supporting
@@ -3924,20 +4065,20 @@ Return exactly this JSON shape:
 }`;
 
   try {
-    const response = await openai.responses.create({
-      model: "gpt-4.1-mini",
-      input: [
-        { role: "system", content: prompt },
-        { role: "user", content: [
-          { type: "input_text", text: "Review this uploaded chart in simple beginner trader language using the internal support/resistance framework. Return only the required JSON." },
-          { type: "input_image", image_url: `data:${mimeType};base64,${imageBase64}` },
-        ]},
-      ],
-      max_output_tokens: 3200,
+    const response = await runVisionModel({
+      systemPrompt: prompt,
+      userText:
+        "Review this uploaded chart in simple beginner trader language using the internal support/resistance framework. Return only the required JSON.",
+      imageBase64,
+      mimeType,
+      maxTokens: 3200,
+      openaiModel: "gpt-4.1-mini",
+      claudeModel: CLAUDE_MODEL,
       temperature: 0,
+      imageDetail: "high",
     });
 
-    const parsed = extractJsonObject(response.output_text || "");
+    const parsed = extractJsonObject(response.text || "");
     if (!parsed) {
       return visualFallback("The visual response could not be parsed as JSON.");
     }
@@ -4053,7 +4194,7 @@ Return exactly this JSON shape:
       entryEvidence: safeUserText(parsed.entryEvidence),
       riskEvidence: safeUserText(parsed.riskEvidence),
       visualQualityWarning,
-      raw: response.output_text || "",
+      raw: response.text || "",
     };
   } catch (error) {
     console.error("Visual trade review error:", error);
@@ -12140,7 +12281,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const requestAuth = await getRequestUser(req);
     const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
 
-    if (!process.env.OPENAI_API_KEY) return res.status(500).json({ success: false, error: "OPENAI_API_KEY is missing on the server." });
+    if (!isAiProviderConfigured()) return res.status(500).json({ success: false, error: getAiConfigurationError() });
     if (!req.file) return res.status(400).json({ success: false, error: "No chart image uploaded." });
 
     const {
