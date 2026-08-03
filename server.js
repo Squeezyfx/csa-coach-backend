@@ -93,6 +93,28 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
+// Mock/Default endpoint for Account Entitlements (fixes frontend 404)
+app.get('/account-entitlements', (req, res) => {
+  res.json({
+    tier: 'Pro',
+    unlimitedAnalysis: true,
+    customStrategiesAllowed: true,
+    maxUploadsPerDay: 100,
+  });
+});
+
+// Mock/Default endpoint for Strategies (fixes frontend 404)
+app.get('/strategies', (req, res) => {
+  res.json([
+    {
+      id: 'csa-framework',
+      name: 'CSA Framework',
+      description: 'Default market structure and liquidity analysis framework',
+      isDefault: true,
+    },
+  ]);
+});
+
 // Primary trade analysis API route
 app.post('/api/analyze-trade', async (req, res) => {
   try {
@@ -129,10 +151,11 @@ app.post('/api/analyze-trade', async (req, res) => {
     });
 
     const rawText = response.content[0].text;
-    
-    // Parse JSON output from Claude
+
+    // Parse JSON output from Claude (including markdown cleanup if wrapped in ```json)
     try {
-      const extractedFacts = JSON.parse(rawText);
+      const cleanJsonStr = rawText.replace(/```json\s*|\s*```/g, '').trim();
+      const extractedFacts = JSON.parse(cleanJsonStr);
       return res.json({ success: true, facts: extractedFacts });
     } catch (parseError) {
       return res.json({ success: true, rawOutput: rawText });
