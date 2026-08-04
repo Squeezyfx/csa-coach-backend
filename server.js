@@ -1401,7 +1401,7 @@ AREA RANKING RULES:
 - Validate genuine support/resistance or supply/demand structure before considering distance.
 - Fibonacci retracement is a silent mandatory quality filter only after an authoritative structural area already exists. Only 38.2%, 50%, and 61.8% are used.
 - The deterministic CSA selector controls entry areas. Build candidates only from the timeframe's authoritative source periods, resolve each level's current lifecycle role chronologically, reject failed/choppy/weak levels, then keep only structural areas in close proximity to 38.2%, 50%, or 61.8% of the relevant completed impulse before sequencing Entry 1 and Entry 2.
-- A clean confirmed converted S/R remains structurally valid, but it still must pass the 38.2% / 50% / 61.8% proximity filter before it can become Entry 1 or Entry 2. A repeatedly crossed/choppy converted level must also re-earn structural quality.
+- A clean break with continuation may create a potential converted S/R area that can be watched for a future retest. It becomes confirmed converted only after price returns from the opposite side and respects it. Either way, it must still pass the 38.2% / 50% / 61.8% proximity filter before it can become Entry 1 or Entry 2.
 - Fibonacci must never create an area by itself. An independently valid S/R or supply/demand area becomes a strong entry candidate only when it is close to 38.2%, 50%, or 61.8%.
 - Preserve the true area type: converted resistance/support, resistance/support, or supply/demand.
 - Use the timeframe-framework high or low to identify the correct structural period first.
@@ -2889,6 +2889,7 @@ function chooseFinalChartDate({
   selectedDate,
   detection,
   analysisType = "post-trade",
+  cutoffMode = "final_visible",
 }) {
   const detectedDate = isUsableChartDateDetection(detection)
     ? parseISODateOnly(detection.latestVisibleDate)
@@ -2903,10 +2904,28 @@ function chooseFinalChartDate({
 
   const isPostTrade =
     String(analysisType || "").toLowerCase() === "post-trade";
+  const normalizedMode = normalizeCutoffMode(cutoffMode);
 
-  // A post-trade screenshot is a frozen historical record.
-  // Never analyse candles beyond the final date visible on that screenshot.
+  // FINAL VISIBLE CANDLE is authoritative when the user selects it.
+  // The manually selected Chart/Trade Date is only a fallback in this mode.
+  if (normalizedMode === "final_visible" && detectedDate) {
+    return {
+      finalDate: detectedDate,
+      finalDateText: detectedDateText,
+      selectedDateText,
+      detectedDateText,
+      source: "chart-final-visible-date",
+      selectedDateAdjusted:
+        Boolean(selectedDateText) && selectedDateText !== detectedDateText,
+      reason:
+        "Final visible candle mode was selected, so the chart's detected final visible date controls the review.",
+    };
+  }
+
+  // In selected-day / exact-time modes, a post-trade screenshot must never
+  // allow a user-selected date later than the uploaded chart itself.
   if (
+    normalizedMode !== "final_visible" &&
     isPostTrade &&
     selectedDate &&
     detectedDate &&
@@ -2931,9 +2950,15 @@ function chooseFinalChartDate({
       finalDateText: selectedDateText,
       selectedDateText,
       detectedDateText,
-      source: "user-selected-date",
+      source:
+        normalizedMode === "exact"
+          ? "user-exact-date"
+          : "user-selected-date",
       selectedDateAdjusted: false,
-      reason: "The selected chart/trade date was used.",
+      reason:
+        normalizedMode === "exact"
+          ? "The selected chart date is being used with the requested exact historical time."
+          : "The selected chart/trade date was used.",
     };
   }
 
@@ -2946,7 +2971,7 @@ function chooseFinalChartDate({
       source: "chart-detected-date",
       selectedDateAdjusted: false,
       reason:
-        "No user-selected date was provided, so the chart's final visible date was used.",
+        "No user-selected date was available, so the chart's final visible date was used.",
     };
   }
 
@@ -7389,16 +7414,6 @@ function validateAndSequenceEntryAreas({
     }
 
     if (
-      ["converted resistance", "converted support"].includes(
-        area.areaType
-      ) &&
-      area.conversionConfirmed !== true
-    ) {
-      errors.push("unconfirmed_conversion");
-      return false;
-    }
-
-    if (
       Number(area.structuralScore || 0) <= 0 &&
       Number(area.fibonacciScore || 0) > 0
     ) {
@@ -8394,6 +8409,7 @@ function countLevelSideChanges({
 function selectorAreaQuality({
   areaType = "",
   lifecycleFlipCount = 0,
+  lifecycleEvents = [],
   sideChangeCount = 0,
   reactionStats = {},
   pivotConfirmationCount = 0,
@@ -8406,9 +8422,33 @@ function selectorAreaQuality({
   const flips = Number(lifecycleFlipCount || 0);
   const sideChanges = Number(sideChangeCount || 0);
 
+  const conversionType =
+    ["converted resistance", "converted support"].includes(type);
+
+  const lifecycleEventList = Array.isArray(lifecycleEvents)
+    ? lifecycleEvents
+    : [];
+
+  const latestLifecycleEvent =
+    lifecycleEventList.length > 0
+      ? lifecycleEventList[lifecycleEventList.length - 1]
+      : null;
+
+  const latestBreakClean =
+    !conversionType ||
+    (
+      latestLifecycleEvent &&
+      ["strong_displacement", "multiple_closes"].includes(
+        String(latestLifecycleEvent?.confirmationPath || "")
+      )
+    );
+
+  // A level can legitimately change role twice over time.
+  // Two clean chronological role changes are not automatically ranging/chop.
   const cleanConversion =
-    ["converted resistance", "converted support"].includes(type) &&
-    flips <= 1;
+    conversionType &&
+    flips <= 2 &&
+    latestBreakClean;
 
   let score =
     ["supply", "demand"].includes(type)
@@ -8429,8 +8469,14 @@ function selectorAreaQuality({
   score -= Math.max(0, sideChanges - 1) * 7;
 
   const choppy =
-    flips >= 2 ||
-    sideChanges >= 3;
+    flips >= 3 ||
+    sideChanges >= 4 ||
+    (
+      flips >= 2 &&
+      sideChanges >= 3 &&
+      reactions < 2 &&
+      departures < 1
+    );
 
   let valid = true;
   let reason = "validated";
@@ -8641,9 +8687,10 @@ function buildAuthoritativeFrameworkCandidates({
       period: periodLabel,
       date: sourcePeriod?.date || sourcePeriod?.key || area?.date || null,
       sourceIndex,
-      conversionConfirmed:
+      conversionBreakConfirmed:
         lifecycle.state === "converted" &&
         ["converted resistance", "converted support"].includes(finalType),
+      conversionConfirmed: false,
       lifecycleFlipCount: Number(lifecycle.flipCount || 0),
       lifecycleEvents: Array.isArray(lifecycle.events)
         ? lifecycle.events
@@ -8701,7 +8748,8 @@ function buildAuthoritativeFrameworkCandidates({
       frameworkPrice: candidate.frameworkPrice,
       chartPrice: candidate.price,
       flipCount: candidate.lifecycleFlipCount,
-      conversionConfirmed: candidate.conversionConfirmed,
+      conversionBreakConfirmed: candidate.conversionBreakConfirmed === true,
+      conversionConfirmed: candidate.conversionConfirmed === true,
     })),
   });
 
@@ -8833,6 +8881,7 @@ function rankRawEntryAreas({
     members: [candidate],
     source: candidate.source,
     authoritativeType: candidate.type,
+    conversionBreakConfirmed: candidate.conversionBreakConfirmed === true,
     conversionConfirmed: candidate.conversionConfirmed === true,
     lifecycleFlipCount: Number(candidate.lifecycleFlipCount || 0),
     lifecycleEvents: Array.isArray(candidate.lifecycleEvents)
@@ -8849,6 +8898,7 @@ function rankRawEntryAreas({
   }));
 
   const fibGateDiagnostics = [];
+  const structuralGateDiagnostics = [];
 
   const evaluated = rawZones.map((rawZone) => {
     const compacted = compactZoneBounds({
@@ -8921,6 +8971,9 @@ function rankRawEntryAreas({
       lifecycleFlipCount: Number(
         rawZone?.lifecycleFlipCount || 0
       ),
+      lifecycleEvents: Array.isArray(rawZone?.lifecycleEvents)
+        ? rawZone.lifecycleEvents
+        : [],
       sideChangeCount,
       reactionStats,
       pivotConfirmationCount: Number(
@@ -8932,6 +8985,30 @@ function rankRawEntryAreas({
     const structurallyValid =
       isAuthoritativeFrameworkLevel &&
       quality.valid;
+
+    structuralGateDiagnostics.push({
+      frameworkPrice:
+        asPositiveNumber(rawZone?.members?.[0]?.frameworkPrice) ||
+        authoritativeCenter,
+      chartReconciledPrice:
+        asPositiveNumber(rawZone?.members?.[0]?.price),
+      areaType: rawZone?.authoritativeType || null,
+      frameworkPeriod:
+        rawZone?.period ||
+        rawZone?.members?.[0]?.period ||
+        null,
+      lifecycleFlipCount: Number(rawZone?.lifecycleFlipCount || 0),
+      sideChangeCount,
+      reactionCount: Number(reactionStats?.reactions || 0),
+      strongDepartureCount: Number(reactionStats?.strongDepartures || 0),
+      pivotConfirmationCount: Number(rawZone?.pivotConfirmationCount || 0),
+      conversionBreakConfirmed:
+        rawZone?.conversionBreakConfirmed === true,
+      structurallyValid,
+      qualityReason: quality.reason,
+      qualityScore: quality.score,
+      choppy: quality.choppy,
+    });
 
     if (!structurallyValid) return null;
 
@@ -8992,9 +9069,12 @@ function rankRawEntryAreas({
       Math.abs(zoneHigh - zoneLow) * 0.75
     );
 
-    const conversionConfirmed =
-      !["converted resistance", "converted support"].includes(areaType) ||
-      rawZone?.conversionConfirmed === true ||
+    const isConvertedArea =
+      ["converted resistance", "converted support"].includes(areaType);
+
+    const conversionBreakConfirmed =
+      !isConvertedArea ||
+      rawZone?.conversionBreakConfirmed === true ||
       (
         brokenLevel !== null &&
         brokenLevel >= zoneLow - conversionTolerance &&
@@ -9006,6 +9086,10 @@ function rankRawEntryAreas({
           historicalPhase?.phase === "bullish_structure"
         )
       );
+
+    const conversionConfirmed =
+      !isConvertedArea ||
+      rawZone?.conversionConfirmed === true;
 
     const center = (zoneLow + zoneHigh) / 2;
     const distance = Math.abs(center - Number(currentPrice));
@@ -9020,7 +9104,14 @@ function rankRawEntryAreas({
       // authoritative framework level simply as "around X" to the user.
       zoneText: `around ${formatPrice(authoritativeCenter, symbol)}`,
       levelText: formatPrice(authoritativeCenter, symbol),
-      state: "active",
+      state:
+        isConvertedArea
+          ? conversionConfirmed
+            ? "confirmed conversion"
+            : conversionBreakConfirmed
+            ? "potential conversion"
+            : "active"
+          : "active",
       source: rawZone.source,
       sourceReason:
         `${areaType} validated by ${reactionStats.reactions} separated reaction(s)` +
@@ -9048,6 +9139,7 @@ function rankRawEntryAreas({
       selectorQualityReason: quality.reason,
       selectorChoppy: quality.choppy,
       validated: true,
+      conversionBreakConfirmed,
       conversionConfirmed,
       brokenLevel:
         ["converted resistance", "converted support"].includes(areaType)
@@ -9093,6 +9185,12 @@ function rankRawEntryAreas({
     direction,
     currentPrice,
     atr,
+  });
+
+  console.log("CSA selector v3 structural gate:", {
+    selectorVersion: CSA_SELECTOR_VERSION,
+    direction,
+    candidates: structuralGateDiagnostics,
   });
 
   console.log("CSA selector v3 Fibonacci entry gate:", {
@@ -12731,7 +12829,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       return stoppedResponse({ res, errorType: "insufficient_chart_data", error: "Uploaded chart does not have enough visible price data for review.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
 
-    const dateMismatch = getSelectedDateMismatch(chartDetection, selectedDate, timeframe);
+    const dateMismatch =
+      normalizedRequestedCutoffMode === "final_visible"
+        ? { hasMismatch: false }
+        : getSelectedDateMismatch(chartDetection, selectedDate, timeframe);
+
     if (dateMismatch.hasMismatch) {
       const analysis = buildDateMismatchAnalysis({ selectedDateText, chartDetection, dateMismatch });
       return stoppedResponse({ res, errorType: "selected_date_not_visible", error: "Selected chart/trade date is not visible or reasonably covered by the uploaded chart.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
@@ -12776,9 +12878,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       selectedDate,
       detection: chartDetection,
       analysisType: mode,
+      cutoffMode: normalizedRequestedCutoffMode,
     });
 
     console.log("Chart date decision:", {
+      cutoffMode: normalizedRequestedCutoffMode,
       selectedDate: dateDecision.selectedDateText,
       detectedVisibleDate: dateDecision.detectedDateText,
       finalAnalysisDate: dateDecision.finalDateText,
