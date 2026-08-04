@@ -1399,10 +1399,10 @@ AREA RANKING RULES:
 - A converted resistance may only come from a level originally classified by the CSA period engine as support; a converted support may only come from original resistance. Do not convert demand or supply levels.
 - Generic pivots and chart markings may only confirm or refine an authoritative framework level; they must never create or replace the primary area.
 - Validate genuine support/resistance or supply/demand structure before considering distance.
-- Fibonacci retracement is confluence only. It must never create an entry area by itself.
-- The deterministic CSA selector controls entry areas. Build candidates only from the timeframe's authoritative source periods, resolve each level's current lifecycle role chronologically, reject failed/choppy/weak levels, use Fibonacci only as confluence, then sequence the surviving valid areas by the order price would reach them.
-- A clean confirmed converted S/R is protected as a valid first area when it is the nearest valid level. A repeatedly crossed/choppy converted level must re-earn quality and may be bypassed by a materially stronger structural area.
-- Fibonacci may strengthen an independently valid S/R or supply/demand area but must never create an entry area by itself.
+- Fibonacci retracement is a silent mandatory quality filter only after an authoritative structural area already exists. Only 38.2%, 50%, and 61.8% are used.
+- The deterministic CSA selector controls entry areas. Build candidates only from the timeframe's authoritative source periods, resolve each level's current lifecycle role chronologically, reject failed/choppy/weak levels, then keep only structural areas in close proximity to 38.2%, 50%, or 61.8% of the relevant completed impulse before sequencing Entry 1 and Entry 2.
+- A clean confirmed converted S/R remains structurally valid, but it still must pass the 38.2% / 50% / 61.8% proximity filter before it can become Entry 1 or Entry 2. A repeatedly crossed/choppy converted level must also re-earn structural quality.
+- Fibonacci must never create an area by itself. An independently valid S/R or supply/demand area becomes a strong entry candidate only when it is close to 38.2%, 50%, or 61.8%.
 - Preserve the true area type: converted resistance/support, resistance/support, or supply/demand.
 - Use the timeframe-framework high or low to identify the correct structural period first.
 - If the uploaded chart clearly shows the matching broker level within a reasonable ATR-scaled tolerance, reconcile the final displayed price to that visible chart level.
@@ -1412,9 +1412,9 @@ AREA RANKING RULES:
 - Pivots, reactions and Fibonacci may confirm the chosen period/level but must never replace it.
 - Keep zones compact and tied to the authoritative framework price; do not merge unrelated levels into a wide band.
 - Reject any secondary sell area below the primary sell area, or any secondary buy area above the primary buy area.
-- Rank structural quality and Fibonacci overlap before proximity to price.
-- For a bearish plan, a broken support below an older supply zone becomes potential converted resistance and should normally be the primary area when it is the nearest valid sell area above price.
-- For a bullish plan, a broken resistance above an older demand zone becomes potential converted support and should normally be the primary area when it is the nearest valid buy area below price.
+- First require independent structural validity, then require 38.2% / 50% / 61.8% proximity. Sequence only the surviving strong areas by the order price would reach them.
+- For a bearish plan, a broken support below an older supply zone may become potential converted resistance, but it becomes a strong primary sell area only if it also passes the 38.2% / 50% / 61.8% proximity filter.
+- For a bullish plan, a broken resistance above an older demand zone may become potential converted support, but it becomes a strong primary buy area only if it also passes the 38.2% / 50% / 61.8% proximity filter.
 - Keep a farther supply/demand zone as a secondary area when it remains valid.
 - Do not include an invalidated area as an active entry area.
 - Each area must have a state: active, potential conversion, confirmed conversion, or invalidated.
@@ -3317,9 +3317,12 @@ BREAKS, FALSE BREAKS, AND CONVERTED LEVELS
 - If price repeatedly crosses the area, describe it as ranging or unconfirmed rather than cleanly converted.
 
 FIBONACCI
-- Use Fibonacci only as internal confluence to refine direction and rank valid structural areas.
-- Fibonacci must not create a setup by itself and should not normally be mentioned in beginner-facing feedback.
-- The valid entry remains the support/resistance or supply/demand zone, not an exact Fibonacci price.
+- Use Fibonacci only as a silent internal entry-quality filter after a genuine support/resistance or supply/demand area has already been identified.
+- Only the 38.2%, 50%, and 61.8% retracement levels are used for this entry filter.
+- A structural area is a strong entry area only when that support/resistance or supply/demand area is in close proximity to at least one of those retracement levels.
+- A structurally valid area that is not close to 38.2%, 50%, or 61.8% may remain an important chart reference, but it must not become Entry 1, Entry 2, or the preferred entry area.
+- Fibonacci must never create a setup by itself. The actual entry remains the support/resistance or supply/demand area, not the Fibonacci number.
+- Do not mention Fibonacci, retracement percentages, 38.2%, 50%, or 61.8% in normal beginner-facing feedback. You may simply say one structural area is stronger or offers a cleaner opportunity.
 
 ENTRY AREA AND TIMING
 - Prefer entries that agree with direction and occur at support, resistance, supply, demand, or a valid converted level.
@@ -3328,8 +3331,10 @@ ENTRY AREA AND TIMING
 - If price has not retested the area, say so. Never imply a rejection or trigger has already happened.
 
 ENTRY 1 AND ENTRY 2
-- More than one area can be valid.
-- Entry 1 is the first valid area likely to be reached; Entry 2 is a second valid area, often deeper or at a different confluence point.
+- More than one structural area can exist, but only areas that pass the mandatory 38.2% / 50% / 61.8% internal proximity filter may be treated as strong entry areas.
+- Entry 1 is the first strong Fib-confluent structural area price is likely to reach.
+- Entry 2 is the next strong Fib-confluent structural area if one exists.
+- A nearer structural level that fails the internal Fibonacci proximity filter remains a market reference only and must not be promoted to Entry 1 merely because price will reach it first.
 - Do not automatically call Entry 2 superior or tell the trader to skip Entry 1. Price may react from Entry 1 and never reach Entry 2.
 - Entry 2 should generally be considered if Entry 1 fails and a fresh trigger appears.
 - Do not encourage adding to a losing Entry 1 position. An advanced add-on is outside the default beginner recommendation.
@@ -6541,7 +6546,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.0.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.1.0";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -6910,7 +6915,7 @@ function buildLatestImpulseFibonacci({
   }
 
   const range = Number(swingHigh) - Number(swingLow);
-  const ratios = [0.382, 0.5, 0.618, 0.786];
+  const ratios = [0.382, 0.5, 0.618];
 
   return {
     direction,
@@ -6925,6 +6930,108 @@ function buildLatestImpulseFibonacci({
           : Number(swingHigh) - range * ratio,
     })),
     source: "latest_confirmed_impulse",
+  };
+}
+
+function distanceFromPriceToZone(price, zoneLow, zoneHigh) {
+  const value = Number(price);
+  const low = Math.min(Number(zoneLow), Number(zoneHigh));
+  const high = Math.max(Number(zoneLow), Number(zoneHigh));
+
+  if (
+    !Number.isFinite(value) ||
+    !Number.isFinite(low) ||
+    !Number.isFinite(high)
+  ) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  if (value < low) return low - value;
+  if (value > high) return value - high;
+  return 0;
+}
+
+function evaluateRequiredFibonacciConfluence({
+  fibonacci = null,
+  zoneLow = null,
+  zoneHigh = null,
+  atr = 0,
+  symbol = "",
+}) {
+  const low = Number(zoneLow);
+  const high = Number(zoneHigh);
+
+  if (
+    !fibonacci ||
+    !Array.isArray(fibonacci.levels) ||
+    !Number.isFinite(low) ||
+    !Number.isFinite(high) ||
+    low >= high
+  ) {
+    return {
+      passed: false,
+      matches: [],
+      proximityAllowance: null,
+      reason: "fibonacci_or_structural_area_unavailable",
+    };
+  }
+
+  const halfWidth = Math.abs(high - low) / 2;
+
+  // "Close proximity" is measured relative to the already-validated
+  // structural area, with a small ATR/symbol-scaled allowance so the rule
+  // works across FX, JPY pairs, gold, crypto, stocks and other instruments.
+  // The structural area remains primary; this allowance must never create
+  // a new area around a Fibonacci price.
+  const proximityAllowance = Math.max(
+    halfWidth * 0.25,
+    getApprovedPriceTolerance(symbol) * 0.25,
+    Number(atr || 0) * 0.03,
+    Number.EPSILON * 100
+  );
+
+  const allowedRatios = new Set([0.382, 0.5, 0.618]);
+
+  const matches = fibonacci.levels
+    .filter((level) => allowedRatios.has(Number(level?.ratio)))
+    .map((level) => {
+      const distanceToZone = distanceFromPriceToZone(
+        level?.price,
+        low,
+        high
+      );
+
+      return {
+        ratio: Number(level.ratio),
+        label: String(level.label || ""),
+        price: Number(level.price),
+        distanceToZone,
+        matchType:
+          distanceToZone === 0
+            ? "inside_structural_area"
+            : "close_proximity",
+      };
+    })
+    .filter(
+      (match) =>
+        Number.isFinite(match.distanceToZone) &&
+        match.distanceToZone <= proximityAllowance
+    )
+    .sort((a, b) => {
+      if (a.distanceToZone !== b.distanceToZone) {
+        return a.distanceToZone - b.distanceToZone;
+      }
+      return a.ratio - b.ratio;
+    });
+
+  return {
+    passed: matches.length > 0,
+    matches,
+    proximityAllowance,
+    reason:
+      matches.length > 0
+        ? "structural_area_close_to_required_retracement"
+        : "no_382_50_618_proximity",
   };
 }
 
@@ -7120,7 +7227,12 @@ function compactZoneBounds({
       String(member?.source || "").startsWith("authoritative_framework_")
     ) || members[0] || null;
 
-  const authoritativePrice = Number(authoritativeMember?.price);
+  // Keep the deterministic framework price authoritative for internal
+  // area construction. A visually reconciled broker label may confirm the
+  // level, but it must not replace the framework price used for entry logic.
+  const authoritativePrice = Number(
+    authoritativeMember?.frameworkPrice ?? authoritativeMember?.price
+  );
 
   const fallbackCenter =
     Number.isFinite(Number(rawLow)) && Number.isFinite(Number(rawHigh))
@@ -7208,6 +7320,20 @@ function validateAndSequenceEntryAreas({
   const valid = areas.filter((area) => {
     const low = Number(area?.zoneLow);
     const high = Number(area?.zoneHigh);
+
+    // Final hard guard: only deterministic strong areas that already passed
+    // the 38.2 / 50 / 61.8 proximity gate are allowed into sequencing.
+    if (
+      area?.requiredFibConfluence !== true ||
+      Number(area?.fibonacciScore || 0) <= 0
+    ) {
+      console.log("CSA selector v3 rejected non-confluent structural area:", {
+        areaType: area?.areaType || null,
+        levelText: area?.levelText || null,
+        frameworkPeriod: area?.frameworkPeriod || null,
+      });
+      return false;
+    }
 
     if (area?.authoritativeFrameworkLevel !== true) {
       errors.push("non_framework_area_rejected");
@@ -7924,7 +8050,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "2.0.0";
+const CSA_SELECTOR_VERSION = "3.0.0";
 
 function frameworkAreaSide(type = "") {
   const normalized = String(type || "").toLowerCase();
@@ -8355,6 +8481,13 @@ function shouldBypassNearerPlainArea({
 }) {
   const type = String(candidate?.areaType || "").toLowerCase();
 
+  // Once an area has passed the mandatory structural + 38.2/50/61.8 gate,
+  // preserve it in path order. Entry 1 is the first strong area price is
+  // likely to reach; Entry 2 is the next strong area.
+  if (candidate?.requiredFibConfluence === true) {
+    return false;
+  }
+
   // A clean converted level is not skipped simply because another area
   // scores higher. This protects the D1 converted-resistance benchmark.
   if (
@@ -8715,6 +8848,8 @@ function rankRawEntryAreas({
     ),
   }));
 
+  const fibGateDiagnostics = [];
+
   const evaluated = rawZones.map((rawZone) => {
     const compacted = compactZoneBounds({
       rawLow: rawZone.zoneLow,
@@ -8742,20 +8877,6 @@ function rankRawEntryAreas({
       reactionBars: config.reactionBars,
     });
 
-    const fibMatches = Array.isArray(fibonacci?.levels)
-      ? fibonacci.levels.filter((level) => {
-          const fibTolerance = Math.max(
-            priceTolerance * 2,
-            Number(atr || 0) * 0.12,
-            Math.abs(zoneHigh - zoneLow) * 0.20
-          );
-          return (
-            level.price >= zoneLow - fibTolerance &&
-            level.price <= zoneHigh + fibTolerance
-          );
-        })
-      : [];
-
     const distinctSources = new Set(
       (rawZone.members || []).map((member) => member.source)
     ).size;
@@ -8769,13 +8890,6 @@ function rankRawEntryAreas({
     const isConfirmedConversion =
       rawZone?.authoritativeType === "converted resistance" ||
       rawZone?.authoritativeType === "converted support";
-
-    let fibonacciScore = 0;
-    fibMatches.forEach((match) => {
-      if (match.ratio === 0.618) fibonacciScore = Math.max(fibonacciScore, 3);
-      else if (match.ratio === 0.5) fibonacciScore = Math.max(fibonacciScore, 2);
-      else fibonacciScore = Math.max(fibonacciScore, 1);
-    });
 
     const candidatePrice = Number(
       rawZone?.members?.[0]?.frameworkPrice ||
@@ -8800,6 +8914,8 @@ function rankRawEntryAreas({
       ),
     });
 
+    // Structural validity is deliberately assessed WITHOUT Fibonacci.
+    // Fibonacci is not allowed to rescue or create a weak level.
     const quality = selectorAreaQuality({
       areaType: rawZone?.authoritativeType,
       lifecycleFlipCount: Number(
@@ -8810,7 +8926,7 @@ function rankRawEntryAreas({
       pivotConfirmationCount: Number(
         rawZone?.pivotConfirmationCount || 0
       ),
-      fibonacciScore,
+      fibonacciScore: 0,
     });
 
     const structurallyValid =
@@ -8819,6 +8935,45 @@ function rankRawEntryAreas({
 
     if (!structurallyValid) return null;
 
+    const fibConfluence = evaluateRequiredFibonacciConfluence({
+      fibonacci,
+      zoneLow,
+      zoneHigh,
+      atr,
+      symbol,
+    });
+
+    fibGateDiagnostics.push({
+      frameworkPrice:
+        asPositiveNumber(rawZone?.members?.[0]?.frameworkPrice) ||
+        authoritativeCenter,
+      chartReconciledPrice:
+        asPositiveNumber(rawZone?.members?.[0]?.price),
+      areaType: rawZone?.authoritativeType || null,
+      frameworkPeriod:
+        rawZone?.period ||
+        rawZone?.members?.[0]?.period ||
+        null,
+      zoneLow,
+      zoneHigh,
+      passed: fibConfluence.passed === true,
+      matchedLevels: fibConfluence.matches.map((match) => ({
+        label: match.label,
+        ratio: match.ratio,
+        price: match.price,
+        matchType: match.matchType,
+        distanceToZone: match.distanceToZone,
+      })),
+      proximityAllowance: fibConfluence.proximityAllowance,
+    });
+
+    // HARD CSA ENTRY GATE:
+    // A valid structural area without 38.2 / 50 / 61.8 proximity remains
+    // market context only. It cannot become Entry 1, Entry 2 or preferred.
+    if (!fibConfluence.passed) return null;
+
+    const fibMatches = fibConfluence.matches;
+    const fibonacciScore = 1;
     const structuralScore = quality.score;
 
     const areaType = classifyValidatedArea({
@@ -8861,24 +9016,25 @@ function rankRawEntryAreas({
       zoneLow,
       zoneHigh,
       authoritativeCenter,
-      zoneText: `${formatPrice(zoneLow, symbol)}–${formatPrice(zoneHigh, symbol)}`,
+      // Keep the internal zone bounds for validation, but present the
+      // authoritative framework level simply as "around X" to the user.
+      zoneText: `around ${formatPrice(authoritativeCenter, symbol)}`,
       levelText: formatPrice(authoritativeCenter, symbol),
       state: "active",
       source: rawZone.source,
       sourceReason:
         `${areaType} validated by ${reactionStats.reactions} separated reaction(s)` +
         (reactionStats.strongDepartures
-          ? ` and ${reactionStats.strongDepartures} strong departure(s)`
-          : "") +
-        (fibonacciScore
-          ? `, with ${fibMatches.map((match) => match.label).join(", ")} Fibonacci confluence.`
+          ? ` and ${reactionStats.strongDepartures} strong departure(s).`
           : "."),
       distance,
       structuralScore,
       fibonacciScore,
+      requiredFibConfluence: true,
+      fibonacciConfluence: fibConfluence,
       qualityScore:
         structuralScore +
-        fibonacciScore * 7,
+        7,
       reactionCount: reactionStats.reactions,
       strongDepartureCount: reactionStats.strongDepartures,
       fibonacciMatches: fibMatches,
@@ -8932,12 +9088,40 @@ function rankRawEntryAreas({
     };
   });
 
-  return validateAndSequenceEntryAreas({
+  const sequencedResult = validateAndSequenceEntryAreas({
     areas: evaluated.filter(Boolean),
     direction,
     currentPrice,
     atr,
   });
+
+  console.log("CSA selector v3 Fibonacci entry gate:", {
+    selectorVersion: CSA_SELECTOR_VERSION,
+    direction,
+    swingLow: fibonacci?.swingLow ?? null,
+    swingHigh: fibonacci?.swingHigh ?? null,
+    retracementLevels: Array.isArray(fibonacci?.levels)
+      ? fibonacci.levels.map((level) => ({
+          label: level.label,
+          ratio: level.ratio,
+          price: level.price,
+        }))
+      : [],
+    candidates: fibGateDiagnostics,
+    selectedEntries: (sequencedResult?.areas || []).map((area) => ({
+      executionOrder: area.executionOrder,
+      areaType: area.areaType,
+      levelText: area.levelText,
+      frameworkPeriod: area.frameworkPeriod,
+      fibonacciMatches: (area.fibonacciMatches || []).map((match) => ({
+        label: match.label,
+        price: match.price,
+        matchType: match.matchType,
+      })),
+    })),
+  });
+
+  return sequencedResult;
 }
 
 function normalizeBreakoutState(visualReview = {}, chartDetection = {}) {
@@ -10472,6 +10656,8 @@ function buildValidatedAnalysisFacts({
           : null,
       structuralScore: Number(candidate.structuralScore || 0),
       fibonacciScore: Number(candidate.fibonacciScore || 0),
+      requiredFibConfluence:
+        candidate.requiredFibConfluence === true,
       executionOrder: Number(candidate.executionOrder || index + 1),
       conversionConfirmed: candidate.conversionConfirmed === true,
     })),
@@ -10532,6 +10718,8 @@ function buildValidatedAnalysisFacts({
         areaDirectionMatches(areaType, direction),
       structuralScore: Number(preferredArea?.structuralScore || 0),
       fibonacciScore: Number(preferredArea?.fibonacciScore || 0),
+      requiredFibConfluence:
+        preferredArea?.requiredFibConfluence === true,
       fibonacciMatches: Array.isArray(preferredArea?.fibonacciMatches)
         ? preferredArea.fibonacciMatches
         : [],
@@ -10560,7 +10748,7 @@ function buildValidatedAnalysisFacts({
         Number(preferredArea?.reactionCount || 0) +
         (Number(preferredArea?.fibonacciScore || 0) > 0 ? 1 : 0),
       strength:
-        Number(preferredArea?.fibonacciScore || 0) >= 2 &&
+        Number(preferredArea?.fibonacciScore || 0) > 0 &&
         Number(preferredArea?.structuralScore || 0) >= 18
           ? "high"
           : Number(preferredArea?.structuralScore || 0) >= 12
@@ -10615,6 +10803,137 @@ function secondaryAreaDisplay(facts) {
     facts.direction === "bearish" ? "supply area" : "demand area"
   );
 }
+
+function applyDeterministicEntryPlanToVisualReview({
+  visualReview = null,
+  facts = null,
+}) {
+  if (!visualReview || !facts) return visualReview;
+
+  const deterministicAreas = Array.isArray(facts?.activeEntryAreas)
+    ? facts.activeEntryAreas
+    : [];
+
+  const preferred = facts?.preferredEntryArea || {};
+  const hasPreferred =
+    preferred?.validated === true &&
+    ["buy", "sell"].includes(String(preferred?.direction || "").toLowerCase()) &&
+    Number.isFinite(Number(preferred?.zoneLow)) &&
+    Number.isFinite(Number(preferred?.zoneHigh));
+
+  const activeEntryAreas = deterministicAreas.map((area, index) => ({
+    rank: Number(area?.rank || area?.executionOrder || index + 1),
+    role:
+      area?.role ||
+      (index === 0 ? "primary" : index === 1 ? "secondary" : "alternative"),
+    direction: String(area?.direction || "none").toLowerCase(),
+    areaType: String(area?.areaType || "none").toLowerCase(),
+    zoneLow: Number.isFinite(Number(area?.zoneLow))
+      ? Number(area.zoneLow)
+      : null,
+    zoneHigh: Number.isFinite(Number(area?.zoneHigh))
+      ? Number(area.zoneHigh)
+      : null,
+    zoneText: String(area?.zoneText || "").trim(),
+    state: String(area?.state || "active").toLowerCase(),
+    sourceReason: safeUserText(area?.sourceReason || ""),
+    priceStatus: "not reached",
+    areaVisuallyReached: false,
+    areaReachEvidence: null,
+    areaReachPrice: null,
+    areaReachTime: null,
+    triggerPresent: false,
+    triggerAtAreaVisible: false,
+    triggerEvidence: null,
+    triggerEvidenceTime: null,
+    triggerDescription: null,
+  }));
+
+  const preferredEntryArea = hasPreferred
+    ? {
+        direction: String(preferred.direction).toLowerCase(),
+        areaType: String(preferred.areaType || "none").toLowerCase(),
+        zoneLow: Number(preferred.zoneLow),
+        zoneHigh: Number(preferred.zoneHigh),
+        zoneText: String(preferred.zoneText || "").trim(),
+        priceStatus: String(preferred.priceStatus || "not_reached")
+          .replace(/_/g, " ")
+          .toLowerCase(),
+        areaVisuallyReached: preferred.areaRetested === true,
+        areaReachEvidence:
+          preferred.areaRetested === true
+            ? safeUserText(preferred.areaReachEvidence || "")
+            : null,
+        areaReachPrice:
+          preferred.areaRetested === true
+            ? asPositiveNumber(preferred.areaReachPrice)
+            : null,
+        areaReachTime:
+          preferred.areaRetested === true
+            ? safeUserText(preferred.areaReachTime || "")
+            : null,
+        triggerPresent: preferred.triggerPresent === true,
+        triggerAtAreaVisible: preferred.triggerPresent === true,
+        triggerEvidence:
+          preferred.triggerPresent === true
+            ? safeUserText(preferred.triggerEvidence || "")
+            : null,
+        triggerEvidenceTime:
+          preferred.triggerPresent === true
+            ? safeUserText(preferred.triggerEvidenceTime || "")
+            : null,
+        triggerDescription:
+          preferred.triggerPresent === true
+            ? safeUserText(preferred.triggerDescription || "")
+            : null,
+      }
+    : {
+        direction: "none",
+        areaType: "none",
+        zoneLow: null,
+        zoneHigh: null,
+        zoneText: "",
+        priceStatus: "unclear",
+        areaVisuallyReached: false,
+        areaReachEvidence: null,
+        areaReachPrice: null,
+        areaReachTime: null,
+        triggerPresent: false,
+        triggerAtAreaVisible: false,
+        triggerEvidence: null,
+        triggerEvidenceTime: null,
+        triggerDescription: null,
+      };
+
+  const preferredText = hasPreferred
+    ? `${preferred.areaType} ${preferred.zoneText}`.replace(/\s+/g, " ").trim()
+    : "";
+
+  const bestAreaToWatch = hasPreferred
+    ? preferred.direction === "sell"
+      ? `Wait for price to return towards the ${preferredText} and show a clear bearish trigger before considering a sell.`
+      : `Wait for price to return towards the ${preferredText} and show a clear bullish trigger before considering a buy.`
+    : facts.direction === "bearish"
+    ? "No strong resistance or supply entry area has passed the internal quality checks yet."
+    : facts.direction === "bullish"
+    ? "No strong support or demand entry area has passed the internal quality checks yet."
+    : "No strong entry area has been confirmed yet.";
+
+  const coachVerdict = hasPreferred
+    ? preferred.direction === "sell"
+      ? `The stronger sell area to monitor is ${preferredText}. Wait for a fresh bearish trigger there and avoid chasing price.`
+      : `The stronger buy area to monitor is ${preferredText}. Wait for a fresh bullish trigger there and avoid chasing price.`
+    : "No strong entry area is confirmed yet, so avoid forcing a trade.";
+
+  return {
+    ...visualReview,
+    activeEntryAreas,
+    preferredEntryArea,
+    bestAreaToWatch,
+    coachVerdict,
+  };
+}
+
 
 function directionDisplay(facts) {
   if (
@@ -12633,6 +12952,15 @@ ${(visualReview?.strategyMissingInformation || []).length
       analysisType: mode,
       selectedDate: chartCutoff.resolvedDate || selectedDateText || "",
       submittedNotes,
+    });
+
+    // Replace any model-suggested entry areas with the deterministic CSA
+    // selector result before saving or returning the visual review. This keeps
+    // Claude's visual observations useful while preventing it from promoting a
+    // structurally valid but non-confluent level as Entry 1 / Entry 2.
+    visualReview = applyDeterministicEntryPlanToVisualReview({
+      visualReview,
+      facts: analysisFacts,
     });
 
     const finalFeedback = buildControlledFeedback({
