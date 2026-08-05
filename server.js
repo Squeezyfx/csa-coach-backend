@@ -8504,13 +8504,15 @@ function selectorAreaQuality({
 
     if (!valid) reason = "choppy_converted_level";
   } else {
-    valid =
-      reactions >= 1 ||
-      departures >= 1 ||
-      pivots >= 1 ||
-      fibonacciScore > 0;
+    // Plain support/resistance candidates reaching this function already come
+    // from authoritative timeframe framework highs/lows and have survived the
+    // deterministic lifecycle invalidation checks. Do not require an extra
+    // reaction/pivot merely to remain a valid structural reference.
+    // The mandatory 38.2 / 50 / 61.8 gate later decides whether the valid
+    // structural level is strong enough to become an entry.
+    valid = !choppy;
 
-    if (!valid) reason = "weak_plain_sr";
+    if (!valid) reason = "choppy_plain_sr";
   }
 
   return {
@@ -8876,8 +8878,11 @@ function rankRawEntryAreas({
   });
 
   const rawZones = frameworkCandidates.map((candidate) => ({
-    zoneLow: candidate.price,
-    zoneHigh: candidate.price,
+    // The CSA framework price is authoritative for the entry level.
+    // A visually reconciled chart price is supporting evidence only and must
+    // never replace the framework price used for Entry 1 / Entry 2.
+    zoneLow: candidate.frameworkPrice,
+    zoneHigh: candidate.frameworkPrice,
     members: [candidate],
     source: candidate.source,
     authoritativeType: candidate.type,
@@ -8911,7 +8916,14 @@ function rankRawEntryAreas({
 
     const zoneLow = compacted.zoneLow;
     const zoneHigh = compacted.zoneHigh;
-    const authoritativeCenter = compacted.center;
+
+    const authoritativeCenter =
+      asPositiveNumber(rawZone?.members?.[0]?.frameworkPrice) ||
+      compacted.center;
+
+    const chartReconciledCenter =
+      asPositiveNumber(rawZone?.members?.[0]?.price) ||
+      compacted.center;
 
     const reactionTolerance = Math.max(
       priceTolerance,
@@ -9091,7 +9103,7 @@ function rankRawEntryAreas({
       !isConvertedArea ||
       rawZone?.conversionConfirmed === true;
 
-    const center = (zoneLow + zoneHigh) / 2;
+    const center = authoritativeCenter;
     const distance = Math.abs(center - Number(currentPrice));
 
     return {
@@ -9100,6 +9112,7 @@ function rankRawEntryAreas({
       zoneLow,
       zoneHigh,
       authoritativeCenter,
+      chartReconciledCenter,
       // Keep the internal zone bounds for validation, but present the
       // authoritative framework level simply as "around X" to the user.
       zoneText: `around ${formatPrice(authoritativeCenter, symbol)}`,
@@ -9144,7 +9157,7 @@ function rankRawEntryAreas({
       brokenLevel:
         ["converted resistance", "converted support"].includes(areaType)
           ? (
-              asPositiveNumber(rawZone?.members?.[0]?.price) ||
+              asPositiveNumber(rawZone?.members?.[0]?.frameworkPrice) ||
               brokenLevel
             )
           : null,
@@ -9210,6 +9223,8 @@ function rankRawEntryAreas({
       executionOrder: area.executionOrder,
       areaType: area.areaType,
       levelText: area.levelText,
+      authoritativeCenter: area.authoritativeCenter,
+      chartReconciledCenter: area.chartReconciledCenter,
       frameworkPeriod: area.frameworkPeriod,
       fibonacciMatches: (area.fibonacciMatches || []).map((match) => ({
         label: match.label,
@@ -10745,7 +10760,13 @@ function buildValidatedAnalysisFacts({
       areaType: candidate.areaType,
       zoneLow: candidate.zoneLow,
       zoneHigh: candidate.zoneHigh,
-      zoneText: candidate.zoneText,
+      zoneText:
+        safeUserText(candidate.levelText || "")
+          ? `around ${safeUserText(candidate.levelText || "")}`
+          : candidate.zoneText,
+      authoritativeCenter: asPositiveNumber(candidate.authoritativeCenter),
+      chartReconciledCenter: asPositiveNumber(candidate.chartReconciledCenter),
+      levelText: safeUserText(candidate.levelText || ""),
       state: candidate.state,
       sourceReason: safeUserText(candidate.sourceReason || ""),
       distanceFromPrice:
@@ -10773,7 +10794,10 @@ function buildValidatedAnalysisFacts({
           areaType: secondaryRawArea.areaType,
           zoneLow: secondaryRawArea.zoneLow,
           zoneHigh: secondaryRawArea.zoneHigh,
-          zoneText: secondaryRawArea.zoneText,
+          zoneText:
+            safeUserText(secondaryRawArea.levelText || "")
+              ? `around ${safeUserText(secondaryRawArea.levelText)}`
+              : secondaryRawArea.zoneText,
           state: secondaryRawArea.state,
           sourceReason: safeUserText(secondaryRawArea.sourceReason || ""),
           executionOrder: Number(secondaryRawArea.executionOrder || 2),
@@ -10798,7 +10822,10 @@ function buildValidatedAnalysisFacts({
       areaType,
       zoneLow: zone.zoneLow,
       zoneHigh: zone.zoneHigh,
-      zoneText: zone.zoneText,
+      zoneText:
+        safeUserText(preferredArea?.levelText || "")
+          ? `around ${safeUserText(preferredArea.levelText)}`
+          : safeUserText(preferredArea?.zoneText || zone.zoneText),
       priceStatus,
       areaRetested,
       areaReachEvidence: areaRetested ? areaReachEvidence : "",
@@ -10932,7 +10959,12 @@ function applyDeterministicEntryPlanToVisualReview({
     zoneHigh: Number.isFinite(Number(area?.zoneHigh))
       ? Number(area.zoneHigh)
       : null,
-    zoneText: String(area?.zoneText || "").trim(),
+    zoneText:
+      safeUserText(area?.levelText || "")
+        ? `around ${safeUserText(area.levelText)}`
+        : String(area?.zoneText || "").trim(),
+    authoritativeCenter: asPositiveNumber(area?.authoritativeCenter),
+    levelText: safeUserText(area?.levelText || ""),
     state: String(area?.state || "active").toLowerCase(),
     sourceReason: safeUserText(area?.sourceReason || ""),
     priceStatus: "not reached",
@@ -10953,7 +10985,12 @@ function applyDeterministicEntryPlanToVisualReview({
         areaType: String(preferred.areaType || "none").toLowerCase(),
         zoneLow: Number(preferred.zoneLow),
         zoneHigh: Number(preferred.zoneHigh),
-        zoneText: String(preferred.zoneText || "").trim(),
+        zoneText:
+          safeUserText(preferred.levelText || "")
+            ? `around ${safeUserText(preferred.levelText)}`
+            : String(preferred.zoneText || "").trim(),
+        authoritativeCenter: asPositiveNumber(preferred.authoritativeCenter),
+        levelText: safeUserText(preferred.levelText || ""),
         priceStatus: String(preferred.priceStatus || "not_reached")
           .replace(/_/g, " ")
           .toLowerCase(),
@@ -11003,8 +11040,20 @@ function applyDeterministicEntryPlanToVisualReview({
         triggerDescription: null,
       };
 
+  const preferredExactText =
+    safeUserText(preferred.levelText || "") ||
+    (
+      Number.isFinite(Number(preferred.authoritativeCenter))
+        ? formatPrice(preferred.authoritativeCenter)
+        : ""
+    );
+
   const preferredText = hasPreferred
-    ? `${preferred.areaType} ${preferred.zoneText}`.replace(/\s+/g, " ").trim()
+    ? preferredExactText
+      ? `${preferred.areaType} around ${preferredExactText}`
+      : `${preferred.areaType} ${String(preferred.zoneText || "").replace(/^around\s+/i, "")}`
+          .replace(/\s+/g, " ")
+          .trim()
     : "";
 
   const bestAreaToWatch = hasPreferred
@@ -11242,7 +11291,7 @@ function buildControlledFeedback({
 
   if (secondaryAreaText) {
     strengths.push(
-      `The ${secondaryAreaText} provides a secondary ${action} location if price retraces further.`
+      `The ${secondaryAreaText} remains a fallback ${action} area if Entry 1 fails and a fresh trigger appears there.`
     );
   }
 
