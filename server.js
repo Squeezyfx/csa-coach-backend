@@ -1849,6 +1849,24 @@ function buildApprovedMarketAreas(marketReference = null) {
     .filter(Boolean);
 }
 
+function getFrameworkChartReconciliationTolerance({
+  symbol = "",
+  atr = 0,
+}) {
+  // This tolerance is deliberately much tighter than the broad "approved
+  // market price" tolerance. It is only for matching one already-selected
+  // framework level to the SAME visible chart level.
+  //
+  // Examples for normal non-JPY FX:
+  // - 0.69858 -> 0.69845 is acceptable.
+  // - 0.69634 -> 0.69618/0.69620 is acceptable.
+  // - 0.69634 -> 0.69845 is far too large and must be rejected.
+  return Math.max(
+    getCleanBreakTolerance(symbol) * 1.5,
+    Number(atr || 0) * 0.08
+  );
+}
+
 function getApprovedPriceTolerance(symbol = "") {
   const base = getCleanBreakTolerance(symbol);
   const compact = comparableInstrument(symbol);
@@ -3502,9 +3520,11 @@ Instructions:
 5. If there is no marked line but the matching period high/low is clear, estimate it from the visible price scale only when confident.
 6. Never use a level from another period.
 7. Never swap high and low.
-8. Never invent digits.
-9. If the exact printed price cannot be read, displayedPrice must be null.
-10. If the price can be estimated with useful confidence, put it in approximatePrice; otherwise null.
+8. Treat the MARKET-DATA REFERENCE PRICE as a strong location anchor. The correct chart-visible level should be near that reference price.
+9. If the line you find is materially far from the MARKET-DATA REFERENCE PRICE, do NOT use it. Return null rather than borrowing a different period's line.
+10. Never invent digits.
+11. If the exact printed price cannot be read, displayedPrice must be null.
+12. If the price can be estimated with useful confidence, put it in approximatePrice; otherwise null.
 
 Return JSON only:
 {
@@ -3604,16 +3624,34 @@ Return JSON only:
     getStructureEngineConfig(timeframe).atrPeriod
   );
 
-  const tolerance = Math.max(
-    getApprovedPriceTolerance(marketReference?.symbol || "") * 12,
-    Number(atr || 0) * 0.35
-  );
+  const tolerance = getFrameworkChartReconciliationTolerance({
+    symbol: marketReference?.symbol || "",
+    atr,
+  });
+
+  const candidateDifference =
+    candidatePrice !== null
+      ? Math.abs(
+          Number(candidatePrice) -
+          Number(target.frameworkPrice)
+        )
+      : null;
 
   const withinTolerance =
-    candidatePrice !== null &&
-    Math.abs(
-      Number(candidatePrice) - Number(target.frameworkPrice)
-    ) <= tolerance;
+    candidateDifference !== null &&
+    candidateDifference <= tolerance;
+
+  if (candidatePrice !== null && !withinTolerance) {
+    console.log("Focused framework price rejected as too far:", {
+      period: target.period,
+      side: target.side,
+      areaType: target.areaType,
+      frameworkPrice: target.frameworkPrice,
+      candidatePrice,
+      difference: candidateDifference,
+      tolerance,
+    });
+  }
 
   return {
     period: target.period,
@@ -3634,13 +3672,7 @@ Return JSON only:
     confidence,
     withinTolerance,
     modelUsed,
-    difference:
-      candidatePrice !== null
-        ? Math.abs(
-            Number(candidatePrice) -
-            Number(target.frameworkPrice)
-          )
-        : null,
+    difference: candidateDifference,
   };
 }
 
@@ -7995,10 +8027,10 @@ function reconcileFrameworkLevelWithVisibleChart({
     };
   }
 
-  const tolerance = Math.max(
-    getApprovedPriceTolerance(symbol) * 8,
-    Number(atr || 0) * 0.22
-  );
+  const tolerance = getFrameworkChartReconciliationTolerance({
+    symbol,
+    atr,
+  });
 
   const typeCompatible = (candidateType) => {
     const type = String(candidateType || "").toLowerCase();
@@ -8077,10 +8109,10 @@ function reconcileFrameworkLevelWithVisibleChart({
       distance: Math.abs(Number(candidate.price) - basePrice),
     }))
     .sort((a, b) => {
-      if (b.confidence !== a.confidence) {
-        return b.confidence - a.confidence;
+      if (a.distance !== b.distance) {
+        return a.distance - b.distance;
       }
-      return a.distance - b.distance;
+      return b.confidence - a.confidence;
     });
 
   if (!evidence.length) {
@@ -8089,6 +8121,7 @@ function reconcileFrameworkLevelWithVisibleChart({
       frameworkSide,
       frameworkType,
       frameworkPrice: basePrice,
+      tolerance,
       reason:
         "No same-period/same-side chart price survived validation.",
     });
@@ -8114,6 +8147,8 @@ function reconcileFrameworkLevelWithVisibleChart({
     periodHint: selected.periodHint || null,
     sideHint: selected.sideHint || null,
     confidence: selected.confidence,
+    difference: selected.distance,
+    tolerance,
   });
 
   return {
