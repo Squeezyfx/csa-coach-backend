@@ -7319,6 +7319,47 @@ function dedupeValidatedAreas(areas = [], atr = 0) {
     }
 
     const existing = result[duplicateIndex];
+    const candidateReconciled =
+      candidate?.chartReconciled === true;
+    const existingReconciled =
+      existing?.chartReconciled === true;
+
+    const candidateDifference = Number.isFinite(
+      Number(candidate?.reconciliationDifference)
+    )
+      ? Number(candidate.reconciliationDifference)
+      : Number.POSITIVE_INFINITY;
+
+    const existingDifference = Number.isFinite(
+      Number(existing?.reconciliationDifference)
+    )
+      ? Number(existing.reconciliationDifference)
+      : Number.POSITIVE_INFINITY;
+
+    // For overlapping strong levels, prefer the candidate whose same-period
+    // chart reading agrees most closely with its framework price.
+    if (candidateReconciled && !existingReconciled) {
+      result[duplicateIndex] = candidate;
+      return;
+    }
+
+    if (
+      candidateReconciled &&
+      existingReconciled &&
+      candidateDifference + Number.EPSILON < existingDifference
+    ) {
+      result[duplicateIndex] = candidate;
+      return;
+    }
+
+    if (
+      candidateReconciled &&
+      existingReconciled &&
+      existingDifference + Number.EPSILON < candidateDifference
+    ) {
+      return;
+    }
+
     const candidatePriority =
       Number(candidate.structuralScore || 0) +
       Number(candidate.fibonacciScore || 0) * 4;
@@ -8067,6 +8108,36 @@ function reconcileFrameworkLevelWithVisibleChart({
 
 const CSA_SELECTOR_VERSION = "3.0.0";
 
+function resolveCsaEntryPrice({
+  frameworkPrice = null,
+  chartPrice = null,
+  chartReconciled = false,
+  symbol = "",
+}) {
+  const framework = asPositiveNumber(frameworkPrice);
+  const chart = asPositiveNumber(chartPrice);
+
+  if (framework === null) return chart;
+  if (!chartReconciled || chart === null) return framework;
+
+  const difference = Math.abs(chart - framework);
+
+  // Keep the framework value when the difference is only a tiny broker/feed
+  // variation. For normal non-JPY FX this is roughly 0.3 pip.
+  const microDifferenceTolerance = Math.max(
+    getCleanBreakTolerance(symbol) * 0.15,
+    Number.EPSILON * 100
+  );
+
+  if (difference <= microDifferenceTolerance) {
+    return framework;
+  }
+
+  // A meaningful same-period visual reconciliation may refine the entry price.
+  // Period identity is still controlled by the deterministic framework.
+  return chart;
+}
+
 function frameworkAreaSide(type = "") {
   const normalized = String(type || "").toLowerCase();
 
@@ -8686,6 +8757,10 @@ function buildAuthoritativeFrameworkCandidates({
       reconciliationEvidence: reconciled.evidence || null,
       reconciliationPeriodHint: reconciled.periodHint || null,
       reconciliationConfidence: Number(reconciled.confidence || 0),
+      reconciliationDifference:
+        Number.isFinite(Number(reconciled.difference))
+          ? Number(reconciled.difference)
+          : null,
       period: periodLabel,
       date: sourcePeriod?.date || sourcePeriod?.key || area?.date || null,
       sourceIndex,
@@ -8702,26 +8777,20 @@ function buildAuthoritativeFrameworkCandidates({
     });
   });
 
-  const sorted = [...candidates].sort((a, b) => {
-    if (Number(a.price) !== Number(b.price)) {
-      return Number(a.price) - Number(b.price);
-    }
-
-    return (
-      Number(a.authorityRank || 99) -
-      Number(b.authorityRank || 99)
-    );
-  });
-
+  // Do not collapse nearby levels from different authoritative periods here.
+  // Each distinct framework level must reach structural + Fibonacci validation
+  // before any overlap/deduplication decision is made.
   const unique = [];
 
-  sorted.forEach((candidate) => {
-    const duplicateIndex = unique.findIndex(
-      (existing) =>
-        Math.abs(
-          Number(existing.price) -
-          Number(candidate.price)
-        ) <= tolerance
+  candidates.forEach((candidate) => {
+    const duplicateIndex = unique.findIndex((existing) =>
+      Number(existing.sourceIndex) === Number(candidate.sourceIndex) &&
+      String(existing.originalType || "") ===
+        String(candidate.originalType || "") &&
+      Math.abs(
+        Number(existing.frameworkPrice) -
+        Number(candidate.frameworkPrice)
+      ) <= Math.max(Number.EPSILON * 100, tolerance * 0.02)
     );
 
     if (duplicateIndex < 0) {
@@ -8731,13 +8800,33 @@ function buildAuthoritativeFrameworkCandidates({
 
     const existing = unique[duplicateIndex];
 
+    const existingDiff = Number.isFinite(
+      Number(existing.reconciliationDifference)
+    )
+      ? Number(existing.reconciliationDifference)
+      : Number.POSITIVE_INFINITY;
+
+    const candidateDiff = Number.isFinite(
+      Number(candidate.reconciliationDifference)
+    )
+      ? Number(candidate.reconciliationDifference)
+      : Number.POSITIVE_INFINITY;
+
     if (
-      Number(candidate.authorityRank || 99) <
-      Number(existing.authorityRank || 99)
+      candidate.chartReconciled === true &&
+      (
+        existing.chartReconciled !== true ||
+        candidateDiff < existingDiff
+      )
     ) {
       unique[duplicateIndex] = candidate;
     }
   });
+
+  unique.sort(
+    (a, b) =>
+      Number(a.frameworkPrice) - Number(b.frameworkPrice)
+  );
 
   console.log("CSA selector v2 framework candidates:", {
     selectorVersion: CSA_SELECTOR_VERSION,
@@ -8749,8 +8838,11 @@ function buildAuthoritativeFrameworkCandidates({
       finalType: candidate.type,
       frameworkPrice: candidate.frameworkPrice,
       chartPrice: candidate.price,
+      chartReconciled: candidate.chartReconciled === true,
+      reconciliationDifference: candidate.reconciliationDifference,
       flipCount: candidate.lifecycleFlipCount,
-      conversionBreakConfirmed: candidate.conversionBreakConfirmed === true,
+      conversionBreakConfirmed:
+        candidate.conversionBreakConfirmed === true,
       conversionConfirmed: candidate.conversionConfirmed === true,
     })),
   });
@@ -8877,30 +8969,40 @@ function rankRawEntryAreas({
     timeframe,
   });
 
-  const rawZones = frameworkCandidates.map((candidate) => ({
-    // The CSA framework price is authoritative for the entry level.
-    // A visually reconciled chart price is supporting evidence only and must
-    // never replace the framework price used for Entry 1 / Entry 2.
-    zoneLow: candidate.frameworkPrice,
-    zoneHigh: candidate.frameworkPrice,
-    members: [candidate],
-    source: candidate.source,
-    authoritativeType: candidate.type,
-    conversionBreakConfirmed: candidate.conversionBreakConfirmed === true,
-    conversionConfirmed: candidate.conversionConfirmed === true,
-    lifecycleFlipCount: Number(candidate.lifecycleFlipCount || 0),
-    lifecycleEvents: Array.isArray(candidate.lifecycleEvents)
-      ? candidate.lifecycleEvents
-      : [],
-    sourceIndex: Number.isInteger(candidate.sourceIndex)
-      ? candidate.sourceIndex
-      : -1,
-    period: candidate.period || null,
-    breakPeriod: candidate.breakPeriod || null,
-    pivotConfirmationCount: Number(
-      candidate.pivotConfirmationCount || 0
-    ),
-  }));
+  const rawZones = frameworkCandidates.map((candidate) => {
+    const resolvedEntryPrice = resolveCsaEntryPrice({
+      frameworkPrice: candidate.frameworkPrice,
+      chartPrice: candidate.price,
+      chartReconciled: candidate.chartReconciled === true,
+      symbol,
+    });
+
+    return {
+      // Framework period identity remains authoritative. The final level price
+      // may be refined only by validated same-period chart reconciliation.
+      zoneLow: resolvedEntryPrice,
+      zoneHigh: resolvedEntryPrice,
+      resolvedEntryPrice,
+      members: [candidate],
+      source: candidate.source,
+      authoritativeType: candidate.type,
+      conversionBreakConfirmed:
+        candidate.conversionBreakConfirmed === true,
+      conversionConfirmed: candidate.conversionConfirmed === true,
+      lifecycleFlipCount: Number(candidate.lifecycleFlipCount || 0),
+      lifecycleEvents: Array.isArray(candidate.lifecycleEvents)
+        ? candidate.lifecycleEvents
+        : [],
+      sourceIndex: Number.isInteger(candidate.sourceIndex)
+        ? candidate.sourceIndex
+        : -1,
+      period: candidate.period || null,
+      breakPeriod: candidate.breakPeriod || null,
+      pivotConfirmationCount: Number(
+        candidate.pivotConfirmationCount || 0
+      ),
+    };
+  });
 
   const fibGateDiagnostics = [];
   const structuralGateDiagnostics = [];
@@ -8917,13 +9019,17 @@ function rankRawEntryAreas({
     const zoneLow = compacted.zoneLow;
     const zoneHigh = compacted.zoneHigh;
 
-    const authoritativeCenter =
+    const frameworkCenter =
       asPositiveNumber(rawZone?.members?.[0]?.frameworkPrice) ||
       compacted.center;
 
     const chartReconciledCenter =
       asPositiveNumber(rawZone?.members?.[0]?.price) ||
       compacted.center;
+
+    const authoritativeCenter =
+      asPositiveNumber(rawZone?.resolvedEntryPrice) ||
+      frameworkCenter;
 
     const reactionTolerance = Math.max(
       priceTolerance,
@@ -9112,6 +9218,7 @@ function rankRawEntryAreas({
       zoneLow,
       zoneHigh,
       authoritativeCenter,
+      frameworkCenter,
       chartReconciledCenter,
       // Keep the internal zone bounds for validation, but present the
       // authoritative framework level simply as "around X" to the user.
@@ -9185,6 +9292,12 @@ function rankRawEntryAreas({
         ),
       reconciliationConfidence:
         Number(rawZone?.members?.[0]?.reconciliationConfidence || 0),
+      reconciliationDifference:
+        Number.isFinite(
+          Number(rawZone?.members?.[0]?.reconciliationDifference)
+        )
+          ? Number(rawZone.members[0].reconciliationDifference)
+          : null,
       authoritativeFrameworkLevel: true,
       conversionSourceRule:
         ["converted resistance", "converted support"].includes(areaType)
@@ -9224,7 +9337,10 @@ function rankRawEntryAreas({
       areaType: area.areaType,
       levelText: area.levelText,
       authoritativeCenter: area.authoritativeCenter,
+      frameworkCenter: area.frameworkCenter,
       chartReconciledCenter: area.chartReconciledCenter,
+      chartReconciled: area.chartReconciled === true,
+      reconciliationDifference: area.reconciliationDifference,
       frameworkPeriod: area.frameworkPeriod,
       fibonacciMatches: (area.fibonacciMatches || []).map((match) => ({
         label: match.label,
@@ -10765,6 +10881,7 @@ function buildValidatedAnalysisFacts({
           ? `around ${safeUserText(candidate.levelText || "")}`
           : candidate.zoneText,
       authoritativeCenter: asPositiveNumber(candidate.authoritativeCenter),
+      frameworkCenter: asPositiveNumber(candidate.frameworkCenter),
       chartReconciledCenter: asPositiveNumber(candidate.chartReconciledCenter),
       levelText: safeUserText(candidate.levelText || ""),
       state: candidate.state,
@@ -10911,7 +11028,7 @@ function formatRankedArea(area, fallbackType = "entry") {
     );
 
   if (exactLevel) return `${base} around ${exactLevel}`;
-  return area.zoneText ? `${base} around ${area.zoneText}` : `marked ${base}`;
+  return area.zoneText ? `${base} ${String(area.zoneText).replace(/^around\\s+/i, "around ")}` : `marked ${base}`;
 }
 
 function areaDisplay(facts) {
