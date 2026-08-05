@@ -1383,6 +1383,8 @@ Important:
 - If the selected date is clearly far after the latest visible chart date, set selectedDateVisible=false and provide latestVisibleDate.
 - Inspect the far-right side of the time axis and the latest visible candle. When readable, return the latest visible candle time in 24-hour HH:mm format.
 - latestVisibleTime must describe where the uploaded screenshot stops, not the current time and not a later market time.
+- Read the final visible candle CLOSE price from the chart header or final printed price label when it is clearly visible. Return it as latestVisiblePrice. Prefer an exact printed/header close over a visual estimate.
+- latestVisiblePrice must describe the final candle visible in the uploaded screenshot, not a later external-data price. If the exact final close cannot be read confidently, return null rather than guessing.
 - If the final candle time cannot be read confidently, set latestVisibleTime=null and latestVisibleTimeConfidence="low". Never guess.
 - If the date axis is hard to read, set dateConfidence="low" instead of blocking the chart.
 - Only mark hasUsablePriceData=false when the chart is truly blank, unreadable, severely cropped, loading, or has almost no price movement.
@@ -1438,6 +1440,8 @@ Return exactly this JSON shape:
   "latestVisibleDate": "YYYY-MM-DD or null",
   "latestVisibleTime": "HH:mm in 24-hour time or null",
   "latestVisibleTimeConfidence": "high or medium or low",
+  "latestVisiblePrice": 1.23456,
+  "latestVisiblePriceConfidence": "high or medium or low",
   "dateConfidence": "high or medium or low",
   "visibleTrigger": "brief trigger description or null",
   "triggerDirection": "bullish or bearish or neutral or null",
@@ -2713,6 +2717,332 @@ async function fetchTwelveDataStructureLevels({
   };
 }
 
+function getLastTimeframeCandle(marketReference = null) {
+  const candles = Array.isArray(marketReference?.timeframeCandles)
+    ? marketReference.timeframeCandles
+    : [];
+  return candles.length ? candles[candles.length - 1] : null;
+}
+
+function getFinalVisiblePriceSyncTolerance({
+  marketReference = null,
+  symbol = "",
+  targetPrice = null,
+}) {
+  const candles = Array.isArray(marketReference?.timeframeCandles)
+    ? marketReference.timeframeCandles
+    : [];
+  const atr = averageTrueRange(candles, 14);
+  const price = Number(targetPrice);
+
+  return Math.max(
+    Number.isFinite(atr) ? atr * 0.25 : 0,
+    getCleanBreakTolerance(symbol) * 2,
+    closePriceTolerance(symbol, Number.isFinite(price) ? price : 0),
+    Number.EPSILON * 100
+  );
+}
+
+function findBestCandleForVisibleClose({
+  candles = [],
+  targetPrice = null,
+  tolerance = 0,
+}) {
+  const target = Number(targetPrice);
+  if (!Array.isArray(candles) || !candles.length || !Number.isFinite(target)) {
+    return null;
+  }
+
+  const candidates = candles
+    .map((candle, index) => {
+      const close = Number(candle?.close);
+      const high = Number(candle?.high);
+      const low = Number(candle?.low);
+      const closeDistance = Number.isFinite(close)
+        ? Math.abs(close - target)
+        : Infinity;
+      const targetInsideRange =
+        Number.isFinite(high) &&
+        Number.isFinite(low) &&
+        target >= Math.min(low, high) - tolerance * 0.10 &&
+        target <= Math.max(low, high) + tolerance * 0.10;
+
+      return {
+        candle,
+        index,
+        closeDistance,
+        targetInsideRange,
+        acceptable:
+          closeDistance <= tolerance ||
+          (targetInsideRange && closeDistance <= tolerance * 1.5),
+      };
+    })
+    .filter((item) => item.acceptable)
+    .sort((a, b) => {
+      if (a.closeDistance !== b.closeDistance) {
+        return a.closeDistance - b.closeDistance;
+      }
+      // If the same price occurred more than once, prefer the later candle.
+      return b.index - a.index;
+    });
+
+  return candidates.length ? candidates[0] : null;
+}
+
+async function synchronizeFinalVisibleMarketReference({
+  marketReference = null,
+  chartDetection = null,
+  selectedDateText = "",
+  symbol = "",
+  timeframe = "H1",
+  timezone = "UTC",
+  analysisType = "post-trade",
+  chartCutoff = null,
+}) {
+  const normalizedMode = normalizeCutoffMode(chartCutoff?.mode || "final_visible");
+  const visiblePrice = asPositiveNumber(chartDetection?.latestVisiblePrice);
+  const priceConfidence = String(
+    chartDetection?.latestVisiblePriceConfidence || "low"
+  ).toLowerCase();
+
+  const unchanged = (reason, extra = {}) => ({
+    marketReference,
+    chartCutoff,
+    adjusted: false,
+    reason,
+    diagnostics: {
+      visiblePrice,
+      priceConfidence,
+      ...extra,
+    },
+  });
+
+  if (normalizedMode !== "final_visible") {
+    return unchanged("not_final_visible_mode");
+  }
+
+  if (!visiblePrice || !["high", "medium"].includes(priceConfidence)) {
+    return unchanged("no_reliable_final_visible_price");
+  }
+
+  const initialCandles = Array.isArray(marketReference?.timeframeCandles)
+    ? marketReference.timeframeCandles
+    : [];
+  const lastCandle = getLastTimeframeCandle(marketReference);
+  const lastClose = asPositiveNumber(lastCandle?.close);
+  const initialTolerance = getFinalVisiblePriceSyncTolerance({
+    marketReference,
+    symbol,
+    targetPrice: visiblePrice,
+  });
+  const initialMismatch =
+    lastClose === null ? null : Math.abs(lastClose - visiblePrice);
+
+  if (
+    lastClose !== null &&
+    Number.isFinite(initialMismatch) &&
+    initialMismatch <= initialTolerance
+  ) {
+    return unchanged("market_close_matches_final_visible_price", {
+      lastMarketCandle: lastCandle?.datetime || null,
+      lastMarketClose: lastClose,
+      tolerance: initialTolerance,
+      mismatch: initialMismatch,
+    });
+  }
+
+  // First search the candles already fetched. This fixes the opposite problem:
+  // the date is correct but an end-of-day fallback included candles after the
+  // screenshot's final visible candle.
+  let searchReference = marketReference;
+  let match = findBestCandleForVisibleClose({
+    candles: initialCandles,
+    targetPrice: visiblePrice,
+    tolerance: initialTolerance,
+  });
+  let searchSource = "initial_market_reference";
+
+  // If the visible price is not present in the initial series, the chart's
+  // rightmost printed date may simply be the last axis tick, while later
+  // candles extend into the next calendar day. In Final Visible mode only,
+  // use the user's selected chart date as a tightly bounded search horizon.
+  if (!match) {
+    const currentResolvedDate = parseISODateOnly(chartCutoff?.resolvedDate || "");
+    const selectedDate = parseISODateOnly(selectedDateText || "");
+    const gapDays =
+      currentResolvedDate && selectedDate
+        ? getDaysBetweenDates(currentResolvedDate, selectedDate)
+        : null;
+    const allowedGapDays = getAllowedFutureDateGapDays(timeframe);
+
+    const canExtendSearch =
+      selectedDate &&
+      Number.isFinite(gapDays) &&
+      gapDays >= 0 &&
+      gapDays <= allowedGapDays;
+
+    if (canExtendSearch) {
+      const extendedCutoff = {
+        ...(chartCutoff || {}),
+        endDateTime: `${formatDateOnly(selectedDate)} 23:59:59`,
+        resolvedDate: formatDateOnly(selectedDate),
+        source: "final-visible-price-sync-search",
+        mode: "final_visible",
+        precision: "price-search-window",
+        exactVisibleCutoff: false,
+        allowMarketDirectionalBias: true,
+        reason:
+          "The final visible screenshot price did not exist before the detected right-edge date, so the selected chart date was used only as a bounded search horizon for the matching candle.",
+      };
+
+      const extendedReference = await fetchTwelveDataStructureLevels({
+        symbol,
+        chartDate: selectedDate,
+        timeframe,
+        timezone,
+        analysisType,
+        chartCutoff: extendedCutoff,
+      });
+
+      const extendedTolerance = getFinalVisiblePriceSyncTolerance({
+        marketReference: extendedReference,
+        symbol,
+        targetPrice: visiblePrice,
+      });
+
+      const extendedMatch = findBestCandleForVisibleClose({
+        candles: extendedReference?.timeframeCandles || [],
+        targetPrice: visiblePrice,
+        tolerance: extendedTolerance,
+      });
+
+      if (extendedMatch) {
+        searchReference = extendedReference;
+        match = extendedMatch;
+        searchSource = "bounded_selected_date_extension";
+      }
+    }
+  }
+
+  if (!match?.candle?.datetime) {
+    console.log("Final visible price synchronization:", {
+      adjusted: false,
+      reason: "matching_candle_not_found",
+      visiblePrice,
+      priceConfidence,
+      detectedVisibleDate: chartDetection?.latestVisibleDate || null,
+      detectedVisibleTime: chartDetection?.latestVisibleTime || null,
+      selectedDateText: selectedDateText || null,
+      lastMarketCandle: lastCandle?.datetime || null,
+      lastMarketClose: lastClose,
+      initialMismatch,
+      initialTolerance,
+    });
+    return unchanged("matching_candle_not_found", {
+      lastMarketCandle: lastCandle?.datetime || null,
+      lastMarketClose: lastClose,
+      tolerance: initialTolerance,
+      mismatch: initialMismatch,
+    });
+  }
+
+  const matchedDateTime = normalizeTwelveDataDateTime(match.candle.datetime);
+  const matchedDate = candleDateOnly(matchedDateTime);
+  const matchedDateObject = parseISODateOnly(matchedDate);
+
+  if (!matchedDateTime || !matchedDateObject) {
+    return unchanged("matched_candle_datetime_invalid");
+  }
+
+  const exactCutoff = {
+    ...(chartCutoff || {}),
+    endDateTime: matchedDateTime,
+    resolvedDate: matchedDate,
+    source: "chart-final-visible-price-synchronized",
+    mode: "final_visible",
+    precision: "price-synchronized",
+    exactVisibleCutoff: true,
+    allowMarketDirectionalBias: true,
+    visiblePrice,
+    matchedMarketClose: Number(match.candle.close),
+    matchedMarketCandle: matchedDateTime,
+    reason:
+      "The external OHLC series was synchronized to the final visible screenshot close before structure, lifecycle and Fibonacci calculations were performed.",
+  };
+
+  const synchronizedReference = await fetchTwelveDataStructureLevels({
+    symbol,
+    chartDate: matchedDateObject,
+    timeframe,
+    timezone,
+    analysisType,
+    chartCutoff: exactCutoff,
+  });
+
+  const synchronizedLast = getLastTimeframeCandle(synchronizedReference);
+  const synchronizedClose = asPositiveNumber(synchronizedLast?.close);
+  const synchronizedTolerance = getFinalVisiblePriceSyncTolerance({
+    marketReference: synchronizedReference,
+    symbol,
+    targetPrice: visiblePrice,
+  });
+  const synchronizedMismatch =
+    synchronizedClose === null
+      ? null
+      : Math.abs(synchronizedClose - visiblePrice);
+
+  const verified =
+    synchronizedClose !== null &&
+    Number.isFinite(synchronizedMismatch) &&
+    synchronizedMismatch <= synchronizedTolerance;
+
+  console.log("Final visible price synchronization:", {
+    adjusted: verified,
+    searchSource,
+    visiblePrice,
+    priceConfidence,
+    detectedVisibleDate: chartDetection?.latestVisibleDate || null,
+    detectedVisibleTime: chartDetection?.latestVisibleTime || null,
+    selectedDateText: selectedDateText || null,
+    originalCutoff: chartCutoff?.endDateTime || null,
+    originalLastMarketCandle: lastCandle?.datetime || null,
+    originalLastMarketClose: lastClose,
+    matchedMarketCandle: matchedDateTime,
+    matchedMarketClose: Number(match.candle.close),
+    synchronizedLastMarketCandle: synchronizedLast?.datetime || null,
+    synchronizedLastMarketClose: synchronizedClose,
+    synchronizedMismatch,
+    synchronizedTolerance,
+  });
+
+  if (!verified) {
+    return unchanged("synchronized_close_failed_verification", {
+      matchedMarketCandle: matchedDateTime,
+      matchedMarketClose: Number(match.candle.close),
+      synchronizedLastMarketClose: synchronizedClose,
+      synchronizedMismatch,
+      synchronizedTolerance,
+    });
+  }
+
+  return {
+    marketReference: synchronizedReference,
+    chartCutoff: exactCutoff,
+    adjusted: true,
+    reason: "final_visible_price_synchronized",
+    diagnostics: {
+      searchSource,
+      visiblePrice,
+      priceConfidence,
+      matchedMarketCandle: matchedDateTime,
+      matchedMarketClose: Number(match.candle.close),
+      synchronizedLastMarketClose: synchronizedClose,
+      synchronizedMismatch,
+      synchronizedTolerance,
+    },
+  };
+}
+
 function areaBrokenByCloseLater(area, levels = [], symbol = "") {
   if (!area || !Array.isArray(levels)) return false;
   const level = Number(area.price), tol = getCleanBreakTolerance(symbol);
@@ -2781,7 +3111,7 @@ function buildFrameworkMistakeHub({ failedAreas = [], hasConfirmedTrigger = fals
 }
 
 async function detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument = "", selectedTimeframe = "", selectedDateText = "", analysisType = "post-trade" }) {
-  const fallback = (reason) => ({ ok: false, isTradingChart: false, chartValidityReason: reason, hasUsablePriceData: false, visibleCandleCount: 0, chartDataQuality: "unclear", chartOccupancyPercent: 0, isNestedChart: false, isChartReadableAtCurrentSize: false, selectedDateVisible: false, insufficientDataReason: reason, detectedInstrument: null, detectedTimeframe: null, latestVisibleDate: null, latestVisibleTime: null, latestVisibleTimeConfidence: "low", dateConfidence: "low", visibleTrigger: null, rejectedTriggerContext: null, triggerDirection: null, triggerConfidence: "low", notes: reason, raw: "" });
+  const fallback = (reason) => ({ ok: false, isTradingChart: false, chartValidityReason: reason, hasUsablePriceData: false, visibleCandleCount: 0, chartDataQuality: "unclear", chartOccupancyPercent: 0, isNestedChart: false, isChartReadableAtCurrentSize: false, selectedDateVisible: false, insufficientDataReason: reason, detectedInstrument: null, detectedTimeframe: null, latestVisibleDate: null, latestVisibleTime: null, latestVisibleTimeConfidence: "low", latestVisiblePrice: null, latestVisiblePriceConfidence: "low", dateConfidence: "low", visibleTrigger: null, rejectedTriggerContext: null, triggerDirection: null, triggerConfidence: "low", notes: reason, raw: "" });
   if (!isAiProviderConfigured()) return fallback(getAiConfigurationError());
 
   try {
@@ -2856,6 +3186,14 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
         parsed?.isChartReadableAtCurrentSize,
       detectedInstrument: parsed?.detectedInstrument,
       detectedTimeframe: parsed?.detectedTimeframe,
+      latestVisibleDate: parsed?.latestVisibleDate || null,
+      latestVisibleTime: parsed?.latestVisibleTime || null,
+      latestVisiblePrice:
+        Number.isFinite(Number(parsed?.latestVisiblePrice))
+          ? Number(parsed.latestVisiblePrice)
+          : null,
+      latestVisiblePriceConfidence:
+        parsed?.latestVisiblePriceConfidence || "low",
       reason: parsed?.chartValidityReason,
     });
 
@@ -2881,6 +3219,14 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
       latestVisibleTimeConfidence:
         isTradingChart
           ? String(parsed?.latestVisibleTimeConfidence || "low").toLowerCase()
+          : "low",
+      latestVisiblePrice:
+        isTradingChart && Number.isFinite(Number(parsed?.latestVisiblePrice)) && Number(parsed.latestVisiblePrice) > 0
+          ? Number(parsed.latestVisiblePrice)
+          : null,
+      latestVisiblePriceConfidence:
+        isTradingChart
+          ? String(parsed?.latestVisiblePriceConfidence || "low").toLowerCase()
           : "low",
       dateConfidence: isTradingChart ? parsed?.dateConfidence || "low" : "low",
       visibleTrigger: isTradingChart ? cleanTrigger : null,
@@ -8276,7 +8622,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "3.0.0";
+const CSA_SELECTOR_VERSION = "3.1.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -10929,10 +11275,17 @@ function buildValidatedAnalysisFacts({
     direction = historicalPhase.direction;
   }
 
-  const currentPrice =
-    asPositiveNumber(historicalPhase?.latestClose) ||
-    extractLastMarketPrice(marketReference) ||
-    asPositiveNumber(visualReview?.latestVisiblePrice);
+  const finalVisibleMode =
+    normalizeCutoffMode(marketReference?.chartCutoff?.mode || "final_visible") ===
+    "final_visible";
+
+  const currentPrice = finalVisibleMode
+    ? asPositiveNumber(visualReview?.latestVisiblePrice) ||
+      asPositiveNumber(historicalPhase?.latestClose) ||
+      extractLastMarketPrice(marketReference)
+    : asPositiveNumber(historicalPhase?.latestClose) ||
+      extractLastMarketPrice(marketReference) ||
+      asPositiveNumber(visualReview?.latestVisiblePrice);
 
   const lockedMarketState = Object.freeze({
     direction,
@@ -13498,7 +13851,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       reason: dateDecision.reason,
     });
 
-    const chartCutoff = resolveTwelveDataChartCutoff({
+    let chartCutoff = resolveTwelveDataChartCutoff({
       chartDetection,
       dateDecision,
       selectedDateText,
@@ -13526,7 +13879,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
 
     const resolvedAnalysisDate = parseISODateOnly(chartCutoff.resolvedDate);
 
-    const marketReference = await fetchTwelveDataStructureLevels({
+    let marketReference = await fetchTwelveDataStructureLevels({
       symbol: normalizedSymbol,
       chartDate: resolvedAnalysisDate,
       timeframe,
@@ -13534,6 +13887,28 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       analysisType: mode,
       chartCutoff,
     });
+
+    // FINAL VISIBLE CANDLE synchronization:
+    // A sparse time axis can show the last printed date tick before the actual
+    // final candle. Cross-check the external OHLC series against the exact
+    // visible close before any framework/Fibonacci calculations are trusted.
+    const initialFinalVisibleSync =
+      await synchronizeFinalVisibleMarketReference({
+        marketReference,
+        chartDetection,
+        selectedDateText,
+        symbol: normalizedSymbol,
+        timeframe,
+        timezone: resolvedTimezone,
+        analysisType: mode,
+        chartCutoff,
+      });
+
+    if (initialFinalVisibleSync.adjusted) {
+      marketReference = initialFinalVisibleSync.marketReference;
+      chartCutoff = initialFinalVisibleSync.chartCutoff;
+    }
+
     let visualReview = await compareUploadedChartWithCsaFramework({
       imageBase64,
       mimeType,
@@ -13546,6 +13921,58 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       analysisFramework: selectedStrategy.analysisFramework,
       personalStrategySnapshot: selectedStrategy.snapshot,
     });
+
+    // If the lightweight chart validator could not read the final close but
+    // the full visual review could, perform the same synchronization now and
+    // rerun the visual comparison against the corrected market reference.
+    const visualVisiblePrice = asPositiveNumber(visualReview?.latestVisiblePrice);
+    const detectedVisiblePrice = asPositiveNumber(chartDetection?.latestVisiblePrice);
+
+    if (
+      normalizedRequestedCutoffMode === "final_visible" &&
+      visualVisiblePrice &&
+      (!detectedVisiblePrice ||
+        Math.abs(visualVisiblePrice - detectedVisiblePrice) >
+          getFinalVisiblePriceSyncTolerance({
+            marketReference,
+            symbol: normalizedSymbol,
+            targetPrice: visualVisiblePrice,
+          }))
+    ) {
+      const visualPriceSync =
+        await synchronizeFinalVisibleMarketReference({
+          marketReference,
+          chartDetection: {
+            ...chartDetection,
+            latestVisiblePrice: visualVisiblePrice,
+            latestVisiblePriceConfidence: "medium",
+          },
+          selectedDateText,
+          symbol: normalizedSymbol,
+          timeframe,
+          timezone: resolvedTimezone,
+          analysisType: mode,
+          chartCutoff,
+        });
+
+      if (visualPriceSync.adjusted) {
+        marketReference = visualPriceSync.marketReference;
+        chartCutoff = visualPriceSync.chartCutoff;
+
+        visualReview = await compareUploadedChartWithCsaFramework({
+          imageBase64,
+          mimeType,
+          marketReference,
+          chartDetection,
+          submittedInstrument,
+          timeframe,
+          analysisType: mode,
+          submittedNotes,
+          analysisFramework: selectedStrategy.analysisFramework,
+          personalStrategySnapshot: selectedStrategy.snapshot,
+        });
+      }
+    }
 
     const dedicatedFrameworkPriceMap =
       await extractVisibleFrameworkPriceMap({
