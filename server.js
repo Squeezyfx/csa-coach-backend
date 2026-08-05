@@ -3766,6 +3766,8 @@ FIBONACCI
 - A structural area is a strong entry area only when that support/resistance or supply/demand area is in close proximity to at least one of those retracement levels.
 - A structurally valid area that is not close to 38.2%, 50%, or 61.8% may remain an important chart reference, but it must not become Entry 1, Entry 2, or the preferred entry area.
 - Fibonacci must never create a setup by itself. The actual entry remains the support/resistance or supply/demand area, not the Fibonacci number.
+- The retracement must be calculated from the genuine completed impulse that produced the current directional breakout/breakdown, using the current structure-sequence origin and the final visible directional extreme; do not shrink the impulse to a late local swing merely because it is more recent.
+- When the same authoritative framework period/side has an exact printed broker/platform price label, that exact chart label may refine the market-data framework price; never borrow a price from a different period or side.
 - Do not mention Fibonacci, retracement percentages, 38.2%, 50%, or 61.8% in normal beginner-facing feedback. You may simply say one structural area is stronger or offers a cleaner opportunity.
 
 ENTRY AREA AND TIMING
@@ -3844,30 +3846,55 @@ function buildFocusedFrameworkPriceTargets(
 
   if (!direction || currentPrice === null) return [];
 
-  const ranked = rankRawEntryAreas({
-    visualReview: {},
+  const candles = Array.isArray(marketReference?.timeframeCandles)
+    ? marketReference.timeframeCandles
+    : [];
+
+  const atr = averageTrueRange(
+    candles,
+    getStructureEngineConfig(timeframe).atrPeriod
+  );
+
+  // IMPORTANT:
+  // The dedicated price reader must run BEFORE the Fib gate and therefore
+  // must not depend on rankRawEntryAreas(), because that function already
+  // requires Fib confluence. Otherwise a broker/platform price can never be
+  // reconciled when the market-data price initially misses Fib.
+  const structuralCandidates = buildAuthoritativeFrameworkCandidates({
     marketReference,
-    historicalPhase,
+    visualReview: {},
     direction,
     currentPrice,
     symbol,
     timeframe,
+    atr,
   });
 
-  const areas = Array.isArray(ranked?.areas)
-    ? ranked.areas.slice(0, 3)
-    : [];
+  const pathOrdered = [...structuralCandidates]
+    .filter((candidate) => {
+      const price = asPositiveNumber(candidate?.frameworkPrice);
+      if (price === null) return false;
 
-  return areas
-    .map((area) => {
-      const period = String(area?.frameworkPeriod || "").trim();
+      return direction === "bullish"
+        ? price < Number(currentPrice)
+        : price > Number(currentPrice);
+    })
+    .sort((a, b) =>
+      direction === "bullish"
+        ? Number(b.frameworkPrice) - Number(a.frameworkPrice)
+        : Number(a.frameworkPrice) - Number(b.frameworkPrice)
+    )
+    .slice(0, 6);
+
+  return pathOrdered
+    .map((candidate, index) => {
+      const period = String(candidate?.period || "").trim();
       const frameworkPrice =
-        asPositiveNumber(area?.frameworkPrice) ||
-        asPositiveNumber(area?.authoritativeCenter);
+        asPositiveNumber(candidate?.frameworkPrice);
 
       if (!period || frameworkPrice === null) return null;
 
-      const areaType = String(area?.areaType || "").toLowerCase();
+      const areaType = String(candidate?.type || "").toLowerCase();
 
       const side =
         ["converted resistance", "support", "demand"].includes(areaType)
@@ -3883,7 +3910,7 @@ function buildFocusedFrameworkPriceTargets(
         side,
         frameworkPrice,
         areaType,
-        executionOrder: Number(area?.executionOrder || 0),
+        executionOrder: index + 1,
       };
     })
     .filter(Boolean);
@@ -4021,10 +4048,25 @@ Return JSON only:
     getStructureEngineConfig(timeframe).atrPeriod
   );
 
-  const tolerance = getFrameworkChartReconciliationTolerance({
-    symbol: marketReference?.symbol || "",
-    atr,
-  });
+  const standardTolerance =
+    getFrameworkChartReconciliationTolerance({
+      symbol: marketReference?.symbol || "",
+      atr,
+    });
+
+  // Exact broker/platform labels deserve a wider same-period allowance than
+  // visual estimates because data feeds can differ materially on gold,
+  // crypto, indices and individual stocks. This is safe here because the
+  // model is reading ONE authoritative period and ONE side only.
+  const exactLabelTolerance = Math.max(
+    standardTolerance,
+    Number(atr || 0) * 0.25
+  );
+
+  const selectedTolerance =
+    displayedPrice !== null
+      ? exactLabelTolerance
+      : standardTolerance;
 
   const candidateDifference =
     candidatePrice !== null
@@ -4036,7 +4078,7 @@ Return JSON only:
 
   const withinTolerance =
     candidateDifference !== null &&
-    candidateDifference <= tolerance;
+    candidateDifference <= selectedTolerance;
 
   if (candidatePrice !== null && !withinTolerance) {
     console.log("Focused framework price rejected as too far:", {
@@ -4046,7 +4088,10 @@ Return JSON only:
       frameworkPrice: target.frameworkPrice,
       candidatePrice,
       difference: candidateDifference,
-      tolerance,
+      standardTolerance,
+      exactLabelTolerance,
+      selectedTolerance,
+      exactPrintedLabel: displayedPrice !== null,
     });
   }
 
@@ -4070,6 +4115,9 @@ Return JSON only:
     withinTolerance,
     modelUsed,
     difference: candidateDifference,
+    standardTolerance,
+    exactLabelTolerance,
+    selectedTolerance,
   };
 }
 
@@ -7323,68 +7371,370 @@ function buildLatestImpulseFibonacci({
   historicalPhase = null,
   direction = "range",
   timeframe = "H1",
+  symbol = "",
 }) {
   if (!Array.isArray(candles) || candles.length < 10) return null;
   if (!["bullish", "bearish"].includes(direction)) return null;
 
-  const config = getAreaEngineConfig(timeframe);
-  const eventDatetime =
-    historicalPhase?.diagnostics?.latestEvent?.datetime || "";
+  const ordered = candles
+    .filter(
+      (candle) =>
+        candle?.datetime &&
+        Number.isFinite(Number(candle?.open)) &&
+        Number.isFinite(Number(candle?.high)) &&
+        Number.isFinite(Number(candle?.low)) &&
+        Number.isFinite(Number(candle?.close))
+    )
+    .sort((a, b) =>
+      String(a.datetime).localeCompare(String(b.datetime))
+    );
 
-  let eventIndex = eventDatetime
-    ? candles.findIndex(
-        (candle) =>
-          String(candle?.datetime || "").slice(0, 16) ===
-          String(eventDatetime).slice(0, 16)
-      )
-    : -1;
+  if (ordered.length < 10) return null;
 
-  if (eventIndex < 0) {
-    eventIndex = Math.max(1, candles.length - Math.ceil(config.lookback / 3));
-  }
-
-  const before = candles.slice(
-    Math.max(0, eventIndex - Math.ceil(config.lookback / 2)),
-    eventIndex + 1
+  const structureConfig = getStructureEngineConfig(timeframe);
+  const areaConfig = getAreaEngineConfig(timeframe);
+  const atr = averageTrueRange(
+    ordered,
+    structureConfig.atrPeriod
   );
-  const after = candles.slice(eventIndex);
 
-  let swingHigh = null;
-  let swingLow = null;
+  const breakTolerance = Math.max(
+    getCleanBreakTolerance(symbol),
+    Number(atr || 0) * 0.12
+  );
 
-  if (direction === "bearish") {
-    swingHigh = maxFinite(before.map((candle) => candle?.high));
-    swingLow = minFinite(after.map((candle) => candle?.low));
-  } else {
-    swingLow = minFinite(before.map((candle) => candle?.low));
-    swingHigh = maxFinite(after.map((candle) => candle?.high));
+  const pivots = detectConfirmedSwingPivots(
+    ordered,
+    structureConfig
+  );
+
+  const searchStart = Math.max(
+    1,
+    ordered.length -
+      Number(structureConfig.eventLookback || areaConfig.lookback || 160)
+  );
+
+  const events = buildOrderedStructureEvents({
+    candles: ordered,
+    pivots,
+    tolerance: breakTolerance,
+    atr,
+    timeframe: structureConfig.timeframe,
+    confirmationCloses: structureConfig.confirmationCloses,
+    searchStart,
+  });
+
+  const expectedSide =
+    direction === "bullish" ? "bullish" : "bearish";
+  const oppositeSide =
+    direction === "bullish" ? "bearish" : "bullish";
+
+  const controllingEvent =
+    [...events]
+      .reverse()
+      .find((event) => event.side === expectedSide) ||
+    null;
+
+  // The origin of the current directional impulse is not simply the latest
+  // local low/high. It begins after the last confirmed OPPOSITE structure
+  // event preceding the current uninterrupted directional event sequence.
+  // This preserves the completed impulse that actually produced the current
+  // breakout/breakdown instead of shrinking Fib to a late local swing.
+  let oppositeOriginEvent = null;
+
+  if (controllingEvent) {
+    oppositeOriginEvent =
+      [...events]
+        .reverse()
+        .find(
+          (event) =>
+            event.side === oppositeSide &&
+            Number(event.index) < Number(controllingEvent.index)
+        ) || null;
   }
+
+  const extremaIndex = ({
+    startIndex = 0,
+    endIndex = ordered.length - 1,
+    field = "high",
+    mode = "max",
+  }) => {
+    let selectedIndex = -1;
+    let selectedValue =
+      mode === "min"
+        ? Number.POSITIVE_INFINITY
+        : Number.NEGATIVE_INFINITY;
+
+    const start = Math.max(0, Number(startIndex || 0));
+    const end = Math.min(
+      ordered.length - 1,
+      Number.isFinite(Number(endIndex))
+        ? Number(endIndex)
+        : ordered.length - 1
+    );
+
+    for (let index = start; index <= end; index += 1) {
+      const value = Number(ordered[index]?.[field]);
+      if (!Number.isFinite(value)) continue;
+
+      if (
+        (mode === "min" && value < selectedValue) ||
+        (mode === "max" && value > selectedValue)
+      ) {
+        selectedValue = value;
+        selectedIndex = index;
+      }
+    }
+
+    return {
+      index: selectedIndex,
+      value:
+        selectedIndex >= 0 &&
+        Number.isFinite(selectedValue)
+          ? selectedValue
+          : null,
+    };
+  };
+
+  let selectionReason =
+    "fallback_latest_confirmed_impulse";
+  let originSearchStart = 0;
+  let originSearchEnd = ordered.length - 1;
+  let terminalSearchStart = 0;
+
+  if (controllingEvent) {
+    terminalSearchStart = Number(controllingEvent.index);
+
+    if (oppositeOriginEvent) {
+      originSearchStart = Number(oppositeOriginEvent.index);
+      originSearchEnd = Number(controllingEvent.index);
+      selectionReason =
+        direction === "bullish"
+          ? "bearish_structure_origin_to_final_visible_high"
+          : "bullish_structure_origin_to_final_visible_low";
+    } else {
+      originSearchStart = Math.max(
+        0,
+        Number(controllingEvent.index) -
+          Math.ceil(Number(areaConfig.lookback || 160) * 0.65)
+      );
+      originSearchEnd = Number(controllingEvent.index);
+      selectionReason =
+        direction === "bullish"
+          ? "pre_breakout_origin_to_final_visible_high"
+          : "pre_breakdown_origin_to_final_visible_low";
+    }
+  } else {
+    const eventDatetime =
+      historicalPhase?.diagnostics?.latestEvent?.datetime || "";
+
+    let eventIndex = eventDatetime
+      ? ordered.findIndex(
+          (candle) =>
+            String(candle?.datetime || "").slice(0, 16) ===
+            String(eventDatetime).slice(0, 16)
+        )
+      : -1;
+
+    if (eventIndex < 0) {
+      eventIndex = Math.max(
+        1,
+        ordered.length -
+          Math.ceil(Number(areaConfig.lookback || 160) / 3)
+      );
+    }
+
+    originSearchStart = Math.max(
+      0,
+      eventIndex -
+        Math.ceil(Number(areaConfig.lookback || 160) / 2)
+    );
+    originSearchEnd = eventIndex;
+    terminalSearchStart = eventIndex;
+  }
+
+  let swingHighResult;
+  let swingLowResult;
+
+  if (direction === "bullish") {
+    swingLowResult = extremaIndex({
+      startIndex: originSearchStart,
+      endIndex: originSearchEnd,
+      field: "low",
+      mode: "min",
+    });
+
+    swingHighResult = extremaIndex({
+      startIndex: terminalSearchStart,
+      endIndex: ordered.length - 1,
+      field: "high",
+      mode: "max",
+    });
+  } else {
+    swingHighResult = extremaIndex({
+      startIndex: originSearchStart,
+      endIndex: originSearchEnd,
+      field: "high",
+      mode: "max",
+    });
+
+    swingLowResult = extremaIndex({
+      startIndex: terminalSearchStart,
+      endIndex: ordered.length - 1,
+      field: "low",
+      mode: "min",
+    });
+  }
+
+  const swingHigh = Number(swingHighResult?.value);
+  const swingLow = Number(swingLowResult?.value);
 
   if (
-    !Number.isFinite(Number(swingHigh)) ||
-    !Number.isFinite(Number(swingLow)) ||
-    Number(swingHigh) <= Number(swingLow)
+    !Number.isFinite(swingHigh) ||
+    !Number.isFinite(swingLow) ||
+    swingHigh <= swingLow
   ) {
     return null;
   }
 
-  const range = Number(swingHigh) - Number(swingLow);
+  // Directional chronology must make sense. If the event-sequence method
+  // somehow produces a reversed anchor, fall back to a bounded broad impulse
+  // rather than manufacturing retracement levels from invalid chronology.
+  if (
+    direction === "bullish" &&
+    Number(swingLowResult.index) >
+      Number(swingHighResult.index)
+  ) {
+    const fallbackStart = Math.max(
+      0,
+      ordered.length -
+        Number(areaConfig.lookback || 160)
+    );
+
+    swingLowResult = extremaIndex({
+      startIndex: fallbackStart,
+      endIndex: ordered.length - 2,
+      field: "low",
+      mode: "min",
+    });
+
+    swingHighResult = extremaIndex({
+      startIndex: Math.max(
+        Number(swingLowResult.index) + 1,
+        fallbackStart + 1
+      ),
+      endIndex: ordered.length - 1,
+      field: "high",
+      mode: "max",
+    });
+
+    selectionReason =
+      "chronology_fallback_broad_bullish_impulse";
+  }
+
+  if (
+    direction === "bearish" &&
+    Number(swingHighResult.index) >
+      Number(swingLowResult.index)
+  ) {
+    const fallbackStart = Math.max(
+      0,
+      ordered.length -
+        Number(areaConfig.lookback || 160)
+    );
+
+    swingHighResult = extremaIndex({
+      startIndex: fallbackStart,
+      endIndex: ordered.length - 2,
+      field: "high",
+      mode: "max",
+    });
+
+    swingLowResult = extremaIndex({
+      startIndex: Math.max(
+        Number(swingHighResult.index) + 1,
+        fallbackStart + 1
+      ),
+      endIndex: ordered.length - 1,
+      field: "low",
+      mode: "min",
+    });
+
+    selectionReason =
+      "chronology_fallback_broad_bearish_impulse";
+  }
+
+  const finalSwingHigh = Number(swingHighResult?.value);
+  const finalSwingLow = Number(swingLowResult?.value);
+
+  if (
+    !Number.isFinite(finalSwingHigh) ||
+    !Number.isFinite(finalSwingLow) ||
+    finalSwingHigh <= finalSwingLow
+  ) {
+    return null;
+  }
+
+  const range = finalSwingHigh - finalSwingLow;
   const ratios = [0.382, 0.5, 0.618];
 
-  return {
+  const result = {
     direction,
-    swingHigh: Number(swingHigh),
-    swingLow: Number(swingLow),
+    swingHigh: finalSwingHigh,
+    swingLow: finalSwingLow,
+    swingHighTime:
+      ordered[swingHighResult.index]?.datetime || null,
+    swingLowTime:
+      ordered[swingLowResult.index]?.datetime || null,
+    impulseRange: range,
     levels: ratios.map((ratio) => ({
       ratio,
-      label: ratio === 0.5 ? "50%" : `${(ratio * 100).toFixed(1)}%`,
+      label:
+        ratio === 0.5
+          ? "50%"
+          : `${(ratio * 100).toFixed(1)}%`,
       price:
         direction === "bearish"
-          ? Number(swingLow) + range * ratio
-          : Number(swingHigh) - range * ratio,
+          ? finalSwingLow + range * ratio
+          : finalSwingHigh - range * ratio,
     })),
-    source: "latest_confirmed_impulse",
+    source:
+      "current_structure_sequence_impulse",
+    selectionReason,
+    controllingEvent: controllingEvent
+      ? {
+          side: controllingEvent.side,
+          datetime: controllingEvent.datetime || null,
+          level: Number(controllingEvent.level),
+          index: Number(controllingEvent.index),
+        }
+      : null,
+    oppositeOriginEvent: oppositeOriginEvent
+      ? {
+          side: oppositeOriginEvent.side,
+          datetime: oppositeOriginEvent.datetime || null,
+          level: Number(oppositeOriginEvent.level),
+          index: Number(oppositeOriginEvent.index),
+        }
+      : null,
+    atr: Number(atr || 0),
+    breakTolerance,
   };
+
+  console.log("CSA relevant impulse:", {
+    direction: result.direction,
+    swingLow: result.swingLow,
+    swingLowTime: result.swingLowTime,
+    swingHigh: result.swingHigh,
+    swingHighTime: result.swingHighTime,
+    impulseRange: result.impulseRange,
+    selectionReason: result.selectionReason,
+    controllingEvent: result.controllingEvent,
+    oppositeOriginEvent: result.oppositeOriginEvent,
+    retracementLevels: result.levels,
+  });
+
+  return result;
 }
 
 function distanceFromPriceToZone(price, zoneLow, zoneHigh) {
@@ -8526,6 +8876,11 @@ function reconcileFrameworkLevelWithVisibleChart({
   const normalizedFrameworkPeriod =
     normalizeFrameworkPeriodIdentity(frameworkPeriod);
 
+  const dedicatedExactTolerance = Math.max(
+    tolerance,
+    Number(atr || 0) * 0.25
+  );
+
   const evidence = collectVisibleChartPriceEvidence({
     visualReview,
     frameworkType,
@@ -8533,10 +8888,10 @@ function reconcileFrameworkLevelWithVisibleChart({
   })
     .filter((candidate) => {
       if (!typeCompatible(candidate.type)) return false;
-      if (Math.abs(Number(candidate.price) - basePrice) > tolerance) return false;
 
-      // A visible broker price is allowed to replace the market-data price only
-      // when the chart reader associates it with the same authoritative period.
+      // A visible broker price may refine the market-data price only when it
+      // belongs to the SAME authoritative period. Period identity remains
+      // non-negotiable.
       const periodMatches = periodHintsCompatible(
         candidate.periodIdentity || candidate.periodHint,
         normalizedFrameworkPeriod
@@ -8559,13 +8914,32 @@ function reconcileFrameworkLevelWithVisibleChart({
         return false;
       }
 
-      return true;
+      const dedicatedExact =
+        String(candidate.source || "") ===
+        "per_target_framework_price_map_exact";
+
+      const allowedTolerance = dedicatedExact
+        ? dedicatedExactTolerance
+        : tolerance;
+
+      return (
+        Math.abs(Number(candidate.price) - basePrice) <=
+        allowedTolerance
+      );
     })
     .map((candidate) => ({
       ...candidate,
       distance: Math.abs(Number(candidate.price) - basePrice),
+      exactPeriodPrice:
+        String(candidate.source || "") ===
+        "per_target_framework_price_map_exact",
     }))
     .sort((a, b) => {
+      // Exact printed same-period platform labels outrank approximations and
+      // generic line reads. Distance decides only inside the same evidence tier.
+      if (a.exactPeriodPrice !== b.exactPeriodPrice) {
+        return a.exactPeriodPrice ? -1 : 1;
+      }
       if (a.distance !== b.distance) {
         return a.distance - b.distance;
       }
@@ -8606,6 +8980,8 @@ function reconcileFrameworkLevelWithVisibleChart({
     confidence: selected.confidence,
     difference: selected.distance,
     tolerance,
+    dedicatedExactTolerance,
+    exactPeriodPrice: selected.exactPeriodPrice === true,
   });
 
   return {
@@ -8622,7 +8998,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "3.1.0";
+const CSA_SELECTOR_VERSION = "3.2.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -9483,6 +9859,7 @@ function rankRawEntryAreas({
     historicalPhase,
     direction,
     timeframe,
+    symbol,
   });
 
   const rawZones = frameworkCandidates.map((candidate) => {
@@ -9717,6 +10094,8 @@ function rankRawEntryAreas({
           Number.isFinite(Number(nearestFib?.distanceAsAtrPercent))
             ? Number(nearestFib.distanceAsAtrPercent)
             : null,
+        conversionConfirmed:
+          rawZone?.members?.[0]?.conversionConfirmed === true,
         referenceOnly: true,
       });
     }
@@ -9912,6 +10291,8 @@ function rankRawEntryAreas({
   console.log("CSA selector v3 Fibonacci entry gate:", {
     selectorVersion: CSA_SELECTOR_VERSION,
     fibProximityModel: "adaptive_atr_15_20_percent",
+    impulseModel: "current_structure_sequence_origin_to_final_visible_extreme",
+    frameworkPriceModel: "same_period_exact_chart_label_priority",
     direction,
     swingLow: fibonacci?.swingLow ?? null,
     swingHigh: fibonacci?.swingHigh ?? null,
@@ -11570,6 +11951,8 @@ function buildValidatedAnalysisFacts({
         Number.isFinite(Number(candidate.fibDistanceAsAtrPercent))
           ? Number(candidate.fibDistanceAsAtrPercent)
           : null,
+      conversionConfirmed:
+        candidate.conversionConfirmed === true,
       referenceOnly: true,
     })),
     activeEntryAreas: rankedRawAreas.map((candidate, index) => ({
@@ -11721,7 +12104,18 @@ function buildValidatedAnalysisFacts({
 function formatRankedArea(area, fallbackType = "entry") {
   if (!area) return "";
 
-  const base = area.areaType || fallbackType;
+  const rawType = String(area.areaType || fallbackType);
+  const normalizedType = rawType.toLowerCase();
+
+  const base =
+    normalizedType === "converted support" &&
+    area?.conversionConfirmed !== true
+      ? "potential converted support"
+      : normalizedType === "converted resistance" &&
+        area?.conversionConfirmed !== true
+      ? "potential converted resistance"
+      : rawType;
+
   const exactLevel =
     safeUserText(area.levelText || "") ||
     (
