@@ -7065,9 +7065,12 @@ function evaluateRequiredFibonacciConfluence({
   zoneHigh = null,
   atr = 0,
   symbol = "",
+  structuralQualityScore = 0,
+  structuralEvidenceStrong = false,
 }) {
   const low = Number(zoneLow);
   const high = Number(zoneHigh);
+  const normalizedAtr = Math.max(0, Number(atr || 0));
 
   if (
     !fibonacci ||
@@ -7079,28 +7082,50 @@ function evaluateRequiredFibonacciConfluence({
     return {
       passed: false,
       matches: [],
+      evaluatedLevels: [],
       proximityAllowance: null,
+      closeAllowance: null,
+      borderlineAllowance: null,
       reason: "fibonacci_or_structural_area_unavailable",
     };
   }
 
-  const halfWidth = Math.abs(high - low) / 2;
-
-  // "Close proximity" is measured relative to the already-validated
-  // structural area, with a small ATR/symbol-scaled allowance so the rule
-  // works across FX, JPY pairs, gold, crypto, stocks and other instruments.
-  // The structural area remains primary; this allowance must never create
-  // a new area around a Fibonacci price.
-  const proximityAllowance = Math.max(
-    halfWidth * 0.25,
-    getApprovedPriceTolerance(symbol) * 0.25,
-    Number(atr || 0) * 0.03,
+  // UNIVERSAL CSA FIB-CONFLUENCE RULE
+  //
+  // The structural S/R or S/D area is primary.
+  // Fibonacci only confirms strength; it never creates an entry area.
+  //
+  // 1) Fib inside the structural area -> direct confluence -> PASS.
+  // 2) Fib outside but within 15% of ATR from the nearest zone edge
+  //    -> close confluence -> PASS.
+  // 3) Fib between 15% and 20% of ATR from the nearest zone edge
+  //    -> borderline confluence -> PASS only when structure is very strong.
+  // 4) Beyond 20% ATR -> no confluence -> FAIL.
+  //
+  // This scales naturally across forex, JPY pairs, gold, stocks, indices,
+  // crypto and other instruments without hard-coded pip/dollar distances.
+  const minimumInstrumentBuffer = Math.max(
+    getCleanBreakTolerance(symbol) * 0.5,
     Number.EPSILON * 100
   );
 
+  const closeAllowance = Math.max(
+    normalizedAtr * 0.15,
+    minimumInstrumentBuffer
+  );
+
+  const borderlineAllowance = Math.max(
+    normalizedAtr * 0.20,
+    closeAllowance
+  );
+
+  const strongStructure =
+    structuralEvidenceStrong === true ||
+    Number(structuralQualityScore || 0) >= 50;
+
   const allowedRatios = new Set([0.382, 0.5, 0.618]);
 
-  const matches = fibonacci.levels
+  const evaluatedLevels = fibonacci.levels
     .filter((level) => allowedRatios.has(Number(level?.ratio)))
     .map((level) => {
       const distanceToZone = distanceFromPriceToZone(
@@ -7109,22 +7134,48 @@ function evaluateRequiredFibonacciConfluence({
         high
       );
 
+      const atrFraction =
+        normalizedAtr > 0 && Number.isFinite(distanceToZone)
+          ? distanceToZone / normalizedAtr
+          : null;
+
+      const direct = distanceToZone === 0;
+      const close =
+        !direct &&
+        Number.isFinite(distanceToZone) &&
+        distanceToZone <= closeAllowance;
+
+      const borderline =
+        !direct &&
+        !close &&
+        Number.isFinite(distanceToZone) &&
+        distanceToZone <= borderlineAllowance;
+
+      const passed =
+        direct ||
+        close ||
+        (borderline && strongStructure);
+
       return {
         ratio: Number(level.ratio),
         label: String(level.label || ""),
         price: Number(level.price),
         distanceToZone,
-        matchType:
-          distanceToZone === 0
-            ? "inside_structural_area"
-            : "close_proximity",
+        distanceAsAtrFraction: atrFraction,
+        distanceAsAtrPercent:
+          atrFraction === null ? null : atrFraction * 100,
+        matchType: direct
+          ? "inside_structural_area"
+          : close
+          ? "close_proximity"
+          : borderline
+          ? strongStructure
+            ? "borderline_strong_structure"
+            : "borderline_structure_not_strong_enough"
+          : "no_confluence",
+        passed,
       };
     })
-    .filter(
-      (match) =>
-        Number.isFinite(match.distanceToZone) &&
-        match.distanceToZone <= proximityAllowance
-    )
     .sort((a, b) => {
       if (a.distanceToZone !== b.distanceToZone) {
         return a.distanceToZone - b.distanceToZone;
@@ -7132,13 +7183,22 @@ function evaluateRequiredFibonacciConfluence({
       return a.ratio - b.ratio;
     });
 
+  const matches = evaluatedLevels.filter(
+    (level) => level.passed === true
+  );
+
   return {
     passed: matches.length > 0,
     matches,
-    proximityAllowance,
+    evaluatedLevels,
+    proximityAllowance: closeAllowance,
+    closeAllowance,
+    borderlineAllowance,
+    structuralQualityScore: Number(structuralQualityScore || 0),
+    strongStructure,
     reason:
       matches.length > 0
-        ? "structural_area_close_to_required_retracement"
+        ? "structural_area_has_required_retracement_proximity"
         : "no_382_50_618_proximity",
   };
 }
@@ -9116,6 +9176,7 @@ function rankRawEntryAreas({
 
   const fibGateDiagnostics = [];
   const structuralGateDiagnostics = [];
+  const structuralReferenceAreas = [];
 
   const evaluated = rawZones.map((rawZone) => {
     const compacted = compactZoneBounds({
@@ -9241,13 +9302,78 @@ function rankRawEntryAreas({
 
     if (!structurallyValid) return null;
 
+    const areaType = classifyValidatedArea({
+      direction,
+      zoneLow,
+      zoneHigh,
+      rawZone,
+      historicalPhase,
+      reactionStats,
+      atr,
+    });
+
+    const structuralEvidenceStrong =
+      quality.choppy !== true &&
+      (
+        Number(quality.score || 0) >= 50 ||
+        (
+          Number(reactionStats?.reactions || 0) >= 2 &&
+          Number(reactionStats?.strongDepartures || 0) >= 1
+        )
+      );
+
     const fibConfluence = evaluateRequiredFibonacciConfluence({
       fibonacci,
       zoneLow,
       zoneHigh,
       atr,
       symbol,
+      structuralQualityScore: quality.score,
+      structuralEvidenceStrong,
     });
+
+    if (
+      areaDirectionMatches(areaType, direction) &&
+      fibConfluence.passed !== true
+    ) {
+      const nearestFib =
+        Array.isArray(fibConfluence.evaluatedLevels) &&
+        fibConfluence.evaluatedLevels.length
+          ? fibConfluence.evaluatedLevels[0]
+          : null;
+
+      structuralReferenceAreas.push({
+        direction: direction === "bearish" ? "sell" : "buy",
+        areaType,
+        zoneLow,
+        zoneHigh,
+        authoritativeCenter,
+        levelText: formatPrice(authoritativeCenter, symbol),
+        zoneText: `around ${formatPrice(authoritativeCenter, symbol)}`,
+        frameworkPeriod:
+          rawZone?.period ||
+          rawZone?.members?.[0]?.period ||
+          null,
+        structuralScore: Number(quality.score || 0),
+        distanceFromPrice:
+          Math.abs(authoritativeCenter - Number(currentPrice)),
+        fibPassed: false,
+        nearestFibLabel: nearestFib?.label || null,
+        nearestFibPrice:
+          Number.isFinite(Number(nearestFib?.price))
+            ? Number(nearestFib.price)
+            : null,
+        fibDistance:
+          Number.isFinite(Number(nearestFib?.distanceToZone))
+            ? Number(nearestFib.distanceToZone)
+            : null,
+        fibDistanceAsAtrPercent:
+          Number.isFinite(Number(nearestFib?.distanceAsAtrPercent))
+            ? Number(nearestFib.distanceAsAtrPercent)
+            : null,
+        referenceOnly: true,
+      });
+    }
 
     fibGateDiagnostics.push({
       frameworkPrice:
@@ -9272,7 +9398,21 @@ function rankRawEntryAreas({
         price: match.price,
         matchType: match.matchType,
         distanceToZone: match.distanceToZone,
+        distanceAsAtrPercent: match.distanceAsAtrPercent,
       })),
+      evaluatedFibLevels: fibConfluence.evaluatedLevels.map((match) => ({
+        label: match.label,
+        ratio: match.ratio,
+        price: match.price,
+        matchType: match.matchType,
+        passed: match.passed,
+        distanceToZone: match.distanceToZone,
+        distanceAsAtrPercent: match.distanceAsAtrPercent,
+      })),
+      closeAllowance: fibConfluence.closeAllowance,
+      borderlineAllowance: fibConfluence.borderlineAllowance,
+      structuralQualityScore: fibConfluence.structuralQualityScore,
+      strongStructure: fibConfluence.strongStructure,
       proximityAllowance: fibConfluence.proximityAllowance,
     });
 
@@ -9284,16 +9424,6 @@ function rankRawEntryAreas({
     const fibMatches = fibConfluence.matches;
     const fibonacciScore = 1;
     const structuralScore = quality.score;
-
-    const areaType = classifyValidatedArea({
-      direction,
-      zoneLow,
-      zoneHigh,
-      rawZone,
-      historicalPhase,
-      reactionStats,
-      atr,
-    });
 
     const brokenLevel = asPositiveNumber(historicalPhase?.brokenLevel);
     const conversionTolerance = Math.max(
@@ -9435,6 +9565,7 @@ function rankRawEntryAreas({
 
   console.log("CSA selector v3 Fibonacci entry gate:", {
     selectorVersion: CSA_SELECTOR_VERSION,
+    fibProximityModel: "adaptive_atr_15_20_percent",
     direction,
     swingLow: fibonacci?.swingLow ?? null,
     swingHigh: fibonacci?.swingHigh ?? null,
@@ -9464,7 +9595,19 @@ function rankRawEntryAreas({
     })),
   });
 
-  return sequencedResult;
+  const referenceAreas = structuralReferenceAreas
+    .sort((a, b) => {
+      if (a.distanceFromPrice !== b.distanceFromPrice) {
+        return a.distanceFromPrice - b.distanceFromPrice;
+      }
+      return Number(b.structuralScore || 0) - Number(a.structuralScore || 0);
+    })
+    .slice(0, 3);
+
+  return {
+    ...sequencedResult,
+    referenceAreas,
+  };
 }
 
 function normalizeBreakoutState(visualReview = {}, chartDetection = {}) {
@@ -10813,6 +10956,12 @@ function buildValidatedAnalysisFacts({
   const rankedRawAreas = Array.isArray(rankedAreaResult?.areas)
     ? rankedAreaResult.areas
     : [];
+
+  const structuralReferenceAreas =
+    Array.isArray(rankedAreaResult?.referenceAreas)
+      ? rankedAreaResult.referenceAreas
+      : [];
+
   const entryAreaValidation =
     rankedAreaResult?.validation || {
       passed: false,
@@ -11047,6 +11196,29 @@ function buildValidatedAnalysisFacts({
     shortTermCondition,
     currentPrice,
     latestVisiblePrice: asPositiveNumber(visualReview?.latestVisiblePrice),
+    structuralReferenceAreas: structuralReferenceAreas.map((candidate) => ({
+      direction: candidate.direction,
+      areaType: candidate.areaType,
+      zoneLow: candidate.zoneLow,
+      zoneHigh: candidate.zoneHigh,
+      zoneText: candidate.zoneText,
+      authoritativeCenter: asPositiveNumber(candidate.authoritativeCenter),
+      levelText: safeUserText(candidate.levelText || ""),
+      frameworkPeriod: candidate.frameworkPeriod || null,
+      structuralScore: Number(candidate.structuralScore || 0),
+      fibPassed: false,
+      nearestFibLabel: candidate.nearestFibLabel || null,
+      nearestFibPrice: asPositiveNumber(candidate.nearestFibPrice),
+      fibDistance:
+        Number.isFinite(Number(candidate.fibDistance))
+          ? Number(candidate.fibDistance)
+          : null,
+      fibDistanceAsAtrPercent:
+        Number.isFinite(Number(candidate.fibDistanceAsAtrPercent))
+          ? Number(candidate.fibDistanceAsAtrPercent)
+          : null,
+      referenceOnly: true,
+    })),
     activeEntryAreas: rankedRawAreas.map((candidate, index) => ({
       rank: candidate.executionOrder || index + 1,
       role: candidate.role || (index === 0 ? "primary" : index === 1 ? "secondary" : "alternative"),
@@ -11562,6 +11734,30 @@ function buildControlledFeedback({
     Number.isFinite(Number(area?.zoneHigh));
   const areaText = hasValidatedArea ? areaDisplay(facts) : "";
   const secondaryAreaText = secondaryAreaDisplay(facts);
+
+  const referenceAreas = Array.isArray(facts?.structuralReferenceAreas)
+    ? facts.structuralReferenceAreas
+    : [];
+
+  const referenceAreaTexts = referenceAreas
+    .slice(0, 2)
+    .map((reference) =>
+      formatRankedArea(
+        reference,
+        facts.direction === "bearish"
+          ? "resistance area"
+          : "support area"
+      )
+    )
+    .filter(Boolean);
+
+  const referenceAreasText =
+    referenceAreaTexts.length === 1
+      ? referenceAreaTexts[0]
+      : referenceAreaTexts.length >= 2
+      ? `${referenceAreaTexts[0]} and ${referenceAreaTexts[1]}`
+      : "";
+
   const directionText = directionDisplay(facts);
   const action = area.direction === "sell" ? "sell" : area.direction === "buy" ? "buy" : "trade";
   const opposingLevel = facts.direction === "bearish" ? "support" : "resistance";
@@ -11654,9 +11850,13 @@ function buildControlledFeedback({
   if (!hasValidatedArea) {
     weaknesses.push(
       facts.direction === "bearish"
-        ? "No sufficiently strong resistance or supply area has been validated for the planned sell yet."
+        ? referenceAreasText
+          ? `The nearby ${referenceAreasText} remain structural references, but neither currently qualifies as a strong sell entry.`
+          : "No sufficiently strong resistance or supply area has been validated for the planned sell yet."
         : facts.direction === "bullish"
-        ? "No sufficiently strong support or demand area has been validated for the planned buy yet."
+        ? referenceAreasText
+          ? `The nearby ${referenceAreasText} remain structural references, but neither currently qualifies as a strong buy entry.`
+          : "No sufficiently strong support or demand area has been validated for the planned buy yet."
         : "No sufficiently strong entry area has been validated yet."
     );
   } else if (area.invalidated) {
@@ -11746,9 +11946,13 @@ function buildControlledFeedback({
   if (!hasValidatedArea) {
     nextAction =
       facts.direction === "bearish"
-        ? "No high-quality resistance or supply entry area is confirmed yet. Avoid forcing a sell location. Wait for price to retrace into a clearly validated resistance or supply zone, then require a fresh bearish rejection."
+        ? referenceAreasText
+          ? `No strong sell entry is confirmed yet. The ${referenceAreasText} are the main structural areas to watch, but they are reference areas only and should not be treated as Entry 1 or Entry 2 unless they later meet the full setup rules. Avoid forcing a sell; wait for a stronger resistance or supply setup and a fresh bearish rejection.`
+          : "No high-quality resistance or supply entry area is confirmed yet. Avoid forcing a sell location. Wait for price to retrace into a clearly validated resistance or supply zone, then require a fresh bearish rejection."
         : facts.direction === "bullish"
-        ? "No high-quality support or demand entry area is confirmed yet. Avoid forcing a buy location. Wait for price to return into a clearly validated support or demand zone, then require a fresh bullish hold."
+        ? referenceAreasText
+          ? `No strong buy entry is confirmed yet. The ${referenceAreasText} are the main structural areas to watch, but they are reference areas only and should not be treated as Entry 1 or Entry 2 unless they later meet the full setup rules. Avoid forcing a buy; wait for a stronger support or demand setup and a fresh bullish hold.`
+          : "No high-quality support or demand entry area is confirmed yet. Avoid forcing a buy location. Wait for price to return into a clearly validated support or demand zone, then require a fresh bullish hold."
         : "No high-quality entry area is confirmed yet. Wait for a clearly validated support or resistance zone and a fresh trigger.";
   } else if (
     facts.transitionState?.bullishRecoveryAfterBreakdown &&
@@ -11841,6 +12045,8 @@ function buildControlledFeedback({
     "CHART LEVELS:",
     hasValidatedArea
       ? `- Primary area: ${areaText}.`
+      : referenceAreasText
+      ? `- Structural reference areas: ${referenceAreasText}. These are not validated entries yet.`
       : "- No validated primary entry area was confirmed.",
     secondaryAreaText
       ? `- Secondary area: ${secondaryAreaText}.`
