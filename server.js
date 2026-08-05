@@ -7246,18 +7246,18 @@ function compactZoneBounds({
   members = [],
   atr = 0,
   priceTolerance = 0,
+  preferredCenter = null,
 }) {
   const authoritativeMember =
     members.find((member) =>
       String(member?.source || "").startsWith("authoritative_framework_")
     ) || members[0] || null;
 
-  // Keep the deterministic framework price authoritative for internal
-  // area construction. A visually reconciled broker label may confirm the
-  // level, but it must not replace the framework price used for entry logic.
   const authoritativePrice = Number(
     authoritativeMember?.frameworkPrice ?? authoritativeMember?.price
   );
+
+  const resolvedPreferredCenter = asPositiveNumber(preferredCenter);
 
   const fallbackCenter =
     Number.isFinite(Number(rawLow)) && Number.isFinite(Number(rawHigh))
@@ -7268,9 +7268,15 @@ function compactZoneBounds({
       ? Number(rawHigh)
       : null;
 
-  const center = Number.isFinite(authoritativePrice)
-    ? authoritativePrice
-    : fallbackCenter;
+  // If a same-period chart price has passed reconciliation, use that
+  // resolved CSA level consistently everywhere downstream. Otherwise keep
+  // the deterministic framework price.
+  const center =
+    resolvedPreferredCenter !== null
+      ? resolvedPreferredCenter
+      : Number.isFinite(authoritativePrice)
+      ? authoritativePrice
+      : fallbackCenter;
 
   if (!Number.isFinite(center)) {
     return {
@@ -7281,9 +7287,9 @@ function compactZoneBounds({
     };
   }
 
-  // Universal rule: keep the exact daily/weekly/monthly/quarterly/yearly
-  // framework price at the centre. Other evidence may validate the level but
-  // must never move it.
+  // Keep the resolved CSA level at the centre. Period identity remains
+  // deterministic; only a validated same-period chart reconciliation may
+  // refine the final price used for the entry.
   const halfWidth = Math.max(
     priceTolerance,
     Number(atr || 0) * 0.025
@@ -7413,12 +7419,27 @@ function validateAndSequenceEntryAreas({
 
     const authoritativeCenter = Number(area?.authoritativeCenter);
 
+    const zoneCenter = (low + high) / 2;
+    const centerTolerance = Math.max(
+      Number(atr || 0) * 0.001,
+      Number.EPSILON * 100
+    );
+
     if (
       !Number.isFinite(authoritativeCenter) ||
-      Math.abs(((low + high) / 2) - authoritativeCenter) >
-        Math.max(Number(atr || 0) * 0.001, Number.EPSILON * 100)
+      Math.abs(zoneCenter - authoritativeCenter) > centerTolerance
     ) {
-      errors.push("framework_level_not_zone_center");
+      errors.push("resolved_csa_level_not_zone_center");
+      console.log("CSA selector v3 zone-center mismatch:", {
+        levelText: area?.levelText || null,
+        frameworkPeriod: area?.frameworkPeriod || null,
+        zoneCenter,
+        authoritativeCenter,
+        frameworkCenter: area?.frameworkCenter ?? null,
+        chartReconciledCenter: area?.chartReconciledCenter ?? null,
+        difference: Math.abs(zoneCenter - authoritativeCenter),
+        tolerance: centerTolerance,
+      });
       return false;
     }
 
@@ -7542,6 +7563,9 @@ function validateAndSequenceEntryAreas({
       role: area.role,
       areaType: area.areaType,
       levelText: area.levelText,
+      authoritativeCenter: area.authoritativeCenter,
+      frameworkCenter: area.frameworkCenter,
+      chartReconciledCenter: area.chartReconciledCenter,
       frameworkPeriod: area.frameworkPeriod,
       qualityScore: area.qualityScore,
       reactionCount: area.reactionCount,
@@ -9014,6 +9038,7 @@ function rankRawEntryAreas({
       members: rawZone.members,
       atr,
       priceTolerance,
+      preferredCenter: rawZone.resolvedEntryPrice,
     });
 
     const zoneLow = compacted.zoneLow;
@@ -9151,6 +9176,9 @@ function rankRawEntryAreas({
         null,
       zoneLow,
       zoneHigh,
+      resolvedEntryPrice: authoritativeCenter,
+      frameworkCenter,
+      chartReconciledCenter,
       passed: fibConfluence.passed === true,
       matchedLevels: fibConfluence.matches.map((match) => ({
         label: match.label,
