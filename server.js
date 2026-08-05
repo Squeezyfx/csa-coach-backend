@@ -11201,10 +11201,29 @@ function applyDeterministicEntryPlanToVisualReview({
           .trim()
     : "";
 
+  const secondaryVisualArea =
+    activeEntryAreas.length > 1 ? activeEntryAreas[1] : null;
+
+  const secondaryVisualText = secondaryVisualArea
+    ? `${secondaryVisualArea.areaType} ${
+        safeUserText(secondaryVisualArea.levelText || "")
+          ? `around ${safeUserText(secondaryVisualArea.levelText)}`
+          : String(secondaryVisualArea.zoneText || "").trim()
+      }`
+        .replace(/\s+/g, " ")
+        .trim()
+    : "";
+
   const bestAreaToWatch = hasPreferred
     ? preferred.direction === "sell"
-      ? `Wait for price to return towards the ${preferredText} and show a clear bearish trigger before considering a sell.`
-      : `Wait for price to return towards the ${preferredText} and show a clear bullish trigger before considering a buy.`
+      ? `Entry 1 is ${preferredText}. Wait for a fresh bearish trigger there before considering a sell.` +
+        (secondaryVisualText
+          ? ` If Entry 1 fails, Entry 2 is ${secondaryVisualText}; wait for a new bearish trigger there and do not add to a losing Entry 1.`
+          : "")
+      : `Entry 1 is ${preferredText}. Wait for a fresh bullish trigger there before considering a buy.` +
+        (secondaryVisualText
+          ? ` If Entry 1 fails, Entry 2 is ${secondaryVisualText}; wait for a new bullish trigger there and do not add to a losing Entry 1.`
+          : "")
     : facts.direction === "bearish"
     ? "No strong resistance or supply entry area has passed the internal quality checks yet."
     : facts.direction === "bullish"
@@ -11213,8 +11232,14 @@ function applyDeterministicEntryPlanToVisualReview({
 
   const coachVerdict = hasPreferred
     ? preferred.direction === "sell"
-      ? `The stronger sell area to monitor is ${preferredText}. Wait for a fresh bearish trigger there and avoid chasing price.`
-      : `The stronger buy area to monitor is ${preferredText}. Wait for a fresh bullish trigger there and avoid chasing price.`
+      ? `Entry 1 is ${preferredText}. Wait for a fresh bearish trigger there and avoid chasing price.` +
+        (secondaryVisualText
+          ? ` If Entry 1 fails, Entry 2 is ${secondaryVisualText}; require a new bearish trigger before considering it.`
+          : "")
+      : `Entry 1 is ${preferredText}. Wait for a fresh bullish trigger there and avoid chasing price.` +
+        (secondaryVisualText
+          ? ` If Entry 1 fails, Entry 2 is ${secondaryVisualText}; require a new bullish trigger before considering it.`
+          : "")
     : "No strong entry area is confirmed yet, so avoid forcing a trade.";
 
   return {
@@ -11427,9 +11452,13 @@ function buildControlledFeedback({
   } else if (!area.invalidated) {
     strengths.push(
       area.areaType === "converted resistance"
-        ? `The broken support around ${area.zoneText} has been correctly classified as converted resistance and is the first sell area to monitor.`
+        ? area.conversionConfirmed
+          ? `The broken support ${area.zoneText} has been confirmed as converted resistance and is the first sell area to monitor.`
+          : `The broken support ${area.zoneText} is a potential converted resistance and is the first sell area to monitor if price retests it from below.`
         : area.areaType === "converted support"
-        ? `The broken resistance around ${area.zoneText} has been correctly classified as converted support and is the first buy area to monitor.`
+        ? area.conversionConfirmed
+          ? `The broken resistance ${area.zoneText} has been confirmed as converted support and is the first buy area to monitor.`
+          : `The broken resistance ${area.zoneText} is a potential converted support and is the first buy area to monitor if price retests it from above.`
         : `The ${areaText} gives a clear ${action} location to monitor.`
     );
   }
@@ -11589,14 +11618,22 @@ function buildControlledFeedback({
     !area.invalidated
   ) {
     nextAction =
-      `Do not chase the current bullish move near resistance. Wait for price to pull back towards the ${areaText} and show a clear bullish hold before considering a buy. Alternatively, wait for a clean breakout and hold above the upper resistance before looking for continuation.`;
+      `Do not chase the current bullish move near resistance. Entry 1 is the ${areaText}; wait for price to pull back there and show a fresh bullish hold before considering a buy.` +
+      (secondaryAreaText
+        ? ` If Entry 1 fails by breaking below and holding, Entry 2 is the ${secondaryAreaText}; only consider it after a new bullish trigger appears there. Do not add to a losing Entry 1.`
+        : "") +
+      ` Alternatively, wait for a clean breakout and hold above the upper resistance before looking for continuation.`;
   } else if (
     facts.breakoutState?.bearishBreakdown &&
     facts.breakoutState?.extended &&
     !area.invalidated
   ) {
     nextAction =
-      `Do not chase the current bearish move near support. Wait for price to retrace towards the ${areaText} and show a clear bearish rejection before considering a sell. Alternatively, wait for a clean breakdown and hold below the lower support before looking for continuation.`;
+      `Do not chase the current bearish move near support. Entry 1 is the ${areaText}; wait for price to retrace there and show a fresh bearish rejection before considering a sell.` +
+      (secondaryAreaText
+        ? ` If Entry 1 fails by breaking above and holding, Entry 2 is the ${secondaryAreaText}; only consider it after a new bearish trigger appears there. Do not add to a losing Entry 1.`
+        : "") +
+      ` Alternatively, wait for a clean breakdown and hold below the lower support before looking for continuation.`;
   } else if (area.invalidated) {
     if (facts.direction === "bearish") {
       nextAction =
@@ -11610,16 +11647,16 @@ function buildControlledFeedback({
     }
   } else if (facts.direction === "bearish") {
     nextAction =
-      `Wait for price to retrace towards the ${areaText} and show a clear bearish rejection before considering a sell.` +
+      `Entry 1 is the ${areaText}. Wait for price to retrace there and show a fresh bearish rejection before considering a sell.` +
       (secondaryAreaText
-        ? ` If price breaks above and holds beyond the primary area, the next higher sell area to monitor is the ${secondaryAreaText}.`
+        ? ` If Entry 1 fails by breaking above and holding, Entry 2 is the ${secondaryAreaText}. Only consider Entry 2 after a new bearish trigger appears there, and do not add to a losing Entry 1.`
         : "") +
       ` Make sure there is enough room to the next support for a reasonable risk-to-reward ratio. Do not chase a sell while price remains close to support.`;
   } else if (facts.direction === "bullish") {
     nextAction =
-      `Wait for price to return towards the ${areaText} and show a clear bullish hold before considering a buy.` +
+      `Entry 1 is the ${areaText}. Wait for price to return there and show a fresh bullish hold before considering a buy.` +
       (secondaryAreaText
-        ? ` If price breaks below and holds beyond the primary area, the next lower buy area to monitor is the ${secondaryAreaText}.`
+        ? ` If Entry 1 fails by breaking below and holding, Entry 2 is the ${secondaryAreaText}. Only consider Entry 2 after a new bullish trigger appears there, and do not add to a losing Entry 1.`
         : "") +
       ` Make sure there is enough room to the next resistance for a reasonable risk-to-reward ratio. Do not chase a buy while price remains close to resistance.`;
   } else {
@@ -11707,6 +11744,26 @@ function buildControlledFeedback({
     strengths: finalStrengths,
     weaknesses: finalWeaknesses,
     nextAction,
+    entry1: hasValidatedArea
+      ? {
+          areaType: area.areaType,
+          zoneText: area.zoneText,
+          authoritativeCenter: asPositiveNumber(area.authoritativeCenter),
+          levelText: safeUserText(area.levelText || ""),
+        }
+      : null,
+    entry2: facts.secondaryEntryArea
+      ? {
+          areaType: facts.secondaryEntryArea.areaType,
+          zoneText: facts.secondaryEntryArea.zoneText,
+          authoritativeCenter: asPositiveNumber(
+            facts.secondaryEntryArea.authoritativeCenter
+          ),
+          levelText: safeUserText(
+            facts.secondaryEntryArea.levelText || ""
+          ),
+        }
+      : null,
     scores,
     setupQuality: {
       score: scores.setupQuality,
