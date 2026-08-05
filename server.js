@@ -1394,6 +1394,7 @@ Bounce, pullback, reaction, retracement, ranging, or consolidation alone is not 
 
 AREA RANKING RULES:
 - The deterministic OHLC market direction and phase supplied by the backend are immutable. Do not rewrite them.
+- When the review uses End of selected day or Exact historical time, ignore any later candles visible to the right of that cutoff when describing direction, breakout state, entry readiness, strengths, weaknesses, or next action. Those later candles are outside the review.
 - Identify up to 3 active entry areas that agree with the locked directional bias.
 - The timeframe-specific CSA framework levels are authoritative: M1-H1 daily, H4 weekly, D1 monthly, W1 quarterly, MN yearly/multi-year.
 - A converted resistance may only come from a level originally classified by the CSA period engine as support; a converted support may only come from original resistance. Do not convert demand or supply levels.
@@ -2607,7 +2608,7 @@ async function fetchTwelveDataStructureLevels({
   );
   const csaAreas = buildCsaAreas(dailyLevels, symbol, profile);
 
-  const directionalBias =
+  const baseDirectionalBias =
     chartCutoff?.allowMarketDirectionalBias === false
       ? {
           ...calculateCsaDirectionalBias([], symbol, profile),
@@ -2625,6 +2626,60 @@ async function fetchTwelveDataStructureLevels({
             "Later same-day market data was excluded.",
         }
       : calculateCsaDirectionalBias(dailyLevels, symbol, profile);
+
+  const phaseForBias =
+    deriveAuthoritativeCsaHistoricalPhase({
+      marketReference: {
+        dailyLevels,
+        timeframeCandles,
+        directionalBias: baseDirectionalBias,
+        chartCutoff,
+        profile,
+      },
+      symbol,
+      timeframe,
+    });
+
+  const directionalBias =
+    shouldUseAuthoritativePeriodPhase({ chartCutoff }) &&
+    phaseForBias &&
+    ["bullish", "bearish", "range"].includes(phaseForBias.direction)
+      ? {
+          ...baseDirectionalBias,
+          bias:
+            phaseForBias.direction === "bullish"
+              ? "Bullish"
+              : phaseForBias.direction === "bearish"
+              ? "Bearish"
+              : "Range-bound",
+          biasCode: phaseForBias.direction,
+          confidence:
+            phaseForBias.direction === "range" ? "medium" : "high",
+          traderBias:
+            phaseForBias.direction === "bullish"
+              ? "The historical CSA structure is bullish at the selected cutoff."
+              : phaseForBias.direction === "bearish"
+              ? "The historical CSA structure is bearish at the selected cutoff."
+              : "The historical CSA structure is range-bound at the selected cutoff.",
+          reason:
+            `Historical direction is locked to the ${profile.sourceUnitPlural} available by the selected cutoff. ` +
+            `Candles after ${chartCutoff?.resolvedDate || "the cutoff"} are excluded.`,
+          cutoffPhase: phaseForBias,
+        }
+      : baseDirectionalBias;
+
+  console.log("CSA historical direction lock:", {
+    cutoffMode: chartCutoff?.mode || null,
+    resolvedDate: chartCutoff?.resolvedDate || null,
+    timeframe,
+    structureMode: profile?.structureMode || null,
+    sourcePeriods: profile?.sourceUnitPlural || null,
+    direction: phaseForBias?.direction || null,
+    phase: phaseForBias?.phase || null,
+    phaseSource: phaseForBias?.source || null,
+    lastIncludedCandle,
+    firstExcludedCandle,
+  });
 
   const approvedAreas = buildApprovedMarketAreas({ csaAreas });
 
@@ -3425,14 +3480,10 @@ function buildFocusedFrameworkPriceTargets(
     "";
 
   const historicalPhase =
-    deriveHistoricalPhaseFromTimeframeCandles({
+    deriveAuthoritativeCsaHistoricalPhase({
       marketReference,
       symbol,
       timeframe,
-    }) ||
-    deriveHistoricalPhaseFromLevels({
-      marketReference,
-      symbol,
     });
 
   const direction =
@@ -10552,6 +10603,62 @@ function deriveHistoricalPhaseFromLevels({
   };
 }
 
+function shouldUseAuthoritativePeriodPhase(marketReference = {}) {
+  const cutoffMode = normalizeCutoffMode(
+    marketReference?.chartCutoff?.mode || ""
+  );
+
+  return ["selected_day", "exact"].includes(cutoffMode);
+}
+
+function deriveAuthoritativeCsaHistoricalPhase({
+  marketReference = {},
+  symbol = "",
+  timeframe = "H1",
+}) {
+  const periodPhase = deriveHistoricalPhaseFromLevels({
+    marketReference,
+    symbol,
+  });
+
+  const candlePhase = deriveHistoricalPhaseFromTimeframeCandles({
+    marketReference,
+    symbol,
+    timeframe,
+  });
+
+  const usePeriodPhase =
+    shouldUseAuthoritativePeriodPhase(marketReference);
+
+  if (
+    usePeriodPhase &&
+    periodPhase &&
+    ["bullish", "bearish", "range"].includes(periodPhase.direction)
+  ) {
+    return {
+      ...periodPhase,
+      source: `${periodPhase.source || "cutoff_period_levels"}_authoritative`,
+      diagnostics: {
+        ...(periodPhase.diagnostics || {}),
+        cutoffMode:
+          marketReference?.chartCutoff?.mode || "selected_day",
+        directionAuthority: "csa_source_period_levels",
+        secondaryCandlePhase: candlePhase
+          ? {
+              direction: candlePhase.direction || null,
+              phase: candlePhase.phase || null,
+              source: candlePhase.source || null,
+              finalCandle:
+                candlePhase?.diagnostics?.finalCandle || null,
+            }
+          : null,
+      },
+    };
+  }
+
+  return candlePhase || periodPhase || null;
+}
+
 function buildValidatedAnalysisFacts({
   visualReview = {},
   marketReference = {},
@@ -10607,19 +10714,19 @@ function buildValidatedAnalysisFacts({
   );
 
   const historicalPhase =
-    deriveHistoricalPhaseFromTimeframeCandles({
+    deriveAuthoritativeCsaHistoricalPhase({
       marketReference,
       symbol: submittedInstrument,
       timeframe,
-    }) ||
-    deriveHistoricalPhaseFromLevels({
-      marketReference,
-      symbol: submittedInstrument,
     });
 
   const deterministicMarketStateAvailable =
     historicalPhase &&
     ["bullish", "bearish", "range"].includes(historicalPhase.direction);
+
+  const historicalPeriodDirectionLocked =
+    shouldUseAuthoritativePeriodPhase(marketReference) &&
+    deterministicMarketStateAvailable;
 
   const breakoutState = deterministicMarketStateAvailable
     ? {
@@ -10671,6 +10778,14 @@ function buildValidatedAnalysisFacts({
   ) {
     direction = "bullish";
   }
+
+  // In End-of-selected-day / Exact historical mode, the CSA source-period
+  // structure is immutable. Later candles visible in the uploaded screenshot
+  // and visual-model descriptions must not flip the historical direction.
+  if (historicalPeriodDirectionLocked) {
+    direction = historicalPhase.direction;
+  }
+
   const currentPrice =
     asPositiveNumber(historicalPhase?.latestClose) ||
     extractLastMarketPrice(marketReference) ||
