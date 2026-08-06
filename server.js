@@ -3769,6 +3769,7 @@ FIBONACCI
 - The retracement must be calculated from the genuine completed impulse that produced the current directional breakout/breakdown, using the current structure-sequence origin and the final visible directional extreme; do not shrink the impulse to a late local swing merely because it is more recent.
 - In Final Visible Candle mode, when the uploaded broker/platform chart and external OHLC feed use materially different price scales, use deterministic OHLC only to identify the relevant structure/impulse sequence and use the uploaded chart's own price scale for the impulse swing prices. Exact printed chart OHLC/labels outrank estimates. Never choose swing anchors to force Fibonacci confluence.
 - A marked horizontal support/resistance/supply/demand price may calibrate the chart scale but must never automatically become the Fib swing origin. The swing origin is the actual candle wick/extreme; if a proposed origin collides with a marked reference line, independently verify the wick or reject the chart-native anchor.
+- For Final Visible Candle reviews, prefer pixel-calibrated chart-native swing prices when the right-side price axis can be calibrated from at least two exact visible prices. Vision locates wick coordinates only; JavaScript converts Y coordinates to broker-chart prices. If calibration or wick geometry is unreliable, fall back to deterministic external OHLC rather than guessing.
 - When the same authoritative framework period/side has an exact printed broker/platform price label, that exact chart label may refine the market-data framework price; never borrow a price from a different period or side.
 - Do not mention Fibonacci, retracement percentages, 38.2%, 50%, or 61.8% in normal beginner-facing feedback. You may simply say one structural area is stronger or offers a cleaner opportunity.
 
@@ -4193,6 +4194,655 @@ async function extractVisibleFrameworkPriceMap({
 }
 
 
+
+function normalizeChartCoordinate1000(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+
+  // Accept either 0..1 normalized coordinates or the requested 0..1000
+  // coordinate system. Internally we keep everything on 0..1000.
+  const normalized =
+    numeric >= 0 && numeric <= 1.2
+      ? numeric * 1000
+      : numeric;
+
+  if (normalized < 0 || normalized > 1000) return null;
+
+  return normalized;
+}
+
+function fitChartPixelPriceCalibration({
+  points = [],
+  atr = 0,
+  symbol = "",
+}) {
+  const cleaned = (Array.isArray(points) ? points : [])
+    .map((point, index) => {
+      const price = nullablePositiveNumber(point?.price);
+      const y = normalizeChartCoordinate1000(
+        point?.y1000 ?? point?.y ?? point?.yNormalized
+      );
+
+      const confidence = ["high", "medium", "low"].includes(
+        String(point?.confidence || "").toLowerCase()
+      )
+        ? String(point.confidence).toLowerCase()
+        : "low";
+
+      if (
+        price === null ||
+        y === null ||
+        confidence === "low"
+      ) {
+        return null;
+      }
+
+      return {
+        index,
+        price,
+        y,
+        label: String(point?.label || "").trim(),
+        kind: String(point?.kind || "").trim(),
+        confidence,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.y - b.y);
+
+  // Remove near-duplicate visual points. Keep the higher-confidence point.
+  const deduped = [];
+
+  for (const point of cleaned) {
+    const existingIndex = deduped.findIndex(
+      (existing) =>
+        Math.abs(existing.y - point.y) <= 1.5 ||
+        Math.abs(existing.price - point.price) <=
+          Math.max(
+            getApprovedPriceTolerance(symbol) * 0.05,
+            Number.EPSILON * 100
+          )
+    );
+
+    if (existingIndex < 0) {
+      deduped.push(point);
+      continue;
+    }
+
+    const existing = deduped[existingIndex];
+    const rank = { high: 3, medium: 2, low: 1 };
+
+    if (
+      (rank[point.confidence] || 0) >
+      (rank[existing.confidence] || 0)
+    ) {
+      deduped[existingIndex] = point;
+    }
+  }
+
+  if (deduped.length < 2) {
+    return {
+      usable: false,
+      reason: "fewer_than_two_price_scale_points",
+      pointsUsed: deduped,
+      pointsRejected: [],
+    };
+  }
+
+  const fit = (items) => {
+    const n = items.length;
+    const meanY =
+      items.reduce((sum, item) => sum + item.y, 0) / n;
+    const meanPrice =
+      items.reduce((sum, item) => sum + item.price, 0) / n;
+
+    let covariance = 0;
+    let varianceY = 0;
+
+    for (const item of items) {
+      covariance +=
+        (item.y - meanY) * (item.price - meanPrice);
+      varianceY += Math.pow(item.y - meanY, 2);
+    }
+
+    if (!Number.isFinite(varianceY) || varianceY <= 0) {
+      return null;
+    }
+
+    const slope = covariance / varianceY;
+    const intercept = meanPrice - slope * meanY;
+
+    const residuals = items.map((item) => {
+      const predicted = intercept + slope * item.y;
+      return {
+        ...item,
+        predicted,
+        residual: Math.abs(item.price - predicted),
+      };
+    });
+
+    const ssResidual = residuals.reduce(
+      (sum, item) =>
+        sum + Math.pow(item.price - item.predicted, 2),
+      0
+    );
+
+    const ssTotal = items.reduce(
+      (sum, item) =>
+        sum + Math.pow(item.price - meanPrice, 2),
+      0
+    );
+
+    const rSquared =
+      ssTotal > 0 ? 1 - ssResidual / ssTotal : 1;
+
+    return {
+      slope,
+      intercept,
+      residuals,
+      rSquared,
+      maxResidual: Math.max(
+        ...residuals.map((item) => item.residual)
+      ),
+    };
+  };
+
+  let pointsUsed = [...deduped];
+  let pointsRejected = [];
+  let fitted = fit(pointsUsed);
+
+  if (!fitted) {
+    return {
+      usable: false,
+      reason: "price_scale_fit_failed",
+      pointsUsed,
+      pointsRejected,
+    };
+  }
+
+  const initialPriceSpan =
+    Math.max(...pointsUsed.map((item) => item.price)) -
+    Math.min(...pointsUsed.map((item) => item.price));
+
+  const initialResidualAllowance = Math.max(
+    Number(atr || 0) * 0.12,
+    initialPriceSpan * 0.012,
+    Math.abs(fitted.slope) * 4,
+    getApprovedPriceTolerance(symbol) * 0.2,
+    Number.EPSILON * 100
+  );
+
+  // With 4+ points, allow one obvious coordinate-reading outlier to be
+  // removed, but only when doing so materially improves the linear scale.
+  if (
+    pointsUsed.length >= 4 &&
+    fitted.maxResidual > initialResidualAllowance
+  ) {
+    const worst = [...fitted.residuals].sort(
+      (a, b) => b.residual - a.residual
+    )[0];
+
+    const candidatePoints = pointsUsed.filter(
+      (item) => item.index !== worst.index
+    );
+
+    const candidateFit = fit(candidatePoints);
+
+    if (
+      candidateFit &&
+      candidateFit.rSquared > fitted.rSquared &&
+      candidateFit.maxResidual < fitted.maxResidual
+    ) {
+      pointsRejected.push({
+        ...worst,
+        rejectionReason:
+          "single_geometric_outlier_removed",
+      });
+
+      pointsUsed = candidatePoints;
+      fitted = candidateFit;
+    }
+  }
+
+  const yValues = pointsUsed.map((item) => item.y);
+  const prices = pointsUsed.map((item) => item.price);
+
+  const ySpan = Math.max(...yValues) - Math.min(...yValues);
+  const priceSpan = Math.max(...prices) - Math.min(...prices);
+
+  const residualAllowance = Math.max(
+    Number(atr || 0) * 0.12,
+    priceSpan * 0.012,
+    Math.abs(fitted.slope) * 4,
+    getApprovedPriceTolerance(symbol) * 0.2,
+    Number.EPSILON * 100
+  );
+
+  // On a normal trading chart, price decreases as image Y increases.
+  const directionCorrect = fitted.slope < 0;
+
+  // Price-axis points should be substantially vertically separated.
+  const spreadAdequate =
+    ySpan >= 80 &&
+    priceSpan > 0;
+
+  // Exact price scale should be very close to linear. Coordinates are
+  // vision-read, so use a tolerant but meaningful R²/residual threshold.
+  const fitQualityGood =
+    fitted.rSquared >= 0.985 &&
+    fitted.maxResidual <= residualAllowance;
+
+  // Also require the observed points to be monotonic from top to bottom.
+  let monotonicViolations = 0;
+
+  for (let index = 1; index < pointsUsed.length; index += 1) {
+    if (
+      Number(pointsUsed[index].price) >=
+      Number(pointsUsed[index - 1].price)
+    ) {
+      monotonicViolations += 1;
+    }
+  }
+
+  const monotonic =
+    monotonicViolations === 0;
+
+  const usable =
+    pointsUsed.length >= 2 &&
+    directionCorrect &&
+    spreadAdequate &&
+    fitQualityGood &&
+    monotonic;
+
+  return {
+    usable,
+    reason: usable
+      ? "validated_linear_chart_price_scale"
+      : !directionCorrect
+      ? "price_scale_direction_invalid"
+      : !spreadAdequate
+      ? "price_scale_points_not_spread_enough"
+      : !monotonic
+      ? "price_scale_points_not_monotonic"
+      : "price_scale_fit_quality_too_low",
+    slope: fitted.slope,
+    intercept: fitted.intercept,
+    rSquared: fitted.rSquared,
+    maxResidual: fitted.maxResidual,
+    residualAllowance,
+    ySpan,
+    priceSpan,
+    monotonicViolations,
+    pointsUsed: fitted.residuals,
+    pointsRejected,
+    minCalibrationY: Math.min(...yValues),
+    maxCalibrationY: Math.max(...yValues),
+    minCalibrationPrice: Math.min(...prices),
+    maxCalibrationPrice: Math.max(...prices),
+    pricePer1000Y: Math.abs(fitted.slope) * 1000,
+  };
+}
+
+function priceFromChartY(calibration, yValue) {
+  const y = normalizeChartCoordinate1000(yValue);
+
+  if (
+    !calibration?.usable ||
+    y === null ||
+    !Number.isFinite(Number(calibration?.slope)) ||
+    !Number.isFinite(Number(calibration?.intercept))
+  ) {
+    return null;
+  }
+
+  const price =
+    Number(calibration.intercept) +
+    Number(calibration.slope) * y;
+
+  return asPositiveNumber(price);
+}
+
+async function extractChartPriceScalePoints({
+  imageBase64,
+  mimeType,
+  timeframe = "H1",
+  symbol = "",
+  visualReview = {},
+}) {
+  if (!isAiProviderConfigured() || !imageBase64) {
+    return {
+      ok: false,
+      points: [],
+      reason: imageBase64
+        ? getAiConfigurationError()
+        : "missing_chart_image",
+    };
+  }
+
+  const visiblePrice =
+    asPositiveNumber(visualReview?.latestVisiblePrice);
+
+  const prompt = `
+You have ONE narrow geometric chart-reading task.
+
+INSTRUMENT: ${symbol}
+TIMEFRAME: ${timeframe}
+VISIBLE FINAL PRICE WHEN AVAILABLE: ${visiblePrice ?? "unknown"}
+
+TASK:
+Build calibration points for the chart's vertical PRICE scale.
+
+Read 4 to 8 clearly visible numeric price labels from the RIGHT-SIDE price axis, spread from near the top to near the bottom of the actual chart plot.
+
+You may also use a clearly printed colored horizontal-line price label on the right edge because its Y position corresponds exactly to that printed price.
+
+For EACH calibration point return:
+- the exact printed numeric price
+- the vertical center position of that exact label/line on the FULL uploaded image
+- Y must use a 0..1000 coordinate system:
+  0 = very top edge of the full image
+  1000 = very bottom edge of the full image
+- confidence
+- whether it is a normal axis tick or a horizontal-line label
+
+CRITICAL RULES:
+1. Read ONLY exact printed prices. Do not estimate a price from candle height.
+2. Never invent digits.
+3. Prefer labels that are vertically well separated.
+4. Do not return dates/times from the bottom axis.
+5. Do not return OHLC header numbers unless they are physically located on the right-side vertical price axis.
+6. The Y coordinate must correspond to the vertical center of the printed price/line.
+7. Return at least 3 points if possible. If fewer than 2 exact prices are readable, return an empty points array.
+8. This task is ONLY price-scale calibration. Do not identify support, resistance, entries, trends, or Fibonacci.
+
+Return JSON only:
+{
+  "points": [
+    {
+      "price": null,
+      "y1000": null,
+      "label": null,
+      "kind": "axis_tick | horizontal_line_label",
+      "confidence": "high | medium | low"
+    }
+  ],
+  "confidence": "high | medium | low"
+}`;
+
+  try {
+    const response = await runVisionModel({
+      systemPrompt: prompt,
+      userText:
+        "Read exact right-axis price labels and their 0..1000 Y coordinates. Return JSON only.",
+      imageBase64,
+      mimeType,
+      maxTokens: 900,
+      openaiModel: "gpt-4.1",
+      claudeModel: CLAUDE_MODEL,
+      temperature: 0,
+      imageDetail: "high",
+    });
+
+    const parsed = extractJsonObject(response.text || "");
+
+    const points = Array.isArray(parsed?.points)
+      ? parsed.points
+          .map((point) => ({
+            price: nullablePositiveNumber(point?.price),
+            y1000: normalizeChartCoordinate1000(
+              point?.y1000
+            ),
+            label: String(point?.label || "").trim(),
+            kind: String(point?.kind || "").trim(),
+            confidence: String(
+              point?.confidence || ""
+            ).toLowerCase(),
+          }))
+          .filter(
+            (point) =>
+              point.price !== null &&
+              point.y1000 !== null
+          )
+      : [];
+
+    const result = {
+      ok: points.length >= 2,
+      points,
+      confidence: String(
+        parsed?.confidence || "low"
+      ).toLowerCase(),
+      modelUsed: response.model,
+      provider: response.provider,
+      reason:
+        points.length >= 2
+          ? ""
+          : "fewer_than_two_exact_price_axis_points",
+    };
+
+    console.log(
+      "CSA chart price-scale points:",
+      result
+    );
+
+    return result;
+  } catch (error) {
+    console.warn(
+      "CSA chart price-scale extraction failed:",
+      error?.message || error
+    );
+
+    return {
+      ok: false,
+      points: [],
+      reason: "price_scale_reader_failed",
+      error: safeUserText(
+        error?.message || "Unknown calibration error"
+      ),
+    };
+  }
+}
+
+async function locateChartNativeImpulseWicks({
+  imageBase64,
+  mimeType,
+  direction,
+  timeframe = "H1",
+  symbol = "",
+  marketImpulse = null,
+  latestVisibleDate = "",
+  latestVisibleTime = "",
+}) {
+  if (
+    !isAiProviderConfigured() ||
+    !imageBase64 ||
+    !["bullish", "bearish"].includes(direction)
+  ) {
+    return {
+      ok: false,
+      reason: "wick_locator_unavailable",
+    };
+  }
+
+  const locatorText = marketImpulse
+    ? `
+STRUCTURE/TIME LOCATOR FROM CUTOFF-FILTERED MARKET DATA:
+- current directional event: ${marketImpulse?.controllingEvent?.datetime || "unknown"}
+- prior opposite structure event: ${marketImpulse?.oppositeOriginEvent?.datetime || "unknown"}
+- external origin-time hint: ${
+        direction === "bullish"
+          ? marketImpulse?.swingLowTime || "unknown"
+          : marketImpulse?.swingHighTime || "unknown"
+      }
+- external terminal-time hint: ${
+        direction === "bullish"
+          ? marketImpulse?.swingHighTime || "unknown"
+          : marketImpulse?.swingLowTime || "unknown"
+      }
+
+Use these only to locate the correct section of the TIME axis. Do not infer or copy any external price.
+`
+    : "";
+
+  const prompt = `
+You have ONE narrow geometric chart-reading task.
+
+INSTRUMENT: ${symbol}
+TIMEFRAME: ${timeframe}
+LOCKED DIRECTION: ${direction}
+FINAL VISIBLE DATE: ${latestVisibleDate || "not reliably printed"}
+FINAL VISIBLE TIME: ${latestVisibleTime || "not reliably printed"}
+${locatorText}
+
+TASK:
+Locate the ACTUAL CANDLE-WICK coordinates of the completed directional impulse used for retracement analysis.
+
+For BULLISH direction:
+- originWick = the genuine LOWEST candle wick that begins the sustained bullish impulse which ultimately produces the current/final visible bullish breakout and terminal high.
+- terminalWick = the genuine HIGHEST candle wick reached by that same completed bullish impulse through the final visible candle.
+
+For BEARISH direction:
+- originWick = the genuine HIGHEST candle wick that begins the sustained bearish impulse which ultimately produces the current/final visible bearish breakdown and terminal low.
+- terminalWick = the genuine LOWEST candle wick reached by that same completed bearish impulse through the final visible candle.
+
+Return coordinates on the FULL uploaded image using 0..1000:
+- X=0 left edge, X=1000 right edge
+- Y=0 top edge, Y=1000 bottom edge
+
+CRITICAL RULES:
+1. Return COORDINATES, NOT PRICES.
+2. Ignore all horizontal support/resistance/supply/demand lines as possible wick anchors.
+3. If a horizontal line crosses the origin candle, follow the candle wick beyond/through the line and locate the actual wick tip.
+4. Never place the origin coordinate on a horizontal line simply because that line is nearby.
+5. Do not calculate Fibonacci.
+6. Do not choose a wick because it would make any structural level line up with a retracement.
+7. Do not automatically use the most recent minor pullback.
+8. Use the genuine structural origin of the sustained directional move.
+9. Origin must occur before terminal in time, so origin X must be meaningfully left of terminal X.
+10. If either wick tip cannot be located with at least medium confidence, return null for that coordinate rather than guessing.
+11. Do not return coordinates for price-axis labels, horizontal lines, or chart borders.
+12. The terminal should be the actual candle wick extreme, not merely the final candle close.
+
+Return JSON only:
+{
+  "originWickX1000": null,
+  "originWickY1000": null,
+  "terminalWickX1000": null,
+  "terminalWickY1000": null,
+  "originEvidence": null,
+  "terminalEvidence": null,
+  "originConfidence": "high | medium | low",
+  "terminalConfidence": "high | medium | low",
+  "confidence": "high | medium | low"
+}`;
+
+  try {
+    const response = await runVisionModel({
+      systemPrompt: prompt,
+      userText:
+        "Locate only the actual origin and terminal candle-wick tips. Return 0..1000 image coordinates, not prices.",
+      imageBase64,
+      mimeType,
+      maxTokens: 650,
+      openaiModel: "gpt-4.1",
+      claudeModel: CLAUDE_MODEL,
+      temperature: 0,
+      imageDetail: "high",
+    });
+
+    const parsed = extractJsonObject(response.text || "");
+
+    const originX = normalizeChartCoordinate1000(
+      parsed?.originWickX1000
+    );
+    const originY = normalizeChartCoordinate1000(
+      parsed?.originWickY1000
+    );
+    const terminalX = normalizeChartCoordinate1000(
+      parsed?.terminalWickX1000
+    );
+    const terminalY = normalizeChartCoordinate1000(
+      parsed?.terminalWickY1000
+    );
+
+    const originConfidence = String(
+      parsed?.originConfidence ||
+      parsed?.confidence ||
+      "low"
+    ).toLowerCase();
+
+    const terminalConfidence = String(
+      parsed?.terminalConfidence ||
+      parsed?.confidence ||
+      "low"
+    ).toLowerCase();
+
+    const confidence = String(
+      parsed?.confidence || "low"
+    ).toLowerCase();
+
+    const validConfidence = (value) =>
+      ["high", "medium"].includes(value);
+
+    const chronologyValid =
+      originX !== null &&
+      terminalX !== null &&
+      terminalX - originX >= 15;
+
+    const ok =
+      originX !== null &&
+      originY !== null &&
+      terminalX !== null &&
+      terminalY !== null &&
+      validConfidence(originConfidence) &&
+      validConfidence(terminalConfidence) &&
+      chronologyValid;
+
+    const result = {
+      ok,
+      originX,
+      originY,
+      terminalX,
+      terminalY,
+      originEvidence: safeUserText(
+        parsed?.originEvidence || ""
+      ),
+      terminalEvidence: safeUserText(
+        parsed?.terminalEvidence || ""
+      ),
+      originConfidence,
+      terminalConfidence,
+      confidence,
+      chronologyValid,
+      modelUsed: response.model,
+      provider: response.provider,
+      reason: ok
+        ? ""
+        : !chronologyValid
+        ? "wick_coordinates_fail_chronology"
+        : "wick_coordinates_missing_or_low_confidence",
+    };
+
+    console.log(
+      "CSA chart-native wick coordinates:",
+      result
+    );
+
+    return result;
+  } catch (error) {
+    console.warn(
+      "CSA chart-native wick locator failed:",
+      error?.message || error
+    );
+
+    return {
+      ok: false,
+      reason: "wick_locator_failed",
+      error: safeUserText(
+        error?.message || "Unknown wick locator error"
+      ),
+    };
+  }
+}
+
 async function extractChartNativeImpulseAnchors({
   imageBase64,
   mimeType,
@@ -4207,14 +4857,15 @@ async function extractChartNativeImpulseAnchors({
     marketReference?.chartCutoff?.mode || "final_visible"
   );
 
-  // Historical selected-day / exact-time reviews stay on deterministic
-  // cutoff-filtered OHLC so future candles visible in the screenshot can
-  // never leak into the historical Fib impulse.
+  // Historical selected-day / exact-time reviews remain fully locked to
+  // deterministic cutoff-filtered OHLC. This prevents future visible candles
+  // from affecting a historical Fib swing.
   if (cutoffMode !== "final_visible") {
     return {
       usable: false,
       source: "external_ohlc",
-      reason: "chart_native_impulse_disabled_for_historical_cutoff",
+      reason:
+        "pixel_chart_native_impulse_disabled_for_historical_cutoff",
     };
   }
 
@@ -4237,7 +4888,9 @@ async function extractChartNativeImpulseAnchors({
 
   const direction =
     historicalPhase &&
-    ["bullish", "bearish"].includes(historicalPhase.direction)
+    ["bullish", "bearish"].includes(
+      historicalPhase.direction
+    )
       ? historicalPhase.direction
       : null;
 
@@ -4245,11 +4898,14 @@ async function extractChartNativeImpulseAnchors({
     return {
       usable: false,
       source: "external_ohlc",
-      reason: "no_locked_direction_for_chart_native_impulse",
+      reason:
+        "no_locked_direction_for_pixel_chart_native_impulse",
     };
   }
 
-  const candles = Array.isArray(marketReference?.timeframeCandles)
+  const candles = Array.isArray(
+    marketReference?.timeframeCandles
+  )
     ? marketReference.timeframeCandles
     : [];
 
@@ -4258,8 +4914,9 @@ async function extractChartNativeImpulseAnchors({
     getStructureEngineConfig(timeframe).atrPeriod
   );
 
-  // The market-data impulse is used only as a broad structure/time locator
-  // and sanity-check. Its prices are NOT treated as the chart's price scale.
+  // Deterministic market-data structure remains responsible for deciding
+  // WHICH impulse matters. The uploaded image is used only to move the two
+  // swing prices onto the user's broker/platform scale.
   const marketImpulse = buildLatestImpulseFibonacci({
     candles,
     historicalPhase,
@@ -4270,27 +4927,55 @@ async function extractChartNativeImpulseAnchors({
     suppressImpulseLog: true,
   });
 
-  const exactReferenceLevels = Array.isArray(priceMap?.matches)
-    ? priceMap.matches
-        .filter(
-          (match) =>
-            match?.withinTolerance === true &&
-            nullablePositiveNumber(match?.displayedPrice) !== null
-        )
-        .slice(0, 6)
-        .map((match) => ({
-          period: String(match?.period || ""),
-          side: String(match?.side || ""),
-          role: String(match?.areaType || ""),
-          price: nullablePositiveNumber(match?.displayedPrice),
-          label: String(match?.platformLabel || ""),
-        }))
-        .filter((item) => item.price !== null)
-    : [];
+  if (!marketImpulse) {
+    return {
+      usable: false,
+      source: "external_ohlc",
+      reason:
+        "deterministic_impulse_locator_unavailable",
+    };
+  }
 
-  const visibleClose =
-    asPositiveNumber(visualReview?.latestVisiblePrice) ||
-    asPositiveNumber(chartDetection?.latestVisiblePrice);
+  const scaleRead = await extractChartPriceScalePoints({
+    imageBase64,
+    mimeType,
+    timeframe,
+    symbol,
+    visualReview,
+  });
+
+  if (!scaleRead?.ok) {
+    return {
+      usable: false,
+      source: "external_ohlc",
+      reason:
+        scaleRead?.reason ||
+        "chart_price_scale_points_unavailable",
+      scaleRead,
+    };
+  }
+
+  const calibration = fitChartPixelPriceCalibration({
+    points: scaleRead.points,
+    atr,
+    symbol,
+  });
+
+  console.log(
+    "CSA chart price-scale calibration:",
+    calibration
+  );
+
+  if (!calibration?.usable) {
+    return {
+      usable: false,
+      source: "external_ohlc",
+      reason:
+        calibration?.reason ||
+        "chart_price_scale_calibration_invalid",
+      calibration,
+    };
+  }
 
   const latestVisibleDate =
     String(
@@ -4300,531 +4985,362 @@ async function extractChartNativeImpulseAnchors({
     ).trim();
 
   const latestVisibleTime =
-    String(chartDetection?.latestVisibleTime || "").trim();
+    String(
+      chartDetection?.latestVisibleTime || ""
+    ).trim();
 
-  const referenceText =
-    exactReferenceLevels.length
-      ? exactReferenceLevels
-          .map(
-            (item) =>
-              `${item.period} ${item.side} ${item.role}: ${item.price}` +
-              (item.label ? ` (${item.label})` : "")
-          )
-          .join("\n")
-      : "No exact horizontal reference labels were reliably extracted.";
-
-  const locatorText = marketImpulse
-    ? `
-External-data STRUCTURE/TIME locator only:
-- controlling event: ${marketImpulse?.controllingEvent?.datetime || "unknown"}
-- prior opposite structure event: ${marketImpulse?.oppositeOriginEvent?.datetime || "unknown"}
-- external swing-low time hint: ${marketImpulse?.swingLowTime || "unknown"}
-- external swing-high time hint: ${marketImpulse?.swingHighTime || "unknown"}
-
-These times are only rough locators. Do NOT copy the external swing prices. The uploaded broker chart is the price authority for this task.
-`
-    : "";
-
-  const prompt = `
-You have ONE narrow visual task for a trading chart.
-
-LOCKED DIRECTION: ${direction}
-TIMEFRAME: ${timeframe}
-FINAL VISIBLE DATE: ${latestVisibleDate || "not reliably printed"}
-FINAL VISIBLE TIME: ${latestVisibleTime || "not reliably printed"}
-FINAL VISIBLE CLOSE (when readable): ${visibleClose ?? "not available"}
-
-Exact broker/platform chart reference prices already read from this SAME image:
-${referenceText}
-${locatorText}
-
-TASK:
-Read the TWO price anchors of the CURRENT COMPLETED DIRECTIONAL IMPULSE from the uploaded chart's OWN price scale.
-
-For a BULLISH chart:
-- originPrice = the genuine swing LOW that begins the sustained bullish impulse which ultimately produces the current/final visible breakout and directional high.
-- terminalPrice = the highest price reached by that completed bullish impulse through the final visible candle.
-
-For a BEARISH chart:
-- originPrice = the genuine swing HIGH that begins the sustained bearish impulse which ultimately produces the current/final visible breakdown and directional low.
-- terminalPrice = the lowest price reached by that completed bearish impulse through the final visible candle.
-
-CRITICAL RULES:
-1. Use the BROKER/PLATFORM PRICE SCALE VISIBLE IN THIS SCREENSHOT.
-2. Exact printed OHLC/header values or printed price labels outrank visual estimation.
-3. Use the exact reference prices above only to calibrate the chart's vertical price scale and identify the same chart feed. A reference-line price is NOT a swing price unless the actual candle wick visibly ends there.
-4. The impulse origin must be taken from the actual candle wick/extreme. Never substitute a horizontal support/resistance/supply/demand line for the wick.
-5. If a marked horizontal line crosses the swing candle, inspect the wick above/below that line and use the wick extreme.
-6. Do NOT calculate Fibonacci.
-7. Do NOT choose an origin because it would make a support/resistance level line up with any retracement.
-8. Do NOT simply choose the most recent minor pullback low/high.
-9. Do NOT choose the oldest or absolute chart extreme unless it genuinely begins the current directional impulse.
-10. For a bullish impulse, the origin must occur before the terminal high. For a bearish impulse, the origin high must occur before the terminal low.
-11. The final visible candle and chart header are authoritative for the screenshot endpoint.
-12. If the genuine origin cannot be read with at least medium confidence from the visible chart/price scale, return null rather than guessing.
-13. Never invent digits. A visually estimated origin is acceptable only when the price scale makes the estimate reasonably clear.
-14. Keep this entirely separate from entry-area selection. You are reading swing prices only.
-
-Return JSON only:
-{
-  "direction": "${direction}",
-  "originPrice": null,
-  "terminalPrice": null,
-  "originTime": null,
-  "terminalTime": null,
-  "originPriceSource": "exact_printed | chart_scale_estimate | null",
-  "terminalPriceSource": "exact_printed | chart_scale_estimate | null",
-  "originEvidence": null,
-  "terminalEvidence": null,
-  "originAppearsToBeMarkedHorizontalLine": false,
-  "confidence": "high | medium | low"
-}`;
-
-  try {
-    const response = await runVisionModel({
-      systemPrompt: prompt,
-      userText:
-        "Read only the current directional impulse origin and terminal price from this uploaded chart. Return JSON only.",
+  const wickLocation =
+    await locateChartNativeImpulseWicks({
       imageBase64,
       mimeType,
-      maxTokens: 700,
-      openaiModel: "gpt-4.1",
-      claudeModel: CLAUDE_MODEL,
-      temperature: 0,
-      imageDetail: "high",
+      direction,
+      timeframe,
+      symbol,
+      marketImpulse,
+      latestVisibleDate,
+      latestVisibleTime,
     });
 
-    const parsed = extractJsonObject(response.text || "");
-
-    if (!parsed) {
-      return {
-        usable: false,
-        source: "external_ohlc",
-        reason: "chart_native_impulse_json_unavailable",
-        raw: response.text || "",
-      };
-    }
-
-    let originPrice = nullablePositiveNumber(parsed?.originPrice);
-    let terminalPrice = nullablePositiveNumber(parsed?.terminalPrice);
-
-    let originTime = safeUserText(parsed?.originTime || "");
-    let terminalTime = safeUserText(parsed?.terminalTime || "");
-    let originPriceSource =
-      String(parsed?.originPriceSource || "").trim();
-    let terminalPriceSource =
-      String(parsed?.terminalPriceSource || "").trim();
-    let originEvidence =
-      safeUserText(parsed?.originEvidence || "");
-    let terminalEvidence =
-      safeUserText(parsed?.terminalEvidence || "");
-
-    let confidence = ["high", "medium", "low"].includes(
-      String(parsed?.confidence || "").toLowerCase()
-    )
-      ? String(parsed.confidence).toLowerCase()
-      : "low";
-
-    const referenceCollisionTolerance = Math.max(
-      Number(atr || 0) * 0.025,
-      getApprovedPriceTolerance(symbol) * 0.5,
-      Number.EPSILON * 100
-    );
-
-    const nearestOriginReference =
-      originPrice !== null && exactReferenceLevels.length
-        ? exactReferenceLevels
-            .map((reference) => ({
-              ...reference,
-              distance: Math.abs(
-                Number(originPrice) - Number(reference.price)
-              ),
-            }))
-            .sort((a, b) => a.distance - b.distance)[0] || null
-        : null;
-
-    const originReferenceCollision =
-      parsed?.originAppearsToBeMarkedHorizontalLine === true ||
-      (
-        nearestOriginReference !== null &&
-        Number.isFinite(Number(nearestOriginReference.distance)) &&
-        Number(nearestOriginReference.distance) <=
-          referenceCollisionTolerance
-      );
-
-    let wickOnlyReread = null;
-
-    if (
-      originPrice !== null &&
-      terminalPrice !== null &&
-      originReferenceCollision
-    ) {
-      const wickPrompt = `
-You are validating ONE suspicious impulse-origin reading on a trading chart.
-
-LOCKED DIRECTION: ${direction}
-TIMEFRAME: ${timeframe}
-FIRST-PASS ORIGIN: ${originPrice}
-FIRST-PASS TERMINAL: ${terminalPrice}
-
-The first-pass origin is suspicious because it is essentially identical to this marked/reference price:
-- period: ${nearestOriginReference?.period || "unknown"}
-- side: ${nearestOriginReference?.side || "unknown"}
-- role: ${nearestOriginReference?.role || "unknown"}
-- marked/reference price: ${nearestOriginReference?.price ?? "unknown"}
-
-Other exact chart reference prices:
-${referenceText}
-
-TASK:
-Re-read ONLY the genuine candle-WICK extreme that begins the current completed ${direction} impulse.
-
-MANDATORY RULES:
-1. IGNORE horizontal support/resistance/supply/demand lines as possible swing anchors. They may calibrate the vertical scale only.
-2. The origin must be the actual candle wick/extreme, not the price of a drawn horizontal line.
-3. If a horizontal line crosses or sits near the swing candle, inspect whether the wick visibly extends above/below the line. Use the wick extreme.
-4. For bullish direction, return the LOWEST wick of the actual origin swing that begins the sustained bullish leg into the final visible breakout/high.
-5. For bearish direction, return the HIGHEST wick of the actual origin swing that begins the sustained bearish leg into the final visible breakdown/low.
-6. Do not calculate Fibonacci and do not choose a price because it aligns with any entry level.
-7. Do not reuse ${nearestOriginReference?.price ?? "the reference price"} unless you can visibly verify that the candle wick itself truly ends at that exact price.
-8. If the wick cannot be read with at least medium confidence, return null.
-9. Preserve the terminal price unless the chart clearly shows the first-pass terminal was wrong.
-
-Return JSON only:
-{
-  "originPrice": null,
-  "terminalPrice": ${terminalPrice},
-  "originTime": null,
-  "terminalTime": null,
-  "originPriceSource": "exact_printed | chart_scale_estimate | null",
-  "terminalPriceSource": "exact_printed | chart_scale_estimate | null",
-  "originEvidence": null,
-  "terminalEvidence": null,
-  "wickVisiblySeparateFromReferenceLine": false,
-  "confidence": "high | medium | low"
-}`;
-
-      try {
-        const wickResponse = await runVisionModel({
-          systemPrompt: wickPrompt,
-          userText:
-            "Re-read the actual candle-wick impulse origin. Ignore marked horizontal lines as anchors. Return JSON only.",
-          imageBase64,
-          mimeType,
-          maxTokens: 550,
-          openaiModel: "gpt-4.1",
-          claudeModel: CLAUDE_MODEL,
-          temperature: 0,
-          imageDetail: "high",
-        });
-
-        const wickParsed =
-          extractJsonObject(wickResponse.text || "");
-
-        const rereadOrigin =
-          nullablePositiveNumber(wickParsed?.originPrice);
-
-        const rereadTerminal =
-          nullablePositiveNumber(wickParsed?.terminalPrice);
-
-        const rereadConfidence =
-          ["high", "medium", "low"].includes(
-            String(wickParsed?.confidence || "").toLowerCase()
-          )
-            ? String(wickParsed.confidence).toLowerCase()
-            : "low";
-
-        const wickSeparated =
-          wickParsed?.wickVisiblySeparateFromReferenceLine === true;
-
-        const rereadReferenceDistance =
-          rereadOrigin !== null &&
-          nearestOriginReference?.price !== null &&
-          nearestOriginReference?.price !== undefined
-            ? Math.abs(
-                Number(rereadOrigin) -
-                Number(nearestOriginReference.price)
-              )
-            : null;
-
-        const rereadStillCollides =
-          rereadReferenceDistance !== null &&
-          rereadReferenceDistance <=
-            referenceCollisionTolerance;
-
-        const rereadUsable =
-          rereadOrigin !== null &&
-          rereadConfidence !== "low" &&
-          (
-            wickSeparated ||
-            !rereadStillCollides
-          );
-
-        wickOnlyReread = {
-          attempted: true,
-          usable: rereadUsable,
-          firstPassOrigin: originPrice,
-          collidingReferencePrice:
-            nearestOriginReference?.price ?? null,
-          collidingReferencePeriod:
-            nearestOriginReference?.period || null,
-          collidingReferenceRole:
-            nearestOriginReference?.role || null,
-          referenceCollisionTolerance,
-          rereadOrigin,
-          rereadTerminal,
-          rereadConfidence,
-          wickSeparated,
-          rereadReferenceDistance,
-          rereadStillCollides,
-          modelUsed: wickResponse.model,
-          provider: wickResponse.provider,
-        };
-
-        console.log(
-          "CSA chart-native wick-only origin reread:",
-          wickOnlyReread
-        );
-
-        if (rereadUsable) {
-          originPrice = rereadOrigin;
-
-          if (rereadTerminal !== null) {
-            terminalPrice = rereadTerminal;
-          }
-
-          originTime =
-            safeUserText(wickParsed?.originTime || "") ||
-            originTime;
-
-          terminalTime =
-            safeUserText(wickParsed?.terminalTime || "") ||
-            terminalTime;
-
-          originPriceSource =
-            String(
-              wickParsed?.originPriceSource ||
-              "chart_scale_estimate"
-            ).trim();
-
-          terminalPriceSource =
-            String(
-              wickParsed?.terminalPriceSource ||
-              terminalPriceSource ||
-              ""
-            ).trim();
-
-          originEvidence =
-            safeUserText(wickParsed?.originEvidence || "") ||
-            originEvidence;
-
-          terminalEvidence =
-            safeUserText(wickParsed?.terminalEvidence || "") ||
-            terminalEvidence;
-
-          confidence = rereadConfidence;
-        } else {
-          // A suspicious line-colliding origin that cannot be independently
-          // verified as a candle wick is not safe enough for Fib.
-          originPrice = null;
-          confidence = "low";
-        }
-      } catch (wickError) {
-        wickOnlyReread = {
-          attempted: true,
-          usable: false,
-          firstPassOrigin: originPrice,
-          collidingReferencePrice:
-            nearestOriginReference?.price ?? null,
-          referenceCollisionTolerance,
-          error: safeUserText(
-            wickError?.message || "Unknown wick reread error"
-          ),
-        };
-
-        console.warn(
-          "CSA chart-native wick-only origin reread failed:",
-          wickError?.message || wickError
-        );
-
-        originPrice = null;
-        confidence = "low";
-      }
-    }
-
-    if (
-      originPrice === null ||
-      terminalPrice === null ||
-      confidence === "low"
-    ) {
-      console.log("CSA chart-native impulse extraction:", {
-        usable: false,
-        direction,
-        originPrice,
-        terminalPrice,
-        confidence,
-        originReferenceCollision,
-        nearestOriginReference,
-        wickOnlyReread,
-        reason: "missing_or_low_confidence_anchor",
-      });
-
-      return {
-        usable: false,
-        source: "external_ohlc",
-        reason: "missing_or_low_confidence_chart_native_anchor",
-        direction,
-        originPrice,
-        terminalPrice,
-        confidence,
-        originReferenceCollision,
-        nearestOriginReference,
-        wickOnlyReread,
-      };
-    }
-
-    const chartSwingLow =
-      direction === "bullish" ? originPrice : terminalPrice;
-
-    const chartSwingHigh =
-      direction === "bullish" ? terminalPrice : originPrice;
-
-    if (
-      !Number.isFinite(chartSwingLow) ||
-      !Number.isFinite(chartSwingHigh) ||
-      chartSwingHigh <= chartSwingLow
-    ) {
-      return {
-        usable: false,
-        source: "external_ohlc",
-        reason: "invalid_chart_native_anchor_order",
-        direction,
-        originPrice,
-        terminalPrice,
-        confidence,
-      };
-    }
-
-    const chartRange = chartSwingHigh - chartSwingLow;
-    const marketRange = Number(marketImpulse?.impulseRange || 0);
-
-    // Broad sanity-check only. The entire point of this reader is to permit
-    // broker/feed differences, so the validation must not force the chart
-    // prices back onto the external feed.
-    const rangeRatio =
-      marketRange > 0 ? chartRange / marketRange : null;
-
-    const broadAnchorTolerance = Math.max(
-      Number(atr || 0) * 2.5,
-      marketRange > 0 ? marketRange * 0.22 : 0,
-      getApprovedPriceTolerance(symbol) * 10
-    );
-
-    const externalLowDifference =
-      marketImpulse
-        ? Math.abs(
-            chartSwingLow - Number(marketImpulse.swingLow)
-          )
-        : null;
-
-    const externalHighDifference =
-      marketImpulse
-        ? Math.abs(
-            chartSwingHigh - Number(marketImpulse.swingHigh)
-          )
-        : null;
-
-    const rangePlausible =
-      rangeRatio === null ||
-      (rangeRatio >= 0.55 && rangeRatio <= 1.75);
-
-    const anchorsPlausible =
-      !marketImpulse ||
-      (
-        externalLowDifference <= broadAnchorTolerance &&
-        externalHighDifference <= broadAnchorTolerance
-      );
-
-    const closePlausible =
-      visibleClose === null ||
-      (
-        visibleClose >=
-          chartSwingLow -
-            Math.max(Number(atr || 0), chartRange * 0.05) &&
-        visibleClose <=
-          chartSwingHigh +
-            Math.max(Number(atr || 0), chartRange * 0.05)
-      );
-
-    const usable =
-      rangePlausible &&
-      anchorsPlausible &&
-      closePlausible;
-
-    const result = {
-      usable,
-      direction,
-      swingLow: chartSwingLow,
-      swingHigh: chartSwingHigh,
-      swingLowTime:
-        direction === "bullish"
-          ? originTime
-          : terminalTime,
-      swingHighTime:
-        direction === "bullish"
-          ? terminalTime
-          : originTime,
-      originPrice,
-      terminalPrice,
-      originPriceSource,
-      terminalPriceSource,
-      originEvidence,
-      terminalEvidence,
-      confidence,
-      originReferenceCollision,
-      nearestOriginReference,
-      referenceCollisionTolerance,
-      wickOnlyReread,
-      source: usable
-        ? "uploaded_chart_price_scale"
-        : "external_ohlc",
-      reason: usable
-        ? "validated_chart_native_impulse"
-        : "chart_native_impulse_failed_sanity_check",
-      validation: {
-        chartRange,
-        marketRange: marketRange || null,
-        rangeRatio,
-        atr: Number(atr || 0),
-        broadAnchorTolerance,
-        externalLowDifference,
-        externalHighDifference,
-        rangePlausible,
-        anchorsPlausible,
-        closePlausible,
-        visibleClose,
-      },
-      exactReferenceLevels,
-      modelUsed: response.model,
-      provider: response.provider,
-    };
-
-    console.log("CSA chart-native impulse extraction:", result);
-
-    return result;
-  } catch (error) {
-    console.warn(
-      "CSA chart-native impulse extraction failed:",
-      error?.message || error
-    );
-
+  if (!wickLocation?.ok) {
     return {
       usable: false,
       source: "external_ohlc",
-      reason: "chart_native_impulse_reader_failed",
-      error: safeUserText(error?.message || "Unknown error"),
+      reason:
+        wickLocation?.reason ||
+        "chart_native_wick_coordinates_unavailable",
+      calibration,
+      wickLocation,
     };
   }
+
+  const originPrice = priceFromChartY(
+    calibration,
+    wickLocation.originY
+  );
+
+  const terminalPrice = priceFromChartY(
+    calibration,
+    wickLocation.terminalY
+  );
+
+  if (
+    originPrice === null ||
+    terminalPrice === null
+  ) {
+    return {
+      usable: false,
+      source: "external_ohlc",
+      reason:
+        "pixel_to_price_conversion_failed",
+      calibration,
+      wickLocation,
+    };
+  }
+
+  const chartSwingLow =
+    direction === "bullish"
+      ? originPrice
+      : terminalPrice;
+
+  const chartSwingHigh =
+    direction === "bullish"
+      ? terminalPrice
+      : originPrice;
+
+  if (
+    !Number.isFinite(chartSwingLow) ||
+    !Number.isFinite(chartSwingHigh) ||
+    chartSwingHigh <= chartSwingLow
+  ) {
+    return {
+      usable: false,
+      source: "external_ohlc",
+      reason:
+        "pixel_calibrated_anchor_order_invalid",
+      calibration,
+      wickLocation,
+      originPrice,
+      terminalPrice,
+    };
+  }
+
+  const chartRange =
+    chartSwingHigh - chartSwingLow;
+
+  const marketRange =
+    Number(marketImpulse?.impulseRange || 0);
+
+  const rangeRatio =
+    marketRange > 0
+      ? chartRange / marketRange
+      : null;
+
+  const visibleClose =
+    asPositiveNumber(
+      visualReview?.latestVisiblePrice
+    ) ||
+    asPositiveNumber(
+      chartDetection?.latestVisiblePrice
+    );
+
+  // Allow the wick to sit outside the vertical range covered by selected
+  // axis labels, but reject extreme extrapolation. 20% of the calibrated
+  // Y-span is enough for top/bottom labels that don't reach the plot edge.
+  const calibrationYSpan =
+    Number(calibration?.ySpan || 0);
+
+  const yExtrapolationAllowance =
+    Math.max(25, calibrationYSpan * 0.2);
+
+  const originWithinScaleReach =
+    wickLocation.originY >=
+      Number(calibration.minCalibrationY) -
+        yExtrapolationAllowance &&
+    wickLocation.originY <=
+      Number(calibration.maxCalibrationY) +
+        yExtrapolationAllowance;
+
+  const terminalWithinScaleReach =
+    wickLocation.terminalY >=
+      Number(calibration.minCalibrationY) -
+        yExtrapolationAllowance &&
+    wickLocation.terminalY <=
+      Number(calibration.maxCalibrationY) +
+        yExtrapolationAllowance;
+
+  // Broad comparison to the deterministic data-feed swing. We deliberately
+  // allow meaningful broker/feed differences, but reject a completely
+  // different geometric swing.
+  const broadAnchorTolerance = Math.max(
+    Number(atr || 0) * 3,
+    marketRange > 0
+      ? marketRange * 0.28
+      : 0,
+    getApprovedPriceTolerance(symbol) * 12
+  );
+
+  const externalLowDifference =
+    Math.abs(
+      chartSwingLow -
+      Number(marketImpulse.swingLow)
+    );
+
+  const externalHighDifference =
+    Math.abs(
+      chartSwingHigh -
+      Number(marketImpulse.swingHigh)
+    );
+
+  const rangePlausible =
+    rangeRatio === null ||
+    (rangeRatio >= 0.5 && rangeRatio <= 1.8);
+
+  const anchorsPlausible =
+    externalLowDifference <=
+      broadAnchorTolerance &&
+    externalHighDifference <=
+      broadAnchorTolerance;
+
+  const terminalVsVisibleClose =
+    visibleClose !== null
+      ? Math.abs(chartSwingHigh - visibleClose)
+      : null;
+
+  // For a bullish final-visible chart, terminal high should be reasonably
+  // near/above the visible close; bearish uses the analogous terminal low.
+  const terminalClosePlausible =
+    visibleClose === null ||
+    (
+      direction === "bullish"
+        ? (
+            chartSwingHigh >=
+              visibleClose -
+                Math.max(
+                  Number(atr || 0) * 0.2,
+                  chartRange * 0.015
+                ) &&
+            terminalVsVisibleClose <=
+              Math.max(
+                Number(atr || 0) * 1.25,
+                chartRange * 0.08
+              )
+          )
+        : (
+            chartSwingLow <=
+              visibleClose +
+                Math.max(
+                  Number(atr || 0) * 0.2,
+                  chartRange * 0.015
+                ) &&
+            Math.abs(
+              chartSwingLow - visibleClose
+            ) <=
+              Math.max(
+                Number(atr || 0) * 1.25,
+                chartRange * 0.08
+              )
+          )
+    );
+
+  // Horizontal framework prices may calibrate/validate the chart, but they
+  // must not become swing anchors. A pixel-derived origin that lands almost
+  // exactly on an exact framework label is suspicious unless its wick
+  // coordinate is clearly independent of that level.
+  const exactReferenceLevels =
+    Array.isArray(priceMap?.matches)
+      ? priceMap.matches
+          .filter(
+            (match) =>
+              match?.withinTolerance === true &&
+              nullablePositiveNumber(
+                match?.displayedPrice
+              ) !== null
+          )
+          .map((match) => ({
+            period: String(
+              match?.period || ""
+            ),
+            side: String(match?.side || ""),
+            role: String(
+              match?.areaType || ""
+            ),
+            price:
+              nullablePositiveNumber(
+                match?.displayedPrice
+              ),
+          }))
+          .filter(
+            (item) => item.price !== null
+          )
+      : [];
+
+  const originReferenceCollisionTolerance =
+    Math.max(
+      Number(atr || 0) * 0.025,
+      Math.abs(
+        Number(calibration.slope)
+      ) * 3,
+      getApprovedPriceTolerance(symbol) * 0.35,
+      Number.EPSILON * 100
+    );
+
+  const nearestOriginReference =
+    exactReferenceLevels.length
+      ? exactReferenceLevels
+          .map((reference) => ({
+            ...reference,
+            distance: Math.abs(
+              originPrice -
+              Number(reference.price)
+            ),
+          }))
+          .sort(
+            (a, b) =>
+              a.distance - b.distance
+          )[0] || null
+      : null;
+
+  const originReferenceCollision =
+    nearestOriginReference !== null &&
+    nearestOriginReference.distance <=
+      originReferenceCollisionTolerance;
+
+  // Coordinate-based extraction already avoids using the line itself.
+  // Still reject suspicious exact collisions because they often signal that
+  // the locator returned the line's Y rather than the wick tip.
+  const originIndependentOfReference =
+    !originReferenceCollision;
+
+  const usable =
+    rangePlausible &&
+    anchorsPlausible &&
+    terminalClosePlausible &&
+    originWithinScaleReach &&
+    terminalWithinScaleReach &&
+    originIndependentOfReference;
+
+  const confidence =
+    wickLocation.originConfidence === "high" &&
+    wickLocation.terminalConfidence === "high" &&
+    calibration.rSquared >= 0.995
+      ? "high"
+      : "medium";
+
+  const result = {
+    usable,
+    direction,
+    swingLow: chartSwingLow,
+    swingHigh: chartSwingHigh,
+    swingLowTime:
+      direction === "bullish"
+        ? marketImpulse?.swingLowTime || null
+        : marketImpulse?.swingLowTime || null,
+    swingHighTime:
+      direction === "bullish"
+        ? marketImpulse?.swingHighTime || null
+        : marketImpulse?.swingHighTime || null,
+    originPrice,
+    terminalPrice,
+    originPriceSource:
+      "pixel_calibrated_chart_scale",
+    terminalPriceSource:
+      "pixel_calibrated_chart_scale",
+    originEvidence:
+      wickLocation.originEvidence || "",
+    terminalEvidence:
+      wickLocation.terminalEvidence || "",
+    confidence,
+    source: usable
+      ? "uploaded_chart_pixel_calibration"
+      : "external_ohlc",
+    reason: usable
+      ? "validated_pixel_calibrated_chart_native_impulse"
+      : originReferenceCollision
+      ? "pixel_origin_collides_with_framework_reference"
+      : !originWithinScaleReach ||
+        !terminalWithinScaleReach
+      ? "wick_coordinate_too_far_outside_calibrated_scale"
+      : !rangePlausible
+      ? "pixel_impulse_range_not_plausible"
+      : !anchorsPlausible
+      ? "pixel_impulse_too_far_from_structure_locator"
+      : !terminalClosePlausible
+      ? "pixel_terminal_inconsistent_with_final_visible_price"
+      : "pixel_chart_native_impulse_failed_validation",
+    validation: {
+      chartRange,
+      marketRange:
+        marketRange || null,
+      rangeRatio,
+      atr: Number(atr || 0),
+      broadAnchorTolerance,
+      externalLowDifference,
+      externalHighDifference,
+      rangePlausible,
+      anchorsPlausible,
+      terminalVsVisibleClose,
+      terminalClosePlausible,
+      originWithinScaleReach,
+      terminalWithinScaleReach,
+      yExtrapolationAllowance,
+      visibleClose,
+      originReferenceCollision,
+      originReferenceCollisionTolerance,
+      nearestOriginReference,
+    },
+    calibration,
+    wickLocation,
+    exactReferenceLevels,
+    modelUsed: wickLocation.modelUsed,
+    provider: wickLocation.provider,
+  };
+
+  console.log(
+    "CSA chart-native impulse extraction:",
+    result
+  );
+
+  return result;
 }
 
 function mergeDedicatedFrameworkPriceMapIntoVisualReview({
@@ -8350,7 +8866,9 @@ function buildLatestImpulseFibonacci({
     selectedSwingHighTime =
       chartNativeImpulse?.swingHighTime ||
       selectedSwingHighTime;
-    priceSource = "uploaded_chart_price_scale";
+    priceSource =
+      chartNativeImpulse?.source ||
+      "uploaded_chart_pixel_calibration";
     chartNativeConfidence =
       chartNativeImpulse?.confidence || null;
     selectionReason =
@@ -9688,7 +10206,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "3.4.0";
+const CSA_SELECTOR_VERSION = "3.5.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -10983,11 +11501,16 @@ function rankRawEntryAreas({
   console.log("CSA selector v3 Fibonacci entry gate:", {
     selectorVersion: CSA_SELECTOR_VERSION,
     fibProximityModel: "adaptive_atr_15_20_percent",
-    impulseModel: "deterministic_structure_with_chart_native_wick_price_scale",
+    impulseModel: "deterministic_structure_with_pixel_calibrated_chart_wicks",
     frameworkPriceModel: "same_period_exact_chart_label_priority",
     direction,
-    fibonacciPriceSource: fibonacci?.priceSource || "external_ohlc",
-    chartNativeConfidence: fibonacci?.chartNativeConfidence || null,
+    fibonacciPriceSource:
+      fibonacci?.priceSource || "external_ohlc",
+    chartNativeConfidence:
+      fibonacci?.chartNativeConfidence || null,
+    pixelCalibrationUsed:
+      fibonacci?.priceSource ===
+      "uploaded_chart_pixel_calibration",
     marketDataSwingLow: fibonacci?.marketDataSwingLow ?? null,
     marketDataSwingHigh: fibonacci?.marketDataSwingHigh ?? null,
     swingLow: fibonacci?.swingLow ?? null,
