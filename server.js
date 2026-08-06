@@ -3768,6 +3768,7 @@ FIBONACCI
 - Fibonacci must never create a setup by itself. The actual entry remains the support/resistance or supply/demand area, not the Fibonacci number.
 - The retracement must be calculated from the genuine completed impulse that produced the current directional breakout/breakdown, using the current structure-sequence origin and the final visible directional extreme; do not shrink the impulse to a late local swing merely because it is more recent.
 - In Final Visible Candle mode, when the uploaded broker/platform chart and external OHLC feed use materially different price scales, use deterministic OHLC only to identify the relevant structure/impulse sequence and use the uploaded chart's own price scale for the impulse swing prices. Exact printed chart OHLC/labels outrank estimates. Never choose swing anchors to force Fibonacci confluence.
+- A marked horizontal support/resistance/supply/demand price may calibrate the chart scale but must never automatically become the Fib swing origin. The swing origin is the actual candle wick/extreme; if a proposed origin collides with a marked reference line, independently verify the wick or reject the chart-native anchor.
 - When the same authoritative framework period/side has an exact printed broker/platform price label, that exact chart label may refine the market-data framework price; never borrow a price from a different period or side.
 - Do not mention Fibonacci, retracement percentages, 38.2%, 50%, or 61.8% in normal beginner-facing feedback. You may simply say one structural area is stronger or offers a cleaner opportunity.
 
@@ -4351,16 +4352,18 @@ For a BEARISH chart:
 CRITICAL RULES:
 1. Use the BROKER/PLATFORM PRICE SCALE VISIBLE IN THIS SCREENSHOT.
 2. Exact printed OHLC/header values or printed price labels outrank visual estimation.
-3. Use the exact reference prices above only to calibrate the chart's vertical price scale and identify the same chart feed.
-4. Do NOT calculate Fibonacci.
-5. Do NOT choose an origin because it would make a support/resistance level line up with any retracement.
-6. Do NOT simply choose the most recent minor pullback low/high.
-7. Do NOT choose the oldest or absolute chart extreme unless it genuinely begins the current directional impulse.
-8. For a bullish impulse, the origin must occur before the terminal high. For a bearish impulse, the origin high must occur before the terminal low.
-9. The final visible candle and chart header are authoritative for the screenshot endpoint.
-10. If the genuine origin cannot be read with at least medium confidence from the visible chart/price scale, return null rather than guessing.
-11. Never invent digits. A visually estimated origin is acceptable only when the price scale makes the estimate reasonably clear.
-12. Keep this entirely separate from entry-area selection. You are reading swing prices only.
+3. Use the exact reference prices above only to calibrate the chart's vertical price scale and identify the same chart feed. A reference-line price is NOT a swing price unless the actual candle wick visibly ends there.
+4. The impulse origin must be taken from the actual candle wick/extreme. Never substitute a horizontal support/resistance/supply/demand line for the wick.
+5. If a marked horizontal line crosses the swing candle, inspect the wick above/below that line and use the wick extreme.
+6. Do NOT calculate Fibonacci.
+7. Do NOT choose an origin because it would make a support/resistance level line up with any retracement.
+8. Do NOT simply choose the most recent minor pullback low/high.
+9. Do NOT choose the oldest or absolute chart extreme unless it genuinely begins the current directional impulse.
+10. For a bullish impulse, the origin must occur before the terminal high. For a bearish impulse, the origin high must occur before the terminal low.
+11. The final visible candle and chart header are authoritative for the screenshot endpoint.
+12. If the genuine origin cannot be read with at least medium confidence from the visible chart/price scale, return null rather than guessing.
+13. Never invent digits. A visually estimated origin is acceptable only when the price scale makes the estimate reasonably clear.
+14. Keep this entirely separate from entry-area selection. You are reading swing prices only.
 
 Return JSON only:
 {
@@ -4373,6 +4376,7 @@ Return JSON only:
   "terminalPriceSource": "exact_printed | chart_scale_estimate | null",
   "originEvidence": null,
   "terminalEvidence": null,
+  "originAppearsToBeMarkedHorizontalLine": false,
   "confidence": "high | medium | low"
 }`;
 
@@ -4401,14 +4405,252 @@ Return JSON only:
       };
     }
 
-    const originPrice = nullablePositiveNumber(parsed?.originPrice);
-    const terminalPrice = nullablePositiveNumber(parsed?.terminalPrice);
+    let originPrice = nullablePositiveNumber(parsed?.originPrice);
+    let terminalPrice = nullablePositiveNumber(parsed?.terminalPrice);
 
-    const confidence = ["high", "medium", "low"].includes(
+    let originTime = safeUserText(parsed?.originTime || "");
+    let terminalTime = safeUserText(parsed?.terminalTime || "");
+    let originPriceSource =
+      String(parsed?.originPriceSource || "").trim();
+    let terminalPriceSource =
+      String(parsed?.terminalPriceSource || "").trim();
+    let originEvidence =
+      safeUserText(parsed?.originEvidence || "");
+    let terminalEvidence =
+      safeUserText(parsed?.terminalEvidence || "");
+
+    let confidence = ["high", "medium", "low"].includes(
       String(parsed?.confidence || "").toLowerCase()
     )
       ? String(parsed.confidence).toLowerCase()
       : "low";
+
+    const referenceCollisionTolerance = Math.max(
+      Number(atr || 0) * 0.025,
+      getApprovedPriceTolerance(symbol) * 0.5,
+      Number.EPSILON * 100
+    );
+
+    const nearestOriginReference =
+      originPrice !== null && exactReferenceLevels.length
+        ? exactReferenceLevels
+            .map((reference) => ({
+              ...reference,
+              distance: Math.abs(
+                Number(originPrice) - Number(reference.price)
+              ),
+            }))
+            .sort((a, b) => a.distance - b.distance)[0] || null
+        : null;
+
+    const originReferenceCollision =
+      parsed?.originAppearsToBeMarkedHorizontalLine === true ||
+      (
+        nearestOriginReference !== null &&
+        Number.isFinite(Number(nearestOriginReference.distance)) &&
+        Number(nearestOriginReference.distance) <=
+          referenceCollisionTolerance
+      );
+
+    let wickOnlyReread = null;
+
+    if (
+      originPrice !== null &&
+      terminalPrice !== null &&
+      originReferenceCollision
+    ) {
+      const wickPrompt = `
+You are validating ONE suspicious impulse-origin reading on a trading chart.
+
+LOCKED DIRECTION: ${direction}
+TIMEFRAME: ${timeframe}
+FIRST-PASS ORIGIN: ${originPrice}
+FIRST-PASS TERMINAL: ${terminalPrice}
+
+The first-pass origin is suspicious because it is essentially identical to this marked/reference price:
+- period: ${nearestOriginReference?.period || "unknown"}
+- side: ${nearestOriginReference?.side || "unknown"}
+- role: ${nearestOriginReference?.role || "unknown"}
+- marked/reference price: ${nearestOriginReference?.price ?? "unknown"}
+
+Other exact chart reference prices:
+${referenceText}
+
+TASK:
+Re-read ONLY the genuine candle-WICK extreme that begins the current completed ${direction} impulse.
+
+MANDATORY RULES:
+1. IGNORE horizontal support/resistance/supply/demand lines as possible swing anchors. They may calibrate the vertical scale only.
+2. The origin must be the actual candle wick/extreme, not the price of a drawn horizontal line.
+3. If a horizontal line crosses or sits near the swing candle, inspect whether the wick visibly extends above/below the line. Use the wick extreme.
+4. For bullish direction, return the LOWEST wick of the actual origin swing that begins the sustained bullish leg into the final visible breakout/high.
+5. For bearish direction, return the HIGHEST wick of the actual origin swing that begins the sustained bearish leg into the final visible breakdown/low.
+6. Do not calculate Fibonacci and do not choose a price because it aligns with any entry level.
+7. Do not reuse ${nearestOriginReference?.price ?? "the reference price"} unless you can visibly verify that the candle wick itself truly ends at that exact price.
+8. If the wick cannot be read with at least medium confidence, return null.
+9. Preserve the terminal price unless the chart clearly shows the first-pass terminal was wrong.
+
+Return JSON only:
+{
+  "originPrice": null,
+  "terminalPrice": ${terminalPrice},
+  "originTime": null,
+  "terminalTime": null,
+  "originPriceSource": "exact_printed | chart_scale_estimate | null",
+  "terminalPriceSource": "exact_printed | chart_scale_estimate | null",
+  "originEvidence": null,
+  "terminalEvidence": null,
+  "wickVisiblySeparateFromReferenceLine": false,
+  "confidence": "high | medium | low"
+}`;
+
+      try {
+        const wickResponse = await runVisionModel({
+          systemPrompt: wickPrompt,
+          userText:
+            "Re-read the actual candle-wick impulse origin. Ignore marked horizontal lines as anchors. Return JSON only.",
+          imageBase64,
+          mimeType,
+          maxTokens: 550,
+          openaiModel: "gpt-4.1",
+          claudeModel: CLAUDE_MODEL,
+          temperature: 0,
+          imageDetail: "high",
+        });
+
+        const wickParsed =
+          extractJsonObject(wickResponse.text || "");
+
+        const rereadOrigin =
+          nullablePositiveNumber(wickParsed?.originPrice);
+
+        const rereadTerminal =
+          nullablePositiveNumber(wickParsed?.terminalPrice);
+
+        const rereadConfidence =
+          ["high", "medium", "low"].includes(
+            String(wickParsed?.confidence || "").toLowerCase()
+          )
+            ? String(wickParsed.confidence).toLowerCase()
+            : "low";
+
+        const wickSeparated =
+          wickParsed?.wickVisiblySeparateFromReferenceLine === true;
+
+        const rereadReferenceDistance =
+          rereadOrigin !== null &&
+          nearestOriginReference?.price !== null &&
+          nearestOriginReference?.price !== undefined
+            ? Math.abs(
+                Number(rereadOrigin) -
+                Number(nearestOriginReference.price)
+              )
+            : null;
+
+        const rereadStillCollides =
+          rereadReferenceDistance !== null &&
+          rereadReferenceDistance <=
+            referenceCollisionTolerance;
+
+        const rereadUsable =
+          rereadOrigin !== null &&
+          rereadConfidence !== "low" &&
+          (
+            wickSeparated ||
+            !rereadStillCollides
+          );
+
+        wickOnlyReread = {
+          attempted: true,
+          usable: rereadUsable,
+          firstPassOrigin: originPrice,
+          collidingReferencePrice:
+            nearestOriginReference?.price ?? null,
+          collidingReferencePeriod:
+            nearestOriginReference?.period || null,
+          collidingReferenceRole:
+            nearestOriginReference?.role || null,
+          referenceCollisionTolerance,
+          rereadOrigin,
+          rereadTerminal,
+          rereadConfidence,
+          wickSeparated,
+          rereadReferenceDistance,
+          rereadStillCollides,
+          modelUsed: wickResponse.model,
+          provider: wickResponse.provider,
+        };
+
+        console.log(
+          "CSA chart-native wick-only origin reread:",
+          wickOnlyReread
+        );
+
+        if (rereadUsable) {
+          originPrice = rereadOrigin;
+
+          if (rereadTerminal !== null) {
+            terminalPrice = rereadTerminal;
+          }
+
+          originTime =
+            safeUserText(wickParsed?.originTime || "") ||
+            originTime;
+
+          terminalTime =
+            safeUserText(wickParsed?.terminalTime || "") ||
+            terminalTime;
+
+          originPriceSource =
+            String(
+              wickParsed?.originPriceSource ||
+              "chart_scale_estimate"
+            ).trim();
+
+          terminalPriceSource =
+            String(
+              wickParsed?.terminalPriceSource ||
+              terminalPriceSource ||
+              ""
+            ).trim();
+
+          originEvidence =
+            safeUserText(wickParsed?.originEvidence || "") ||
+            originEvidence;
+
+          terminalEvidence =
+            safeUserText(wickParsed?.terminalEvidence || "") ||
+            terminalEvidence;
+
+          confidence = rereadConfidence;
+        } else {
+          // A suspicious line-colliding origin that cannot be independently
+          // verified as a candle wick is not safe enough for Fib.
+          originPrice = null;
+          confidence = "low";
+        }
+      } catch (wickError) {
+        wickOnlyReread = {
+          attempted: true,
+          usable: false,
+          firstPassOrigin: originPrice,
+          collidingReferencePrice:
+            nearestOriginReference?.price ?? null,
+          referenceCollisionTolerance,
+          error: safeUserText(
+            wickError?.message || "Unknown wick reread error"
+          ),
+        };
+
+        console.warn(
+          "CSA chart-native wick-only origin reread failed:",
+          wickError?.message || wickError
+        );
+
+        originPrice = null;
+        confidence = "low";
+      }
+    }
 
     if (
       originPrice === null ||
@@ -4421,6 +4663,9 @@ Return JSON only:
         originPrice,
         terminalPrice,
         confidence,
+        originReferenceCollision,
+        nearestOriginReference,
+        wickOnlyReread,
         reason: "missing_or_low_confidence_anchor",
       });
 
@@ -4432,6 +4677,9 @@ Return JSON only:
         originPrice,
         terminalPrice,
         confidence,
+        originReferenceCollision,
+        nearestOriginReference,
+        wickOnlyReread,
       };
     }
 
@@ -4520,21 +4768,23 @@ Return JSON only:
       swingHigh: chartSwingHigh,
       swingLowTime:
         direction === "bullish"
-          ? safeUserText(parsed?.originTime || "")
-          : safeUserText(parsed?.terminalTime || ""),
+          ? originTime
+          : terminalTime,
       swingHighTime:
         direction === "bullish"
-          ? safeUserText(parsed?.terminalTime || "")
-          : safeUserText(parsed?.originTime || ""),
+          ? terminalTime
+          : originTime,
       originPrice,
       terminalPrice,
-      originPriceSource:
-        String(parsed?.originPriceSource || "").trim(),
-      terminalPriceSource:
-        String(parsed?.terminalPriceSource || "").trim(),
-      originEvidence: safeUserText(parsed?.originEvidence || ""),
-      terminalEvidence: safeUserText(parsed?.terminalEvidence || ""),
+      originPriceSource,
+      terminalPriceSource,
+      originEvidence,
+      terminalEvidence,
       confidence,
+      originReferenceCollision,
+      nearestOriginReference,
+      referenceCollisionTolerance,
+      wickOnlyReread,
       source: usable
         ? "uploaded_chart_price_scale"
         : "external_ohlc",
@@ -9438,7 +9688,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "3.3.0";
+const CSA_SELECTOR_VERSION = "3.4.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -10733,7 +10983,7 @@ function rankRawEntryAreas({
   console.log("CSA selector v3 Fibonacci entry gate:", {
     selectorVersion: CSA_SELECTOR_VERSION,
     fibProximityModel: "adaptive_atr_15_20_percent",
-    impulseModel: "deterministic_structure_with_chart_native_price_scale",
+    impulseModel: "deterministic_structure_with_chart_native_wick_price_scale",
     frameworkPriceModel: "same_period_exact_chart_label_priority",
     direction,
     fibonacciPriceSource: fibonacci?.priceSource || "external_ohlc",
