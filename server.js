@@ -3770,6 +3770,7 @@ FIBONACCI
 - In Final Visible Candle mode, when the uploaded broker/platform chart and external OHLC feed use materially different price scales, use deterministic OHLC only to identify the relevant structure/impulse sequence and use the uploaded chart's own price scale for the impulse swing prices. Exact printed chart OHLC/labels outrank estimates. Never choose swing anchors to force Fibonacci confluence.
 - A marked horizontal support/resistance/supply/demand price may calibrate the chart scale but must never automatically become the Fib swing origin. The swing origin is the actual candle wick/extreme; if a proposed origin collides with a marked reference line, independently verify the wick or reject the chart-native anchor.
 - For Final Visible Candle reviews, prefer pixel-calibrated chart-native swing prices when the right-side price axis can be calibrated from at least two exact visible prices. Vision locates wick coordinates only; JavaScript converts Y coordinates to broker-chart prices. If calibration or wick geometry is unreliable, fall back to deterministic external OHLC rather than guessing.
+- The deterministic structure engine must choose the impulse origin/terminal candle times. Vision must map those specific timestamps (allowing at most ±2 candles for broker/timezone alignment) to wick coordinates on the uploaded chart; vision must not choose a different swing. Origin and terminal should be located in separate narrow visual tasks.
 - When the same authoritative framework period/side has an exact printed broker/platform price label, that exact chart label may refine the market-data framework price; never borrow a price from a different period or side.
 - Do not mention Fibonacci, retracement percentages, 38.2%, 50%, or 61.8% in normal beginner-facing feedback. You may simply say one structural area is stronger or offers a cleaner opportunity.
 
@@ -4641,6 +4642,248 @@ Return JSON only:
   }
 }
 
+
+function getChartTargetWickSpec({
+  direction = "",
+  role = "",
+}) {
+  const normalizedDirection =
+    String(direction || "").toLowerCase();
+
+  const normalizedRole =
+    String(role || "").toLowerCase();
+
+  if (
+    !["bullish", "bearish"].includes(
+      normalizedDirection
+    ) ||
+    !["origin", "terminal"].includes(
+      normalizedRole
+    )
+  ) {
+    return null;
+  }
+
+  if (normalizedDirection === "bullish") {
+    return {
+      wickSide:
+        normalizedRole === "origin"
+          ? "low"
+          : "high",
+      description:
+        normalizedRole === "origin"
+          ? "LOWEST wick tip of the targeted bullish origin candle"
+          : "HIGHEST wick tip of the targeted bullish terminal candle",
+    };
+  }
+
+  return {
+    wickSide:
+      normalizedRole === "origin"
+        ? "high"
+        : "low",
+    description:
+      normalizedRole === "origin"
+        ? "HIGHEST wick tip of the targeted bearish origin candle"
+        : "LOWEST wick tip of the targeted bearish terminal candle",
+  };
+}
+
+async function locateTimestampTargetedChartWick({
+  imageBase64,
+  mimeType,
+  direction,
+  role,
+  targetTime = "",
+  timeframe = "H1",
+  symbol = "",
+  latestVisibleDate = "",
+  latestVisibleTime = "",
+}) {
+  const spec = getChartTargetWickSpec({
+    direction,
+    role,
+  });
+
+  if (
+    !spec ||
+    !isAiProviderConfigured() ||
+    !imageBase64 ||
+    !String(targetTime || "").trim()
+  ) {
+    return {
+      ok: false,
+      role,
+      targetTime:
+        String(targetTime || "").trim(),
+      reason:
+        !String(targetTime || "").trim()
+          ? "deterministic_target_time_missing"
+          : "targeted_wick_locator_unavailable",
+    };
+  }
+
+  const prompt = `
+You have ONE narrow chart-coordinate task.
+
+INSTRUMENT: ${symbol}
+TIMEFRAME: ${timeframe}
+LOCKED DIRECTION: ${direction}
+TARGET ROLE: ${role}
+DETERMINISTIC TARGET CANDLE/TIME: ${targetTime}
+FINAL VISIBLE DATE: ${latestVisibleDate || "not reliably printed"}
+FINAL VISIBLE TIME: ${latestVisibleTime || "not reliably printed"}
+
+The backend has ALREADY chosen which candle matters.
+You must NOT choose a different swing or a different setup.
+
+TASK:
+Locate the candle on the uploaded chart that corresponds to the deterministic target time above, allowing only a very small broker/time-label mismatch, and return the coordinate of the ${spec.description}.
+
+COORDINATE SYSTEM:
+- FULL uploaded image
+- X = 0 at left edge, 1000 at right edge
+- Y = 0 at top edge, 1000 at bottom edge
+
+MANDATORY RULES:
+1. Return a coordinate for the TARGETED candle only. Do not decide which swing is important.
+2. Use the bottom time axis, candle spacing, nearby printed date/time labels, and the visible chart sequence to map the target time to the candle.
+3. If the exact target timestamp is not printed, infer its candle position from neighboring time labels and regular ${timeframe} candle spacing.
+4. You may shift at most 2 candles left or right if the broker chart timezone/session alignment differs slightly from the external-data timestamp.
+5. Report that shift as candleOffsetFromTarget:
+   -2, -1, 0, 1, or 2.
+6. Do not use a candle farther than ±2 candles from the target.
+7. Return the ACTUAL candle-wick tip, not the body, not the close, not a horizontal S/R line, and not a price-axis label.
+8. Ignore horizontal support/resistance/supply/demand lines when locating the wick tip. Follow the wick through/beyond any line that crosses the candle.
+9. Return COORDINATES ONLY. Do not estimate or return a price.
+10. Do not calculate Fibonacci.
+11. Do not choose a different candle because it creates better confluence.
+12. If the targeted candle cannot be located with at least MEDIUM confidence, return null coordinates.
+13. The target time is authoritative for candle identity; the screenshot is authoritative for wick geometry.
+14. For terminal-role mapping, do not automatically use the last visible candle unless it corresponds to the target time.
+
+Return JSON only:
+{
+  "role": "${role}",
+  "targetTime": "${targetTime}",
+  "matchedChartTime": null,
+  "candleOffsetFromTarget": null,
+  "wickX1000": null,
+  "wickY1000": null,
+  "wickSide": "${spec.wickSide}",
+  "evidence": null,
+  "confidence": "high | medium | low"
+}`;
+
+  try {
+    const response = await runVisionModel({
+      systemPrompt: prompt,
+      userText:
+        `Locate only the ${role} target candle and its ${spec.wickSide} wick tip. Return 0..1000 coordinates only.`,
+      imageBase64,
+      mimeType,
+      maxTokens: 500,
+      openaiModel: "gpt-4.1",
+      claudeModel: CLAUDE_MODEL,
+      temperature: 0,
+      imageDetail: "high",
+    });
+
+    const parsed =
+      extractJsonObject(response.text || "");
+
+    const x = normalizeChartCoordinate1000(
+      parsed?.wickX1000
+    );
+
+    const y = normalizeChartCoordinate1000(
+      parsed?.wickY1000
+    );
+
+    const confidence = String(
+      parsed?.confidence || "low"
+    ).toLowerCase();
+
+    const rawOffset =
+      Number(parsed?.candleOffsetFromTarget);
+
+    const candleOffsetFromTarget =
+      Number.isInteger(rawOffset) &&
+      rawOffset >= -2 &&
+      rawOffset <= 2
+        ? rawOffset
+        : null;
+
+    const coordinatesPresent =
+      x !== null &&
+      y !== null;
+
+    const confidenceUsable =
+      ["high", "medium"].includes(confidence);
+
+    const offsetUsable =
+      candleOffsetFromTarget !== null;
+
+    const ok =
+      coordinatesPresent &&
+      confidenceUsable &&
+      offsetUsable;
+
+    const result = {
+      ok,
+      role,
+      targetTime:
+        String(targetTime || "").trim(),
+      matchedChartTime: safeUserText(
+        parsed?.matchedChartTime || ""
+      ),
+      candleOffsetFromTarget,
+      x,
+      y,
+      wickSide: spec.wickSide,
+      evidence: safeUserText(
+        parsed?.evidence || ""
+      ),
+      confidence,
+      modelUsed: response.model,
+      provider: response.provider,
+      reason: ok
+        ? ""
+        : !coordinatesPresent
+        ? "targeted_wick_coordinates_missing"
+        : !confidenceUsable
+        ? "targeted_wick_low_confidence"
+        : !offsetUsable
+        ? "targeted_wick_offset_missing_or_out_of_range"
+        : "targeted_wick_validation_failed",
+    };
+
+    console.log(
+      "CSA timestamp-targeted wick coordinate:",
+      result
+    );
+
+    return result;
+  } catch (error) {
+    console.warn(
+      "CSA timestamp-targeted wick locator failed:",
+      error?.message || error
+    );
+
+    return {
+      ok: false,
+      role,
+      targetTime:
+        String(targetTime || "").trim(),
+      reason: "targeted_wick_locator_failed",
+      error: safeUserText(
+        error?.message ||
+          "Unknown targeted wick locator error"
+      ),
+    };
+  }
+}
+
 async function locateChartNativeImpulseWicks({
   imageBase64,
   mimeType,
@@ -4654,171 +4897,46 @@ async function locateChartNativeImpulseWicks({
   if (
     !isAiProviderConfigured() ||
     !imageBase64 ||
-    !["bullish", "bearish"].includes(direction)
+    !["bullish", "bearish"].includes(
+      direction
+    )
   ) {
     return {
       ok: false,
-      reason: "wick_locator_unavailable",
+      reason:
+        "timestamp_targeted_wick_mapping_unavailable",
     };
   }
 
-  const locatorText = marketImpulse
-    ? `
-STRUCTURE/TIME LOCATOR FROM CUTOFF-FILTERED MARKET DATA:
-- current directional event: ${marketImpulse?.controllingEvent?.datetime || "unknown"}
-- prior opposite structure event: ${marketImpulse?.oppositeOriginEvent?.datetime || "unknown"}
-- external origin-time hint: ${
-        direction === "bullish"
-          ? marketImpulse?.swingLowTime || "unknown"
-          : marketImpulse?.swingHighTime || "unknown"
-      }
-- external terminal-time hint: ${
-        direction === "bullish"
-          ? marketImpulse?.swingHighTime || "unknown"
-          : marketImpulse?.swingLowTime || "unknown"
-      }
+  const targetOriginTime =
+    direction === "bullish"
+      ? String(
+          marketImpulse?.swingLowTime || ""
+        ).trim()
+      : String(
+          marketImpulse?.swingHighTime || ""
+        ).trim();
 
-Use these only to locate the correct section of the TIME axis. Do not infer or copy any external price.
-`
-    : "";
+  const targetTerminalTime =
+    direction === "bullish"
+      ? String(
+          marketImpulse?.swingHighTime || ""
+        ).trim()
+      : String(
+          marketImpulse?.swingLowTime || ""
+        ).trim();
 
-  const prompt = `
-You have ONE narrow geometric chart-reading task.
-
-INSTRUMENT: ${symbol}
-TIMEFRAME: ${timeframe}
-LOCKED DIRECTION: ${direction}
-FINAL VISIBLE DATE: ${latestVisibleDate || "not reliably printed"}
-FINAL VISIBLE TIME: ${latestVisibleTime || "not reliably printed"}
-${locatorText}
-
-TASK:
-Locate the ACTUAL CANDLE-WICK coordinates of the completed directional impulse used for retracement analysis.
-
-For BULLISH direction:
-- originWick = the genuine LOWEST candle wick that begins the sustained bullish impulse which ultimately produces the current/final visible bullish breakout and terminal high.
-- terminalWick = the genuine HIGHEST candle wick reached by that same completed bullish impulse through the final visible candle.
-
-For BEARISH direction:
-- originWick = the genuine HIGHEST candle wick that begins the sustained bearish impulse which ultimately produces the current/final visible bearish breakdown and terminal low.
-- terminalWick = the genuine LOWEST candle wick reached by that same completed bearish impulse through the final visible candle.
-
-Return coordinates on the FULL uploaded image using 0..1000:
-- X=0 left edge, X=1000 right edge
-- Y=0 top edge, Y=1000 bottom edge
-
-CRITICAL RULES:
-1. Return COORDINATES, NOT PRICES.
-2. Ignore all horizontal support/resistance/supply/demand lines as possible wick anchors.
-3. If a horizontal line crosses the origin candle, follow the candle wick beyond/through the line and locate the actual wick tip.
-4. Never place the origin coordinate on a horizontal line simply because that line is nearby.
-5. Do not calculate Fibonacci.
-6. Do not choose a wick because it would make any structural level line up with a retracement.
-7. Do not automatically use the most recent minor pullback.
-8. Use the genuine structural origin of the sustained directional move.
-9. Origin must occur before terminal in time, so origin X must be meaningfully left of terminal X.
-10. If either wick tip cannot be located with at least medium confidence, return null for that coordinate rather than guessing.
-11. Do not return coordinates for price-axis labels, horizontal lines, or chart borders.
-12. The terminal should be the actual candle wick extreme, not merely the final candle close.
-
-Return JSON only:
-{
-  "originWickX1000": null,
-  "originWickY1000": null,
-  "terminalWickX1000": null,
-  "terminalWickY1000": null,
-  "originEvidence": null,
-  "terminalEvidence": null,
-  "originConfidence": "high | medium | low",
-  "terminalConfidence": "high | medium | low",
-  "confidence": "high | medium | low"
-}`;
-
-  try {
-    const response = await runVisionModel({
-      systemPrompt: prompt,
-      userText:
-        "Locate only the actual origin and terminal candle-wick tips. Return 0..1000 image coordinates, not prices.",
-      imageBase64,
-      mimeType,
-      maxTokens: 650,
-      openaiModel: "gpt-4.1",
-      claudeModel: CLAUDE_MODEL,
-      temperature: 0,
-      imageDetail: "high",
-    });
-
-    const parsed = extractJsonObject(response.text || "");
-
-    const originX = normalizeChartCoordinate1000(
-      parsed?.originWickX1000
-    );
-    const originY = normalizeChartCoordinate1000(
-      parsed?.originWickY1000
-    );
-    const terminalX = normalizeChartCoordinate1000(
-      parsed?.terminalWickX1000
-    );
-    const terminalY = normalizeChartCoordinate1000(
-      parsed?.terminalWickY1000
-    );
-
-    const originConfidence = String(
-      parsed?.originConfidence ||
-      parsed?.confidence ||
-      "low"
-    ).toLowerCase();
-
-    const terminalConfidence = String(
-      parsed?.terminalConfidence ||
-      parsed?.confidence ||
-      "low"
-    ).toLowerCase();
-
-    const confidence = String(
-      parsed?.confidence || "low"
-    ).toLowerCase();
-
-    const validConfidence = (value) =>
-      ["high", "medium"].includes(value);
-
-    const chronologyValid =
-      originX !== null &&
-      terminalX !== null &&
-      terminalX - originX >= 15;
-
-    const ok =
-      originX !== null &&
-      originY !== null &&
-      terminalX !== null &&
-      terminalY !== null &&
-      validConfidence(originConfidence) &&
-      validConfidence(terminalConfidence) &&
-      chronologyValid;
-
+  if (
+    !targetOriginTime ||
+    !targetTerminalTime
+  ) {
     const result = {
-      ok,
-      originX,
-      originY,
-      terminalX,
-      terminalY,
-      originEvidence: safeUserText(
-        parsed?.originEvidence || ""
-      ),
-      terminalEvidence: safeUserText(
-        parsed?.terminalEvidence || ""
-      ),
-      originConfidence,
-      terminalConfidence,
-      confidence,
-      chronologyValid,
-      modelUsed: response.model,
-      provider: response.provider,
-      reason: ok
-        ? ""
-        : !chronologyValid
-        ? "wick_coordinates_fail_chronology"
-        : "wick_coordinates_missing_or_low_confidence",
+      ok: false,
+      direction,
+      targetOriginTime,
+      targetTerminalTime,
+      reason:
+        "deterministic_impulse_target_times_missing",
     };
 
     console.log(
@@ -4827,21 +4945,147 @@ Return JSON only:
     );
 
     return result;
-  } catch (error) {
-    console.warn(
-      "CSA chart-native wick locator failed:",
-      error?.message || error
-    );
-
-    return {
-      ok: false,
-      reason: "wick_locator_failed",
-      error: safeUserText(
-        error?.message || "Unknown wick locator error"
-      ),
-    };
   }
+
+  // Independent calls are intentional. Each vision task has ONE candle and
+  // ONE wick to find, which is much easier and more consistent than asking
+  // the model to interpret both ends of the impulse at once.
+  const [
+    originTarget,
+    terminalTarget,
+  ] = await Promise.all([
+    locateTimestampTargetedChartWick({
+      imageBase64,
+      mimeType,
+      direction,
+      role: "origin",
+      targetTime: targetOriginTime,
+      timeframe,
+      symbol,
+      latestVisibleDate,
+      latestVisibleTime,
+    }),
+    locateTimestampTargetedChartWick({
+      imageBase64,
+      mimeType,
+      direction,
+      role: "terminal",
+      targetTime: targetTerminalTime,
+      timeframe,
+      symbol,
+      latestVisibleDate,
+      latestVisibleTime,
+    }),
+  ]);
+
+  const coordinatesPresent =
+    originTarget?.x !== null &&
+    originTarget?.x !== undefined &&
+    originTarget?.y !== null &&
+    originTarget?.y !== undefined &&
+    terminalTarget?.x !== null &&
+    terminalTarget?.x !== undefined &&
+    terminalTarget?.y !== null &&
+    terminalTarget?.y !== undefined;
+
+  const bothTargetsUsable =
+    originTarget?.ok === true &&
+    terminalTarget?.ok === true;
+
+  const chronologyValid =
+    coordinatesPresent
+      ? Number(terminalTarget.x) -
+          Number(originTarget.x) >= 10
+      : null;
+
+  const ok =
+    bothTargetsUsable &&
+    chronologyValid === true;
+
+  let reason = "";
+
+  if (!bothTargetsUsable) {
+    reason =
+      originTarget?.ok !== true &&
+      terminalTarget?.ok !== true
+        ? "origin_and_terminal_target_mapping_failed"
+        : originTarget?.ok !== true
+        ? `origin_target_mapping_failed:${
+            originTarget?.reason ||
+            "unknown"
+          }`
+        : `terminal_target_mapping_failed:${
+            terminalTarget?.reason ||
+            "unknown"
+          }`;
+  } else if (
+    chronologyValid !== true
+  ) {
+    reason =
+      coordinatesPresent
+        ? "targeted_wick_coordinates_fail_chronology"
+        : "targeted_wick_coordinates_missing";
+  }
+
+  const result = {
+    ok,
+    originX:
+      originTarget?.x ?? null,
+    originY:
+      originTarget?.y ?? null,
+    terminalX:
+      terminalTarget?.x ?? null,
+    terminalY:
+      terminalTarget?.y ?? null,
+    originEvidence:
+      originTarget?.evidence || "",
+    terminalEvidence:
+      terminalTarget?.evidence || "",
+    originConfidence:
+      originTarget?.confidence || "low",
+    terminalConfidence:
+      terminalTarget?.confidence || "low",
+    confidence:
+      originTarget?.confidence === "high" &&
+      terminalTarget?.confidence === "high"
+        ? "high"
+        : bothTargetsUsable
+        ? "medium"
+        : "low",
+    targetOriginTime,
+    targetTerminalTime,
+    originMatchedChartTime:
+      originTarget?.matchedChartTime || "",
+    terminalMatchedChartTime:
+      terminalTarget?.matchedChartTime || "",
+    originCandleOffset:
+      originTarget?.candleOffsetFromTarget ??
+      null,
+    terminalCandleOffset:
+      terminalTarget?.candleOffsetFromTarget ??
+      null,
+    chronologyValid,
+    originTarget,
+    terminalTarget,
+    modelUsed:
+      originTarget?.modelUsed ||
+      terminalTarget?.modelUsed ||
+      null,
+    provider:
+      originTarget?.provider ||
+      terminalTarget?.provider ||
+      null,
+    reason,
+  };
+
+  console.log(
+    "CSA chart-native wick coordinates:",
+    result
+  );
+
+  return result;
 }
+
 
 async function extractChartNativeImpulseAnchors({
   imageBase64,
@@ -5330,6 +5574,22 @@ async function extractChartNativeImpulseAnchors({
     },
     calibration,
     wickLocation,
+    targetedWickMapping: {
+      targetOriginTime:
+        wickLocation?.targetOriginTime || null,
+      targetTerminalTime:
+        wickLocation?.targetTerminalTime || null,
+      originMatchedChartTime:
+        wickLocation?.originMatchedChartTime || null,
+      terminalMatchedChartTime:
+        wickLocation?.terminalMatchedChartTime || null,
+      originCandleOffset:
+        wickLocation?.originCandleOffset ?? null,
+      terminalCandleOffset:
+        wickLocation?.terminalCandleOffset ?? null,
+      chronologyValid:
+        wickLocation?.chronologyValid ?? null,
+    },
     exactReferenceLevels,
     modelUsed: wickLocation.modelUsed,
     provider: wickLocation.provider,
@@ -8939,6 +9199,28 @@ function buildLatestImpulseFibonacci({
       controllingEvent: result.controllingEvent,
       oppositeOriginEvent: result.oppositeOriginEvent,
       retracementLevels: result.levels,
+      chartNativeTargeting:
+        chartNativeImpulse?.targetedWickMapping ||
+        chartNativeImpulse?.wickLocation
+          ? {
+              targetOriginTime:
+                chartNativeImpulse?.wickLocation?.targetOriginTime ||
+                chartNativeImpulse?.targetedWickMapping?.targetOriginTime ||
+                null,
+              targetTerminalTime:
+                chartNativeImpulse?.wickLocation?.targetTerminalTime ||
+                chartNativeImpulse?.targetedWickMapping?.targetTerminalTime ||
+                null,
+              originCandleOffset:
+                chartNativeImpulse?.wickLocation?.originCandleOffset ??
+                chartNativeImpulse?.targetedWickMapping?.originCandleOffset ??
+                null,
+              terminalCandleOffset:
+                chartNativeImpulse?.wickLocation?.terminalCandleOffset ??
+                chartNativeImpulse?.targetedWickMapping?.terminalCandleOffset ??
+                null,
+            }
+          : null,
     });
   }
 
@@ -10206,7 +10488,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "3.5.0";
+const CSA_SELECTOR_VERSION = "3.6.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -11501,7 +11783,7 @@ function rankRawEntryAreas({
   console.log("CSA selector v3 Fibonacci entry gate:", {
     selectorVersion: CSA_SELECTOR_VERSION,
     fibProximityModel: "adaptive_atr_15_20_percent",
-    impulseModel: "deterministic_structure_with_pixel_calibrated_chart_wicks",
+    impulseModel: "deterministic_structure_with_timestamp_targeted_pixel_wicks",
     frameworkPriceModel: "same_period_exact_chart_label_priority",
     direction,
     fibonacciPriceSource:
@@ -11511,6 +11793,8 @@ function rankRawEntryAreas({
     pixelCalibrationUsed:
       fibonacci?.priceSource ===
       "uploaded_chart_pixel_calibration",
+    wickMappingModel:
+      "timestamp_targeted_independent_origin_terminal",
     marketDataSwingLow: fibonacci?.marketDataSwingLow ?? null,
     marketDataSwingHigh: fibonacci?.marketDataSwingHigh ?? null,
     swingLow: fibonacci?.swingLow ?? null,
