@@ -3772,6 +3772,7 @@ FIBONACCI
 - For Final Visible Candle reviews, prefer pixel-calibrated chart-native swing prices when the right-side price axis can be calibrated from at least two exact visible prices. Vision locates wick coordinates only; JavaScript converts Y coordinates to broker-chart prices. If calibration or wick geometry is unreliable, fall back to deterministic external OHLC rather than guessing.
 - The deterministic structure engine must choose the impulse origin/terminal candle times. Vision must map those specific timestamps (allowing at most ±2 candles for broker/timezone alignment) to wick coordinates on the uploaded chart; vision must not choose a different swing. Origin and terminal should be located in separate narrow visual tasks.
 - The deterministic Fib origin must be the protected swing associated with the major structural level broken by the current directional breakout/breakdown, not merely the most recent higher low/lower high. For bullish structure, identify the major resistance pivot being broken and use the lowest confirmed protected swing low formed after that resistance pivot and before its breakout; bearish is the mirror image. Prefer the current breakout sequence and score major breaks by structural excursion, pivot age, and confirmed-pivot quality. Never select an old extreme solely because it creates better Fib confluence.
+- Major broken-level selection must rank all actually broken confirmed prior swing highs/lows within the active lookback by structural significance rather than recency alone. Significance should consider time-to-break, prominence versus nearby same-side pivots, number of pre-break reactions, percentage of time price remained on the original side, opposing excursion size, separation from the final directional extreme, confirmed protected-pivot quality, and break displacement. Strongly penalize very recent/local pivots and raw-extreme-only protected swings. When two candidates are similarly significant, prefer the older structural pivot rather than the nearer local level.
 - When the same authoritative framework period/side has an exact printed broker/platform price label, that exact chart label may refine the market-data framework price; never borrow a price from a different period or side.
 - Do not mention Fibonacci, retracement percentages, 38.2%, 50%, or 61.8% in normal beginner-facing feedback. You may simply say one structural area is stronger or offers a cleaner opportunity.
 
@@ -8833,10 +8834,6 @@ function buildLatestImpulseFibonacci({
     structureConfig
   );
 
-  // Keep event detection focused on the recent structure sequence, but note
-  // that an event may break a pivot that formed much earlier. This is exactly
-  // what we need for a major breakout: the break can happen today while the
-  // broken major swing high/low was formed several sessions ago.
   const searchStart = Math.max(
     1,
     ordered.length -
@@ -8867,6 +8864,16 @@ function buildLatestImpulseFibonacci({
     direction === "bullish"
       ? "bearish"
       : "bullish";
+
+  const expectedBrokenPivotType =
+    direction === "bullish"
+      ? "resistance"
+      : "support";
+
+  const expectedProtectedPivotType =
+    direction === "bullish"
+      ? "support"
+      : "resistance";
 
   const extremaIndex = ({
     startIndex = 0,
@@ -8945,97 +8952,191 @@ function buildLatestImpulseFibonacci({
           ) || null
       : null;
 
-  // ----------------------------------------------------------
-  // PROTECTED-SWING BREAKOUT MODEL
+  // ==============================================================
+  // V3.8 MAJOR-BREAK SIGNIFICANCE MODEL
   //
-  // A bullish retracement should not automatically start at the latest
-  // higher low before the breakout. It should start at the protected swing
-  // low associated with the MAJOR resistance that the current breakout
-  // sequence actually overcame.
+  // Goal:
+  // Do NOT assume the latest broken pivot is the major level.
+  // Instead, identify prior confirmed swing highs/lows that the current
+  // directional expansion actually broke, score them for structural
+  // significance, and then use the protected swing associated with the
+  // highest-quality major break.
   //
-  // Bearish logic is the mirror image.
-  // ----------------------------------------------------------
+  // Bullish:
+  //   major broken resistance -> protected swing low -> final high
+  //
+  // Bearish:
+  //   major broken support -> protected swing high -> final low
+  // ==============================================================
 
-  const currentSequenceWindowBars = Math.max(
+  const currentPrice =
     Number(
-      structureConfig.recoveryBars || 18
-    ) * 2,
-    Math.ceil(
+      ordered[
+        ordered.length - 1
+      ]?.close
+    );
+
+  const finalExtreme =
+    direction === "bullish"
+      ? extremaIndex({
+          startIndex:
+            Math.max(
+              0,
+              ordered.length -
+                Number(
+                  areaConfig.lookback ||
+                  structureConfig.eventLookback ||
+                  160
+                )
+            ),
+          endIndex:
+            ordered.length - 1,
+          field: "high",
+          mode: "max",
+        })
+      : extremaIndex({
+          startIndex:
+            Math.max(
+              0,
+              ordered.length -
+                Number(
+                  areaConfig.lookback ||
+                  structureConfig.eventLookback ||
+                  160
+                )
+            ),
+          endIndex:
+            ordered.length - 1,
+          field: "low",
+          mode: "min",
+        });
+
+  const finalExtremePrice =
+    Number(finalExtreme?.value);
+
+  const finalExtremeIndex =
+    Number(finalExtreme?.index);
+
+  const candidateLookbackBars =
+    Math.max(
       Number(
+        areaConfig.lookback ||
         structureConfig.eventLookback ||
-        140
-      ) * 0.18
-    ),
-    18
-  );
+        160
+      ),
+      Math.ceil(
+        Number(
+          structureConfig.eventLookback ||
+          140
+        ) * 1.35
+      )
+    );
 
-  const directionalEvents =
-    latestDirectionalEvent
-      ? events.filter(
-          (event) =>
-            event.side === expectedSide &&
-            Number(event.index) <=
-              Number(
-                latestDirectionalEvent.index
-              ) &&
-            Number(event.index) >=
-              Number(
-                latestDirectionalEvent.index
-              ) -
-                currentSequenceWindowBars
-        )
-      : [];
+  const candidateStartIndex =
+    Math.max(
+      0,
+      ordered.length -
+        candidateLookbackBars
+    );
 
-  const protectedCandidates =
-    directionalEvents
-      .map((event) => {
-        const breakIndex =
-          Number(event?.index);
+  const priorMajorPivots =
+    pivots
+      .filter(
+        (pivot) =>
+          pivot.type ===
+            expectedBrokenPivotType &&
+          Number(pivot.pivotIndex) >=
+            candidateStartIndex &&
+          Number(pivot.pivotIndex) <
+            finalExtremeIndex
+      )
+      .map((pivot) => {
+        const pivotIndex =
+          Number(pivot.pivotIndex);
 
-        const brokenPivotIndex =
-          Number(event?.pivotIndex);
+        const pivotPrice =
+          Number(pivot.price);
 
-        const brokenLevel =
-          Number(event?.level);
+        const confirmedAtIndex =
+          Number(
+            pivot.confirmedAtIndex
+          );
 
         if (
-          !Number.isFinite(breakIndex) ||
+          !Number.isFinite(pivotIndex) ||
+          !Number.isFinite(pivotPrice) ||
           !Number.isFinite(
-            brokenPivotIndex
-          ) ||
-          !Number.isFinite(brokenLevel) ||
-          brokenPivotIndex < 0 ||
-          breakIndex <= brokenPivotIndex
+            confirmedAtIndex
+          )
         ) {
           return null;
         }
 
-        const expectedPivotType =
-          direction === "bullish"
-            ? "support"
-            : "resistance";
+        // Identify the FIRST clean break of this specific pivot after it was
+        // confirmed. This prevents a later local break event from hijacking
+        // an older, more important level.
+        const breakEvent =
+          events.find(
+            (event) =>
+              event.side ===
+                expectedSide &&
+              Number(event.pivotIndex) ===
+                pivotIndex &&
+              Number(event.index) >
+                confirmedAtIndex
+          ) || null;
 
-        const oppositePivots =
+        if (!breakEvent) {
+          return null;
+        }
+
+        const breakIndex =
+          Number(breakEvent.index);
+
+        if (
+          !Number.isFinite(breakIndex) ||
+          breakIndex <= pivotIndex ||
+          breakIndex >
+            finalExtremeIndex
+        ) {
+          return null;
+        }
+
+        // Protected swing must form after the major pivot and before its
+        // breakout. Prefer confirmed opposite pivots. Only use a raw
+        // interval extreme if no confirmed protected pivot exists.
+        const protectedPivots =
           pivots.filter(
-            (pivot) =>
-              pivot.type ===
-                expectedPivotType &&
-              Number(pivot.pivotIndex) >
-                brokenPivotIndex &&
+            (candidate) =>
+              candidate.type ===
+                expectedProtectedPivotType &&
               Number(
-                pivot.confirmedAtIndex
-              ) < breakIndex
+                candidate.pivotIndex
+              ) >
+                pivotIndex &&
+              Number(
+                candidate.confirmedAtIndex
+              ) <
+                breakIndex
           );
 
-        let protectedPivot = null;
-        let protectedPrice = null;
-        let protectedIndex = null;
+        let protectedPivot =
+          null;
+
+        let protectedPrice =
+          null;
+
+        let protectedIndex =
+          null;
+
         let protectedSource =
           "confirmed_pivot";
 
-        if (oppositePivots.length) {
+        if (
+          protectedPivots.length
+        ) {
           protectedPivot =
-            [...oppositePivots].sort(
+            [...protectedPivots].sort(
               (a, b) =>
                 direction === "bullish"
                   ? Number(a.price) -
@@ -9045,7 +9146,9 @@ function buildLatestImpulseFibonacci({
             )[0] || null;
 
           protectedPrice =
-            Number(protectedPivot?.price);
+            Number(
+              protectedPivot?.price
+            );
 
           protectedIndex =
             Number(
@@ -9053,9 +9156,6 @@ function buildLatestImpulseFibonacci({
             );
         }
 
-        // If no confirmed opposite pivot exists between the major broken
-        // pivot and the breakout, use the raw extreme only as a controlled
-        // fallback. The main model strongly prefers a confirmed pivot.
         if (
           !Number.isFinite(
             protectedPrice
@@ -9064,11 +9164,11 @@ function buildLatestImpulseFibonacci({
             protectedIndex
           )
         ) {
-          const fallbackExtreme =
+          const fallback =
             direction === "bullish"
               ? extremaIndex({
                   startIndex:
-                    brokenPivotIndex + 1,
+                    pivotIndex + 1,
                   endIndex:
                     breakIndex - 1,
                   field: "low",
@@ -9076,7 +9176,7 @@ function buildLatestImpulseFibonacci({
                 })
               : extremaIndex({
                   startIndex:
-                    brokenPivotIndex + 1,
+                    pivotIndex + 1,
                   endIndex:
                     breakIndex - 1,
                   field: "high",
@@ -9084,14 +9184,10 @@ function buildLatestImpulseFibonacci({
                 });
 
           protectedPrice =
-            Number(
-              fallbackExtreme?.value
-            );
+            Number(fallback?.value);
 
           protectedIndex =
-            Number(
-              fallbackExtreme?.index
-            );
+            Number(fallback?.index);
 
           protectedSource =
             "raw_extreme_fallback";
@@ -9105,26 +9201,23 @@ function buildLatestImpulseFibonacci({
             protectedIndex
           ) ||
           protectedIndex <=
-            brokenPivotIndex ||
-          protectedIndex >= breakIndex
+            pivotIndex ||
+          protectedIndex >=
+            breakIndex
         ) {
           return null;
         }
 
+        // ------------------------------------------------------------
+        // STRUCTURAL SIGNIFICANCE FEATURES
+        // ------------------------------------------------------------
+
         const excursion =
           direction === "bullish"
-            ? brokenLevel -
+            ? pivotPrice -
               protectedPrice
             : protectedPrice -
-              brokenLevel;
-
-        const pivotAgeBars =
-          breakIndex -
-          brokenPivotIndex;
-
-        const originToBreakBars =
-          breakIndex -
-          protectedIndex;
+              pivotPrice;
 
         const excursionAtr =
           Number(atr || 0) > 0
@@ -9132,67 +9225,332 @@ function buildLatestImpulseFibonacci({
               Number(atr)
             : excursion;
 
+        // 1) Age / persistence:
+        // How long this level remained structurally relevant before breaking.
+        const barsUntilBreak =
+          breakIndex -
+          pivotIndex;
+
         const ageScore =
           Math.min(
-            40,
+            34,
             Math.max(
               0,
-              pivotAgeBars
-            ) * 0.18
+              barsUntilBreak
+            ) * 0.22
           );
 
+        // 2) Prominence:
+        // Compare the pivot with neighboring confirmed same-side pivots.
+        const neighborWindow =
+          Math.max(
+            12,
+            Math.ceil(
+              Number(
+                structureConfig.swingWindow ||
+                4
+              ) * 8
+            )
+          );
+
+        const nearbySameSide =
+          pivots.filter(
+            (other) =>
+              other !== pivot &&
+              other.type ===
+                expectedBrokenPivotType &&
+              Math.abs(
+                Number(
+                  other.pivotIndex
+                ) -
+                  pivotIndex
+              ) <=
+                neighborWindow
+          );
+
+        let prominence =
+          0;
+
+        if (nearbySameSide.length) {
+          const neighborReference =
+            direction === "bullish"
+              ? Math.max(
+                  ...nearbySameSide.map(
+                    (item) =>
+                      Number(item.price)
+                  )
+                )
+              : Math.min(
+                  ...nearbySameSide.map(
+                    (item) =>
+                      Number(item.price)
+                  )
+                );
+
+          prominence =
+            direction === "bullish"
+              ? pivotPrice -
+                neighborReference
+              : neighborReference -
+                pivotPrice;
+        }
+
+        const prominenceAtr =
+          Number(atr || 0) > 0
+            ? prominence /
+              Number(atr)
+            : prominence;
+
+        const prominenceScore =
+          Math.max(
+            0,
+            prominenceAtr
+          ) * 12;
+
+        // 3) Reaction history:
+        // Count substantial approaches/rejections around the pivot BEFORE
+        // breakout. Multiple reactions imply the market treated the level
+        // as important.
+        const reactionTolerance =
+          Math.max(
+            breakTolerance * 1.5,
+            Number(atr || 0) * 0.18
+          );
+
+        let reactionCount = 0;
+        let lastReactionIndex =
+          -99999;
+
+        for (
+          let index =
+            Math.max(
+              pivotIndex + 1,
+              candidateStartIndex
+            );
+          index <
+            breakIndex;
+          index += 1
+        ) {
+          const candle =
+            ordered[index];
+
+          const touched =
+            direction === "bullish"
+              ? Math.abs(
+                  Number(
+                    candle?.high
+                  ) -
+                    pivotPrice
+                ) <=
+                reactionTolerance
+              : Math.abs(
+                  Number(
+                    candle?.low
+                  ) -
+                    pivotPrice
+                ) <=
+                reactionTolerance;
+
+          if (
+            touched &&
+            index -
+              lastReactionIndex >=
+              Math.max(
+                3,
+                Number(
+                  structureConfig.swingWindow ||
+                  4
+                )
+              )
+          ) {
+            reactionCount += 1;
+            lastReactionIndex =
+              index;
+          }
+        }
+
+        const reactionScore =
+          Math.min(
+            28,
+            reactionCount * 7
+          );
+
+        // 4) Time spent on the original side of the major level:
+        // A major resistance is more meaningful if price spent a substantial
+        // period beneath it before breaking; vice versa for bearish support.
+        let originalSideCount =
+          0;
+
+        const originalSideStart =
+          Math.max(
+            pivotIndex + 1,
+            candidateStartIndex
+          );
+
+        const originalSideBars =
+          Math.max(
+            1,
+            breakIndex -
+              originalSideStart
+          );
+
+        for (
+          let index =
+            originalSideStart;
+          index <
+            breakIndex;
+          index += 1
+        ) {
+          const close =
+            Number(
+              ordered[index]?.close
+            );
+
+          if (
+            direction === "bullish"
+              ? close <
+                pivotPrice -
+                  breakTolerance
+              : close >
+                pivotPrice +
+                  breakTolerance
+          ) {
+            originalSideCount += 1;
+          }
+        }
+
+        const originalSideRatio =
+          originalSideCount /
+          originalSideBars;
+
+        const originalSideScore =
+          Math.max(
+            0,
+            Math.min(
+              18,
+              originalSideRatio *
+                18
+            )
+          );
+
+        // 5) Structural excursion:
+        // Bigger opposing excursion after the pivot and before the breakout
+        // implies a more significant pivot.
         const excursionScore =
           Math.max(
             0,
             excursionAtr
-          ) * 8;
+          ) * 10;
 
+        // 6) Break quality:
         const displacementBonus =
           String(
-            event?.confirmationPath || ""
-          ) === "strong_displacement"
-            ? 6
+            breakEvent
+              ?.confirmationPath ||
+              ""
+          ) ===
+          "strong_displacement"
+            ? 7
             : 0;
 
-        const confirmedPivotBonus =
+        // 7) Confirmed protected swing:
+        const confirmedProtectedBonus =
           protectedSource ===
           "confirmed_pivot"
-            ? 8
+            ? 10
             : 0;
 
-        const recencyPenalty =
-          latestDirectionalEvent
-            ? Math.max(
-                0,
+        // 8) Separation from final extreme:
+        // We want the major broken level to be materially below the final
+        // bullish high / above the final bearish low, otherwise it is merely
+        // a small local level near the endpoint.
+        const terminalSeparation =
+          direction === "bullish"
+            ? finalExtremePrice -
+              pivotPrice
+            : pivotPrice -
+              finalExtremePrice;
+
+        const terminalSeparationAtr =
+          Number(atr || 0) > 0
+            ? terminalSeparation /
+              Number(atr)
+            : terminalSeparation;
+
+        const terminalSeparationScore =
+          Math.min(
+            24,
+            Math.max(
+              0,
+              terminalSeparationAtr
+            ) * 4
+          );
+
+        // 9) Very-local-pivot penalty:
+        // Explicitly penalize pivots that formed only shortly before the
+        // breakout. This is what stops a recent 4105-type local level from
+        // outranking an older structurally important July swing high.
+        const veryLocalPenalty =
+          barsUntilBreak <
+          Math.max(
+            8,
+            Math.ceil(
+              Number(
+                structureConfig.recoveryBars ||
+                18
+              ) * 0.7
+            )
+          )
+            ? 24
+            : barsUntilBreak <
+              Math.max(
+                14,
                 Number(
-                  latestDirectionalEvent.index
-                ) -
-                  breakIndex
-              ) * 0.15
+                  structureConfig.recoveryBars ||
+                  18
+                )
+              )
+            ? 12
             : 0;
 
-        // A "major" break is one whose broken pivot was followed by a
-        // meaningful opposing excursion before price returned to break it.
-        // This prevents a tiny late higher-low/lower-high from replacing
-        // the protected swing of the broader breakout structure.
-        const structuralScore =
-          excursionScore +
+        // 10) Raw-fallback penalty:
+        const rawFallbackPenalty =
+          protectedSource ===
+          "raw_extreme_fallback"
+            ? 12
+            : 0;
+
+        const significanceScore =
           ageScore +
+          prominenceScore +
+          reactionScore +
+          originalSideScore +
+          excursionScore +
           displacementBonus +
-          confirmedPivotBonus -
-          recencyPenalty;
+          confirmedProtectedBonus +
+          terminalSeparationScore -
+          veryLocalPenalty -
+          rawFallbackPenalty;
 
         return {
-          event,
-          breakIndex,
-          brokenPivotIndex,
-          brokenPivotDatetime:
-            event?.pivotDatetime ||
+          pivot,
+          pivotIndex,
+          pivotPrice,
+          pivotDatetime:
+            pivot?.datetime ||
             ordered[
-              brokenPivotIndex
+              pivotIndex
             ]?.datetime ||
             null,
-          brokenLevel,
+          breakEvent,
+          breakIndex,
+          breakoutDatetime:
+            breakEvent?.datetime ||
+            ordered[
+              breakIndex
+            ]?.datetime ||
+            null,
+          protectedPivot,
           protectedPrice,
           protectedIndex,
           protectedDatetime:
@@ -9204,9 +9562,18 @@ function buildLatestImpulseFibonacci({
           protectedSource,
           excursion,
           excursionAtr,
-          pivotAgeBars,
-          originToBreakBars,
-          structuralScore,
+          barsUntilBreak,
+          prominence,
+          prominenceAtr,
+          reactionCount,
+          originalSideRatio,
+          terminalSeparation,
+          terminalSeparationAtr,
+          displacementBonus,
+          confirmedProtectedBonus,
+          veryLocalPenalty,
+          rawFallbackPenalty,
+          significanceScore,
         };
       })
       .filter(Boolean)
@@ -9217,62 +9584,102 @@ function buildLatestImpulseFibonacci({
               candidate.excursion
             )
           ) &&
-          Number(candidate.excursion) >
+          Number(
+            candidate.excursion
+          ) >
             Math.max(
-              Number(atr || 0) * 0.35,
+              Number(atr || 0) *
+                0.35,
+              breakTolerance
+            ) &&
+          Number(
+            candidate.terminalSeparation
+          ) >
+            Math.max(
+              Number(atr || 0) *
+                0.45,
               breakTolerance
             )
+      );
+
+  // "Major" candidates must also clear a minimum significance floor.
+  // If none do, we still retain a controlled fallback later.
+  const majorBreakCandidates =
+    priorMajorPivots
+      .filter(
+        (candidate) =>
+          Number(
+            candidate.significanceScore
+          ) >= 22
       )
       .sort((a, b) => {
         if (
-          Number(b.structuralScore) !==
-          Number(a.structuralScore)
+          Number(
+            b.significanceScore
+          ) !==
+          Number(
+            a.significanceScore
+          )
         ) {
           return (
-            Number(b.structuralScore) -
-            Number(a.structuralScore)
+            Number(
+              b.significanceScore
+            ) -
+            Number(
+              a.significanceScore
+            )
           );
         }
 
-        // Tie-break toward the more recent current-sequence breakout.
+        // Tie-break toward the OLDER pivot because "major" structure should
+        // not be replaced by a nearby local level when significance is equal.
         return (
-          Number(b.breakIndex) -
-          Number(a.breakIndex)
+          Number(a.pivotIndex) -
+          Number(b.pivotIndex)
         );
       });
 
-  const protectedSelection =
-    protectedCandidates[0] ||
+  const majorSelection =
+    majorBreakCandidates[0] ||
     null;
 
   let controllingEvent =
-    protectedSelection?.event ||
+    majorSelection?.breakEvent ||
     latestDirectionalEvent ||
     null;
 
   let selectionReason =
-    protectedSelection
+    majorSelection
       ? direction === "bullish"
-        ? "protected_swing_low_before_major_bullish_breakout"
-        : "protected_swing_high_before_major_bearish_breakdown"
-      : "fallback_latest_confirmed_impulse";
+        ? "major_broken_resistance_with_protected_swing_low"
+        : "major_broken_support_with_protected_swing_high"
+      : "major_break_unavailable_fallback";
 
-  let swingLowResult = null;
-  let swingHighResult = null;
+  let swingLowResult =
+    null;
 
-  if (protectedSelection) {
-    if (direction === "bullish") {
+  let swingHighResult =
+    null;
+
+  if (majorSelection) {
+    if (
+      direction ===
+      "bullish"
+    ) {
       swingLowResult = {
         index:
-          protectedSelection.protectedIndex,
+          majorSelection
+            .protectedIndex,
         value:
-          protectedSelection.protectedPrice,
+          majorSelection
+            .protectedPrice,
       };
 
       swingHighResult =
         extremaIndex({
           startIndex:
-            protectedSelection.breakIndex,
+            majorSelection
+              .breakIndex,
           endIndex:
             ordered.length - 1,
           field: "high",
@@ -9281,45 +9688,53 @@ function buildLatestImpulseFibonacci({
     } else {
       swingHighResult = {
         index:
-          protectedSelection.protectedIndex,
+          majorSelection
+            .protectedIndex,
         value:
-          protectedSelection.protectedPrice,
+          majorSelection
+            .protectedPrice,
       };
 
       swingLowResult =
         extremaIndex({
           startIndex:
-            protectedSelection.breakIndex,
+            majorSelection
+              .breakIndex,
           endIndex:
             ordered.length - 1,
           field: "low",
           mode: "min",
         });
     }
-  } else if (controllingEvent) {
-    // Controlled fallback retaining v3.6 behavior only if no protected swing
-    // can be formed from the major-breakout candidates.
-    const terminalSearchStart =
-      Number(controllingEvent.index);
-
-    const broadOriginStart = Math.max(
-      0,
-      Number(controllingEvent.index) -
+  } else if (
+    latestDirectionalEvent
+  ) {
+    // Fallback is deliberately BROADER than v3.7's local-protected-swing
+    // behavior. If no major pivot passes significance, search broadly around
+    // the current directional sequence instead of anchoring to a late local
+    // higher low/lower high.
+    const fallbackStart =
+      Math.max(
+        0,
         Number(
-          areaConfig.lookback ||
-          structureConfig.eventLookback ||
-          160
-        )
-    );
+          latestDirectionalEvent
+            .index
+        ) -
+          candidateLookbackBars
+      );
 
-    if (direction === "bullish") {
+    if (
+      direction ===
+      "bullish"
+    ) {
       swingLowResult =
         extremaIndex({
           startIndex:
-            broadOriginStart,
+            fallbackStart,
           endIndex:
             Number(
-              controllingEvent.index
+              latestDirectionalEvent
+                .index
             ),
           field: "low",
           mode: "min",
@@ -9328,7 +9743,10 @@ function buildLatestImpulseFibonacci({
       swingHighResult =
         extremaIndex({
           startIndex:
-            terminalSearchStart,
+            Number(
+              latestDirectionalEvent
+                .index
+            ),
           endIndex:
             ordered.length - 1,
           field: "high",
@@ -9336,15 +9754,16 @@ function buildLatestImpulseFibonacci({
         });
 
       selectionReason =
-        "protected_swing_unavailable_broad_bullish_fallback";
+        "major_break_unavailable_broad_bullish_fallback";
     } else {
       swingHighResult =
         extremaIndex({
           startIndex:
-            broadOriginStart,
+            fallbackStart,
           endIndex:
             Number(
-              controllingEvent.index
+              latestDirectionalEvent
+                .index
             ),
           field: "high",
           mode: "max",
@@ -9353,7 +9772,10 @@ function buildLatestImpulseFibonacci({
       swingLowResult =
         extremaIndex({
           startIndex:
-            terminalSearchStart,
+            Number(
+              latestDirectionalEvent
+                .index
+            ),
           endIndex:
             ordered.length - 1,
           field: "low",
@@ -9361,92 +9783,10 @@ function buildLatestImpulseFibonacci({
         });
 
       selectionReason =
-        "protected_swing_unavailable_broad_bearish_fallback";
+        "major_break_unavailable_broad_bearish_fallback";
     }
   } else {
-    const eventDatetime =
-      historicalPhase?.diagnostics
-        ?.latestEvent?.datetime || "";
-
-    let eventIndex =
-      eventDatetime
-        ? ordered.findIndex(
-            (candle) =>
-              String(
-                candle?.datetime || ""
-              ).slice(0, 16) ===
-              String(
-                eventDatetime
-              ).slice(0, 16)
-          )
-        : -1;
-
-    if (eventIndex < 0) {
-      eventIndex = Math.max(
-        1,
-        ordered.length -
-          Math.ceil(
-            Number(
-              areaConfig.lookback ||
-              160
-            ) / 3
-          )
-      );
-    }
-
-    const originStart = Math.max(
-      0,
-      eventIndex -
-        Number(
-          areaConfig.lookback ||
-          160
-        )
-    );
-
-    if (direction === "bullish") {
-      swingLowResult =
-        extremaIndex({
-          startIndex:
-            originStart,
-          endIndex:
-            eventIndex,
-          field: "low",
-          mode: "min",
-        });
-
-      swingHighResult =
-        extremaIndex({
-          startIndex:
-            eventIndex,
-          endIndex:
-            ordered.length - 1,
-          field: "high",
-          mode: "max",
-        });
-    } else {
-      swingHighResult =
-        extremaIndex({
-          startIndex:
-            originStart,
-          endIndex:
-            eventIndex,
-          field: "high",
-          mode: "max",
-        });
-
-      swingLowResult =
-        extremaIndex({
-          startIndex:
-            eventIndex,
-          endIndex:
-            ordered.length - 1,
-          field: "low",
-          mode: "min",
-        });
-    }
-
-    selectionReason =
-      "historical_phase_broad_impulse_fallback";
+    return null;
   }
 
   const preliminarySwingHigh =
@@ -9472,7 +9812,6 @@ function buildLatestImpulseFibonacci({
     return null;
   }
 
-  // Chronology protection remains mandatory.
   if (
     direction === "bullish" &&
     Number(
@@ -9553,9 +9892,6 @@ function buildLatestImpulseFibonacci({
     chartNativeHigh >
       chartNativeLow
   ) {
-    // Structure chooses the candle/time. Pixel/chart-native mapping may only
-    // move that SAME deterministic swing onto the uploaded broker's price
-    // scale. It must never choose a different swing.
     selectedSwingLow =
       chartNativeLow;
 
@@ -9599,8 +9935,77 @@ function buildLatestImpulseFibonacci({
   const ratios =
     [0.382, 0.5, 0.618];
 
+  const majorBrokenLevel =
+    majorSelection
+      ? {
+          price:
+            Number(
+              majorSelection
+                .pivotPrice
+            ),
+          pivotDatetime:
+            majorSelection
+              .pivotDatetime ||
+            null,
+          pivotIndex:
+            Number(
+              majorSelection
+                .pivotIndex
+            ),
+          breakoutDatetime:
+            majorSelection
+              .breakoutDatetime ||
+            null,
+          breakoutIndex:
+            Number(
+              majorSelection
+                .breakIndex
+            ),
+          significanceScore:
+            Number(
+              majorSelection
+                .significanceScore
+            ),
+          barsUntilBreak:
+            Number(
+              majorSelection
+                .barsUntilBreak
+            ),
+          reactionCount:
+            Number(
+              majorSelection
+                .reactionCount
+            ),
+          prominenceAtr:
+            Number(
+              majorSelection
+                .prominenceAtr
+            ),
+          excursionAtr:
+            Number(
+              majorSelection
+                .excursionAtr
+            ),
+          originalSideRatio:
+            Number(
+              majorSelection
+                .originalSideRatio
+            ),
+          terminalSeparationAtr:
+            Number(
+              majorSelection
+                .terminalSeparationAtr
+            ),
+          confirmationPath:
+            majorSelection
+              .breakEvent
+              ?.confirmationPath ||
+            null,
+        }
+      : null;
+
   const protectedSwing =
-    protectedSelection
+    majorSelection
       ? {
           type:
             direction === "bullish"
@@ -9608,75 +10013,21 @@ function buildLatestImpulseFibonacci({
               : "protected_high",
           price:
             Number(
-              protectedSelection
+              majorSelection
                 .protectedPrice
             ),
           datetime:
-            protectedSelection
+            majorSelection
               .protectedDatetime ||
             null,
           index:
             Number(
-              protectedSelection
+              majorSelection
                 .protectedIndex
             ),
           source:
-            protectedSelection
+            majorSelection
               .protectedSource,
-          excursion:
-            Number(
-              protectedSelection
-                .excursion
-            ),
-          excursionAtr:
-            Number(
-              protectedSelection
-                .excursionAtr
-            ),
-        }
-      : null;
-
-  const brokenMajorLevel =
-    protectedSelection
-      ? {
-          price:
-            Number(
-              protectedSelection
-                .brokenLevel
-            ),
-          pivotDatetime:
-            protectedSelection
-              .brokenPivotDatetime ||
-            null,
-          pivotIndex:
-            Number(
-              protectedSelection
-                .brokenPivotIndex
-            ),
-          breakoutDatetime:
-            protectedSelection
-              .event?.datetime ||
-            null,
-          breakoutIndex:
-            Number(
-              protectedSelection
-                .breakIndex
-            ),
-          confirmationPath:
-            protectedSelection
-              .event
-              ?.confirmationPath ||
-            null,
-          structuralScore:
-            Number(
-              protectedSelection
-                .structuralScore
-            ),
-          pivotAgeBars:
-            Number(
-              protectedSelection
-                .pivotAgeBars
-            ),
         }
       : null;
 
@@ -9717,9 +10068,9 @@ function buildLatestImpulseFibonacci({
         })
       ),
     source:
-      protectedSelection
-        ? "protected_swing_major_breakout_impulse"
-        : "fallback_structure_impulse",
+      majorSelection
+        ? "major_break_significance_protected_swing_impulse"
+        : "broad_fallback_structure_impulse",
     selectionReason,
     controllingEvent:
       controllingEvent
@@ -9779,25 +10130,24 @@ function buildLatestImpulseFibonacci({
           }
         : null,
     protectedSwing,
-    brokenMajorLevel,
-    protectedCandidateCount:
-      protectedCandidates.length,
-    protectedCandidateAudit:
-      protectedCandidates
-        .slice(0, 5)
+    brokenMajorLevel:
+      majorBrokenLevel,
+    majorBreakCandidateCount:
+      majorBreakCandidates.length,
+    majorBreakCandidateAudit:
+      majorBreakCandidates
+        .slice(0, 8)
         .map(
           (candidate) => ({
-            brokenLevel:
+            pivotPrice:
               candidate
-                .brokenLevel,
-            brokenPivotDatetime:
+                .pivotPrice,
+            pivotDatetime:
               candidate
-                .brokenPivotDatetime,
+                .pivotDatetime,
             breakoutDatetime:
               candidate
-                .event
-                ?.datetime ||
-              null,
+                .breakoutDatetime,
             protectedPrice:
               candidate
                 .protectedPrice,
@@ -9807,18 +10157,33 @@ function buildLatestImpulseFibonacci({
             protectedSource:
               candidate
                 .protectedSource,
-            excursion:
+            significanceScore:
               candidate
-                .excursion,
+                .significanceScore,
+            barsUntilBreak:
+              candidate
+                .barsUntilBreak,
+            reactionCount:
+              candidate
+                .reactionCount,
+            prominenceAtr:
+              candidate
+                .prominenceAtr,
             excursionAtr:
               candidate
                 .excursionAtr,
-            pivotAgeBars:
+            originalSideRatio:
               candidate
-                .pivotAgeBars,
-            structuralScore:
+                .originalSideRatio,
+            terminalSeparationAtr:
               candidate
-                .structuralScore,
+                .terminalSeparationAtr,
+            veryLocalPenalty:
+              candidate
+                .veryLocalPenalty,
+            rawFallbackPenalty:
+              candidate
+                .rawFallbackPenalty,
           })
         ),
     atr:
@@ -9827,6 +10192,42 @@ function buildLatestImpulseFibonacci({
   };
 
   if (!suppressImpulseLog) {
+    console.log(
+      "CSA major-break significance:",
+      {
+        direction:
+          result.direction,
+        selectedMajorBreak:
+          result.brokenMajorLevel,
+        protectedSwing:
+          result.protectedSwing,
+        terminal:
+          direction === "bullish"
+            ? {
+                type:
+                  "final_high",
+                price:
+                  result.swingHigh,
+                datetime:
+                  result.swingHighTime,
+              }
+            : {
+                type:
+                  "final_low",
+                price:
+                  result.swingLow,
+                datetime:
+                  result.swingLowTime,
+              },
+        selectionReason:
+          result.selectionReason,
+        candidateCount:
+          result.majorBreakCandidateCount,
+        candidateAudit:
+          result.majorBreakCandidateAudit,
+      }
+    );
+
     console.log(
       "CSA protected impulse:",
       {
@@ -9866,17 +10267,11 @@ function buildLatestImpulseFibonacci({
           result.impulseRange,
         selectionReason:
           result.selectionReason,
-        protectedCandidateCount:
-          result.protectedCandidateCount,
-        protectedCandidateAudit:
-          result.protectedCandidateAudit,
         retracementLevels:
           result.levels,
       }
     );
 
-    // Preserve the existing heading because current Render/testing workflows
-    // already search for it.
     console.log(
       "CSA relevant impulse:",
       {
@@ -11218,7 +11613,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "3.7.0";
+const CSA_SELECTOR_VERSION = "3.8.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -12513,7 +12908,7 @@ function rankRawEntryAreas({
   console.log("CSA selector v3 Fibonacci entry gate:", {
     selectorVersion: CSA_SELECTOR_VERSION,
     fibProximityModel: "adaptive_atr_15_20_percent",
-    impulseModel: "protected_swing_major_breakout_with_timestamp_targeted_pixel_wicks",
+    impulseModel: "major_break_significance_with_protected_swing_and_timestamp_targeted_pixel_wicks",
     frameworkPriceModel: "same_period_exact_chart_label_priority",
     direction,
     fibonacciPriceSource:
@@ -12529,8 +12924,12 @@ function rankRawEntryAreas({
       fibonacci?.protectedSwing || null,
     brokenMajorLevel:
       fibonacci?.brokenMajorLevel || null,
-    protectedCandidateCount:
-      Number(fibonacci?.protectedCandidateCount || 0),
+    majorBreakCandidateCount:
+      Number(
+        fibonacci?.majorBreakCandidateCount || 0
+      ),
+    majorBreakSelectionModel:
+      "significance_prominence_reactions_age_original_side",
     marketDataSwingLow:
       fibonacci?.marketDataSwingLow ?? null,
     marketDataSwingHigh: fibonacci?.marketDataSwingHigh ?? null,
