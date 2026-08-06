@@ -3767,6 +3767,7 @@ FIBONACCI
 - A structurally valid area that is not close to 38.2%, 50%, or 61.8% may remain an important chart reference, but it must not become Entry 1, Entry 2, or the preferred entry area.
 - Fibonacci must never create a setup by itself. The actual entry remains the support/resistance or supply/demand area, not the Fibonacci number.
 - The retracement must be calculated from the genuine completed impulse that produced the current directional breakout/breakdown, using the current structure-sequence origin and the final visible directional extreme; do not shrink the impulse to a late local swing merely because it is more recent.
+- In Final Visible Candle mode, when the uploaded broker/platform chart and external OHLC feed use materially different price scales, use deterministic OHLC only to identify the relevant structure/impulse sequence and use the uploaded chart's own price scale for the impulse swing prices. Exact printed chart OHLC/labels outrank estimates. Never choose swing anchors to force Fibonacci confluence.
 - When the same authoritative framework period/side has an exact printed broker/platform price label, that exact chart label may refine the market-data framework price; never borrow a price from a different period or side.
 - Do not mention Fibonacci, retracement percentages, 38.2%, 50%, or 61.8% in normal beginner-facing feedback. You may simply say one structural area is stronger or offers a cleaner opportunity.
 
@@ -4188,6 +4189,392 @@ async function extractVisibleFrameworkPriceMap({
     matches,
     reason: "",
   };
+}
+
+
+async function extractChartNativeImpulseAnchors({
+  imageBase64,
+  mimeType,
+  marketReference,
+  chartDetection = {},
+  visualReview = {},
+  priceMap = null,
+  timeframe = "H1",
+  symbol = "",
+}) {
+  const cutoffMode = normalizeCutoffMode(
+    marketReference?.chartCutoff?.mode || "final_visible"
+  );
+
+  // Historical selected-day / exact-time reviews stay on deterministic
+  // cutoff-filtered OHLC so future candles visible in the screenshot can
+  // never leak into the historical Fib impulse.
+  if (cutoffMode !== "final_visible") {
+    return {
+      usable: false,
+      source: "external_ohlc",
+      reason: "chart_native_impulse_disabled_for_historical_cutoff",
+    };
+  }
+
+  if (!isAiProviderConfigured() || !imageBase64) {
+    return {
+      usable: false,
+      source: "external_ohlc",
+      reason: imageBase64
+        ? getAiConfigurationError()
+        : "missing_chart_image",
+    };
+  }
+
+  const historicalPhase =
+    deriveAuthoritativeCsaHistoricalPhase({
+      marketReference,
+      symbol,
+      timeframe,
+    });
+
+  const direction =
+    historicalPhase &&
+    ["bullish", "bearish"].includes(historicalPhase.direction)
+      ? historicalPhase.direction
+      : null;
+
+  if (!direction) {
+    return {
+      usable: false,
+      source: "external_ohlc",
+      reason: "no_locked_direction_for_chart_native_impulse",
+    };
+  }
+
+  const candles = Array.isArray(marketReference?.timeframeCandles)
+    ? marketReference.timeframeCandles
+    : [];
+
+  const atr = averageTrueRange(
+    candles,
+    getStructureEngineConfig(timeframe).atrPeriod
+  );
+
+  // The market-data impulse is used only as a broad structure/time locator
+  // and sanity-check. Its prices are NOT treated as the chart's price scale.
+  const marketImpulse = buildLatestImpulseFibonacci({
+    candles,
+    historicalPhase,
+    direction,
+    timeframe,
+    symbol,
+    chartNativeImpulse: null,
+    suppressImpulseLog: true,
+  });
+
+  const exactReferenceLevels = Array.isArray(priceMap?.matches)
+    ? priceMap.matches
+        .filter(
+          (match) =>
+            match?.withinTolerance === true &&
+            nullablePositiveNumber(match?.displayedPrice) !== null
+        )
+        .slice(0, 6)
+        .map((match) => ({
+          period: String(match?.period || ""),
+          side: String(match?.side || ""),
+          role: String(match?.areaType || ""),
+          price: nullablePositiveNumber(match?.displayedPrice),
+          label: String(match?.platformLabel || ""),
+        }))
+        .filter((item) => item.price !== null)
+    : [];
+
+  const visibleClose =
+    asPositiveNumber(visualReview?.latestVisiblePrice) ||
+    asPositiveNumber(chartDetection?.latestVisiblePrice);
+
+  const latestVisibleDate =
+    String(
+      chartDetection?.latestVisibleDate ||
+      marketReference?.chartCutoff?.latestVisibleDate ||
+      ""
+    ).trim();
+
+  const latestVisibleTime =
+    String(chartDetection?.latestVisibleTime || "").trim();
+
+  const referenceText =
+    exactReferenceLevels.length
+      ? exactReferenceLevels
+          .map(
+            (item) =>
+              `${item.period} ${item.side} ${item.role}: ${item.price}` +
+              (item.label ? ` (${item.label})` : "")
+          )
+          .join("\n")
+      : "No exact horizontal reference labels were reliably extracted.";
+
+  const locatorText = marketImpulse
+    ? `
+External-data STRUCTURE/TIME locator only:
+- controlling event: ${marketImpulse?.controllingEvent?.datetime || "unknown"}
+- prior opposite structure event: ${marketImpulse?.oppositeOriginEvent?.datetime || "unknown"}
+- external swing-low time hint: ${marketImpulse?.swingLowTime || "unknown"}
+- external swing-high time hint: ${marketImpulse?.swingHighTime || "unknown"}
+
+These times are only rough locators. Do NOT copy the external swing prices. The uploaded broker chart is the price authority for this task.
+`
+    : "";
+
+  const prompt = `
+You have ONE narrow visual task for a trading chart.
+
+LOCKED DIRECTION: ${direction}
+TIMEFRAME: ${timeframe}
+FINAL VISIBLE DATE: ${latestVisibleDate || "not reliably printed"}
+FINAL VISIBLE TIME: ${latestVisibleTime || "not reliably printed"}
+FINAL VISIBLE CLOSE (when readable): ${visibleClose ?? "not available"}
+
+Exact broker/platform chart reference prices already read from this SAME image:
+${referenceText}
+${locatorText}
+
+TASK:
+Read the TWO price anchors of the CURRENT COMPLETED DIRECTIONAL IMPULSE from the uploaded chart's OWN price scale.
+
+For a BULLISH chart:
+- originPrice = the genuine swing LOW that begins the sustained bullish impulse which ultimately produces the current/final visible breakout and directional high.
+- terminalPrice = the highest price reached by that completed bullish impulse through the final visible candle.
+
+For a BEARISH chart:
+- originPrice = the genuine swing HIGH that begins the sustained bearish impulse which ultimately produces the current/final visible breakdown and directional low.
+- terminalPrice = the lowest price reached by that completed bearish impulse through the final visible candle.
+
+CRITICAL RULES:
+1. Use the BROKER/PLATFORM PRICE SCALE VISIBLE IN THIS SCREENSHOT.
+2. Exact printed OHLC/header values or printed price labels outrank visual estimation.
+3. Use the exact reference prices above only to calibrate the chart's vertical price scale and identify the same chart feed.
+4. Do NOT calculate Fibonacci.
+5. Do NOT choose an origin because it would make a support/resistance level line up with any retracement.
+6. Do NOT simply choose the most recent minor pullback low/high.
+7. Do NOT choose the oldest or absolute chart extreme unless it genuinely begins the current directional impulse.
+8. For a bullish impulse, the origin must occur before the terminal high. For a bearish impulse, the origin high must occur before the terminal low.
+9. The final visible candle and chart header are authoritative for the screenshot endpoint.
+10. If the genuine origin cannot be read with at least medium confidence from the visible chart/price scale, return null rather than guessing.
+11. Never invent digits. A visually estimated origin is acceptable only when the price scale makes the estimate reasonably clear.
+12. Keep this entirely separate from entry-area selection. You are reading swing prices only.
+
+Return JSON only:
+{
+  "direction": "${direction}",
+  "originPrice": null,
+  "terminalPrice": null,
+  "originTime": null,
+  "terminalTime": null,
+  "originPriceSource": "exact_printed | chart_scale_estimate | null",
+  "terminalPriceSource": "exact_printed | chart_scale_estimate | null",
+  "originEvidence": null,
+  "terminalEvidence": null,
+  "confidence": "high | medium | low"
+}`;
+
+  try {
+    const response = await runVisionModel({
+      systemPrompt: prompt,
+      userText:
+        "Read only the current directional impulse origin and terminal price from this uploaded chart. Return JSON only.",
+      imageBase64,
+      mimeType,
+      maxTokens: 700,
+      openaiModel: "gpt-4.1",
+      claudeModel: CLAUDE_MODEL,
+      temperature: 0,
+      imageDetail: "high",
+    });
+
+    const parsed = extractJsonObject(response.text || "");
+
+    if (!parsed) {
+      return {
+        usable: false,
+        source: "external_ohlc",
+        reason: "chart_native_impulse_json_unavailable",
+        raw: response.text || "",
+      };
+    }
+
+    const originPrice = nullablePositiveNumber(parsed?.originPrice);
+    const terminalPrice = nullablePositiveNumber(parsed?.terminalPrice);
+
+    const confidence = ["high", "medium", "low"].includes(
+      String(parsed?.confidence || "").toLowerCase()
+    )
+      ? String(parsed.confidence).toLowerCase()
+      : "low";
+
+    if (
+      originPrice === null ||
+      terminalPrice === null ||
+      confidence === "low"
+    ) {
+      console.log("CSA chart-native impulse extraction:", {
+        usable: false,
+        direction,
+        originPrice,
+        terminalPrice,
+        confidence,
+        reason: "missing_or_low_confidence_anchor",
+      });
+
+      return {
+        usable: false,
+        source: "external_ohlc",
+        reason: "missing_or_low_confidence_chart_native_anchor",
+        direction,
+        originPrice,
+        terminalPrice,
+        confidence,
+      };
+    }
+
+    const chartSwingLow =
+      direction === "bullish" ? originPrice : terminalPrice;
+
+    const chartSwingHigh =
+      direction === "bullish" ? terminalPrice : originPrice;
+
+    if (
+      !Number.isFinite(chartSwingLow) ||
+      !Number.isFinite(chartSwingHigh) ||
+      chartSwingHigh <= chartSwingLow
+    ) {
+      return {
+        usable: false,
+        source: "external_ohlc",
+        reason: "invalid_chart_native_anchor_order",
+        direction,
+        originPrice,
+        terminalPrice,
+        confidence,
+      };
+    }
+
+    const chartRange = chartSwingHigh - chartSwingLow;
+    const marketRange = Number(marketImpulse?.impulseRange || 0);
+
+    // Broad sanity-check only. The entire point of this reader is to permit
+    // broker/feed differences, so the validation must not force the chart
+    // prices back onto the external feed.
+    const rangeRatio =
+      marketRange > 0 ? chartRange / marketRange : null;
+
+    const broadAnchorTolerance = Math.max(
+      Number(atr || 0) * 2.5,
+      marketRange > 0 ? marketRange * 0.22 : 0,
+      getApprovedPriceTolerance(symbol) * 10
+    );
+
+    const externalLowDifference =
+      marketImpulse
+        ? Math.abs(
+            chartSwingLow - Number(marketImpulse.swingLow)
+          )
+        : null;
+
+    const externalHighDifference =
+      marketImpulse
+        ? Math.abs(
+            chartSwingHigh - Number(marketImpulse.swingHigh)
+          )
+        : null;
+
+    const rangePlausible =
+      rangeRatio === null ||
+      (rangeRatio >= 0.55 && rangeRatio <= 1.75);
+
+    const anchorsPlausible =
+      !marketImpulse ||
+      (
+        externalLowDifference <= broadAnchorTolerance &&
+        externalHighDifference <= broadAnchorTolerance
+      );
+
+    const closePlausible =
+      visibleClose === null ||
+      (
+        visibleClose >=
+          chartSwingLow -
+            Math.max(Number(atr || 0), chartRange * 0.05) &&
+        visibleClose <=
+          chartSwingHigh +
+            Math.max(Number(atr || 0), chartRange * 0.05)
+      );
+
+    const usable =
+      rangePlausible &&
+      anchorsPlausible &&
+      closePlausible;
+
+    const result = {
+      usable,
+      direction,
+      swingLow: chartSwingLow,
+      swingHigh: chartSwingHigh,
+      swingLowTime:
+        direction === "bullish"
+          ? safeUserText(parsed?.originTime || "")
+          : safeUserText(parsed?.terminalTime || ""),
+      swingHighTime:
+        direction === "bullish"
+          ? safeUserText(parsed?.terminalTime || "")
+          : safeUserText(parsed?.originTime || ""),
+      originPrice,
+      terminalPrice,
+      originPriceSource:
+        String(parsed?.originPriceSource || "").trim(),
+      terminalPriceSource:
+        String(parsed?.terminalPriceSource || "").trim(),
+      originEvidence: safeUserText(parsed?.originEvidence || ""),
+      terminalEvidence: safeUserText(parsed?.terminalEvidence || ""),
+      confidence,
+      source: usable
+        ? "uploaded_chart_price_scale"
+        : "external_ohlc",
+      reason: usable
+        ? "validated_chart_native_impulse"
+        : "chart_native_impulse_failed_sanity_check",
+      validation: {
+        chartRange,
+        marketRange: marketRange || null,
+        rangeRatio,
+        atr: Number(atr || 0),
+        broadAnchorTolerance,
+        externalLowDifference,
+        externalHighDifference,
+        rangePlausible,
+        anchorsPlausible,
+        closePlausible,
+        visibleClose,
+      },
+      exactReferenceLevels,
+      modelUsed: response.model,
+      provider: response.provider,
+    };
+
+    console.log("CSA chart-native impulse extraction:", result);
+
+    return result;
+  } catch (error) {
+    console.warn(
+      "CSA chart-native impulse extraction failed:",
+      error?.message || error
+    );
+
+    return {
+      usable: false,
+      source: "external_ohlc",
+      reason: "chart_native_impulse_reader_failed",
+      error: safeUserText(error?.message || "Unknown error"),
+    };
+  }
 }
 
 function mergeDedicatedFrameworkPriceMapIntoVisualReview({
@@ -7372,6 +7759,8 @@ function buildLatestImpulseFibonacci({
   direction = "range",
   timeframe = "H1",
   symbol = "",
+  chartNativeImpulse = null,
+  suppressImpulseLog = false,
 }) {
   if (!Array.isArray(candles) || candles.length < 10) return null;
   if (!["bullish", "bearish"].includes(direction)) return null;
@@ -7675,17 +8064,62 @@ function buildLatestImpulseFibonacci({
     return null;
   }
 
-  const range = finalSwingHigh - finalSwingLow;
+  let selectedSwingHigh = finalSwingHigh;
+  let selectedSwingLow = finalSwingLow;
+  let selectedSwingHighTime =
+    ordered[swingHighResult.index]?.datetime || null;
+  let selectedSwingLowTime =
+    ordered[swingLowResult.index]?.datetime || null;
+  let priceSource = "external_ohlc";
+  let chartNativeConfidence = null;
+
+  const chartNativeDirection =
+    String(chartNativeImpulse?.direction || "").toLowerCase();
+
+  const chartNativeLow =
+    asPositiveNumber(chartNativeImpulse?.swingLow);
+
+  const chartNativeHigh =
+    asPositiveNumber(chartNativeImpulse?.swingHigh);
+
+  if (
+    chartNativeImpulse?.usable === true &&
+    chartNativeDirection === direction &&
+    chartNativeLow !== null &&
+    chartNativeHigh !== null &&
+    chartNativeHigh > chartNativeLow
+  ) {
+    // Structure/event sequencing remains deterministic from cutoff-filtered
+    // OHLC. Only the price anchors are moved onto the uploaded broker chart's
+    // own price scale so Fib and S/R use the same feed.
+    selectedSwingLow = chartNativeLow;
+    selectedSwingHigh = chartNativeHigh;
+    selectedSwingLowTime =
+      chartNativeImpulse?.swingLowTime ||
+      selectedSwingLowTime;
+    selectedSwingHighTime =
+      chartNativeImpulse?.swingHighTime ||
+      selectedSwingHighTime;
+    priceSource = "uploaded_chart_price_scale";
+    chartNativeConfidence =
+      chartNativeImpulse?.confidence || null;
+    selectionReason =
+      `${selectionReason}_chart_native_price_scale`;
+  }
+
+  const range = selectedSwingHigh - selectedSwingLow;
   const ratios = [0.382, 0.5, 0.618];
 
   const result = {
     direction,
-    swingHigh: finalSwingHigh,
-    swingLow: finalSwingLow,
-    swingHighTime:
-      ordered[swingHighResult.index]?.datetime || null,
-    swingLowTime:
-      ordered[swingLowResult.index]?.datetime || null,
+    swingHigh: selectedSwingHigh,
+    swingLow: selectedSwingLow,
+    swingHighTime: selectedSwingHighTime,
+    swingLowTime: selectedSwingLowTime,
+    marketDataSwingHigh: finalSwingHigh,
+    marketDataSwingLow: finalSwingLow,
+    priceSource,
+    chartNativeConfidence,
     impulseRange: range,
     levels: ratios.map((ratio) => ({
       ratio,
@@ -7695,8 +8129,8 @@ function buildLatestImpulseFibonacci({
           : `${(ratio * 100).toFixed(1)}%`,
       price:
         direction === "bearish"
-          ? finalSwingLow + range * ratio
-          : finalSwingHigh - range * ratio,
+          ? selectedSwingLow + range * ratio
+          : selectedSwingHigh - range * ratio,
     })),
     source:
       "current_structure_sequence_impulse",
@@ -7721,18 +8155,24 @@ function buildLatestImpulseFibonacci({
     breakTolerance,
   };
 
-  console.log("CSA relevant impulse:", {
-    direction: result.direction,
-    swingLow: result.swingLow,
-    swingLowTime: result.swingLowTime,
-    swingHigh: result.swingHigh,
-    swingHighTime: result.swingHighTime,
-    impulseRange: result.impulseRange,
-    selectionReason: result.selectionReason,
-    controllingEvent: result.controllingEvent,
-    oppositeOriginEvent: result.oppositeOriginEvent,
-    retracementLevels: result.levels,
-  });
+  if (!suppressImpulseLog) {
+    console.log("CSA relevant impulse:", {
+      direction: result.direction,
+      swingLow: result.swingLow,
+      swingLowTime: result.swingLowTime,
+      swingHigh: result.swingHigh,
+      swingHighTime: result.swingHighTime,
+      marketDataSwingLow: result.marketDataSwingLow,
+      marketDataSwingHigh: result.marketDataSwingHigh,
+      priceSource: result.priceSource,
+      chartNativeConfidence: result.chartNativeConfidence,
+      impulseRange: result.impulseRange,
+      selectionReason: result.selectionReason,
+      controllingEvent: result.controllingEvent,
+      oppositeOriginEvent: result.oppositeOriginEvent,
+      retracementLevels: result.levels,
+    });
+  }
 
   return result;
 }
@@ -8998,7 +9438,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "3.2.0";
+const CSA_SELECTOR_VERSION = "3.3.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -9860,6 +10300,8 @@ function rankRawEntryAreas({
     direction,
     timeframe,
     symbol,
+    chartNativeImpulse:
+      visualReview?.chartNativeImpulse || null,
   });
 
   const rawZones = frameworkCandidates.map((candidate) => {
@@ -10291,9 +10733,13 @@ function rankRawEntryAreas({
   console.log("CSA selector v3 Fibonacci entry gate:", {
     selectorVersion: CSA_SELECTOR_VERSION,
     fibProximityModel: "adaptive_atr_15_20_percent",
-    impulseModel: "current_structure_sequence_origin_to_final_visible_extreme",
+    impulseModel: "deterministic_structure_with_chart_native_price_scale",
     frameworkPriceModel: "same_period_exact_chart_label_priority",
     direction,
+    fibonacciPriceSource: fibonacci?.priceSource || "external_ohlc",
+    chartNativeConfidence: fibonacci?.chartNativeConfidence || null,
+    marketDataSwingLow: fibonacci?.marketDataSwingLow ?? null,
+    marketDataSwingHigh: fibonacci?.marketDataSwingHigh ?? null,
     swingLow: fibonacci?.swingLow ?? null,
     swingHigh: fibonacci?.swingHigh ?? null,
     retracementLevels: Array.isArray(fibonacci?.levels)
@@ -14381,6 +14827,23 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         visualReview,
         priceMap: dedicatedFrameworkPriceMap,
       });
+
+    const chartNativeImpulse =
+      await extractChartNativeImpulseAnchors({
+        imageBase64,
+        mimeType,
+        marketReference,
+        chartDetection,
+        visualReview,
+        priceMap: dedicatedFrameworkPriceMap,
+        timeframe,
+        symbol: normalizedSymbol || submittedInstrument,
+      });
+
+    visualReview = {
+      ...visualReview,
+      chartNativeImpulse,
+    };
 
     visualReview = resolveIntradayCsaChartMarking({
       visualReview,
