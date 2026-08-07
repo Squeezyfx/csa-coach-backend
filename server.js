@@ -3773,6 +3773,7 @@ FIBONACCI
 - The deterministic structure engine must choose the impulse origin/terminal candle times. Vision must map those specific timestamps (allowing at most ±2 candles for broker/timezone alignment) to wick coordinates on the uploaded chart; vision must not choose a different swing. Origin and terminal should be located in separate narrow visual tasks.
 - The deterministic Fib origin must be the protected swing associated with the major structural level broken by the current directional breakout/breakdown, not merely the most recent higher low/lower high. For bullish structure, identify the major resistance pivot being broken and use the lowest confirmed protected swing low formed after that resistance pivot and before its breakout; bearish is the mirror image. Prefer the current breakout sequence and score major breaks by structural excursion, pivot age, and confirmed-pivot quality. Never select an old extreme solely because it creates better Fib confluence.
 - Major broken-level selection must rank all actually broken confirmed prior swing highs/lows within the active lookback by structural significance rather than recency alone. Significance should consider time-to-break, prominence versus nearby same-side pivots, number of pre-break reactions, percentage of time price remained on the original side, opposing excursion size, separation from the final directional extreme, confirmed protected-pivot quality, and break displacement. Strongly penalize very recent/local pivots and raw-extreme-only protected swings. When two candidates are similarly significant, prefer the older structural pivot rather than the nearer local level.
+- Structural-hierarchy major-break selection must scan each confirmed prior pivot independently for its first valid break, because the normal active-pivot event sequence can miss an older outer resistance/support after newer nested pivots form. Use a broader hierarchy lookback than the normal entry-area lookback. In bullish structure, rank higher/outer broken resistance above lower nested resistance when quality is comparable; in bearish structure rank lower/outer broken support above higher nested support. Reward outer levels broken later in the terminal expansion and penalize deeply nested local levels. Do not choose an outer level merely because it creates desired Fib confluence; it must still have a valid confirmed break and protected swing.
 - When the same authoritative framework period/side has an exact printed broker/platform price label, that exact chart label may refine the market-data framework price; never borrow a price from a different period or side.
 - Do not mention Fibonacci, retracement percentages, 38.2%, 50%, or 61.8% in normal beginner-facing feedback. You may simply say one structural area is stronger or offers a cleaner opportunity.
 
@@ -9017,18 +9018,33 @@ function buildLatestImpulseFibonacci({
   const finalExtremeIndex =
     Number(finalExtreme?.index);
 
+  // Structural hierarchy needs a much broader window than ordinary
+  // entry-area detection. A major resistance/support may have formed many
+  // sessions before the final breakout while several nested local pivots form
+  // inside the range afterward.
   const candidateLookbackBars =
-    Math.max(
-      Number(
-        areaConfig.lookback ||
-        structureConfig.eventLookback ||
-        160
-      ),
-      Math.ceil(
-        Number(
-          structureConfig.eventLookback ||
-          140
-        ) * 1.35
+    Math.min(
+      ordered.length,
+      Math.max(
+        Math.ceil(
+          Number(
+            areaConfig.lookback ||
+            structureConfig.eventLookback ||
+            160
+          ) * 2.2
+        ),
+        Math.ceil(
+          Number(
+            structureConfig.eventLookback ||
+            140
+          ) * 2.6
+        ),
+        Math.ceil(
+          Number(
+            structureConfig.recoveryBars ||
+            18
+          ) * 12
+        )
       )
     );
 
@@ -9038,6 +9054,118 @@ function buildLatestImpulseFibonacci({
       ordered.length -
         candidateLookbackBars
     );
+
+  // buildOrderedStructureEvents() intentionally tracks the latest ACTIVE
+  // support/resistance. That is correct for directional phase, but it can miss
+  // the later break of an older outer structural pivot after newer nested
+  // pivots have formed. Major-break selection therefore scans EACH candidate
+  // pivot independently for its first confirmed break.
+  const findFirstIndependentPivotBreak = ({
+    pivot,
+  }) => {
+    const pivotIndex =
+      Number(pivot?.pivotIndex);
+
+    const confirmedAtIndex =
+      Number(pivot?.confirmedAtIndex);
+
+    const pivotPrice =
+      Number(pivot?.price);
+
+    if (
+      !Number.isFinite(pivotIndex) ||
+      !Number.isFinite(confirmedAtIndex) ||
+      !Number.isFinite(pivotPrice)
+    ) {
+      return null;
+    }
+
+    const scanStart =
+      Math.max(
+        confirmedAtIndex + 1,
+        pivotIndex + 1
+      );
+
+    const scanEnd =
+      Math.min(
+        ordered.length - 1,
+        finalExtremeIndex
+      );
+
+    for (
+      let index = scanStart;
+      index <= scanEnd;
+      index += 1
+    ) {
+      const standardConfirmed =
+        countConsecutiveBreakCloses({
+          candles: ordered,
+          index,
+          level: pivotPrice,
+          tolerance:
+            breakTolerance,
+          side:
+            expectedSide,
+          count:
+            structureConfig.confirmationCloses,
+        });
+
+      const displacementConfirmed =
+        isStrongDisplacementBreak({
+          candles: ordered,
+          index,
+          level: pivotPrice,
+          tolerance:
+            breakTolerance,
+          atr,
+          side:
+            expectedSide,
+          timeframe:
+            structureConfig.timeframe,
+        });
+
+      if (
+        standardConfirmed ||
+        displacementConfirmed
+      ) {
+        return {
+          side:
+            expectedSide,
+          index,
+          datetime:
+            ordered[index]?.datetime ||
+            null,
+          level:
+            pivotPrice,
+          pivotIndex,
+          pivotDatetime:
+            pivot?.datetime ||
+            ordered[pivotIndex]?.datetime ||
+            null,
+          close:
+            Number(
+              ordered[index]?.close
+            ),
+          high:
+            Number(
+              ordered[index]?.high
+            ),
+          low:
+            Number(
+              ordered[index]?.low
+            ),
+          confirmationPath:
+            displacementConfirmed
+              ? "strong_displacement"
+              : "multiple_closes",
+          breakScanSource:
+            "independent_per_pivot",
+        };
+      }
+    }
+
+    return null;
+  };
 
   const priorMajorPivots =
     pivots
@@ -9072,19 +9200,14 @@ function buildLatestImpulseFibonacci({
           return null;
         }
 
-        // Identify the FIRST clean break of this specific pivot after it was
-        // confirmed. This prevents a later local break event from hijacking
-        // an older, more important level.
+        // Identify the FIRST clean break of THIS pivot independently.
+        // Do not rely on the active-pivot event list here, because a newer
+        // nested pivot can become "active" while the older outer structural
+        // level is still intact and waiting to be broken.
         const breakEvent =
-          events.find(
-            (event) =>
-              event.side ===
-                expectedSide &&
-              Number(event.pivotIndex) ===
-                pivotIndex &&
-              Number(event.index) >
-                confirmedAtIndex
-          ) || null;
+          findFirstIndependentPivotBreak({
+            pivot,
+          });
 
         if (!breakEvent) {
           return null;
@@ -9602,40 +9725,373 @@ function buildLatestImpulseFibonacci({
             )
       );
 
-  // "Major" candidates must also clear a minimum significance floor.
-  // If none do, we still retain a controlled fallback later.
-  const majorBreakCandidates =
+  // ------------------------------------------------------------
+  // STRUCTURAL HIERARCHY ENRICHMENT
+  //
+  // Among valid broken pivots, bullish structure should prefer the OUTER /
+  // higher resistance that capped price, while bearish structure should
+  // prefer the OUTER / lower support. We also reward levels broken later in
+  // the terminal expansion and penalize deeply nested local levels.
+  // ------------------------------------------------------------
+
+  const candidatePrices =
     priorMajorPivots
+      .map(
+        (candidate) =>
+          Number(
+            candidate.pivotPrice
+          )
+      )
+      .filter(Number.isFinite);
+
+  const candidateBreakIndices =
+    priorMajorPivots
+      .map(
+        (candidate) =>
+          Number(
+            candidate.breakIndex
+          )
+      )
+      .filter(Number.isFinite);
+
+  const outermostPivotPrice =
+    candidatePrices.length
+      ? direction === "bullish"
+        ? Math.max(
+            ...candidatePrices
+          )
+        : Math.min(
+            ...candidatePrices
+          )
+      : null;
+
+  const innermostPivotPrice =
+    candidatePrices.length
+      ? direction === "bullish"
+        ? Math.min(
+            ...candidatePrices
+          )
+        : Math.max(
+            ...candidatePrices
+          )
+      : null;
+
+  const hierarchyPriceSpan =
+    Number.isFinite(
+      Number(outermostPivotPrice)
+    ) &&
+    Number.isFinite(
+      Number(innermostPivotPrice)
+    )
+      ? Math.abs(
+          Number(
+            outermostPivotPrice
+          ) -
+          Number(
+            innermostPivotPrice
+          )
+        )
+      : 0;
+
+  const earliestCandidateBreak =
+    candidateBreakIndices.length
+      ? Math.min(
+          ...candidateBreakIndices
+        )
+      : null;
+
+  const latestCandidateBreak =
+    candidateBreakIndices.length
+      ? Math.max(
+          ...candidateBreakIndices
+        )
+      : null;
+
+  const breakIndexSpan =
+    Number.isFinite(
+      Number(
+        earliestCandidateBreak
+      )
+    ) &&
+    Number.isFinite(
+      Number(
+        latestCandidateBreak
+      )
+    )
+      ? Math.max(
+          1,
+          Number(
+            latestCandidateBreak
+          ) -
+          Number(
+            earliestCandidateBreak
+          )
+        )
+      : 1;
+
+  const hierarchyRankedPivots =
+    priorMajorPivots.map(
+      (candidate) => {
+        const pivotPrice =
+          Number(
+            candidate.pivotPrice
+          );
+
+        const breakIndex =
+          Number(
+            candidate.breakIndex
+          );
+
+        // 1.0 means the outer structural ceiling/floor among candidates.
+        const hierarchyPosition =
+          hierarchyPriceSpan >
+            0
+            ? direction ===
+              "bullish"
+              ? (
+                  pivotPrice -
+                  Number(
+                    innermostPivotPrice
+                  )
+                ) /
+                hierarchyPriceSpan
+              : (
+                  Number(
+                    innermostPivotPrice
+                  ) -
+                  pivotPrice
+                ) /
+                hierarchyPriceSpan
+            : 1;
+
+        const hierarchyScore =
+          Math.max(
+            0,
+            Math.min(
+              1,
+              hierarchyPosition
+            )
+          ) * 48;
+
+        // Levels broken later in the current terminal expansion are more
+        // likely to be the outer barrier; lower nested levels tend to break
+        // earlier as price climbs/falls toward the true major level.
+        const lateBreakPosition =
+          Number.isFinite(
+            Number(
+              earliestCandidateBreak
+            )
+          ) &&
+          Number.isFinite(
+            breakIndex
+          )
+            ? (
+                breakIndex -
+                Number(
+                  earliestCandidateBreak
+                )
+              ) /
+              breakIndexSpan
+            : 0;
+
+        const lateBreakScore =
+          Math.max(
+            0,
+            Math.min(
+              1,
+              lateBreakPosition
+            )
+          ) * 26;
+
+        const barsFromBreakToTerminal =
+          Number.isFinite(
+            finalExtremeIndex
+          ) &&
+          Number.isFinite(
+            breakIndex
+          )
+            ? Math.max(
+                0,
+                finalExtremeIndex -
+                breakIndex
+              )
+            : null;
+
+        const terminalBreakScore =
+          barsFromBreakToTerminal ===
+          null
+            ? 0
+            : Math.max(
+                0,
+                20 -
+                  barsFromBreakToTerminal *
+                    0.35
+              );
+
+        const nestedDepth =
+          Number.isFinite(
+            Number(
+              outermostPivotPrice
+            )
+          )
+            ? direction ===
+              "bullish"
+              ? Number(
+                  outermostPivotPrice
+                ) -
+                pivotPrice
+              : pivotPrice -
+                Number(
+                  outermostPivotPrice
+                )
+            : 0;
+
+        const nestedDepthAtr =
+          Number(atr || 0) >
+            0
+            ? nestedDepth /
+              Number(atr)
+            : nestedDepth;
+
+        const nestedLevelPenalty =
+          Math.min(
+            38,
+            Math.max(
+              0,
+              nestedDepthAtr
+            ) * 5.5
+          );
+
+        // If a candidate is close to the outermost structural pivot, avoid
+        // over-penalizing small broker/feed differences between nearby highs.
+        const nearOutermost =
+          Math.abs(
+            nestedDepth
+          ) <=
+          Math.max(
+            Number(atr || 0) *
+              0.35,
+            breakTolerance * 2
+          );
+
+        const effectiveNestedPenalty =
+          nearOutermost
+            ? 0
+            : nestedLevelPenalty;
+
+        const hierarchyAdjustedScore =
+          Number(
+            candidate.significanceScore ||
+            0
+          ) +
+          hierarchyScore +
+          lateBreakScore +
+          terminalBreakScore -
+          effectiveNestedPenalty;
+
+        return {
+          ...candidate,
+          hierarchyPosition,
+          hierarchyScore,
+          lateBreakPosition,
+          lateBreakScore,
+          barsFromBreakToTerminal,
+          terminalBreakScore,
+          nestedDepth,
+          nestedDepthAtr,
+          nestedLevelPenalty:
+            effectiveNestedPenalty,
+          hierarchyAdjustedScore,
+          outermostPivotPrice:
+            Number.isFinite(
+              Number(
+                outermostPivotPrice
+              )
+            )
+              ? Number(
+                  outermostPivotPrice
+                )
+              : null,
+        };
+      }
+    );
+
+  // "Major" candidates must clear a quality floor, then are ranked by the
+  // hierarchy-adjusted score rather than the v3.8 base significance alone.
+  const majorBreakCandidates =
+    hierarchyRankedPivots
       .filter(
         (candidate) =>
           Number(
             candidate.significanceScore
-          ) >= 22
+          ) >= 18 &&
+          Number(
+            candidate.hierarchyAdjustedScore
+          ) >= 34
       )
       .sort((a, b) => {
+        const adjustedDifference =
+          Number(
+            b.hierarchyAdjustedScore
+          ) -
+          Number(
+            a.hierarchyAdjustedScore
+          );
+
+        if (
+          Math.abs(
+            adjustedDifference
+          ) > 3
+        ) {
+          return adjustedDifference;
+        }
+
+        // When hierarchy-adjusted scores are close, explicitly prefer the
+        // outer structural ceiling/floor before considering recency.
         if (
           Number(
-            b.significanceScore
+            b.hierarchyPosition
           ) !==
           Number(
-            a.significanceScore
+            a.hierarchyPosition
           )
         ) {
           return (
             Number(
-              b.significanceScore
+              b.hierarchyPosition
             ) -
             Number(
-              a.significanceScore
+              a.hierarchyPosition
             )
           );
         }
 
-        // Tie-break toward the OLDER pivot because "major" structure should
-        // not be replaced by a nearby local level when significance is equal.
+        if (
+          Number(
+            b.breakIndex
+          ) !==
+          Number(
+            a.breakIndex
+          )
+        ) {
+          return (
+            Number(
+              b.breakIndex
+            ) -
+            Number(
+              a.breakIndex
+            )
+          );
+        }
+
+        // Final tie-break toward the older pivot.
         return (
-          Number(a.pivotIndex) -
-          Number(b.pivotIndex)
+          Number(
+            a.pivotIndex
+          ) -
+          Number(
+            b.pivotIndex
+          )
         );
       });
 
@@ -9966,6 +10422,41 @@ function buildLatestImpulseFibonacci({
               majorSelection
                 .significanceScore
             ),
+          hierarchyAdjustedScore:
+            Number(
+              majorSelection
+                .hierarchyAdjustedScore
+            ),
+          hierarchyPosition:
+            Number(
+              majorSelection
+                .hierarchyPosition
+            ),
+          hierarchyScore:
+            Number(
+              majorSelection
+                .hierarchyScore
+            ),
+          lateBreakScore:
+            Number(
+              majorSelection
+                .lateBreakScore
+            ),
+          terminalBreakScore:
+            Number(
+              majorSelection
+                .terminalBreakScore
+            ),
+          nestedLevelPenalty:
+            Number(
+              majorSelection
+                .nestedLevelPenalty
+            ),
+          outermostPivotPrice:
+            Number(
+              majorSelection
+                .outermostPivotPrice
+            ),
           barsUntilBreak:
             Number(
               majorSelection
@@ -10160,6 +10651,35 @@ function buildLatestImpulseFibonacci({
             significanceScore:
               candidate
                 .significanceScore,
+            hierarchyAdjustedScore:
+              candidate
+                .hierarchyAdjustedScore,
+            hierarchyPosition:
+              candidate
+                .hierarchyPosition,
+            hierarchyScore:
+              candidate
+                .hierarchyScore,
+            lateBreakScore:
+              candidate
+                .lateBreakScore,
+            terminalBreakScore:
+              candidate
+                .terminalBreakScore,
+            nestedDepthAtr:
+              candidate
+                .nestedDepthAtr,
+            nestedLevelPenalty:
+              candidate
+                .nestedLevelPenalty,
+            outermostPivotPrice:
+              candidate
+                .outermostPivotPrice,
+            breakScanSource:
+              candidate
+                .breakEvent
+                ?.breakScanSource ||
+              null,
             barsUntilBreak:
               candidate
                 .barsUntilBreak,
@@ -11613,7 +12133,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "3.8.0";
+const CSA_SELECTOR_VERSION = "3.9.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -12908,7 +13428,7 @@ function rankRawEntryAreas({
   console.log("CSA selector v3 Fibonacci entry gate:", {
     selectorVersion: CSA_SELECTOR_VERSION,
     fibProximityModel: "adaptive_atr_15_20_percent",
-    impulseModel: "major_break_significance_with_protected_swing_and_timestamp_targeted_pixel_wicks",
+    impulseModel: "structural_hierarchy_outer_break_with_protected_swing_and_timestamp_targeted_pixel_wicks",
     frameworkPriceModel: "same_period_exact_chart_label_priority",
     direction,
     fibonacciPriceSource:
@@ -12929,7 +13449,7 @@ function rankRawEntryAreas({
         fibonacci?.majorBreakCandidateCount || 0
       ),
     majorBreakSelectionModel:
-      "significance_prominence_reactions_age_original_side",
+      "independent_pivot_break_scan_plus_outer_structural_hierarchy",
     marketDataSwingLow:
       fibonacci?.marketDataSwingLow ?? null,
     marketDataSwingHigh: fibonacci?.marketDataSwingHigh ?? null,
