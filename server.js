@@ -12133,7 +12133,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "3.9.0";
+const CSA_SELECTOR_VERSION = "4.0.0-regression";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -13419,6 +13419,150 @@ function rankRawEntryAreas({
     atr,
   });
 
+  const regressionDiagnostics = {
+    selectorVersion: CSA_SELECTOR_VERSION,
+    direction,
+    fibonacci: {
+      priceSource:
+        fibonacci?.priceSource || "external_ohlc",
+      chartNativeConfidence:
+        fibonacci?.chartNativeConfidence || null,
+      pixelCalibrationUsed:
+        fibonacci?.priceSource ===
+        "uploaded_chart_pixel_calibration",
+      swingLow:
+        fibonacci?.swingLow ?? null,
+      swingHigh:
+        fibonacci?.swingHigh ?? null,
+      swingLowTime:
+        fibonacci?.swingLowTime || null,
+      swingHighTime:
+        fibonacci?.swingHighTime || null,
+      marketDataSwingLow:
+        fibonacci?.marketDataSwingLow ?? null,
+      marketDataSwingHigh:
+        fibonacci?.marketDataSwingHigh ?? null,
+      protectedSwing:
+        fibonacci?.protectedSwing || null,
+      brokenMajorLevel:
+        fibonacci?.brokenMajorLevel || null,
+      majorBreakCandidateCount:
+        Number(
+          fibonacci?.majorBreakCandidateCount || 0
+        ),
+      retracementLevels:
+        Array.isArray(fibonacci?.levels)
+          ? fibonacci.levels.map((level) => ({
+              label: level.label,
+              ratio: level.ratio,
+              price: level.price,
+            }))
+          : [],
+      selectionReason:
+        fibonacci?.selectionReason || null,
+      source:
+        fibonacci?.source || null,
+    },
+    structuralCandidates:
+      structuralGateDiagnostics.map((candidate) => ({
+        frameworkPrice:
+          candidate.frameworkPrice ?? null,
+        chartReconciledPrice:
+          candidate.chartReconciledPrice ?? null,
+        areaType:
+          candidate.areaType || null,
+        frameworkPeriod:
+          candidate.frameworkPeriod || null,
+        structurallyValid:
+          candidate.structurallyValid === true,
+        qualityReason:
+          candidate.qualityReason || null,
+        qualityScore:
+          Number(candidate.qualityScore || 0),
+        lifecycleFlipCount:
+          Number(candidate.lifecycleFlipCount || 0),
+        sideChangeCount:
+          Number(candidate.sideChangeCount || 0),
+        reactionCount:
+          Number(candidate.reactionCount || 0),
+        strongDepartureCount:
+          Number(candidate.strongDepartureCount || 0),
+        conversionBreakConfirmed:
+          candidate.conversionBreakConfirmed === true,
+      })),
+    fibCandidates:
+      fibGateDiagnostics.map((candidate) => ({
+        frameworkPrice:
+          candidate.frameworkPrice ?? null,
+        chartReconciledPrice:
+          candidate.chartReconciledPrice ?? null,
+        areaType:
+          candidate.areaType || null,
+        frameworkPeriod:
+          candidate.frameworkPeriod || null,
+        zoneLow:
+          candidate.zoneLow ?? null,
+        zoneHigh:
+          candidate.zoneHigh ?? null,
+        resolvedEntryPrice:
+          candidate.resolvedEntryPrice ?? null,
+        passed:
+          candidate.passed === true,
+        matchedLevels:
+          Array.isArray(candidate.matchedLevels)
+            ? candidate.matchedLevels
+            : [],
+        evaluatedFibLevels:
+          Array.isArray(candidate.evaluatedFibLevels)
+            ? candidate.evaluatedFibLevels
+            : [],
+        closeAllowance:
+          candidate.closeAllowance ?? null,
+        borderlineAllowance:
+          candidate.borderlineAllowance ?? null,
+        structuralQualityScore:
+          candidate.structuralQualityScore ?? null,
+        strongStructure:
+          candidate.strongStructure === true,
+        proximityAllowance:
+          candidate.proximityAllowance ?? null,
+      })),
+    selectedEntries:
+      (sequencedResult?.areas || []).map((area) => ({
+        executionOrder:
+          Number(area.executionOrder || 0),
+        direction:
+          area.direction || null,
+        areaType:
+          area.areaType || null,
+        levelText:
+          area.levelText || null,
+        authoritativeCenter:
+          area.authoritativeCenter ?? null,
+        frameworkCenter:
+          area.frameworkCenter ?? null,
+        chartReconciledCenter:
+          area.chartReconciledCenter ?? null,
+        frameworkPeriod:
+          area.frameworkPeriod || null,
+        state:
+          area.state || null,
+        conversionConfirmed:
+          area.conversionConfirmed === true,
+        fibonacciMatches:
+          (area.fibonacciMatches || []).map((match) => ({
+            label:
+              match.label || null,
+            price:
+              match.price ?? null,
+            matchType:
+              match.matchType || null,
+          })),
+      })),
+  };
+
+  console.log("CSA regression snapshot:", regressionDiagnostics);
+
   console.log("CSA selector v3 structural gate:", {
     selectorVersion: CSA_SELECTOR_VERSION,
     direction,
@@ -13493,6 +13637,7 @@ function rankRawEntryAreas({
   return {
     ...sequencedResult,
     referenceAreas,
+    regressionDiagnostics,
   };
 }
 
@@ -15142,6 +15287,8 @@ function buildValidatedAnalysisFacts({
       executionOrder: Number(candidate.executionOrder || index + 1),
       conversionConfirmed: candidate.conversionConfirmed === true,
     })),
+    selectorDiagnostics:
+      rankedAreaResult?.regressionDiagnostics || null,
     entryAreaValidation: {
       ...entryAreaValidation,
       frameworkMode:
@@ -17760,6 +17907,23 @@ ${(visualReview?.strategyMissingInformation || []).length
       dateDecision,
       csaDirectionalBias: bias,
       analysisFacts,
+      regressionSnapshot: {
+        instrument: submittedInstrument,
+        timeframe,
+        analysisType: mode,
+        cutoffMode: chartCutoff.mode,
+        resolvedCutoff: chartCutoff.endDateTime,
+        direction:
+          analysisFacts?.direction || null,
+        selector:
+          analysisFacts?.selectorDiagnostics || null,
+        entries: {
+          entry1:
+            finalFeedback?.entry1 || null,
+          entry2:
+            finalFeedback?.entry2 || null,
+        },
+      },
       finalFeedback,
       feedbackEngineVersion: CSA_FEEDBACK_ENGINE_VERSION,
       cutoffMode: chartCutoff.mode,
