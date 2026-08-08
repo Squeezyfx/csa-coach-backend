@@ -1054,8 +1054,30 @@ function compactRawAiResponse({
       mistakes: dashboardFeedback?.aiMistakeDetectionHub || [],
       setupQuality: dashboardFeedback?.setupQuality || null,
       entryAccuracy: dashboardFeedback?.entryAccuracy || null,
-      riskManagement: dashboardFeedback?.riskManagement || null,
-      contextCheck: dashboardFeedback?.contextCheck || null,
+      riskManagement:
+        dashboardFeedback?.riskManagement || null,
+      displayLabels:
+        dashboardFeedback?.displayLabels || null,
+      scoreDisplay:
+        dashboardFeedback?.scoreDisplay || null,
+      overallDisplayLabel:
+        dashboardFeedback?.overallDisplayLabel ||
+        dashboardFeedback?.displayLabels?.overall ||
+        "Overall Grade",
+      setupQualityDisplayLabel:
+        dashboardFeedback?.setupQualityDisplayLabel ||
+        dashboardFeedback?.displayLabels?.setupQuality ||
+        "Setup Quality",
+      entryAccuracyDisplayLabel:
+        dashboardFeedback?.entryAccuracyDisplayLabel ||
+        dashboardFeedback?.displayLabels?.entryAccuracy ||
+        "Entry Accuracy",
+      riskManagementDisplayLabel:
+        dashboardFeedback?.riskManagementDisplayLabel ||
+        dashboardFeedback?.displayLabels?.riskManagement ||
+        "Risk Management",
+      contextCheck:
+        dashboardFeedback?.contextCheck || null,
     },
     marketReference: {
       ok: Boolean(marketReference?.ok),
@@ -8699,7 +8721,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.2.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.3.0";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -16265,6 +16287,32 @@ function gradeFromControlledScore(score) {
   return score >= 85 ? "A" : score >= 75 ? "B" : score >= 60 ? "C" : score >= 40 ? "D" : "F";
 }
 
+function buildEvidenceAwareDisplayLabels(scoreContext = {}) {
+  const tradeVisible =
+    scoreContext?.tradeVisible === true;
+
+  return {
+    overall:
+      tradeVisible
+        ? "Overall Grade"
+        : "Overall Setup Readiness",
+    setupQuality:
+      "Setup Quality",
+    entryAccuracy:
+      tradeVisible
+        ? "Entry Accuracy"
+        : "Entry Readiness",
+    riskManagement:
+      tradeVisible
+        ? "Risk Management"
+        : "Risk Plan",
+    assessmentMode:
+      tradeVisible
+        ? "Executed Trade"
+        : "Setup Readiness",
+  };
+}
+
 function buildControlledFeedback({
   facts,
   plan = "starter",
@@ -16570,7 +16618,28 @@ function buildControlledFeedback({
       `${nextAction} This review excludes candles formed after ${facts.historicalCutoff.selectedDate}.`;
   }
 
-  const scores = controlledScores(facts);
+  const scores =
+    controlledScores(facts);
+
+  const scoreContext = {
+    scoringModelVersion:
+      CSA_SCORING_MODEL_VERSION,
+    tradeVisible:
+      facts?.trade?.visible === true,
+    assessmentMode:
+      scores.assessmentMode,
+    entryMetricMode:
+      scores.entryMetricMode,
+    riskMetricMode:
+      scores.riskMetricMode,
+    weights:
+      scores.weights,
+  };
+
+  const displayLabels =
+    buildEvidenceAwareDisplayLabels(
+      scoreContext
+    );
 
   const starterSections = [
     "DIRECTIONAL BIAS:",
@@ -16668,23 +16737,25 @@ function buildControlledFeedback({
         }
       : null,
     scores,
-    scoreContext: {
-      scoringModelVersion:
-        CSA_SCORING_MODEL_VERSION,
-      tradeVisible:
-        facts?.trade?.visible === true,
-      assessmentMode:
-        scores.assessmentMode,
-      entryMetricMode:
-        scores.entryMetricMode,
-      riskMetricMode:
-        scores.riskMetricMode,
-      weights:
-        scores.weights,
-    },
+    scoreContext,
+    displayLabels,
+    overallDisplayLabel:
+      displayLabels.overall,
+    setupQualityDisplayLabel:
+      displayLabels.setupQuality,
+    entryAccuracyDisplayLabel:
+      displayLabels.entryAccuracy,
+    riskManagementDisplayLabel:
+      displayLabels.riskManagement,
     setupQuality: {
-      score: scores.setupQuality,
-      label: controlledScoreLabel(scores.setupQuality),
+      displayLabel:
+        displayLabels.setupQuality,
+      score:
+        scores.setupQuality,
+      label:
+        controlledScoreLabel(
+          scores.setupQuality
+        ),
       summary:
         area.invalidated
           ? "The previous area has failed and the setup must be rebuilt."
@@ -16693,6 +16764,8 @@ function buildControlledFeedback({
           : "The plan has a useful area, but the setup is not fully ready.",
     },
     entryAccuracy: {
+      displayLabel:
+        displayLabels.entryAccuracy,
       score:
         scores.entryAccuracy,
       label:
@@ -16711,6 +16784,8 @@ function buildControlledFeedback({
         scores.entryMetricMode,
     },
     riskManagement: {
+      displayLabel:
+        displayLabels.riskManagement,
       score:
         scores.riskManagement,
       label:
@@ -16728,8 +16803,49 @@ function buildControlledFeedback({
       assessmentMode:
         scores.riskMetricMode,
     },
-    grade: gradeFromControlledScore(scores.overall),
-    confidence: scores.overall,
+    grade:
+      gradeFromControlledScore(
+        scores.overall
+      ),
+    overallDisplayLabel:
+      displayLabels.overall,
+    overallAssessmentModeLabel:
+      displayLabels.assessmentMode,
+    confidence:
+      scores.overall,
+    scoreDisplay: {
+      overall: {
+        label:
+          displayLabels.overall,
+        score:
+          scores.overall,
+        grade:
+          gradeFromControlledScore(
+            scores.overall
+          ),
+      },
+      setupQuality: {
+        key: "setupQuality",
+        label:
+          displayLabels.setupQuality,
+        score:
+          scores.setupQuality,
+      },
+      entryMetric: {
+        key: "entryAccuracy",
+        label:
+          displayLabels.entryAccuracy,
+        score:
+          scores.entryAccuracy,
+      },
+      riskMetric: {
+        key: "riskManagement",
+        label:
+          displayLabels.riskManagement,
+        score:
+          scores.riskManagement,
+      },
+    },
   };
 }
 
@@ -16757,6 +16873,26 @@ function applyControlledFeedbackToDashboard(
       controlled.scores.riskManagement,
     scoreContext:
       controlled.scoreContext || null,
+    displayLabels:
+      controlled.displayLabels || null,
+    scoreDisplay:
+      controlled.scoreDisplay || null,
+    overallDisplayLabel:
+      controlled.overallDisplayLabel ||
+      controlled.displayLabels?.overall ||
+      "Overall Grade",
+    setupQualityDisplayLabel:
+      controlled.setupQualityDisplayLabel ||
+      controlled.displayLabels?.setupQuality ||
+      "Setup Quality",
+    entryAccuracyDisplayLabel:
+      controlled.entryAccuracyDisplayLabel ||
+      controlled.displayLabels?.entryAccuracy ||
+      "Entry Accuracy",
+    riskManagementDisplayLabel:
+      controlled.riskManagementDisplayLabel ||
+      controlled.displayLabels?.riskManagement ||
+      "Risk Management",
     scores: {
       setupQuality:
         controlled.scores.setupQuality,
@@ -17209,6 +17345,26 @@ function applyPlanToAnalysisResponse({
       controlled.grade,
     scoreContext:
       controlled.scoreContext || null,
+    displayLabels:
+      controlled.displayLabels || null,
+    scoreDisplay:
+      controlled.scoreDisplay || null,
+    overallDisplayLabel:
+      controlled.overallDisplayLabel ||
+      controlled.displayLabels?.overall ||
+      "Overall Grade",
+    setupQualityDisplayLabel:
+      controlled.setupQualityDisplayLabel ||
+      controlled.displayLabels?.setupQuality ||
+      "Setup Quality",
+    entryAccuracyDisplayLabel:
+      controlled.entryAccuracyDisplayLabel ||
+      controlled.displayLabels?.entryAccuracy ||
+      "Entry Accuracy",
+    riskManagementDisplayLabel:
+      controlled.riskManagementDisplayLabel ||
+      controlled.displayLabels?.riskManagement ||
+      "Risk Management",
     mistakes:
       safeMistakes,
     mistakeHub:
@@ -17231,6 +17387,26 @@ function applyPlanToAnalysisResponse({
         controlled.riskManagement,
       scoreContext:
         controlled.scoreContext || null,
+      displayLabels:
+        controlled.displayLabels || null,
+      scoreDisplay:
+        controlled.scoreDisplay || null,
+      overallDisplayLabel:
+        controlled.overallDisplayLabel ||
+        controlled.displayLabels?.overall ||
+        "Overall Grade",
+      setupQualityDisplayLabel:
+        controlled.setupQualityDisplayLabel ||
+        controlled.displayLabels?.setupQuality ||
+        "Setup Quality",
+      entryAccuracyDisplayLabel:
+        controlled.entryAccuracyDisplayLabel ||
+        controlled.displayLabels?.entryAccuracy ||
+        "Entry Accuracy",
+      riskManagementDisplayLabel:
+        controlled.riskManagementDisplayLabel ||
+        controlled.displayLabels?.riskManagement ||
+        "Risk Management",
       mistakes:
         safeMistakes,
       mistakeHub:
@@ -18568,6 +18744,16 @@ ${(visualReview?.strategyMissingInformation || []).length
             CSA_SCORING_MODEL_VERSION,
           context:
             finalFeedback?.scoreContext ||
+            null,
+          displayLabels:
+            finalFeedback?.displayLabels ||
+            null,
+          scoreDisplay:
+            finalFeedback?.scoreDisplay ||
+            null,
+          overallDisplayLabel:
+            finalFeedback?.overallDisplayLabel ||
+            finalFeedback?.displayLabels?.overall ||
             null,
           setupQuality:
             finalFeedback?.scores
