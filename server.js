@@ -8721,7 +8721,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.4.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.5.0";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -10357,6 +10357,458 @@ function buildLatestImpulseFibonacci({
     majorBreakCandidates[0] ||
     null;
 
+  // ==============================================================
+  // V4.5 OUTER STRUCTURAL IMPULSE ORIGIN
+  //
+  // The protected swing that forms AFTER a major resistance/support
+  // pivot is useful for lifecycle analysis, but it is not always the
+  // correct Fibonacci origin.
+  //
+  // Example in a bullish structure:
+  //   outer swing low -> major resistance forms -> range/retests ->
+  //   major resistance eventually breaks -> final high
+  //
+  // If we use only the later internal higher low after the resistance
+  // formed, the Fib grid becomes too shallow. V4.5 therefore searches
+  // BEFORE the major broken pivot for the intact outer swing that
+  // launched the move into that pivot.
+  //
+  // The search is bounded by the most recent opposite structural event
+  // before the major pivot so we do not blindly select an unrelated,
+  // much older chart extreme.
+  // ==============================================================
+
+  const findOuterStructuralOrigin = ({
+    selection,
+  }) => {
+    if (!selection) {
+      return null;
+    }
+
+    const pivotIndex =
+      Number(
+        selection.pivotIndex
+      );
+
+    const breakIndex =
+      Number(
+        selection.breakIndex
+      );
+
+    const localProtectedIndex =
+      Number(
+        selection.protectedIndex
+      );
+
+    const localProtectedPrice =
+      Number(
+        selection.protectedPrice
+      );
+
+    if (
+      !Number.isFinite(pivotIndex) ||
+      !Number.isFinite(breakIndex) ||
+      !Number.isFinite(
+        localProtectedPrice
+      ) ||
+      pivotIndex <= 0 ||
+      breakIndex <= pivotIndex
+    ) {
+      return null;
+    }
+
+    const priorOppositeEvent =
+      [...events]
+        .reverse()
+        .find(
+          (event) =>
+            event.side ===
+              oppositeSide &&
+            Number(
+              event.index
+            ) <
+              pivotIndex
+        ) ||
+      null;
+
+    const fallbackOriginLookback =
+      Math.max(
+        Number(
+          structureConfig
+            .recoveryBars ||
+            18
+        ) * 6,
+        Math.ceil(
+          Number(
+            structureConfig
+              .eventLookback ||
+              areaConfig.lookback ||
+              160
+          ) * 0.75
+        )
+      );
+
+    const originSearchStart =
+      Math.max(
+        candidateStartIndex,
+        priorOppositeEvent
+          ? Math.max(
+              0,
+              Number(
+                priorOppositeEvent
+                  .index
+              )
+            )
+          : Math.max(
+              0,
+              pivotIndex -
+                fallbackOriginLookback
+            )
+      );
+
+    // CRITICAL V4.5 RULE:
+    // The outer origin must already exist when the major broken barrier
+    // forms. Therefore the search ends at the major pivot, not at the
+    // eventual breakout. This prevents a later internal higher low /
+    // lower high from replacing the true outer impulse origin.
+    const originSearchEnd =
+      Math.max(
+        originSearchStart,
+        pivotIndex
+      );
+
+    const rawOrigin =
+      direction === "bullish"
+        ? extremaIndex({
+            startIndex:
+              originSearchStart,
+            endIndex:
+              originSearchEnd,
+            field: "low",
+            mode: "min",
+          })
+        : extremaIndex({
+            startIndex:
+              originSearchStart,
+            endIndex:
+              originSearchEnd,
+            field: "high",
+            mode: "max",
+          });
+
+    const rawOriginIndex =
+      Number(
+        rawOrigin?.index
+      );
+
+    const rawOriginPrice =
+      Number(
+        rawOrigin?.value
+      );
+
+    const confirmedOriginPivots =
+      pivots
+        .filter(
+          (pivot) =>
+            pivot.type ===
+              expectedProtectedPivotType &&
+            Number(
+              pivot.pivotIndex
+            ) >=
+              originSearchStart &&
+            Number(
+              pivot.pivotIndex
+            ) <=
+              originSearchEnd
+        )
+        .sort(
+          (a, b) =>
+            direction ===
+            "bullish"
+              ? Number(a.price) -
+                Number(b.price)
+              : Number(b.price) -
+                Number(a.price)
+        );
+
+    const confirmedOriginPivot =
+      confirmedOriginPivots[0] ||
+      null;
+
+    const confirmedOriginPrice =
+      asPositiveNumber(
+        confirmedOriginPivot
+          ?.price
+      );
+
+    const confirmedOriginIndex =
+      Number.isFinite(
+        Number(
+          confirmedOriginPivot
+            ?.pivotIndex
+        )
+      )
+        ? Number(
+            confirmedOriginPivot
+              .pivotIndex
+          )
+        : null;
+
+    // Prefer the actual wick extreme when it is consistent with the
+    // structural search window. Fibonacci swing anchors are extremes,
+    // while confirmed pivots remain useful validation evidence.
+    let selectedOriginPrice =
+      Number.isFinite(
+        rawOriginPrice
+      )
+        ? rawOriginPrice
+        : confirmedOriginPrice;
+
+    let selectedOriginIndex =
+      Number.isFinite(
+        rawOriginIndex
+      )
+        ? rawOriginIndex
+        : confirmedOriginIndex;
+
+    let selectedOriginSource =
+      Number.isFinite(
+        rawOriginPrice
+      )
+        ? "outer_raw_extreme_pre_major_pivot"
+        : confirmedOriginPrice !==
+          null
+        ? "outer_confirmed_pivot_pre_major_pivot"
+        : null;
+
+    if (
+      !Number.isFinite(
+        selectedOriginPrice
+      ) ||
+      !Number.isFinite(
+        selectedOriginIndex
+      )
+    ) {
+      return null;
+    }
+
+    // The candidate must be meaningfully more "outer" than the later
+    // local protected swing. Tiny differences are broker/feed noise and
+    // should not alter the Fib grid.
+    const minimumOuterExtension =
+      Math.max(
+        Number(atr || 0) *
+          0.18,
+        breakTolerance *
+          1.25
+      );
+
+    const outerExtension =
+      direction === "bullish"
+        ? localProtectedPrice -
+          selectedOriginPrice
+        : selectedOriginPrice -
+          localProtectedPrice;
+
+    const meaningfullyOuter =
+      outerExtension >=
+      minimumOuterExtension;
+
+    if (!meaningfullyOuter) {
+      return null;
+    }
+
+    // The outer swing must remain structurally intact from the time it
+    // forms through the major breakout. Use closes for invalidation so a
+    // small wick through the level does not automatically destroy the
+    // structural origin.
+    const invalidationTolerance =
+      Math.max(
+        breakTolerance *
+          1.25,
+        Number(atr || 0) *
+          0.10
+      );
+
+    let invalidated =
+      false;
+
+    let invalidatedAt =
+      null;
+
+    for (
+      let index =
+        selectedOriginIndex + 1;
+      index <=
+        Math.min(
+          breakIndex,
+          ordered.length - 1
+        );
+      index += 1
+    ) {
+      const close =
+        Number(
+          ordered[index]?.close
+        );
+
+      if (
+        !Number.isFinite(close)
+      ) {
+        continue;
+      }
+
+      const brokeOrigin =
+        direction === "bullish"
+          ? close <
+            selectedOriginPrice -
+              invalidationTolerance
+          : close >
+            selectedOriginPrice +
+              invalidationTolerance;
+
+      if (brokeOrigin) {
+        invalidated = true;
+        invalidatedAt =
+          ordered[index]
+            ?.datetime ||
+          null;
+        break;
+      }
+    }
+
+    if (invalidated) {
+      return null;
+    }
+
+    // Ensure the selected origin genuinely participates in the leg that
+    // formed the major barrier. This avoids using an old extreme that has
+    // no practical relationship with the controlling structure.
+    const barsFromOriginToPivot =
+      pivotIndex -
+      selectedOriginIndex;
+
+    const minimumStructureSpan =
+      Math.max(
+        2,
+        Number(
+          structureConfig
+            .swingWindow ||
+            4
+        )
+      );
+
+    if (
+      barsFromOriginToPivot <
+      minimumStructureSpan
+    ) {
+      return null;
+    }
+
+    const majorPivotPrice =
+      Number(
+        selection.pivotPrice
+      );
+
+    const originToMajorRange =
+      direction === "bullish"
+        ? majorPivotPrice -
+          selectedOriginPrice
+        : selectedOriginPrice -
+          majorPivotPrice;
+
+    if (
+      !Number.isFinite(
+        originToMajorRange
+      ) ||
+      originToMajorRange <=
+        Math.max(
+          Number(atr || 0) *
+            0.75,
+          breakTolerance * 3
+        )
+    ) {
+      return null;
+    }
+
+    return {
+      type:
+        direction === "bullish"
+          ? "outer_structural_low"
+          : "outer_structural_high",
+      price:
+        selectedOriginPrice,
+      index:
+        selectedOriginIndex,
+      datetime:
+        ordered[
+          selectedOriginIndex
+        ]?.datetime ||
+        null,
+      source:
+        selectedOriginSource,
+      confirmedPivotPrice:
+        confirmedOriginPrice,
+      confirmedPivotIndex:
+        confirmedOriginIndex,
+      confirmedPivotDatetime:
+        confirmedOriginPivot
+          ?.datetime ||
+        null,
+      priorOppositeEvent:
+        priorOppositeEvent
+          ? {
+              side:
+                priorOppositeEvent
+                  .side,
+              index:
+                Number(
+                  priorOppositeEvent
+                    .index
+                ),
+              datetime:
+                priorOppositeEvent
+                  .datetime ||
+                null,
+              level:
+                Number(
+                  priorOppositeEvent
+                    .level
+                ),
+            }
+          : null,
+      searchStartIndex:
+        originSearchStart,
+      searchEndIndex:
+        originSearchEnd,
+      localProtectedPrice:
+        localProtectedPrice,
+      localProtectedIndex:
+        Number.isFinite(
+          localProtectedIndex
+        )
+          ? localProtectedIndex
+          : null,
+      outerExtension:
+        outerExtension,
+      minimumOuterExtension:
+        minimumOuterExtension,
+      invalidationTolerance:
+        invalidationTolerance,
+      barsFromOriginToPivot:
+        barsFromOriginToPivot,
+      originToMajorRange:
+        originToMajorRange,
+      structurallyIntact:
+        true,
+    };
+  };
+
+  const outerStructuralOrigin =
+    findOuterStructuralOrigin({
+      selection:
+        majorSelection,
+    });
+
   let controllingEvent =
     majorSelection?.breakEvent ||
     latestDirectionalEvent ||
@@ -10380,14 +10832,24 @@ function buildLatestImpulseFibonacci({
       direction ===
       "bullish"
     ) {
-      swingLowResult = {
-        index:
-          majorSelection
-            .protectedIndex,
-        value:
-          majorSelection
-            .protectedPrice,
-      };
+      swingLowResult =
+        outerStructuralOrigin
+          ? {
+              index:
+                outerStructuralOrigin
+                  .index,
+              value:
+                outerStructuralOrigin
+                  .price,
+            }
+          : {
+              index:
+                majorSelection
+                  .protectedIndex,
+              value:
+                majorSelection
+                  .protectedPrice,
+            };
 
       swingHighResult =
         extremaIndex({
@@ -10399,15 +10861,32 @@ function buildLatestImpulseFibonacci({
           field: "high",
           mode: "max",
         });
+
+      if (
+        outerStructuralOrigin
+      ) {
+        selectionReason =
+          "major_broken_resistance_with_outer_structural_swing_low";
+      }
     } else {
-      swingHighResult = {
-        index:
-          majorSelection
-            .protectedIndex,
-        value:
-          majorSelection
-            .protectedPrice,
-      };
+      swingHighResult =
+        outerStructuralOrigin
+          ? {
+              index:
+                outerStructuralOrigin
+                  .index,
+              value:
+                outerStructuralOrigin
+                  .price,
+            }
+          : {
+              index:
+                majorSelection
+                  .protectedIndex,
+              value:
+                majorSelection
+                  .protectedPrice,
+            };
 
       swingLowResult =
         extremaIndex({
@@ -10419,6 +10898,13 @@ function buildLatestImpulseFibonacci({
           field: "low",
           mode: "min",
         });
+
+      if (
+        outerStructuralOrigin
+      ) {
+        selectionReason =
+          "major_broken_support_with_outer_structural_swing_high";
+      }
     }
   } else if (
     latestDirectionalEvent
@@ -10634,6 +11120,54 @@ function buildLatestImpulseFibonacci({
     selectionReason =
       `${selectionReason}_chart_native_price_scale`;
   }
+
+  console.log(
+    "CSA v4.5 Fibonacci structural origin:",
+    {
+      direction,
+      majorBrokenLevel:
+        majorSelection
+          ? Number(
+              majorSelection
+                .pivotPrice
+            )
+          : null,
+      localProtectedSwing:
+        majorSelection
+          ? {
+              price:
+                Number(
+                  majorSelection
+                    .protectedPrice
+                ),
+              datetime:
+                majorSelection
+                  .protectedDatetime ||
+                null,
+              index:
+                Number(
+                  majorSelection
+                    .protectedIndex
+                ),
+              source:
+                majorSelection
+                  .protectedSource ||
+                null,
+            }
+          : null,
+      outerStructuralOrigin:
+        outerStructuralOrigin ||
+        null,
+      selectedSwingLow,
+      selectedSwingHigh,
+      selectedSwingLowTime,
+      selectedSwingHighTime,
+      priceSource,
+      selectionReason,
+      rule:
+        "outer_intact_pre_major_pivot_origin_preferred_over_later_internal_protected_swing",
+    }
+  );
 
   const range =
     selectedSwingHigh -
@@ -10879,6 +11413,15 @@ function buildLatestImpulseFibonacci({
           }
         : null,
     protectedSwing,
+    outerStructuralOrigin:
+      outerStructuralOrigin ||
+      null,
+    fibOriginModel:
+      outerStructuralOrigin
+        ? "outer_structural_pre_major_pivot"
+        : majorSelection
+        ? "local_protected_swing_fallback"
+        : "broad_structure_fallback",
     brokenMajorLevel:
       majorBrokenLevel,
     majorBreakCandidateCount:
@@ -10906,6 +11449,15 @@ function buildLatestImpulseFibonacci({
             protectedSource:
               candidate
                 .protectedSource,
+            selectedAsControllingMajor:
+              candidate ===
+              majorSelection,
+            fibOuterOrigin:
+              candidate ===
+                majorSelection
+                ? outerStructuralOrigin ||
+                  null
+                : null,
             significanceScore:
               candidate
                 .significanceScore,
@@ -13802,6 +14354,14 @@ function rankRawEntryAreas({
         fibonacci?.marketDataSwingHigh ?? null,
       protectedSwing:
         fibonacci?.protectedSwing || null,
+      outerStructuralOrigin:
+        fibonacci
+          ?.outerStructuralOrigin ||
+        null,
+      fibOriginModel:
+        fibonacci
+          ?.fibOriginModel ||
+        null,
       brokenMajorLevel:
         fibonacci?.brokenMajorLevel || null,
       majorBreakCandidateCount:
@@ -13944,6 +14504,14 @@ function rankRawEntryAreas({
       "timestamp_targeted_independent_origin_terminal",
     protectedSwing:
       fibonacci?.protectedSwing || null,
+    outerStructuralOrigin:
+      fibonacci
+        ?.outerStructuralOrigin ||
+      null,
+    fibOriginModel:
+      fibonacci
+        ?.fibOriginModel ||
+      null,
     brokenMajorLevel:
       fibonacci?.brokenMajorLevel || null,
     majorBreakCandidateCount:
@@ -19216,7 +19784,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       analysisFacts,
       regressionSnapshot: {
         engineVersion:
-          "4.4.0-selected-entry-narrative-lock",
+          "4.5.0-outer-structural-impulse-origin",
         instrument: submittedInstrument,
         timeframe,
         analysisType: mode,
@@ -19232,6 +19800,32 @@ ${(visualReview?.strategyMissingInformation || []).length
             null,
           entry2:
             finalFeedback?.entry2 ||
+            null,
+        },
+        fibOrigin: {
+          model:
+            selectorAudit
+              ?.fibOriginModel ||
+            null,
+          protectedSwing:
+            selectorAudit
+              ?.protectedSwing ||
+            null,
+          outerStructuralOrigin:
+            selectorAudit
+              ?.outerStructuralOrigin ||
+            null,
+          swingLow:
+            selectorAudit
+              ?.swingLow ??
+            null,
+          swingHigh:
+            selectorAudit
+              ?.swingHigh ??
+            null,
+          selectionReason:
+            selectorAudit
+              ?.selectionReason ||
             null,
         },
         narrativeLock:
