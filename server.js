@@ -8721,7 +8721,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.3.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.4.0";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15617,6 +15617,45 @@ function buildValidatedAnalysisFacts({
         candidate.conversionConfirmed === true,
       referenceOnly: true,
     })),
+    selectedEntryAreas:
+      rankedRawAreas.map(
+        (candidate, index) => ({
+          executionOrder:
+            Number(
+              candidate.executionOrder ||
+                index + 1
+            ),
+          direction:
+            candidate.direction,
+          areaType:
+            candidate.areaType,
+          zoneLow:
+            candidate.zoneLow,
+          zoneHigh:
+            candidate.zoneHigh,
+          zoneText:
+            safeUserText(
+              candidate.levelText || ""
+            )
+              ? `around ${safeUserText(
+                  candidate.levelText || ""
+                )}`
+              : candidate.zoneText,
+          authoritativeCenter:
+            asPositiveNumber(
+              candidate.authoritativeCenter
+            ),
+          levelText:
+            safeUserText(
+              candidate.levelText || ""
+            ),
+          conversionConfirmed:
+            candidate
+              .conversionConfirmed === true,
+        })
+      ),
+    selectedEntryCount:
+      rankedRawAreas.length,
     activeEntryAreas: rankedRawAreas.map((candidate, index) => ({
       rank: candidate.executionOrder || index + 1,
       role: candidate.role || (index === 0 ? "primary" : index === 1 ? "secondary" : "alternative"),
@@ -15765,6 +15804,337 @@ function buildValidatedAnalysisFacts({
   };
 }
 
+function getCanonicalSelectedEntryAreas(facts = {}) {
+  const raw =
+    Array.isArray(facts?.activeEntryAreas)
+      ? facts.activeEntryAreas
+      : [];
+
+  return raw
+    .filter((area) => {
+      if (!area || typeof area !== "object") {
+        return false;
+      }
+
+      const direction =
+        String(
+          area?.direction || ""
+        ).toLowerCase();
+
+      const hasPrice =
+        Number.isFinite(
+          Number(
+            area?.authoritativeCenter
+          )
+        ) ||
+        Boolean(
+          safeUserText(
+            area?.levelText || ""
+          )
+        );
+
+      return (
+        ["buy", "sell"].includes(
+          direction
+        ) &&
+        hasPrice
+      );
+    })
+    .sort((a, b) => {
+      const ao =
+        Number(
+          a?.executionOrder ??
+            a?.rank ??
+            999
+        );
+
+      const bo =
+        Number(
+          b?.executionOrder ??
+            b?.rank ??
+            999
+        );
+
+      return ao - bo;
+    })
+    .slice(0, 2);
+}
+
+function extractNarrativePriceNumbers(
+  text = ""
+) {
+  return (
+    String(text || "")
+      .match(
+        /\b\d+(?:\.\d+)?\b/g
+      ) || []
+  )
+    .map(Number)
+    .filter(
+      (value) =>
+        Number.isFinite(value) &&
+        value > 0
+    );
+}
+
+function entryNarrativePriceMatchesArea(
+  price,
+  area
+) {
+  const target =
+    asPositiveNumber(
+      area?.authoritativeCenter
+    );
+
+  if (
+    !Number.isFinite(
+      Number(price)
+    ) ||
+    !Number.isFinite(target)
+  ) {
+    return false;
+  }
+
+  const tolerance =
+    Math.max(
+      Math.abs(target) * 0.000001,
+      0.000001
+    );
+
+  return (
+    Math.abs(
+      Number(price) -
+        target
+    ) <= tolerance
+  );
+}
+
+function narrativeReferencesSelectedEntry(
+  text = "",
+  selectedEntries = []
+) {
+  const normalized =
+    String(text || "");
+
+  const numbers =
+    extractNarrativePriceNumbers(
+      normalized
+    );
+
+  if (!numbers.length) {
+    return false;
+  }
+
+  return numbers.some((price) =>
+    selectedEntries.some((area) =>
+      entryNarrativePriceMatchesArea(
+        price,
+        area
+      )
+    )
+  );
+}
+
+function isRawEntryRecommendationClaim(
+  text = ""
+) {
+  return (
+    /\bentry\s*[12]?\b/i.test(
+      text
+    ) ||
+    /\bsecondary\b/i.test(
+      text
+    ) ||
+    /\bfallback\b/i.test(
+      text
+    ) ||
+    /\bpreferred\s+(?:entry|buy|sell|setup|area|location)\b/i.test(
+      text
+    ) ||
+    /\b(?:buy|sell)\s+(?:area|location|zone)\b/i.test(
+      text
+    ) ||
+    /\b(?:first|second)\s+(?:buy|sell|entry)\s+(?:area|location|zone)\b/i.test(
+      text
+    ) ||
+    /\bconsider(?:ing)?\s+(?:a\s+)?(?:buy|sell)\b/i.test(
+      text
+    )
+  );
+}
+
+function sanitizeRawEntryNarrativeItems({
+  items = [],
+  facts = {},
+}) {
+  const selectedEntries =
+    getCanonicalSelectedEntryAreas(
+      facts
+    );
+
+  return normalizeArrayOfStrings(
+    items,
+    []
+  ).filter((item) => {
+    const text =
+      String(item || "").trim();
+
+    if (!text) {
+      return false;
+    }
+
+    // Raw Claude/legacy entry recommendations are never authoritative.
+    // Controlled feedback below will re-add only the deterministic
+    // selected Entry 1 / Entry 2 statements.
+    if (
+      isRawEntryRecommendationClaim(
+        text
+      )
+    ) {
+      return false;
+    }
+
+    // Extra guard: if a sentence somehow calls an unselected price a
+    // buy/sell entry location, remove it.
+    if (
+      /\b(?:buy|sell)\b/i.test(
+        text
+      ) &&
+      /\b(?:entry|area|location|zone)\b/i.test(
+        text
+      )
+    ) {
+      const prices =
+        extractNarrativePriceNumbers(
+          text
+        );
+
+      if (
+        prices.length &&
+        !narrativeReferencesSelectedEntry(
+          text,
+          selectedEntries
+        )
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+}
+
+function applySelectedEntryNarrativeLockToVisualReview({
+  visualReview = null,
+  facts = null,
+}) {
+  if (!visualReview || !facts) {
+    return visualReview;
+  }
+
+  const selectedEntries =
+    getCanonicalSelectedEntryAreas(
+      facts
+    );
+
+  const lockedStrengths =
+    sanitizeRawEntryNarrativeItems({
+      items:
+        visualReview
+          ?.chartSpecificStrengths ||
+        [],
+      facts,
+    });
+
+  const lockedSimilarities =
+    sanitizeRawEntryNarrativeItems({
+      items:
+        visualReview
+          ?.csaSimilarities ||
+        [],
+      facts,
+    });
+
+  const lockedDifferences =
+    sanitizeRawEntryNarrativeItems({
+      items:
+        visualReview
+          ?.csaDifferences ||
+        [],
+      facts,
+    });
+
+  const selectedEntrySummary =
+    selectedEntries.map(
+      (area, index) => ({
+        executionOrder:
+          Number(
+            area?.executionOrder ||
+              area?.rank ||
+              index + 1
+          ),
+        areaType:
+          String(
+            area?.areaType ||
+              "area"
+          ),
+        levelText:
+          safeUserText(
+            area?.levelText || ""
+          ),
+        authoritativeCenter:
+          asPositiveNumber(
+            area?.authoritativeCenter
+          ),
+      })
+    );
+
+  console.log(
+    "CSA selected-entry narrative lock:",
+    {
+      engineVersion:
+        CSA_FEEDBACK_ENGINE_VERSION,
+      selectedEntryCount:
+        selectedEntrySummary.length,
+      selectedEntries:
+        selectedEntrySummary,
+      rawStrengthCount:
+        normalizeArrayOfStrings(
+          visualReview
+            ?.chartSpecificStrengths,
+          []
+        ).length,
+      lockedStrengthCount:
+        lockedStrengths.length,
+      entry2Allowed:
+        selectedEntrySummary.length > 1,
+      rule:
+        "only_deterministic_selected_entries_may_be_promoted_as_entry_areas",
+    }
+  );
+
+  return {
+    ...visualReview,
+    chartSpecificStrengths:
+      lockedStrengths,
+    csaSimilarities:
+      lockedSimilarities,
+    csaDifferences:
+      lockedDifferences,
+    deterministicEntryNarrativeLock: {
+      active: true,
+      selectedEntryCount:
+        selectedEntrySummary.length,
+      selectedEntries:
+        selectedEntrySummary,
+      entry2Allowed:
+        selectedEntrySummary.length > 1,
+      rule:
+        "selected_entries_are_single_source_of_truth",
+    },
+  };
+}
+
 function formatRankedArea(area, fallbackType = "entry") {
   if (!area) return "";
 
@@ -15801,9 +16171,21 @@ function areaDisplay(facts) {
 }
 
 function secondaryAreaDisplay(facts) {
+  const selectedEntries =
+    getCanonicalSelectedEntryAreas(
+      facts
+    );
+
+  const secondary =
+    selectedEntries.length > 1
+      ? selectedEntries[1]
+      : null;
+
   return formatRankedArea(
-    facts.secondaryEntryArea,
-    facts.direction === "bearish" ? "supply area" : "demand area"
+    secondary,
+    facts.direction === "bearish"
+      ? "supply area"
+      : "demand area"
   );
 }
 
@@ -16319,16 +16701,44 @@ function buildControlledFeedback({
   analysisFramework = "csa",
   personalStrategyAssessment = null,
 }) {
-  const area = facts.preferredEntryArea;
+  const selectedEntryAreas =
+    getCanonicalSelectedEntryAreas(
+      facts
+    );
+
+  const selectedPrimaryArea =
+    selectedEntryAreas[0] ||
+    null;
+
+  const selectedSecondaryArea =
+    selectedEntryAreas[1] ||
+    null;
+
+  const area =
+    facts.preferredEntryArea;
+
   const hasValidatedArea =
     facts.entryAreaValidation?.passed !== false &&
     area?.validated === true &&
     area?.areaType &&
     area.areaType !== "none" &&
     Number.isFinite(Number(area?.zoneLow)) &&
-    Number.isFinite(Number(area?.zoneHigh));
-  const areaText = hasValidatedArea ? areaDisplay(facts) : "";
-  const secondaryAreaText = secondaryAreaDisplay(facts);
+    Number.isFinite(Number(area?.zoneHigh)) &&
+    selectedPrimaryArea !== null;
+  const areaText =
+    hasValidatedArea
+      ? areaDisplay(facts)
+      : "";
+
+  const secondaryAreaText =
+    selectedSecondaryArea
+      ? formatRankedArea(
+          selectedSecondaryArea,
+          facts.direction === "bearish"
+            ? "supply area"
+            : "demand area"
+        )
+      : "";
 
   const referenceAreas = Array.isArray(facts?.structuralReferenceAreas)
     ? facts.structuralReferenceAreas
@@ -16389,24 +16799,6 @@ function buildControlledFeedback({
   if (!hasValidatedArea) {
     strengths.push(
       "The analysis avoids forcing a weak or contradictory entry area."
-    );
-  } else if (!area.invalidated) {
-    strengths.push(
-      area.areaType === "converted resistance"
-        ? area.conversionConfirmed
-          ? `The broken support ${area.zoneText} has been confirmed as converted resistance and is the first sell area to monitor.`
-          : `The broken support ${area.zoneText} is a potential converted resistance and is the first sell area to monitor if price retests it from below.`
-        : area.areaType === "converted support"
-        ? area.conversionConfirmed
-          ? `The broken resistance ${area.zoneText} has been confirmed as converted support and is the first buy area to monitor.`
-          : `The broken resistance ${area.zoneText} is a potential converted support and is the first buy area to monitor if price retests it from above.`
-        : `The ${areaText} gives a clear ${action} location to monitor.`
-    );
-  }
-
-  if (secondaryAreaText) {
-    strengths.push(
-      `The ${secondaryAreaText} remains a fallback ${action} area if Entry 1 fails and a fresh trigger appears there.`
     );
   }
 
@@ -16522,10 +16914,56 @@ function buildControlledFeedback({
     );
   }
 
-  const finalStrengths = removeSemanticFeedbackDuplicates(
-    cleanUserFeedbackItems(strengths),
-    4
-  );
+  const lockedStrengths =
+    sanitizeRawEntryNarrativeItems({
+      items:
+        cleanUserFeedbackItems(
+          strengths
+        ),
+      facts,
+    });
+
+  // Re-add only the canonical deterministic entry statements after
+  // removing any raw/legacy recommendation-like wording.
+  const canonicalStrengths = [
+    ...lockedStrengths,
+  ];
+
+  if (
+    hasValidatedArea &&
+    !area.invalidated
+  ) {
+    const canonicalPrimaryText =
+      area.areaType ===
+        "converted resistance"
+        ? area.conversionConfirmed
+          ? `The broken support ${area.zoneText} has been confirmed as converted resistance and is the first sell area to monitor.`
+          : `The broken support ${area.zoneText} is a potential converted resistance and is the first sell area to monitor if price retests it from below.`
+        : area.areaType ===
+          "converted support"
+        ? area.conversionConfirmed
+          ? `The broken resistance ${area.zoneText} has been confirmed as converted support and is the first buy area to monitor.`
+          : `The broken resistance ${area.zoneText} is a potential converted support and is the first buy area to monitor if price retests it from above.`
+        : `Entry 1 is the ${areaText}; this is the first ${action} area to monitor.`;
+
+    canonicalStrengths.push(
+      canonicalPrimaryText
+    );
+  }
+
+  if (secondaryAreaText) {
+    canonicalStrengths.push(
+      `Entry 2 is the ${secondaryAreaText}; consider it only if Entry 1 fails and a fresh ${triggerSide} trigger appears there.`
+    );
+  }
+
+  const finalStrengths =
+    removeSemanticFeedbackDuplicates(
+      cleanUserFeedbackItems(
+        canonicalStrengths
+      ),
+      4
+    );
   let finalWeaknesses = prioritizeStarterWeaknesses(
     removeSemanticFeedbackDuplicates(cleanUserFeedbackItems(weaknesses), 4)
   );
@@ -16724,18 +17162,56 @@ function buildControlledFeedback({
           levelText: safeUserText(area.levelText || ""),
         }
       : null,
-    entry2: facts.secondaryEntryArea
-      ? {
-          areaType: facts.secondaryEntryArea.areaType,
-          zoneText: facts.secondaryEntryArea.zoneText,
-          authoritativeCenter: asPositiveNumber(
-            facts.secondaryEntryArea.authoritativeCenter
-          ),
-          levelText: safeUserText(
-            facts.secondaryEntryArea.levelText || ""
-          ),
-        }
-      : null,
+    entry2:
+      selectedSecondaryArea
+        ? {
+            areaType:
+              selectedSecondaryArea.areaType,
+            zoneText:
+              selectedSecondaryArea.zoneText,
+            authoritativeCenter:
+              asPositiveNumber(
+                selectedSecondaryArea
+                  .authoritativeCenter
+              ),
+            levelText:
+              safeUserText(
+                selectedSecondaryArea
+                  .levelText || ""
+              ),
+          }
+        : null,
+    narrativeLock: {
+      version:
+        "1.0.0-selected-entry-single-source",
+      selectedEntryCount:
+        selectedEntryAreas.length,
+      selectedEntries:
+        selectedEntryAreas.map(
+          (entry, index) => ({
+            executionOrder:
+              Number(
+                entry?.executionOrder ||
+                  entry?.rank ||
+                  index + 1
+              ),
+            areaType:
+              entry?.areaType || null,
+            levelText:
+              safeUserText(
+                entry?.levelText || ""
+              ),
+            authoritativeCenter:
+              asPositiveNumber(
+                entry?.authoritativeCenter
+              ),
+          })
+        ),
+      entry2Allowed:
+        selectedEntryAreas.length > 1,
+      rule:
+        "unselected_structural_levels_are_context_only",
+    },
     scores,
     scoreContext,
     displayLabels,
@@ -18595,20 +19071,6 @@ ${(visualReview?.strategyMissingInformation || []).length
     const setupScoreMatch = String(analysis).match(/Overall Setup Score:\s*\n- (\d+)\/10/i);
     const setupScore = setupScoreMatch ? Number(setupScoreMatch[1]) : 0;
 
-    const legacyDashboardFeedback = buildDashboardFeedback({
-      marketReference,
-      chartDetection,
-      visualReview,
-      submittedInstrument,
-      timeframe,
-      selectedDateText: chartCutoff.resolvedDate || selectedDateText || "Not provided",
-      detectedDateText:
-        chartDetection.latestVisibleDate || "Not detected",
-      submittedNotes,
-      setupScore,
-      analysisType: mode,
-    });
-
     const analysisFacts = buildValidatedAnalysisFacts({
       visualReview,
       marketReference,
@@ -18625,10 +19087,43 @@ ${(visualReview?.strategyMissingInformation || []).length
     // selector result before saving or returning the visual review. This keeps
     // Claude's visual observations useful while preventing it from promoting a
     // structurally valid but non-confluent level as Entry 1 / Entry 2.
-    visualReview = applyDeterministicEntryPlanToVisualReview({
-      visualReview,
-      facts: analysisFacts,
-    });
+    visualReview =
+      applyDeterministicEntryPlanToVisualReview({
+        visualReview,
+        facts: analysisFacts,
+      });
+
+    // V4.4: raw Claude/legacy wording can describe structure, but it
+    // cannot promote an unselected level as a buy/sell location.
+    visualReview =
+      applySelectedEntryNarrativeLockToVisualReview({
+        visualReview,
+        facts: analysisFacts,
+      });
+
+    // Build the legacy/dashboard compatibility layer only AFTER the
+    // deterministic entry plan and narrative lock have been applied.
+    // This prevents stale model-suggested "secondary buy/sell area"
+    // language from leaking back into dashboard aliases.
+    const legacyDashboardFeedback =
+      buildDashboardFeedback({
+        marketReference,
+        chartDetection,
+        visualReview,
+        submittedInstrument,
+        timeframe,
+        selectedDateText:
+          chartCutoff.resolvedDate ||
+          selectedDateText ||
+          "Not provided",
+        detectedDateText:
+          chartDetection
+            .latestVisibleDate ||
+          "Not detected",
+        submittedNotes,
+        setupScore,
+        analysisType: mode,
+      });
 
     const finalFeedback = buildControlledFeedback({
       facts: analysisFacts,
@@ -18721,7 +19216,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       analysisFacts,
       regressionSnapshot: {
         engineVersion:
-          "4.1.0-separate-framework-impulse-windows",
+          "4.4.0-selected-entry-narrative-lock",
         instrument: submittedInstrument,
         timeframe,
         analysisType: mode,
@@ -18739,6 +19234,12 @@ ${(visualReview?.strategyMissingInformation || []).length
             finalFeedback?.entry2 ||
             null,
         },
+        narrativeLock:
+          finalFeedback
+            ?.narrativeLock ||
+          visualReview
+            ?.deterministicEntryNarrativeLock ||
+          null,
         scoring: {
           modelVersion:
             CSA_SCORING_MODEL_VERSION,
