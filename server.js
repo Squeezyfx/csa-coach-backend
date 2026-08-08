@@ -8699,7 +8699,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.1.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.2.0";
+const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -16033,60 +16034,218 @@ function directionDisplay(facts) {
 }
 
 function controlledScores(facts) {
-  let setup = facts.direction === "range" ? 52 : 66;
-  let entry = facts.trade.visible ? 58 : 48;
-  let risk = 35;
+  const tradeVisible =
+    facts?.trade?.visible === true;
 
-  if (
-    facts.preferredEntryArea.validated === true &&
-    facts.preferredEntryArea.directionMatch
-  ) {
+  const area =
+    facts?.preferredEntryArea || {};
+
+  const hasValidatedArea =
+    area?.validated === true &&
+    area?.directionMatch === true;
+
+  // Setup quality is always assessable from the chart plan.
+  let setup =
+    facts.direction === "range"
+      ? 52
+      : 66;
+
+  if (hasValidatedArea) {
     setup += 6;
   } else {
     setup -= 8;
   }
-  if (facts.confluence.strength === "high") setup += 8;
-  else if (facts.confluence.strength === "medium") setup += 4;
-
-  if (facts.preferredEntryArea.invalidated) setup -= 22;
-  else if (facts.preferredEntryArea.lifecycleStatus === "respected") setup += 8;
-  else if (facts.preferredEntryArea.lifecycleStatus === "triggered") setup += 12;
-
-  if (facts.preferredEntryArea.areaRetested) entry += 12;
-  if (facts.preferredEntryArea.triggerPresent) entry += 20;
-
-  if (!facts.preferredEntryArea.areaRetested) {
-    setup = Math.min(setup, 68);
-    entry = Math.min(entry, 45);
-  }
-
-  if (!facts.preferredEntryArea.triggerPresent) {
-    entry = Math.min(entry, 55);
-  }
 
   if (
-    !facts.preferredEntryArea.areaRetested &&
-    !facts.preferredEntryArea.triggerPresent
+    facts?.confluence?.strength === "high"
   ) {
-    setup = Math.min(setup, 68);
-    entry = Math.min(entry, 45);
+    setup += 8;
+  } else if (
+    facts?.confluence?.strength === "medium"
+  ) {
+    setup += 4;
   }
-  if (facts.preferredEntryArea.invalidated) entry -= 20;
-  if (!facts.trade.visible && !facts.preferredEntryArea.triggerPresent) entry = Math.min(entry, 55);
 
-  if (facts.risk.stopShown) risk += 25;
-  if (facts.risk.targetShown) risk += 25;
-  if (facts.risk.assessable) risk += 10;
+  if (area?.invalidated) {
+    setup -= 22;
+  } else if (
+    area?.lifecycleStatus === "respected"
+  ) {
+    setup += 8;
+  } else if (
+    area?.lifecycleStatus === "triggered"
+  ) {
+    setup += 12;
+  }
 
-  setup = Math.max(0, Math.min(100, Math.round(setup)));
-  entry = Math.max(0, Math.min(100, Math.round(entry)));
-  risk = Math.max(0, Math.min(100, Math.round(risk)));
+  if (!area?.areaRetested) {
+    setup = Math.min(setup, 68);
+  }
+
+  // Entry Accuracy becomes Entry Readiness when no executed
+  // trade is clearly visible.
+  let entry;
+
+  if (tradeVisible) {
+    entry = 58;
+
+    if (area?.areaRetested) {
+      entry += 12;
+    }
+
+    if (area?.triggerPresent) {
+      entry += 20;
+    }
+
+    if (!area?.areaRetested) {
+      entry = Math.min(entry, 45);
+    }
+
+    if (!area?.triggerPresent) {
+      entry = Math.min(entry, 55);
+    }
+
+    if (
+      !area?.areaRetested &&
+      !area?.triggerPresent
+    ) {
+      entry = Math.min(entry, 45);
+    }
+
+    if (area?.invalidated) {
+      entry -= 20;
+    }
+  } else {
+    entry =
+      hasValidatedArea
+        ? 58
+        : 52;
+
+    if (area?.areaRetested) {
+      entry += 8;
+    }
+
+    if (area?.triggerPresent) {
+      entry += 14;
+    }
+
+    if (
+      area?.lifecycleStatus === "respected"
+    ) {
+      entry += 4;
+    }
+
+    if (area?.invalidated) {
+      entry -= 12;
+    }
+
+    if (!hasValidatedArea) {
+      entry = Math.min(entry, 55);
+    }
+
+    // Waiting for confirmation at a valid area is disciplined
+    // behavior, not a bad executed entry.
+    if (
+      hasValidatedArea &&
+      !area?.triggerPresent
+    ) {
+      entry = Math.max(entry, 58);
+    }
+
+    entry = Math.min(entry, 78);
+  }
+
+  // Risk Management becomes Risk-Plan Completeness when no
+  // executed trade is visible.
+  let risk;
+
+  if (tradeVisible) {
+    risk = 35;
+
+    if (facts?.risk?.stopShown) {
+      risk += 25;
+    }
+
+    if (facts?.risk?.targetShown) {
+      risk += 25;
+    }
+
+    if (facts?.risk?.assessable) {
+      risk += 10;
+    }
+  } else {
+    const stopShown =
+      facts?.risk?.stopShown === true;
+
+    const targetShown =
+      facts?.risk?.targetShown === true;
+
+    if (stopShown && targetShown) {
+      risk = 74;
+    } else if (stopShown || targetShown) {
+      risk = 62;
+    } else {
+      risk = 55;
+    }
+  }
+
+  setup = Math.max(
+    0,
+    Math.min(100, Math.round(setup))
+  );
+
+  entry = Math.max(
+    0,
+    Math.min(100, Math.round(entry))
+  );
+
+  risk = Math.max(
+    0,
+    Math.min(100, Math.round(risk))
+  );
+
+  // Executed trade: equal weighting.
+  // No visible trade: weight what is actually observable.
+  const overall =
+    tradeVisible
+      ? Math.round(
+          (setup + entry + risk) / 3
+        )
+      : Math.round(
+          setup * 0.55 +
+          entry * 0.30 +
+          risk * 0.15
+        );
 
   return {
     setupQuality: setup,
     entryAccuracy: entry,
     riskManagement: risk,
-    overall: Math.round((setup + entry + risk) / 3),
+    overall,
+    assessmentMode:
+      tradeVisible
+        ? "executed_trade"
+        : "setup_readiness",
+    entryMetricMode:
+      tradeVisible
+        ? "execution_accuracy"
+        : "entry_readiness",
+    riskMetricMode:
+      tradeVisible
+        ? "executed_trade_risk"
+        : "risk_plan_completeness",
+    weights:
+      tradeVisible
+        ? {
+            setupQuality: 1 / 3,
+            entryAccuracy: 1 / 3,
+            riskManagement: 1 / 3,
+          }
+        : {
+            setupQuality: 0.55,
+            entryAccuracy: 0.30,
+            riskManagement: 0.15,
+          },
   };
 }
 
@@ -16509,6 +16668,20 @@ function buildControlledFeedback({
         }
       : null,
     scores,
+    scoreContext: {
+      scoringModelVersion:
+        CSA_SCORING_MODEL_VERSION,
+      tradeVisible:
+        facts?.trade?.visible === true,
+      assessmentMode:
+        scores.assessmentMode,
+      entryMetricMode:
+        scores.entryMetricMode,
+      riskMetricMode:
+        scores.riskMetricMode,
+      weights:
+        scores.weights,
+    },
     setupQuality: {
       score: scores.setupQuality,
       label: controlledScoreLabel(scores.setupQuality),
@@ -16520,41 +16693,77 @@ function buildControlledFeedback({
           : "The plan has a useful area, but the setup is not fully ready.",
     },
     entryAccuracy: {
-      score: scores.entryAccuracy,
-      label: controlledScoreLabel(scores.entryAccuracy),
+      score:
+        scores.entryAccuracy,
+      label:
+        controlledScoreLabel(
+          scores.entryAccuracy
+        ),
       summary:
-        area.triggerPresent
-          ? "A valid trigger is visible at the planned area."
-          : "The entry still needs a valid trigger at the planned area.",
+        facts?.trade?.visible === true
+          ? area.triggerPresent
+            ? "A valid trigger is visible at the planned area."
+            : "The visible entry still needs stronger confirmation at the planned area."
+          : area.triggerPresent
+          ? "No executed trade is clearly visible; this score reflects entry readiness, and a valid trigger is visible at the planned area."
+          : "No executed trade is clearly visible; this score reflects entry readiness rather than execution accuracy.",
+      assessmentMode:
+        scores.entryMetricMode,
     },
     riskManagement: {
-      score: scores.riskManagement,
-      label: controlledScoreLabel(scores.riskManagement),
+      score:
+        scores.riskManagement,
+      label:
+        controlledScoreLabel(
+          scores.riskManagement
+        ),
       summary:
-        facts.risk.assessable
-          ? "The stop and target are visible enough to review risk."
-          : "The stop and target are not both visible, so risk is incomplete.",
+        facts?.trade?.visible === true
+          ? facts.risk.assessable
+            ? "The stop and target are visible enough to review risk."
+            : "The stop and target are not both visible, so executed-trade risk is incomplete."
+          : facts.risk.assessable
+          ? "No executed trade is clearly visible; the stop and target make the planned risk assessable."
+          : "No executed trade is clearly visible; this score reflects risk-plan completeness, not realized trade management.",
+      assessmentMode:
+        scores.riskMetricMode,
     },
     grade: gradeFromControlledScore(scores.overall),
     confidence: scores.overall,
   };
 }
 
-function applyControlledFeedbackToDashboard(legacyDashboard = {}, controlled = {}) {
+function applyControlledFeedbackToDashboard(
+  legacyDashboard = {},
+  controlled = {}
+) {
   return {
     ...legacyDashboard,
-    strengths: controlled.strengths,
-    weaknesses: controlled.weaknesses,
-    setupQuality: controlled.setupQuality,
-    entryAccuracy: controlled.entryAccuracy,
-    riskManagement: controlled.riskManagement,
-    setupQualityScore: controlled.scores.setupQuality,
-    entryAccuracyScore: controlled.scores.entryAccuracy,
-    riskManagementScore: controlled.scores.riskManagement,
+    strengths:
+      controlled.strengths,
+    weaknesses:
+      controlled.weaknesses,
+    setupQuality:
+      controlled.setupQuality,
+    entryAccuracy:
+      controlled.entryAccuracy,
+    riskManagement:
+      controlled.riskManagement,
+    setupQualityScore:
+      controlled.scores.setupQuality,
+    entryAccuracyScore:
+      controlled.scores.entryAccuracy,
+    riskManagementScore:
+      controlled.scores.riskManagement,
+    scoreContext:
+      controlled.scoreContext || null,
     scores: {
-      setupQuality: controlled.scores.setupQuality,
-      entryAccuracy: controlled.scores.entryAccuracy,
-      riskManagement: controlled.scores.riskManagement,
+      setupQuality:
+        controlled.scores.setupQuality,
+      entryAccuracy:
+        controlled.scores.entryAccuracy,
+      riskManagement:
+        controlled.scores.riskManagement,
     },
   };
 }
@@ -16895,6 +17104,49 @@ function extractStarterSummarySections(summary = "") {
   };
 }
 
+function evidenceSafeMistakeHub(
+  items = [],
+  tradeVisible = false
+) {
+  if (tradeVisible) {
+    return Array.isArray(items)
+      ? items
+      : [];
+  }
+
+  // If no executed trade is visible, prospective readiness
+  // issues must not be presented as mistakes already made.
+  const blockedTitles =
+    new Set([
+      "no visible trigger",
+      "context only, no trigger",
+      "entry evidence weak",
+      "risk evidence unclear",
+    ]);
+
+  const filtered =
+    (Array.isArray(items)
+      ? items
+      : []
+    ).filter((item) => {
+      const title =
+        String(item?.title || "")
+          .trim()
+          .toLowerCase();
+
+      return !blockedTitles.has(title);
+    });
+
+  return filtered.length
+    ? filtered.slice(0, 5)
+    : [
+        makeSimpleMistake(
+          "No executed-trade mistake confirmed",
+          "REVIEW"
+        ),
+      ];
+}
+
 function applyPlanToAnalysisResponse({
   responseBody,
   entitlement,
@@ -16907,9 +17159,31 @@ function applyPlanToAnalysisResponse({
 
   if (!controlled) return responseBody;
 
-  const plan = normalizePlanCode(
-    entitlement?.effectivePlan || controlled.plan || "starter"
-  );
+  const plan =
+    normalizePlanCode(
+      entitlement?.effectivePlan ||
+        controlled.plan ||
+        "starter"
+    );
+
+  const tradeVisible =
+    controlled?.scoreContext
+      ?.tradeVisible === true;
+
+  const sourceMistakes =
+    responseBody?.aiMistakeDetectionHub ||
+    responseBody?.mistakeDetectionHub ||
+    responseBody?.mistakeHub ||
+    responseBody?.mistakes ||
+    responseBody?.dashboard
+      ?.aiMistakeDetectionHub ||
+    [];
+
+  const safeMistakes =
+    evidenceSafeMistakeHub(
+      sourceMistakes,
+      tradeVisible
+    );
 
   const base = {
     ...responseBody,
@@ -16929,15 +17203,42 @@ function applyPlanToAnalysisResponse({
     structureScore: controlled.scores.setupQuality,
     executionScore: controlled.scores.entryAccuracy,
     riskScore: controlled.scores.riskManagement,
-    confidence: controlled.confidence,
-    grade: controlled.grade,
+    confidence:
+      controlled.confidence,
+    grade:
+      controlled.grade,
+    scoreContext:
+      controlled.scoreContext || null,
+    mistakes:
+      safeMistakes,
+    mistakeHub:
+      safeMistakes,
+    mistakeDetectionHub:
+      safeMistakes,
+    aiMistakeDetectionHub:
+      safeMistakes,
     dashboard: {
       ...(responseBody.dashboard || {}),
-      strengths: controlled.strengths,
-      weaknesses: controlled.weaknesses,
-      setupQuality: controlled.setupQuality,
-      entryAccuracy: controlled.entryAccuracy,
-      riskManagement: controlled.riskManagement,
+      strengths:
+        controlled.strengths,
+      weaknesses:
+        controlled.weaknesses,
+      setupQuality:
+        controlled.setupQuality,
+      entryAccuracy:
+        controlled.entryAccuracy,
+      riskManagement:
+        controlled.riskManagement,
+      scoreContext:
+        controlled.scoreContext || null,
+      mistakes:
+        safeMistakes,
+      mistakeHub:
+        safeMistakes,
+      mistakeDetectionHub:
+        safeMistakes,
+      aiMistakeDetectionHub:
+        safeMistakes,
     },
   };
 
@@ -18256,9 +18557,32 @@ ${(visualReview?.strategyMissingInformation || []).length
           analysisFacts?.selectorDiagnostics || null,
         entries: {
           entry1:
-            finalFeedback?.entry1 || null,
+            finalFeedback?.entry1 ||
+            null,
           entry2:
-            finalFeedback?.entry2 || null,
+            finalFeedback?.entry2 ||
+            null,
+        },
+        scoring: {
+          modelVersion:
+            CSA_SCORING_MODEL_VERSION,
+          context:
+            finalFeedback?.scoreContext ||
+            null,
+          setupQuality:
+            finalFeedback?.scores
+              ?.setupQuality ?? null,
+          entryAccuracy:
+            finalFeedback?.scores
+              ?.entryAccuracy ?? null,
+          riskManagement:
+            finalFeedback?.scores
+              ?.riskManagement ?? null,
+          overall:
+            finalFeedback?.scores
+              ?.overall ?? null,
+          grade:
+            finalFeedback?.grade || null,
         },
       },
       finalFeedback,
