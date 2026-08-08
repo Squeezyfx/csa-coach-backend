@@ -8721,7 +8721,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.5.0";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.5.1";
+const CSA_BUILD_ID = "CSA-v4.5.1-clean-outer-origin-hotfix";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -11124,6 +11125,7 @@ function buildLatestImpulseFibonacci({
   console.log(
     "CSA v4.5 Fibonacci structural origin:",
     {
+      buildId: CSA_BUILD_ID,
       direction,
       majorBrokenLevel:
         majorSelection
@@ -19070,6 +19072,9 @@ app.post("/create-checkout-session", async (req, res) => {
     console.error("Create checkout session error:", error);
     return res.status(statusCode).json({
       success: false,
+      buildId: CSA_BUILD_ID,
+      feedbackEngineVersion: CSA_FEEDBACK_ENGINE_VERSION,
+      selectorVersion: CSA_SELECTOR_VERSION,
       error:
         process.env.NODE_ENV === "production" && statusCode >= 500
           ? "Stripe Checkout could not be started."
@@ -19868,6 +19873,8 @@ ${(visualReview?.strategyMissingInformation || []).length
       },
       finalFeedback,
       feedbackEngineVersion: CSA_FEEDBACK_ENGINE_VERSION,
+      buildId: CSA_BUILD_ID,
+      selectorVersion: CSA_SELECTOR_VERSION,
       cutoffMode: chartCutoff.mode,
       cutoffPrecision: chartCutoff.precision,
       resolvedCutoff: chartCutoff.endDateTime,
@@ -19943,4 +19950,12 @@ process.on("uncaughtException", (error) => console.error("Uncaught exception:", 
 process.on("unhandledRejection", (reason) => console.error("Unhandled rejection:", reason));
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, "0.0.0.0", () => console.log(`CSA Coach backend running on port ${PORT}`));
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`CSA Coach backend running on port ${PORT}`);
+  console.log("CSA BUILD:", {
+    buildId: CSA_BUILD_ID,
+    feedbackEngineVersion: CSA_FEEDBACK_ENGINE_VERSION,
+    selectorVersion: CSA_SELECTOR_VERSION,
+    cleanBuild: true,
+  });
+});
