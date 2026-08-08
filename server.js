@@ -1775,8 +1775,139 @@ function getPeriodKeyAndLabel(date, profile) {
 }
 
 function getOutputSizeForInterval(interval) {
-  const map = { "1min": "5000", "5min": "5000", "15min": "3000", "30min": "2000", "1h": "1000", "4h": "500", "1day": "400", "1week": "300", "1month": "120" };
-  return map[interval] || "1000";
+  // V4.1: the market-data request now serves TWO jobs:
+  // 1) a narrow authoritative CSA framework window, and
+  // 2) a broader impulse-history window.
+  // Keep these limits comfortably below provider maximums while allowing
+  // enough historical candles for the broader impulse scan.
+  const map = {
+    "1min": "5000",
+    "5min": "5000",
+    "15min": "5000",
+    "30min": "5000",
+    "1h": "3000",
+    "4h": "2500",
+    "1day": "2200",
+    "1week": "900",
+    "1month": "300",
+  };
+
+  return map[interval] || "1500";
+}
+
+function getImpulseContextRangeForProfile(
+  chartDate,
+  profile = getSupportedCsaTimeframeProfile("H1")
+) {
+  // IMPORTANT:
+  // This range is ONLY for major-structure / Fib impulse discovery.
+  // It must never redefine the authoritative CSA framework periods.
+  //
+  // The lookback is deliberately timeframe-specific so that:
+  // - intraday charts can see the larger move that produced a breakout,
+  // - higher timeframes receive proportionately broader history,
+  // - the same final historical cutoff remains authoritative.
+  const tf = comparableTimeframe(
+    profile?.selectedTimeframe || "H1"
+  ) || "H1";
+
+  const lookbackDaysByTimeframe = {
+    M1: 3,
+    M5: 14,
+    M15: 45,
+    M30: 90,
+    H1: 60,
+    H4: 365,
+    D1: 365 * 5,
+    W1: 365 * 12,
+    MN: 365 * 15,
+  };
+
+  const lookbackDays =
+    Number(
+      lookbackDaysByTimeframe[tf] || 60
+    );
+
+  const end =
+    new Date(
+      Date.UTC(
+        chartDate.getUTCFullYear(),
+        chartDate.getUTCMonth(),
+        chartDate.getUTCDate()
+      )
+    );
+
+  const start =
+    addDays(end, -lookbackDays);
+
+  return {
+    start,
+    end,
+    startDate: formatDateOnly(start),
+    endDate: formatDateOnly(end),
+    lookbackDays,
+    purpose: "impulse_context_only",
+  };
+}
+
+function filterCandlesToStructureRange(
+  candles = [],
+  structureRange = null,
+  profile = getSupportedCsaTimeframeProfile("H1")
+) {
+  if (
+    !Array.isArray(candles) ||
+    !structureRange?.startDate ||
+    !structureRange?.endDate
+  ) {
+    return [];
+  }
+
+  return candles.filter((bar) => {
+    const dateOnly =
+      candleDateOnly(bar?.datetime);
+
+    if (!dateOnly) return false;
+
+    if (
+      dateOnly <
+        structureRange.startDate ||
+      dateOnly >
+        structureRange.endDate
+    ) {
+      return false;
+    }
+
+    if (
+      profile?.structureMode ===
+      "daily-in-week"
+    ) {
+      const date =
+        new Date(
+          `${dateOnly}T00:00:00.000Z`
+        );
+
+      if (
+        Number.isNaN(
+          date.getTime()
+        )
+      ) {
+        return false;
+      }
+
+      const dayNum =
+        date.getUTCDay();
+
+      if (
+        dayNum < 1 ||
+        dayNum > 5
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  });
 }
 
 function buildStructureLevelsFromCandles(candles, structureRange, profile) {
@@ -2465,6 +2596,7 @@ async function fetchTwelveDataStructureLevels({
     error,
     dailyLevels: [],
     timeframeCandles: [],
+    impulseCandles: [],
     csaAreas: [],
     directionalBias: calculateCsaDirectionalBias([], symbol, profile),
     rawCandleCount: 0,
@@ -2481,11 +2613,18 @@ async function fetchTwelveDataStructureLevels({
   if (!symbol) return empty("Instrument/pair is missing or unsupported.");
   if (!chartDate) return empty("Final visible chart date is missing.");
 
-  const structureRange = getStructureRangeForProfile(
-    chartDate,
-    profile,
-    analysisType
-  );
+  const structureRange =
+    getStructureRangeForProfile(
+      chartDate,
+      profile,
+      analysisType
+    );
+
+  const impulseRange =
+    getImpulseContextRangeForProfile(
+      chartDate,
+      profile
+    );
 
   const endDateTime =
     chartCutoff?.endDateTime ||
@@ -2501,7 +2640,7 @@ async function fetchTwelveDataStructureLevels({
   const params = new URLSearchParams({
     symbol,
     interval: profile.interval,
-    start_date: `${structureRange.startDate} 00:00:00`,
+    start_date: `${impulseRange.startDate} 00:00:00`,
     end_date: endDateTime,
     timezone,
     order: "ASC",
@@ -2513,7 +2652,12 @@ async function fetchTwelveDataStructureLevels({
     symbol,
     timeframe,
     analysisType,
-    startDate: `${structureRange.startDate} 00:00:00`,
+    frameworkStartDate:
+      `${structureRange.startDate} 00:00:00`,
+    impulseStartDate:
+      `${impulseRange.startDate} 00:00:00`,
+    impulseLookbackDays:
+      impulseRange.lookbackDays,
     endDate: endDateTime,
     cutoffSource: chartCutoff?.source || "legacy-date-end",
     cutoffTimezone: timezone,
@@ -2587,30 +2731,104 @@ async function fetchTwelveDataStructureLevels({
       ? sortedExcludedDateTimes[0]
       : null;
 
-  const timeframeCandles = filteredCandles
-    .map((bar) => ({
-      datetime: String(bar?.datetime || ""),
-      open: Number(bar?.open),
-      high: Number(bar?.high),
-      low: Number(bar?.low),
-      close: Number(bar?.close),
-    }))
-    .filter(
-      (bar) =>
-        bar.datetime &&
-        Number.isFinite(bar.open) &&
-        Number.isFinite(bar.high) &&
-        Number.isFinite(bar.low) &&
-        Number.isFinite(bar.close)
-    )
-    .sort((a, b) => a.datetime.localeCompare(b.datetime));
+  const normalizeMarketCandles = (
+    candles = []
+  ) =>
+    candles
+      .map((bar) => ({
+        datetime:
+          String(
+            bar?.datetime || ""
+          ),
+        open:
+          Number(bar?.open),
+        high:
+          Number(bar?.high),
+        low:
+          Number(bar?.low),
+        close:
+          Number(bar?.close),
+      }))
+      .filter(
+        (bar) =>
+          bar.datetime &&
+          Number.isFinite(bar.open) &&
+          Number.isFinite(bar.high) &&
+          Number.isFinite(bar.low) &&
+          Number.isFinite(bar.close)
+      )
+      .sort((a, b) =>
+        a.datetime.localeCompare(
+          b.datetime
+        )
+      );
 
-  const dailyLevels = buildStructureLevelsFromCandles(
-    filteredCandles,
-    structureRange,
-    profile
+  // BROAD history: used only by the deterministic major-structure /
+  // Fibonacci impulse selector and broker-price mapping for that same swing.
+  const impulseCandles =
+    normalizeMarketCandles(
+      filteredCandles
+    );
+
+  // NARROW authoritative framework history: used by CSA daily/weekly/monthly
+  // period levels, historical direction, conversion lifecycle and structural
+  // candidate quality. This preserves the existing CSA timeframe rules.
+  const frameworkRawCandles =
+    filterCandlesToStructureRange(
+      filteredCandles,
+      structureRange,
+      profile
+    );
+
+  const timeframeCandles =
+    normalizeMarketCandles(
+      frameworkRawCandles
+    );
+
+  const dailyLevels =
+    buildStructureLevelsFromCandles(
+      frameworkRawCandles,
+      structureRange,
+      profile
+    );
+  const csaAreas =
+    buildCsaAreas(
+      dailyLevels,
+      symbol,
+      profile
+    );
+
+  console.log(
+    "CSA market-data windows:",
+    {
+      symbol,
+      timeframe,
+      frameworkMode:
+        profile?.structureMode ||
+        null,
+      frameworkStartDate:
+        structureRange.startDate,
+      frameworkEndDate:
+        structureRange.endDate,
+      frameworkCandleCount:
+        timeframeCandles.length,
+      impulseStartDate:
+        impulseRange.startDate,
+      impulseEndDate:
+        candleDateOnly(
+          endDateTime
+        ) ||
+        structureRange.endDate,
+      impulseLookbackDays:
+        impulseRange.lookbackDays,
+      impulseCandleCount:
+        impulseCandles.length,
+      sameCutoff:
+        true,
+      rule:
+        "framework_window_authoritative_impulse_window_context_only",
+    }
   );
-  const csaAreas = buildCsaAreas(dailyLevels, symbol, profile);
 
   const baseDirectionalBias =
     chartCutoff?.allowMarketDirectionalBias === false
@@ -2695,12 +2913,21 @@ async function fetchTwelveDataStructureLevels({
         : `No usable ${profile.sourceUnitPlural} were returned before the chart cutoff.`,
     dailyLevels,
     timeframeCandles,
+    impulseCandles,
     csaAreas,
     approvedAreas,
     directionalBias,
-    rawCandleCount: rawCandles.length,
-    filteredCandleCount: filteredCandles.length,
-    weekRange: structureRange,
+    rawCandleCount:
+      rawCandles.length,
+    filteredCandleCount:
+      filteredCandles.length,
+    frameworkCandleCount:
+      timeframeCandles.length,
+    impulseCandleCount:
+      impulseCandles.length,
+    weekRange:
+      structureRange,
+    impulseRange,
     symbol,
     timezone,
     interval: profile.interval,
@@ -3774,6 +4001,7 @@ FIBONACCI
 - The deterministic Fib origin must be the protected swing associated with the major structural level broken by the current directional breakout/breakdown, not merely the most recent higher low/lower high. For bullish structure, identify the major resistance pivot being broken and use the lowest confirmed protected swing low formed after that resistance pivot and before its breakout; bearish is the mirror image. Prefer the current breakout sequence and score major breaks by structural excursion, pivot age, and confirmed-pivot quality. Never select an old extreme solely because it creates better Fib confluence.
 - Major broken-level selection must rank all actually broken confirmed prior swing highs/lows within the active lookback by structural significance rather than recency alone. Significance should consider time-to-break, prominence versus nearby same-side pivots, number of pre-break reactions, percentage of time price remained on the original side, opposing excursion size, separation from the final directional extreme, confirmed protected-pivot quality, and break displacement. Strongly penalize very recent/local pivots and raw-extreme-only protected swings. When two candidates are similarly significant, prefer the older structural pivot rather than the nearer local level.
 - Structural-hierarchy major-break selection must scan each confirmed prior pivot independently for its first valid break, because the normal active-pivot event sequence can miss an older outer resistance/support after newer nested pivots form. Use a broader hierarchy lookback than the normal entry-area lookback. In bullish structure, rank higher/outer broken resistance above lower nested resistance when quality is comparable; in bearish structure rank lower/outer broken support above higher nested support. Reward outer levels broken later in the terminal expansion and penalize deeply nested local levels. Do not choose an outer level merely because it creates desired Fib confluence; it must still have a valid confirmed break and protected swing.
+- Market-data windows are intentionally separate. The authoritative CSA framework window remains timeframe-specific (M1-H1 daily-in-selected-week, H4 weekly-in-selected-month, D1 monthly-in-selected-year, W1 quarterly-in-selected-year, MN yearly across the selected multi-year range). Fibonacci impulse discovery must use a broader historical context ending at the exact same cutoff. Broader impulse candles may identify the relevant protected swing and major broken level, but they must never create extra current-framework support/resistance candidates or change framework period identity.
 - When the same authoritative framework period/side has an exact printed broker/platform price label, that exact chart label may refine the market-data framework price; never borrow a price from a different period or side.
 - Do not mention Fibonacci, retracement percentages, 38.2%, 50%, or 61.8% in normal beginner-facing feedback. You may simply say one structural area is stronger or offers a cleaner opportunity.
 
@@ -5150,11 +5378,18 @@ async function extractChartNativeImpulseAnchors({
     };
   }
 
-  const candles = Array.isArray(
-    marketReference?.timeframeCandles
-  )
-    ? marketReference.timeframeCandles
-    : [];
+  const candles =
+    Array.isArray(
+      marketReference?.impulseCandles
+    ) &&
+    marketReference.impulseCandles.length
+      ? marketReference.impulseCandles
+      : Array.isArray(
+          marketReference
+            ?.timeframeCandles
+        )
+      ? marketReference.timeframeCandles
+      : [];
 
   const atr = averageTrueRange(
     candles,
@@ -12133,7 +12368,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.0.0-regression";
+const CSA_SELECTOR_VERSION = "4.1.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -12917,22 +13152,84 @@ function rankRawEntryAreas({
     return { areas: [], validation: { passed: true, errors: [] } };
   }
 
-  const candles = Array.isArray(marketReference?.timeframeCandles)
-    ? marketReference.timeframeCandles
-        .filter(
-          (candle) =>
-            candle?.datetime &&
-            Number.isFinite(Number(candle?.open)) &&
-            Number.isFinite(Number(candle?.high)) &&
-            Number.isFinite(Number(candle?.low)) &&
-            Number.isFinite(Number(candle?.close))
-        )
-        .sort((a, b) =>
-          String(a.datetime).localeCompare(String(b.datetime))
-        )
-    : [];
+  const candles =
+    Array.isArray(
+      marketReference
+        ?.timeframeCandles
+    )
+      ? marketReference
+          .timeframeCandles
+          .filter(
+            (candle) =>
+              candle?.datetime &&
+              Number.isFinite(
+                Number(candle?.open)
+              ) &&
+              Number.isFinite(
+                Number(candle?.high)
+              ) &&
+              Number.isFinite(
+                Number(candle?.low)
+              ) &&
+              Number.isFinite(
+                Number(candle?.close)
+              )
+          )
+          .sort((a, b) =>
+            String(
+              a.datetime
+            ).localeCompare(
+              String(
+                b.datetime
+              )
+            )
+          )
+      : [];
 
-  if (!candles.length || !Number.isFinite(Number(currentPrice))) {
+  const impulseCandles =
+    Array.isArray(
+      marketReference
+        ?.impulseCandles
+    ) &&
+    marketReference
+      .impulseCandles
+      .length
+      ? marketReference
+          .impulseCandles
+          .filter(
+            (candle) =>
+              candle?.datetime &&
+              Number.isFinite(
+                Number(candle?.open)
+              ) &&
+              Number.isFinite(
+                Number(candle?.high)
+              ) &&
+              Number.isFinite(
+                Number(candle?.low)
+              ) &&
+              Number.isFinite(
+                Number(candle?.close)
+              )
+          )
+          .sort((a, b) =>
+            String(
+              a.datetime
+            ).localeCompare(
+              String(
+                b.datetime
+              )
+            )
+          )
+      : candles;
+
+  if (
+    !candles.length ||
+    !impulseCandles.length ||
+    !Number.isFinite(
+      Number(currentPrice)
+    )
+  ) {
     return {
       areas: [],
       validation: {
@@ -12989,8 +13286,9 @@ function rankRawEntryAreas({
     symbol,
   });
 
-  const fibonacci = buildLatestImpulseFibonacci({
-    candles,
+  const fibonacci =
+    buildLatestImpulseFibonacci({
+    candles: impulseCandles,
     historicalPhase,
     direction,
     timeframe,
@@ -13422,6 +13720,43 @@ function rankRawEntryAreas({
   const regressionDiagnostics = {
     selectorVersion: CSA_SELECTOR_VERSION,
     direction,
+    dataWindows: {
+      framework: {
+        startDate:
+          marketReference
+            ?.weekRange
+            ?.startDate ||
+          null,
+        endDate:
+          marketReference
+            ?.weekRange
+            ?.endDate ||
+          null,
+        candleCount:
+          candles.length,
+      },
+      impulse: {
+        startDate:
+          marketReference
+            ?.impulseRange
+            ?.startDate ||
+          null,
+        endDate:
+          marketReference
+            ?.impulseRange
+            ?.endDate ||
+          null,
+        lookbackDays:
+          marketReference
+            ?.impulseRange
+            ?.lookbackDays ||
+          null,
+        candleCount:
+          impulseCandles.length,
+      },
+      sameHistoricalCutoff:
+        true,
+    },
     fibonacci: {
       priceSource:
         fibonacci?.priceSource || "external_ohlc",
@@ -17908,6 +18243,8 @@ ${(visualReview?.strategyMissingInformation || []).length
       csaDirectionalBias: bias,
       analysisFacts,
       regressionSnapshot: {
+        engineVersion:
+          "4.1.0-separate-framework-impulse-windows",
         instrument: submittedInstrument,
         timeframe,
         analysisType: mode,
@@ -17965,7 +18302,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       journalTags: ["setup review", "directional bias", "entry area", "visual csa comparison", "uploaded chart comparison", "risk reward", marketReference.profile?.selectedTimeframe || selectedTimeframeProfile.selectedTimeframe, marketReference.profile?.structureMode || selectedTimeframeProfile.structureMode, marketReference.ok ? "market-data-backed" : "vision-only fallback", visualReview?.frameworkMatch || "visual-not-reviewed", bias.biasCode || "bias-unavailable"],
       visualReview,
       chartDetection,
-      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, filteredCandleCount: marketReference.filteredCandleCount, weekRange: marketReference.weekRange, dailyLevels: marketReference.dailyLevels, timeframeCandles: marketReference.timeframeCandles, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
+      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, filteredCandleCount: marketReference.filteredCandleCount, frameworkCandleCount: marketReference.frameworkCandleCount, impulseCandleCount: marketReference.impulseCandleCount, weekRange: marketReference.weekRange, impulseRange: marketReference.impulseRange, dailyLevels: marketReference.dailyLevels, timeframeCandles: marketReference.timeframeCandles, impulseCandles: marketReference.impulseCandles, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
     };
 
     const finalClientResponse = applyPlanToAnalysisResponse({
