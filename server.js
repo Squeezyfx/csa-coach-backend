@@ -4978,6 +4978,244 @@ Return JSON only:
   };
 }
 
+
+async function readFrameworkPricesBatchFromChart({
+  imageBase64,
+  mimeType,
+  targets,
+  timeframe,
+  structureLabel,
+  marketReference,
+}) {
+  if (!Array.isArray(targets) || !targets.length) {
+    return {
+      ok: false,
+      matches: [],
+      reason: "No framework targets were provided.",
+    };
+  }
+
+  const compactTargets = targets.map((target, index) => ({
+    id: index + 1,
+    period: target.period,
+    side: target.side,
+    areaType: target.areaType,
+    executionOrder: target.executionOrder,
+    frameworkPrice: target.frameworkPrice,
+  }));
+
+  const prompt = `
+You have ONE narrow chart-reading task.
+
+Read chart-visible prices for several ALREADY-SELECTED CSA framework levels.
+Do NOT perform trading analysis.
+Do NOT rank entries.
+Do NOT calculate Fibonacci.
+Do NOT change a target's period, side, or role.
+
+TIMEFRAME: ${timeframe}
+FRAMEWORK RULE: ${structureLabel}
+
+AUTHORITATIVE TARGETS:
+${JSON.stringify(compactTargets)}
+
+STRICT IDENTITY RULES:
+1. Treat each target independently.
+2. Match the exact TARGET PERIOD and TARGET SIDE only.
+3. Never use a line from another period to fill a target.
+4. Never reuse one visible line for two different targets unless both targets genuinely refer to the same authoritative level.
+5. MARKET-DATA REFERENCE PRICE is a strong location anchor, not permission to invent a chart label.
+6. Prefer an exact printed price-axis label when readable.
+7. If no exact printed price is readable but the matching high/low is visually clear, use approximatePrice.
+8. If the visually identified line is materially far from its own reference price, return null for that target rather than borrowing another line.
+9. Never invent digits.
+10. Return one result for EVERY target id, preserving the same id, period and side.
+
+Return JSON only:
+{
+  "matches": [
+    {
+      "id": 1,
+      "period": "exact target period",
+      "side": "high | low",
+      "displayedPrice": null,
+      "approximatePrice": null,
+      "platformLabel": null,
+      "evidence": null,
+      "confidence": "high | medium | low"
+    }
+  ]
+}`;
+
+  try {
+    const response = await runVisionModel({
+      systemPrompt: prompt,
+      userText:
+        "Read only the listed authoritative framework prices from this chart. Return JSON only.",
+      imageBase64,
+      mimeType,
+      maxTokens: 1200,
+      openaiModel: "gpt-4.1-mini",
+      claudeModel: CLAUDE_MODEL,
+      temperature: 0,
+      imageDetail: "high",
+    });
+
+    const parsed = extractJsonObject(response.text || "");
+    const rawMatches = Array.isArray(parsed?.matches)
+      ? parsed.matches
+      : [];
+
+    if (!rawMatches.length) {
+      return {
+        ok: false,
+        matches: [],
+        reason: "Batch framework price response contained no matches.",
+        provider: response.provider,
+        model: response.model,
+      };
+    }
+
+    const atr = averageTrueRange(
+      Array.isArray(marketReference?.timeframeCandles)
+        ? marketReference.timeframeCandles
+        : [],
+      getStructureEngineConfig(timeframe).atrPeriod
+    );
+
+    const standardTolerance =
+      getFrameworkChartReconciliationTolerance({
+        symbol: marketReference?.symbol || "",
+        atr,
+      });
+
+    const exactLabelTolerance = Math.max(
+      standardTolerance,
+      Number(atr || 0) * 0.25
+    );
+
+    const normalizedMatches = targets.map((target, index) => {
+      const raw =
+        rawMatches.find(
+          (item) => Number(item?.id) === index + 1
+        ) ||
+        rawMatches.find(
+          (item) =>
+            String(item?.period || "").trim() ===
+              String(target.period || "").trim() &&
+            String(item?.side || "").trim().toLowerCase() ===
+              String(target.side || "").trim().toLowerCase()
+        ) ||
+        {};
+
+      const displayedPrice =
+        nullablePositiveNumber(raw?.displayedPrice) ||
+        extractNumericPriceFromLabel(raw?.platformLabel);
+
+      const approximatePrice =
+        displayedPrice === null
+          ? nullablePositiveNumber(raw?.approximatePrice)
+          : null;
+
+      const confidence = ["high", "medium", "low"].includes(
+        String(raw?.confidence || "").toLowerCase()
+      )
+        ? String(raw.confidence).toLowerCase()
+        : "low";
+
+      const candidatePrice =
+        displayedPrice || approximatePrice;
+
+      const selectedTolerance =
+        displayedPrice !== null
+          ? exactLabelTolerance
+          : standardTolerance;
+
+      const candidateDifference =
+        candidatePrice !== null
+          ? Math.abs(
+              Number(candidatePrice) -
+              Number(target.frameworkPrice)
+            )
+          : null;
+
+      const withinTolerance =
+        candidateDifference !== null &&
+        candidateDifference <= selectedTolerance;
+
+      if (candidatePrice !== null && !withinTolerance) {
+        console.log(
+          "Batch framework price rejected as too far:",
+          {
+            period: target.period,
+            side: target.side,
+            areaType: target.areaType,
+            frameworkPrice: target.frameworkPrice,
+            candidatePrice,
+            difference: candidateDifference,
+            standardTolerance,
+            exactLabelTolerance,
+            selectedTolerance,
+            exactPrintedLabel: displayedPrice !== null,
+          }
+        );
+      }
+
+      return {
+        period: target.period,
+        side: target.side,
+        frameworkPrice: target.frameworkPrice,
+        areaType: target.areaType,
+        executionOrder: target.executionOrder,
+        displayedPrice:
+          withinTolerance && displayedPrice !== null
+            ? displayedPrice
+            : null,
+        approximatePrice:
+          withinTolerance && displayedPrice === null
+            ? approximatePrice
+            : null,
+        platformLabel:
+          String(raw?.platformLabel || "").trim(),
+        evidence:
+          safeUserText(raw?.evidence || ""),
+        confidence,
+        withinTolerance,
+        modelUsed: response.model,
+        provider: response.provider,
+        difference: candidateDifference,
+        standardTolerance,
+        exactLabelTolerance,
+        selectedTolerance,
+        batchRead: true,
+      };
+    });
+
+    return {
+      ok: true,
+      matches: normalizedMatches,
+      reason: "",
+      provider: response.provider,
+      model: response.model,
+    };
+  } catch (error) {
+    console.warn(
+      "Batch framework price reader failed; using per-target fallback:",
+      error?.message || error
+    );
+
+    return {
+      ok: false,
+      matches: [],
+      reason:
+        safeUserText(
+          error?.message ||
+            "Batch framework price reader failed."
+        ),
+    };
+  }
+}
+
 async function extractVisibleFrameworkPriceMap({
   imageBase64,
   mimeType,
@@ -5018,51 +5256,74 @@ async function extractVisibleFrameworkPriceMap({
     targets,
   });
 
-  const matches = [];
+  let matches = [];
 
   /*
-   * V4.6.0 PERFORMANCE:
-   * Each focused reader is locked to ONE authoritative period + side, so the
-   * calls are independent. Run them in small batches to cut latency without
-   * creating an unlimited provider burst.
+   * V4.6.2 PERFORMANCE:
+   * Read all authoritative targets in ONE tightly constrained vision call.
+   * The backend still performs target-by-target tolerance validation.
+   *
+   * If the batch response fails or is incomplete, fall back automatically
+   * to the proven independent one-target readers from v4.6.1.
    */
-  const maxConcurrentFocusedReads = Math.min(
-    5,
-    Math.max(1, targets.length)
-  );
+  const batchRead =
+    await readFrameworkPricesBatchFromChart({
+      imageBase64,
+      mimeType,
+      targets,
+      timeframe,
+      structureLabel,
+      marketReference,
+    });
 
-  for (
-    let startIndex = 0;
-    startIndex < targets.length;
-    startIndex += maxConcurrentFocusedReads
-  ) {
-    const batch =
-      targets.slice(
-        startIndex,
-        startIndex + maxConcurrentFocusedReads
-      );
+  const batchComplete =
+    batchRead?.ok === true &&
+    Array.isArray(batchRead?.matches) &&
+    batchRead.matches.length === targets.length;
 
-    const batchMatches =
-      await Promise.all(
-        batch.map((target) =>
-          readSingleFrameworkPriceFromChart({
-            imageBase64,
-            mimeType,
-            target,
-            timeframe,
-            structureLabel,
-            marketReference,
-          })
-        )
-      );
+  if (batchComplete) {
+    matches = batchRead.matches;
+  } else {
+    const maxConcurrentFocusedReads = Math.min(
+      5,
+      Math.max(1, targets.length)
+    );
 
-    matches.push(...batchMatches);
+    for (
+      let startIndex = 0;
+      startIndex < targets.length;
+      startIndex += maxConcurrentFocusedReads
+    ) {
+      const batch =
+        targets.slice(
+          startIndex,
+          startIndex + maxConcurrentFocusedReads
+        );
+
+      const batchMatches =
+        await Promise.all(
+          batch.map((target) =>
+            readSingleFrameworkPriceFromChart({
+              imageBase64,
+              mimeType,
+              target,
+              timeframe,
+              structureLabel,
+              marketReference,
+            })
+          )
+        );
+
+      matches.push(...batchMatches);
+    }
   }
 
-  console.log("Per-target framework price extraction:", {
+  console.log("Focused framework price extraction:", {
     timeframe,
-    concurrency:
-      maxConcurrentFocusedReads,
+    mode:
+      batchComplete
+        ? "single_multi_target_request"
+        : "per_target_fallback",
     targetCount:
       targets.length,
     matches,
@@ -6895,7 +7156,7 @@ Return exactly this JSON shape:
       // Keep the same structured review, but avoid reserving an unnecessarily
       // large generation budget for prose the deterministic backend later
       // normalizes/locks anyway.
-      maxTokens: 2400,
+      maxTokens: 2000,
       openaiModel: "gpt-4.1-mini",
       claudeModel: CLAUDE_MODEL,
       temperature: 0,
@@ -9365,8 +9626,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.6.1";
-const CSA_BUILD_ID = "CSA-v4.6.1-performance-pass-2";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.6.2";
+const CSA_BUILD_ID = "CSA-v4.6.2-performance-pass-3";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15157,7 +15418,7 @@ function rankRawEntryAreas({
       })),
   };
 
-  console.log("CSA v4.6.1 structural-strength decision:", {
+  console.log("CSA v4.6.2 structural-strength decision:", {
     buildId: CSA_BUILD_ID,
     direction,
     initializationOrder: "strength_before_structural_diagnostics",
@@ -20070,8 +20331,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
 
     console.log("CSA PERFORMANCE CONFIG:", {
       buildId: CSA_BUILD_ID,
-      focusedReadConcurrency: 5,
-      fullVisualMaxTokens: 2400,
+      focusedPriceMode:
+        "single_multi_target_with_per_target_fallback",
+      fullVisualMaxTokens: 2000,
+      visualAndPriceMap:
+        "parallel",
       chartNativeBranches:
         "price_scale_and_wick_mapping_parallel",
       selectorRulesChanged: false,
@@ -20244,97 +20508,52 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       }
     );
 
+    /*
+     * V4.6.2 PERFORMANCE:
+     * The full visual review and authoritative framework-price reconciliation
+     * both depend on the same already-synchronized market reference but not
+     * on one another. Start them together.
+     */
     const fullVisualStartedAt =
       csaNowMs();
-
-    let visualReview = await compareUploadedChartWithCsaFramework({
-      imageBase64,
-      mimeType,
-      marketReference,
-      chartDetection,
-      submittedInstrument,
-      timeframe,
-      analysisType: mode,
-      submittedNotes,
-      analysisFramework: selectedStrategy.analysisFramework,
-      personalStrategySnapshot: selectedStrategy.snapshot,
-    });
-
-    // If the lightweight chart validator could not read the final close but
-    // the full visual review could, perform the same synchronization now and
-    // rerun the visual comparison against the corrected market reference.
-    csaTimingLog(
-      "full_visual_review_initial",
-      fullVisualStartedAt
-    );
-
-    const visualVisiblePrice = asPositiveNumber(visualReview?.latestVisiblePrice);
-    const detectedVisiblePrice = asPositiveNumber(chartDetection?.latestVisiblePrice);
-
-    if (
-      normalizedRequestedCutoffMode === "final_visible" &&
-      visualVisiblePrice &&
-      (!detectedVisiblePrice ||
-        Math.abs(visualVisiblePrice - detectedVisiblePrice) >
-          getFinalVisiblePriceSyncTolerance({
-            marketReference,
-            symbol: normalizedSymbol,
-            targetPrice: visualVisiblePrice,
-          }))
-    ) {
-      const visualPriceSync =
-        await synchronizeFinalVisibleMarketReference({
-          marketReference,
-          chartDetection: {
-            ...chartDetection,
-            latestVisiblePrice: visualVisiblePrice,
-            latestVisiblePriceConfidence: "medium",
-          },
-          selectedDateText,
-          symbol: normalizedSymbol,
-          timeframe,
-          timezone: resolvedTimezone,
-          analysisType: mode,
-          chartCutoff,
-        });
-
-      if (visualPriceSync.adjusted) {
-        marketReference = visualPriceSync.marketReference;
-        chartCutoff = visualPriceSync.chartCutoff;
-
-        const visualRerunStartedAt =
-          csaNowMs();
-
-        visualReview = await compareUploadedChartWithCsaFramework({
-          imageBase64,
-          mimeType,
-          marketReference,
-          chartDetection,
-          submittedInstrument,
-          timeframe,
-          analysisType: mode,
-          submittedNotes,
-          analysisFramework: selectedStrategy.analysisFramework,
-          personalStrategySnapshot: selectedStrategy.snapshot,
-        });
-
-        csaTimingLog(
-          "full_visual_review_resync_rerun",
-          visualRerunStartedAt
-        );
-      }
-    }
-
     const frameworkPriceMapStartedAt =
       csaNowMs();
 
-    const dedicatedFrameworkPriceMap =
-      await extractVisibleFrameworkPriceMap({
+    const [
+      initialVisualReview,
+      initialFrameworkPriceMap,
+    ] = await Promise.all([
+      compareUploadedChartWithCsaFramework({
+        imageBase64,
+        mimeType,
+        marketReference,
+        chartDetection,
+        submittedInstrument,
+        timeframe,
+        analysisType: mode,
+        submittedNotes,
+        analysisFramework:
+          selectedStrategy.analysisFramework,
+        personalStrategySnapshot:
+          selectedStrategy.snapshot,
+      }),
+      extractVisibleFrameworkPriceMap({
         imageBase64,
         mimeType,
         marketReference,
         timeframe,
-      });
+      }),
+    ]);
+
+    let visualReview =
+      initialVisualReview;
+    let dedicatedFrameworkPriceMap =
+      initialFrameworkPriceMap;
+
+    csaTimingLog(
+      "full_visual_review_initial",
+      fullVisualStartedAt
+    );
 
     csaTimingLog(
       "focused_framework_price_map",
@@ -20346,8 +20565,117 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           )
             ? dedicatedFrameworkPriceMap.matches.length
             : 0,
+        overlappedWithVisualReview: true,
       }
     );
+
+    // If the lightweight chart validator could not read the final close but
+    // the full visual review could, synchronize the market reference. Because
+    // the framework map was built against the pre-adjustment reference, refresh
+    // both products together only when an actual adjustment occurred.
+    const visualVisiblePrice =
+      asPositiveNumber(
+        visualReview?.latestVisiblePrice
+      );
+    const detectedVisiblePrice =
+      asPositiveNumber(
+        chartDetection?.latestVisiblePrice
+      );
+
+    if (
+      normalizedRequestedCutoffMode === "final_visible" &&
+      visualVisiblePrice &&
+      (!detectedVisiblePrice ||
+        Math.abs(
+          visualVisiblePrice -
+            detectedVisiblePrice
+        ) >
+          getFinalVisiblePriceSyncTolerance({
+            marketReference,
+            symbol: normalizedSymbol,
+            targetPrice: visualVisiblePrice,
+          }))
+    ) {
+      const visualPriceSync =
+        await synchronizeFinalVisibleMarketReference({
+          marketReference,
+          chartDetection: {
+            ...chartDetection,
+            latestVisiblePrice:
+              visualVisiblePrice,
+            latestVisiblePriceConfidence:
+              "medium",
+          },
+          selectedDateText,
+          symbol: normalizedSymbol,
+          timeframe,
+          timezone: resolvedTimezone,
+          analysisType: mode,
+          chartCutoff,
+        });
+
+      if (visualPriceSync.adjusted) {
+        marketReference =
+          visualPriceSync.marketReference;
+        chartCutoff =
+          visualPriceSync.chartCutoff;
+
+        const visualRerunStartedAt =
+          csaNowMs();
+        const priceMapRerunStartedAt =
+          csaNowMs();
+
+        const [
+          refreshedVisualReview,
+          refreshedFrameworkPriceMap,
+        ] = await Promise.all([
+          compareUploadedChartWithCsaFramework({
+            imageBase64,
+            mimeType,
+            marketReference,
+            chartDetection,
+            submittedInstrument,
+            timeframe,
+            analysisType: mode,
+            submittedNotes,
+            analysisFramework:
+              selectedStrategy.analysisFramework,
+            personalStrategySnapshot:
+              selectedStrategy.snapshot,
+          }),
+          extractVisibleFrameworkPriceMap({
+            imageBase64,
+            mimeType,
+            marketReference,
+            timeframe,
+          }),
+        ]);
+
+        visualReview =
+          refreshedVisualReview;
+        dedicatedFrameworkPriceMap =
+          refreshedFrameworkPriceMap;
+
+        csaTimingLog(
+          "full_visual_review_resync_rerun",
+          visualRerunStartedAt
+        );
+
+        csaTimingLog(
+          "focused_framework_price_map_resync_rerun",
+          priceMapRerunStartedAt,
+          {
+            matches:
+              Array.isArray(
+                dedicatedFrameworkPriceMap?.matches
+              )
+                ? dedicatedFrameworkPriceMap.matches.length
+                : 0,
+            overlappedWithVisualReview: true,
+          }
+        );
+      }
+    }
 
     visualReview =
       mergeDedicatedFrameworkPriceMapIntoVisualReview({
@@ -20610,7 +20938,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       analysisFacts,
       regressionSnapshot: {
         engineVersion:
-          "4.6.1-performance-pass-2",
+          "4.6.2-performance-pass-3",
         instrument: submittedInstrument,
         timeframe,
         analysisType: mode,
@@ -20846,7 +21174,7 @@ ${(visualReview?.strategyMissingInformation || []).length
     );
 
     console.log(
-      "CSA v4.6.1 completed analysis commit:",
+      "CSA v4.6.2 completed analysis commit:",
       {
         buildId:
           CSA_BUILD_ID,
