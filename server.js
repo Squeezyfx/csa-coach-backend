@@ -9291,8 +9291,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.5.4";
-const CSA_BUILD_ID = "CSA-v4.5.4-reearned-structural-strength";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.5.5";
+const CSA_BUILD_ID = "CSA-v4.5.5-strength-init-order-fix";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14577,6 +14577,40 @@ function rankRawEntryAreas({
       fibonacciScore: 0,
     });
 
+    /*
+     * V4.5.4 — RE-EARNED STRUCTURAL STRENGTH
+     *
+     * A historically busy authoritative S/R area is not automatically a
+     * strong entry area. However, it may re-earn strong structural status
+     * when current evidence shows:
+     *   - at least 2 genuine reactions, AND
+     *   - at least 1 strong departure.
+     *
+     * Fibonacci distance rules remain unchanged:
+     *   <= 15% ATR = close confluence
+     *   15–20% ATR = borderline, requires strong structure
+     *   > 20% ATR = fail
+     */
+    const cleanStrongStructure =
+      quality.choppy !== true &&
+      Number(quality.score || 0) >= 50;
+
+    const reEarnedStrongStructure =
+      quality.valid === true &&
+      Number(reactionStats?.reactions || 0) >= 2 &&
+      Number(reactionStats?.strongDepartures || 0) >= 1;
+
+    const structuralEvidenceStrong =
+      cleanStrongStructure ||
+      reEarnedStrongStructure;
+
+    const structuralStrengthMode =
+      cleanStrongStructure
+        ? "clean_high_quality"
+        : reEarnedStrongStructure
+        ? "reearned_by_reactions_and_departure"
+        : "not_strong";
+
     const structurallyValid =
       isAuthoritativeFrameworkLevel &&
       quality.valid;
@@ -14620,40 +14654,6 @@ function rankRawEntryAreas({
       reactionStats,
       atr,
     });
-
-    /*
-     * V4.5.4 — RE-EARNED STRUCTURAL STRENGTH
-     *
-     * A historically busy authoritative S/R area is not automatically a
-     * strong entry area. However, it may re-earn strong structural status
-     * when current evidence shows:
-     *   - at least 2 genuine reactions, AND
-     *   - at least 1 strong departure.
-     *
-     * Fibonacci distance rules remain unchanged:
-     *   <= 15% ATR = close confluence
-     *   15–20% ATR = borderline, requires strong structure
-     *   > 20% ATR = fail
-     */
-    const cleanStrongStructure =
-      quality.choppy !== true &&
-      Number(quality.score || 0) >= 50;
-
-    const reEarnedStrongStructure =
-      quality.valid === true &&
-      Number(reactionStats?.reactions || 0) >= 2 &&
-      Number(reactionStats?.strongDepartures || 0) >= 1;
-
-    const structuralEvidenceStrong =
-      cleanStrongStructure ||
-      reEarnedStrongStructure;
-
-    const structuralStrengthMode =
-      cleanStrongStructure
-        ? "clean_high_quality"
-        : reEarnedStrongStructure
-        ? "reearned_by_reactions_and_departure"
-        : "not_strong";
 
     const fibConfluence = evaluateRequiredFibonacciConfluence({
       fibonacci,
@@ -15083,9 +15083,10 @@ function rankRawEntryAreas({
       })),
   };
 
-  console.log("CSA v4.5.4 structural-strength decision:", {
+  console.log("CSA v4.5.5 structural-strength decision:", {
     buildId: CSA_BUILD_ID,
     direction,
+    initializationOrder: "strength_before_structural_diagnostics",
     rule:
       "15_20pct_atr_borderline_requires_clean_or_reearned_strong_structure",
     fibCandidates: fibGateDiagnostics.map((candidate) => ({
@@ -20440,7 +20441,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       analysisFacts,
       regressionSnapshot: {
         engineVersion:
-          "4.5.4-reearned-structural-strength",
+          "4.5.5-strength-init-order-fix",
         instrument: submittedInstrument,
         timeframe,
         analysisType: mode,
