@@ -5026,7 +5026,10 @@ async function extractVisibleFrameworkPriceMap({
    * calls are independent. Run them in small batches to cut latency without
    * creating an unlimited provider burst.
    */
-  const maxConcurrentFocusedReads = 3;
+  const maxConcurrentFocusedReads = Math.min(
+    5,
+    Math.max(1, targets.length)
+  );
 
   for (
     let startIndex = 0;
@@ -6065,13 +6068,47 @@ async function extractChartNativeImpulseAnchors({
     };
   }
 
-  const scaleRead = await extractChartPriceScalePoints({
-    imageBase64,
-    mimeType,
-    timeframe,
-    symbol,
-    visualReview,
-  });
+  const latestVisibleDate =
+    String(
+      chartDetection?.latestVisibleDate ||
+      marketReference?.chartCutoff?.latestVisibleDate ||
+      ""
+    ).trim();
+
+  const latestVisibleTime =
+    String(
+      chartDetection?.latestVisibleTime || ""
+    ).trim();
+
+  /*
+   * V4.6.1 PERFORMANCE:
+   * Price-scale calibration reading and timestamp-targeted wick location are
+   * independent vision tasks. Previously we waited for the scale read before
+   * starting wick mapping. Run both branches concurrently, then combine them
+   * deterministically exactly as before.
+   */
+  const [
+    scaleRead,
+    wickLocation,
+  ] = await Promise.all([
+    extractChartPriceScalePoints({
+      imageBase64,
+      mimeType,
+      timeframe,
+      symbol,
+      visualReview,
+    }),
+    locateChartNativeImpulseWicks({
+      imageBase64,
+      mimeType,
+      direction,
+      timeframe,
+      symbol,
+      marketImpulse,
+      latestVisibleDate,
+      latestVisibleTime,
+    }),
+  ]);
 
   if (!scaleRead?.ok) {
     return {
@@ -6081,6 +6118,7 @@ async function extractChartNativeImpulseAnchors({
         scaleRead?.reason ||
         "chart_price_scale_points_unavailable",
       scaleRead,
+      wickLocation,
     };
   }
 
@@ -6103,32 +6141,9 @@ async function extractChartNativeImpulseAnchors({
         calibration?.reason ||
         "chart_price_scale_calibration_invalid",
       calibration,
+      wickLocation,
     };
   }
-
-  const latestVisibleDate =
-    String(
-      chartDetection?.latestVisibleDate ||
-      marketReference?.chartCutoff?.latestVisibleDate ||
-      ""
-    ).trim();
-
-  const latestVisibleTime =
-    String(
-      chartDetection?.latestVisibleTime || ""
-    ).trim();
-
-  const wickLocation =
-    await locateChartNativeImpulseWicks({
-      imageBase64,
-      mimeType,
-      direction,
-      timeframe,
-      symbol,
-      marketImpulse,
-      latestVisibleDate,
-      latestVisibleTime,
-    });
 
   if (!wickLocation?.ok) {
     return {
@@ -6876,7 +6891,11 @@ Return exactly this JSON shape:
         "Review this uploaded chart in simple beginner trader language using the internal support/resistance framework. Return only the required JSON.",
       imageBase64,
       mimeType,
-      maxTokens: 3200,
+      // V4.6.1 PERFORMANCE:
+      // Keep the same structured review, but avoid reserving an unnecessarily
+      // large generation budget for prose the deterministic backend later
+      // normalizes/locks anyway.
+      maxTokens: 2400,
       openaiModel: "gpt-4.1-mini",
       claudeModel: CLAUDE_MODEL,
       temperature: 0,
@@ -9346,8 +9365,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.6.0";
-const CSA_BUILD_ID = "CSA-v4.6.0-performance-pass-1";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.6.1";
+const CSA_BUILD_ID = "CSA-v4.6.1-performance-pass-2";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15138,7 +15157,7 @@ function rankRawEntryAreas({
       })),
   };
 
-  console.log("CSA v4.6.0 structural-strength decision:", {
+  console.log("CSA v4.6.1 structural-strength decision:", {
     buildId: CSA_BUILD_ID,
     direction,
     initializationOrder: "strength_before_structural_diagnostics",
@@ -20049,6 +20068,16 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const totalAnalysisStartedAt =
       csaNowMs();
 
+    console.log("CSA PERFORMANCE CONFIG:", {
+      buildId: CSA_BUILD_ID,
+      focusedReadConcurrency: 5,
+      fullVisualMaxTokens: 2400,
+      chartNativeBranches:
+        "price_scale_and_wick_mapping_parallel",
+      selectorRulesChanged: false,
+      fibRulesChanged: false,
+    });
+
     const chartValidationStartedAt =
       csaNowMs();
 
@@ -20581,7 +20610,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       analysisFacts,
       regressionSnapshot: {
         engineVersion:
-          "4.6.0-performance-pass-1",
+          "4.6.1-performance-pass-2",
         instrument: submittedInstrument,
         timeframe,
         analysisType: mode,
@@ -20817,7 +20846,7 @@ ${(visualReview?.strategyMissingInformation || []).length
     );
 
     console.log(
-      "CSA v4.6.0 completed analysis commit:",
+      "CSA v4.6.1 completed analysis commit:",
       {
         buildId:
           CSA_BUILD_ID,
