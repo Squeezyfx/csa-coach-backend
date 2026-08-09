@@ -9291,8 +9291,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.5.3";
-const CSA_BUILD_ID = "CSA-v4.5.3-safe-response-commit";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.5.4";
+const CSA_BUILD_ID = "CSA-v4.5.4-reearned-structural-strength";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14603,6 +14603,10 @@ function rankRawEntryAreas({
       qualityReason: quality.reason,
       qualityScore: quality.score,
       choppy: quality.choppy,
+      cleanStrongStructure,
+      reEarnedStrongStructure,
+      structuralEvidenceStrong,
+      structuralStrengthMode,
     });
 
     if (!structurallyValid) return null;
@@ -14617,15 +14621,39 @@ function rankRawEntryAreas({
       atr,
     });
 
-    const structuralEvidenceStrong =
+    /*
+     * V4.5.4 — RE-EARNED STRUCTURAL STRENGTH
+     *
+     * A historically busy authoritative S/R area is not automatically a
+     * strong entry area. However, it may re-earn strong structural status
+     * when current evidence shows:
+     *   - at least 2 genuine reactions, AND
+     *   - at least 1 strong departure.
+     *
+     * Fibonacci distance rules remain unchanged:
+     *   <= 15% ATR = close confluence
+     *   15–20% ATR = borderline, requires strong structure
+     *   > 20% ATR = fail
+     */
+    const cleanStrongStructure =
       quality.choppy !== true &&
-      (
-        Number(quality.score || 0) >= 50 ||
-        (
-          Number(reactionStats?.reactions || 0) >= 2 &&
-          Number(reactionStats?.strongDepartures || 0) >= 1
-        )
-      );
+      Number(quality.score || 0) >= 50;
+
+    const reEarnedStrongStructure =
+      quality.valid === true &&
+      Number(reactionStats?.reactions || 0) >= 2 &&
+      Number(reactionStats?.strongDepartures || 0) >= 1;
+
+    const structuralEvidenceStrong =
+      cleanStrongStructure ||
+      reEarnedStrongStructure;
+
+    const structuralStrengthMode =
+      cleanStrongStructure
+        ? "clean_high_quality"
+        : reEarnedStrongStructure
+        ? "reearned_by_reactions_and_departure"
+        : "not_strong";
 
     const fibConfluence = evaluateRequiredFibonacciConfluence({
       fibonacci,
@@ -14720,6 +14748,10 @@ function rankRawEntryAreas({
       borderlineAllowance: fibConfluence.borderlineAllowance,
       structuralQualityScore: fibConfluence.structuralQualityScore,
       strongStructure: fibConfluence.strongStructure,
+      structuralStrengthMode,
+      reEarnedStrongStructure,
+      reactionCount: Number(reactionStats?.reactions || 0),
+      strongDepartureCount: Number(reactionStats?.strongDepartures || 0),
       proximityAllowance: fibConfluence.proximityAllowance,
     });
 
@@ -15051,6 +15083,51 @@ function rankRawEntryAreas({
       })),
   };
 
+  console.log("CSA v4.5.4 structural-strength decision:", {
+    buildId: CSA_BUILD_ID,
+    direction,
+    rule:
+      "15_20pct_atr_borderline_requires_clean_or_reearned_strong_structure",
+    fibCandidates: fibGateDiagnostics.map((candidate) => ({
+      level:
+        candidate.resolvedEntryPrice ??
+        candidate.frameworkPrice ??
+        null,
+      areaType: candidate.areaType || null,
+      frameworkPeriod: candidate.frameworkPeriod || null,
+      passed: candidate.passed === true,
+      structuralQualityScore:
+        candidate.structuralQualityScore ?? null,
+      structuralStrengthMode:
+        candidate.structuralStrengthMode || null,
+      reEarnedStrongStructure:
+        candidate.reEarnedStrongStructure === true,
+      reactionCount:
+        candidate.reactionCount ?? null,
+      strongDepartureCount:
+        candidate.strongDepartureCount ?? null,
+      matchedLevels:
+        candidate.matchedLevels || [],
+      evaluatedFibLevels:
+        candidate.evaluatedFibLevels || [],
+      closeAllowance:
+        candidate.closeAllowance ?? null,
+      borderlineAllowance:
+        candidate.borderlineAllowance ?? null,
+    })),
+    selectedEntries:
+      (sequencedResult?.areas || []).map((area) => ({
+        executionOrder:
+          Number(area.executionOrder || 0),
+        levelText: area.levelText || null,
+        areaType: area.areaType || null,
+        structuralStrengthMode:
+          area.structuralStrengthMode || null,
+        fibonacciMatches:
+          area.fibonacciMatches || [],
+      })),
+  });
+
   console.log("CSA regression snapshot:", regressionDiagnostics);
 
   console.log("CSA selector v3 structural gate:", {
@@ -15061,7 +15138,7 @@ function rankRawEntryAreas({
 
   console.log("CSA selector v3 Fibonacci entry gate:", {
     selectorVersion: CSA_SELECTOR_VERSION,
-    fibProximityModel: "adaptive_atr_15_20_percent",
+    fibProximityModel: "adaptive_atr_15_20_percent_reearned_structure",
     impulseModel: "structural_hierarchy_outer_break_with_protected_swing_and_timestamp_targeted_pixel_wicks",
     frameworkPriceModel: "same_period_exact_chart_label_priority",
     direction,
@@ -20363,7 +20440,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       analysisFacts,
       regressionSnapshot: {
         engineVersion:
-          "4.5.3-safe-response-commit",
+          "4.5.4-reearned-structural-strength",
         instrument: submittedInstrument,
         timeframe,
         analysisType: mode,
