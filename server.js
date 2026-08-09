@@ -1677,6 +1677,26 @@ function normalizeArrayOfStrings(value = [], fallback = []) {
   }).filter(Boolean);
 }
 
+function csaNowMs() {
+  return Date.now();
+}
+
+function csaElapsedMs(startedAt) {
+  return Math.max(
+    0,
+    Date.now() - Number(startedAt || Date.now())
+  );
+}
+
+function csaTimingLog(stage, startedAt, extra = {}) {
+  console.log("CSA PERFORMANCE:", {
+    buildId: CSA_BUILD_ID,
+    stage,
+    elapsedMs: csaElapsedMs(startedAt),
+    ...extra,
+  });
+}
+
 function safeUserText(value = "") {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -3749,8 +3769,18 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
      * If the first pass rejects the image but there is still plausible
      * chart evidence, run one focused chart-only verification pass.
      */
+    /*
+     * V4.6.0 PERFORMANCE:
+     * Skip a second validation vision call when deterministic evidence already
+     * establishes a strong, usable trading chart. Rescue remains available
+     * for weak/ambiguous evidence and genuine hard-reject cases.
+     */
     const shouldTryRescue =
-      !modelMarkedValid;
+      !modelMarkedValid &&
+      (
+        evidence.hardReject === true ||
+        evidence.strongChartEvidence !== true
+      );
 
     if (shouldTryRescue) {
       rescueParsed =
@@ -4990,23 +5020,48 @@ async function extractVisibleFrameworkPriceMap({
 
   const matches = [];
 
-  // Read each important level separately. This is intentionally sequential:
-  // accuracy is more important here than saving one model call.
-  for (const target of targets) {
-    const match = await readSingleFrameworkPriceFromChart({
-      imageBase64,
-      mimeType,
-      target,
-      timeframe,
-      structureLabel,
-      marketReference,
-    });
+  /*
+   * V4.6.0 PERFORMANCE:
+   * Each focused reader is locked to ONE authoritative period + side, so the
+   * calls are independent. Run them in small batches to cut latency without
+   * creating an unlimited provider burst.
+   */
+  const maxConcurrentFocusedReads = 3;
 
-    matches.push(match);
+  for (
+    let startIndex = 0;
+    startIndex < targets.length;
+    startIndex += maxConcurrentFocusedReads
+  ) {
+    const batch =
+      targets.slice(
+        startIndex,
+        startIndex + maxConcurrentFocusedReads
+      );
+
+    const batchMatches =
+      await Promise.all(
+        batch.map((target) =>
+          readSingleFrameworkPriceFromChart({
+            imageBase64,
+            mimeType,
+            target,
+            timeframe,
+            structureLabel,
+            marketReference,
+          })
+        )
+      );
+
+    matches.push(...batchMatches);
   }
 
   console.log("Per-target framework price extraction:", {
     timeframe,
+    concurrency:
+      maxConcurrentFocusedReads,
+    targetCount:
+      targets.length,
     matches,
   });
 
@@ -9291,8 +9346,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.5.5";
-const CSA_BUILD_ID = "CSA-v4.5.5-strength-init-order-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.6.0";
+const CSA_BUILD_ID = "CSA-v4.6.0-performance-pass-1";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15083,7 +15138,7 @@ function rankRawEntryAreas({
       })),
   };
 
-  console.log("CSA v4.5.5 structural-strength decision:", {
+  console.log("CSA v4.6.0 structural-strength decision:", {
     buildId: CSA_BUILD_ID,
     direction,
     initializationOrder: "strength_before_structural_diagnostics",
@@ -19991,7 +20046,24 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
 
     assertAnalysisAllowed(entitlement);
 
+    const totalAnalysisStartedAt =
+      csaNowMs();
+
+    const chartValidationStartedAt =
+      csaNowMs();
+
     const chartDetection = await detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument, selectedTimeframe: timeframe, selectedDateText, analysisType: mode });
+
+    csaTimingLog(
+      "chart_validation",
+      chartValidationStartedAt,
+      {
+        rescueUsed:
+          chartDetection?.validationRescueUsed === true,
+        evidenceScore:
+          chartDetection?.validationEvidenceScore ?? null,
+      }
+    );
 
     if (!chartDetection.isTradingChart) {
       const analysis = buildInvalidChartAnalysis({ submittedInstrument, timeframe, chartDetection });
@@ -20093,6 +20165,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
 
     const resolvedAnalysisDate = parseISODateOnly(chartCutoff.resolvedDate);
 
+    const marketReferenceStartedAt =
+      csaNowMs();
+
     let marketReference = await fetchTwelveDataStructureLevels({
       symbol: normalizedSymbol,
       chartDate: resolvedAnalysisDate,
@@ -20102,10 +20177,18 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       chartCutoff,
     });
 
+    csaTimingLog(
+      "market_reference_fetch",
+      marketReferenceStartedAt
+    );
+
     // FINAL VISIBLE CANDLE synchronization:
     // A sparse time axis can show the last printed date tick before the actual
     // final candle. Cross-check the external OHLC series against the exact
     // visible close before any framework/Fibonacci calculations are trusted.
+    const initialSyncStartedAt =
+      csaNowMs();
+
     const initialFinalVisibleSync =
       await synchronizeFinalVisibleMarketReference({
         marketReference,
@@ -20123,6 +20206,18 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       chartCutoff = initialFinalVisibleSync.chartCutoff;
     }
 
+    csaTimingLog(
+      "final_visible_sync_initial",
+      initialSyncStartedAt,
+      {
+        adjusted:
+          initialFinalVisibleSync.adjusted === true,
+      }
+    );
+
+    const fullVisualStartedAt =
+      csaNowMs();
+
     let visualReview = await compareUploadedChartWithCsaFramework({
       imageBase64,
       mimeType,
@@ -20139,6 +20234,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // If the lightweight chart validator could not read the final close but
     // the full visual review could, perform the same synchronization now and
     // rerun the visual comparison against the corrected market reference.
+    csaTimingLog(
+      "full_visual_review_initial",
+      fullVisualStartedAt
+    );
+
     const visualVisiblePrice = asPositiveNumber(visualReview?.latestVisiblePrice);
     const detectedVisiblePrice = asPositiveNumber(chartDetection?.latestVisiblePrice);
 
@@ -20173,6 +20273,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         marketReference = visualPriceSync.marketReference;
         chartCutoff = visualPriceSync.chartCutoff;
 
+        const visualRerunStartedAt =
+          csaNowMs();
+
         visualReview = await compareUploadedChartWithCsaFramework({
           imageBase64,
           mimeType,
@@ -20185,8 +20288,16 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           analysisFramework: selectedStrategy.analysisFramework,
           personalStrategySnapshot: selectedStrategy.snapshot,
         });
+
+        csaTimingLog(
+          "full_visual_review_resync_rerun",
+          visualRerunStartedAt
+        );
       }
     }
+
+    const frameworkPriceMapStartedAt =
+      csaNowMs();
 
     const dedicatedFrameworkPriceMap =
       await extractVisibleFrameworkPriceMap({
@@ -20196,11 +20307,27 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         timeframe,
       });
 
+    csaTimingLog(
+      "focused_framework_price_map",
+      frameworkPriceMapStartedAt,
+      {
+        matches:
+          Array.isArray(
+            dedicatedFrameworkPriceMap?.matches
+          )
+            ? dedicatedFrameworkPriceMap.matches.length
+            : 0,
+      }
+    );
+
     visualReview =
       mergeDedicatedFrameworkPriceMapIntoVisualReview({
         visualReview,
         priceMap: dedicatedFrameworkPriceMap,
       });
+
+    const chartNativeImpulseStartedAt =
+      csaNowMs();
 
     const chartNativeImpulse =
       await extractChartNativeImpulseAnchors({
@@ -20213,6 +20340,19 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         timeframe,
         symbol: normalizedSymbol || submittedInstrument,
       });
+
+    csaTimingLog(
+      "chart_native_impulse",
+      chartNativeImpulseStartedAt,
+      {
+        usable:
+          chartNativeImpulse?.usable === true,
+        source:
+          chartNativeImpulse?.source || null,
+        reason:
+          chartNativeImpulse?.reason || null,
+      }
+    );
 
     visualReview = {
       ...visualReview,
@@ -20441,7 +20581,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       analysisFacts,
       regressionSnapshot: {
         engineVersion:
-          "4.5.5-strength-init-order-fix",
+          "4.6.0-performance-pass-1",
         instrument: submittedInstrument,
         timeframe,
         analysisType: mode,
@@ -20665,8 +20805,19 @@ ${(visualReview?.strategyMissingInformation || []).length
         updatedEntitlement,
     };
 
+    csaTimingLog(
+      "total_analysis_to_commit",
+      totalAnalysisStartedAt,
+      {
+        selectedEntryCount:
+          Number(
+            analysisFacts?.selectedEntryCount || 0
+          ),
+      }
+    );
+
     console.log(
-      "CSA v4.5.3 completed analysis commit:",
+      "CSA v4.6.0 completed analysis commit:",
       {
         buildId:
           CSA_BUILD_ID,
