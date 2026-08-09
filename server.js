@@ -9291,8 +9291,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.5.2";
-const CSA_BUILD_ID = "CSA-v4.5.2-robust-chart-validation";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.5.3";
+const CSA_BUILD_ID = "CSA-v4.5.3-safe-response-commit";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -20296,40 +20296,39 @@ ${(visualReview?.strategyMissingInformation || []).length
       finalFeedback
     );
     const dashboardAliases = buildDashboardAliases(dashboardFeedback);
-    const structureLabel = marketReference.profile?.structureLabel || selectedTimeframeProfile.structureLabel || "CSA structure levels";
+    const structureLabel =
+      marketReference.profile?.structureLabel ||
+      selectedTimeframeProfile.structureLabel ||
+      "CSA structure levels";
 
-    const journalSave = await saveCompletedReview({
-      user: requestAuth.user,
-      file: req.file,
-      submittedInstrument,
-      timeframe,
-      mode,
-      submittedNotes,
-      chartDateText: chartCutoff.resolvedDate || selectedDateText || null,
-      analysis,
-      chartDetection,
-      visualReview,
-      marketReference,
-      dashboardFeedback,
-      dateDecision,
-      analysisFramework: selectedStrategy.analysisFramework,
-      selectedStrategy: selectedStrategy.strategy,
-      personalStrategySnapshot: selectedStrategy.snapshot,
-    });
+    // V4.5.3: keep Fibonacci diagnostics in the correct route scope.
+    const selectorAudit =
+      analysisFacts
+        ?.selectorDiagnostics
+        ?.fibonacci ||
+      null;
 
+    // Build and validate the client response BEFORE writing the journal
+    // or usage record. A late response-construction bug must not consume
+    // an analysis allowance.
     const updatedEntitlement = {
       ...entitlement,
-      analysesUsed: entitlement.analysesUsed + 1,
-      analysesRemaining: Math.max(0, entitlement.analysesRemaining - 1),
+      analysesUsed:
+        entitlement.analysesUsed + 1,
+      analysesRemaining:
+        Math.max(
+          0,
+          entitlement.analysesRemaining - 1
+        ),
     };
 
     const responseBody = {
       success: true,
       entitlement: updatedEntitlement,
-      savedToJournal: journalSave.savedToJournal,
-      saveReason: journalSave.saveReason,
-      reviewId: journalSave.reviewId,
-      chartImagePath: journalSave.chartImagePath,
+      savedToJournal: false,
+      saveReason: null,
+      reviewId: null,
+      chartImagePath: null,
       analysis,
       summary: analysis,
       selectedPair: submittedInstrument,
@@ -20364,7 +20363,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       analysisFacts,
       regressionSnapshot: {
         engineVersion:
-          "4.5.2-robust-chart-validation",
+          "4.5.3-safe-response-commit",
         instrument: submittedInstrument,
         timeframe,
         analysisType: mode,
@@ -20403,6 +20402,8 @@ ${(visualReview?.strategyMissingInformation || []).length
             Number(chartDetection?.chartOccupancyPercent || 0),
         },
         fibOrigin: {
+          source:
+            "analysisFacts.selectorDiagnostics.fibonacci",
           model:
             selectorAudit
               ?.fibOriginModel ||
@@ -20529,22 +20530,127 @@ ${(visualReview?.strategyMissingInformation || []).length
       marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, filteredCandleCount: marketReference.filteredCandleCount, frameworkCandleCount: marketReference.frameworkCandleCount, impulseCandleCount: marketReference.impulseCandleCount, weekRange: marketReference.weekRange, impulseRange: marketReference.impulseRange, dailyLevels: marketReference.dailyLevels, timeframeCandles: marketReference.timeframeCandles, impulseCandles: marketReference.impulseCandles, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
     };
 
-    const finalClientResponse = applyPlanToAnalysisResponse({
-      responseBody: {
-        ...responseBody,
-        cacheHit: false,
-        analysisFingerprint,
-      },
-      entitlement: updatedEntitlement,
-    });
+    // Shape the complete response first. If this throws, nothing has yet
+    // been written to chart_reviews or usage_records.
+    let finalClientResponse =
+      applyPlanToAnalysisResponse({
+        responseBody: {
+          ...responseBody,
+          cacheHit: false,
+          analysisFingerprint,
+        },
+        entitlement:
+          updatedEntitlement,
+      });
+
+    // Commit journal + usage only after analysis and response construction
+    // have both completed successfully.
+    const journalSave =
+      await saveCompletedReview({
+        user:
+          requestAuth.user,
+        file:
+          req.file,
+        submittedInstrument,
+        timeframe,
+        mode,
+        submittedNotes,
+        chartDateText:
+          chartCutoff.resolvedDate ||
+          selectedDateText ||
+          null,
+        analysis,
+        chartDetection,
+        visualReview,
+        marketReference,
+        dashboardFeedback,
+        dateDecision,
+        analysisFramework:
+          selectedStrategy.analysisFramework,
+        selectedStrategy:
+          selectedStrategy.strategy,
+        personalStrategySnapshot:
+          selectedStrategy.snapshot,
+      });
+
+    finalClientResponse = {
+      ...finalClientResponse,
+      savedToJournal:
+        journalSave.savedToJournal,
+      saveReason:
+        journalSave.saveReason,
+      reviewId:
+        journalSave.reviewId,
+      chartImagePath:
+        journalSave.chartImagePath,
+      entitlement:
+        updatedEntitlement,
+    };
+
+    console.log(
+      "CSA v4.5.3 completed analysis commit:",
+      {
+        buildId:
+          CSA_BUILD_ID,
+        reviewId:
+          journalSave.reviewId,
+        usageCommitted:
+          journalSave.savedToJournal ===
+          true,
+        analysesUsed:
+          updatedEntitlement
+            .analysesUsed,
+        analysesRemaining:
+          updatedEntitlement
+            .analysesRemaining,
+        selectedEntryCount:
+          Number(
+            analysisFacts
+              ?.selectedEntryCount ||
+              0
+          ),
+        entry1:
+          finalFeedback
+            ?.entry1 ||
+          null,
+        entry2:
+          finalFeedback
+            ?.entry2 ||
+          null,
+      }
+    );
 
     if (!forceFresh) {
-      cacheCompletedAnalysis(analysisFingerprint, finalClientResponse);
+      cacheCompletedAnalysis(
+        analysisFingerprint,
+        finalClientResponse
+      );
     }
 
-    return res.json(finalClientResponse);
+    return res.json(
+      finalClientResponse
+    );
   } catch (error) {
-    console.error("CSA Coach analyze error:", error);
+    console.error(
+      "CSA Coach analyze error:",
+      {
+        buildId:
+          CSA_BUILD_ID,
+        feedbackEngineVersion:
+          CSA_FEEDBACK_ENGINE_VERSION,
+        selectorVersion:
+          CSA_SELECTOR_VERSION,
+        name:
+          error?.name ||
+          "Error",
+        message:
+          error?.message ||
+          String(error),
+        stack:
+          error?.stack ||
+          null,
+      }
+    );
     const statusCode = Number(error?.statusCode) || 500;
     return res.status(statusCode).json({
       success: false,
