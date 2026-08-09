@@ -1368,32 +1368,37 @@ You are CSA Coach's chart screenshot validator. Return ONLY valid JSON.
 
 Your job is to decide whether the uploaded image contains a usable financial trading chart.
 
-ACCEPT a chart when:
-- candles, bars, or clear price movement are visible;
-- a price scale is visible on the side;
-- a time/date axis is visible along the bottom;
+ACCEPT a chart when the overall visual evidence clearly shows a financial price chart. Strong evidence includes:
+- candles, bars, or clear plotted price movement;
+- a visible or reasonably inferable price scale on the side;
+- a visible or reasonably inferable time/date axis along the bottom;
 - the chart is the main subject of the uploaded image;
-- there are about 15 or more visible candles/bars/points.
+- there are about 15 or more visible candles/bars/points;
+- chart-platform context such as a symbol/timeframe header, price labels, order lines, grid, or chart drawings.
+
+Do not require every single feature to be perfectly readable. A normal chart may still be usable when one label, axis, or header is unclear.
 
 Normal chart-platform content is allowed and must NOT cause rejection:
 - MetaTrader, TradingView, cTrader, broker-platform, or other chart headers;
 - toolbars, tabs, price labels, bid/ask lines, order lines, indicators, grids;
 - support/resistance lines, supply/demand zones, rectangles, trendlines, Fibonacci, arrows, text notes, or other chart drawings;
 - a small amount of surrounding platform interface;
-- a screenshot where the chart occupies roughly 35% or more of the useful image and is still clearly readable.
+- a screenshot where the chart occupies roughly 25% or more of the useful image and is still clearly the main analytical object.
 
 REJECT only when:
 - there is no financial trading chart;
-- the chart is a tiny secondary object inside a much larger webpage, phone screen, social post, document, presentation, or dashboard;
+- the chart is genuinely a tiny secondary object inside a much larger unrelated webpage, phone screen, social post, document, presentation, or dashboard;
 - candles and price movement cannot be read;
 - the price scale or time axis is missing or unreadable;
 - the chart is blank, loading, heavily blurred, severely cropped, or has fewer than about 15 visible candles/bars/points.
 
 Important decision rules:
 - Do not reject a normal trading-platform screenshot simply because it contains borders, toolbars, indicators, drawings, or annotations.
-- Do not classify a full MetaTrader, TradingView, cTrader, or broker chart as a nested chart merely because platform controls are visible.
+- Do not classify a full MetaTrader, TradingView, cTrader, or broker chart as a nested chart merely because native platform controls, headers, account text, menus, tabs, indicators, or borders are visible.
+- "Nested chart" means the trading chart is only a small object inside an unrelated outer page/screen. A full chart window from a trading platform is NOT nested.
 - If the chart is clearly the main content and price movement, price scale, and time axis are readable, mark isTradingChart=true.
-- When uncertain but the chart is still clearly usable, prefer isTradingChart=true and use medium or low confidence for uncertain details.
+- When uncertain but there is substantial chart evidence, prefer isTradingChart=true and use medium or low confidence for uncertain details.
+- Never reject solely because one of these is unclear: exact symbol, exact timeframe, exact date, exact final candle time, exact final price, or one axis label.
 - Use isTradingChart=false only when the image is genuinely not usable as a trading chart.
 
 Important:
@@ -1449,6 +1454,12 @@ Return exactly this JSON shape:
 {
   "isTradingChart": true,
   "chartValidityReason": "brief reason",
+  "validationConfidence": "high or medium or low",
+  "hasVisiblePriceMovement": true,
+  "hasPriceScale": true,
+  "hasTimeAxis": true,
+  "chartIsMainSubject": true,
+  "chartPlatformDetected": true,
   "hasUsablePriceData": true,
   "visibleCandleCount": 80,
   "chartDataQuality": "usable",
@@ -3359,8 +3370,347 @@ function buildFrameworkMistakeHub({ failedAreas = [], hasConfirmedTrigger = fals
   return items.slice(0, 5);
 }
 
+const CHART_VALIDATION_RESCUE_PROMPT = `
+You are a second-pass financial chart verifier.
+
+Return ONLY valid JSON.
+
+Decide only whether the uploaded image contains a usable financial trading chart.
+Do NOT perform trading analysis.
+
+A chart should PASS when the image clearly contains substantial plotted financial price movement such as candles, bars, or a price line and the chart is the main analytical object.
+
+Normal MetaTrader, TradingView, cTrader, broker-platform, or desktop chart-window content is allowed:
+- headers;
+- account text;
+- toolbars;
+- tabs;
+- grid;
+- indicators;
+- horizontal levels;
+- drawings;
+- price labels;
+- bid/ask lines.
+
+Do NOT call a normal trading-platform chart "nested" merely because platform chrome is visible.
+
+Only FAIL when:
+- there is no financial price chart;
+- the price chart is genuinely tiny inside an unrelated outer page/dashboard/document;
+- price movement is unreadable or essentially absent;
+- the image is blank/loading/severely corrupted.
+
+Do not require the exact symbol, timeframe, date, or final price to be readable in order to verify that it is a chart.
+
+Return exactly:
+{
+  "isTradingChart": true,
+  "validationConfidence": "high or medium or low",
+  "hasVisiblePriceMovement": true,
+  "hasPriceScale": true,
+  "hasTimeAxis": true,
+  "chartIsMainSubject": true,
+  "chartPlatformDetected": true,
+  "hasUsablePriceData": true,
+  "visibleCandleCount": 50,
+  "chartOccupancyPercent": 80,
+  "isNestedChart": false,
+  "isChartReadableAtCurrentSize": true,
+  "chartDataQuality": "usable",
+  "reason": "brief reason"
+}
+`;
+
+function optionalBoolean(value) {
+  if (value === true) return true;
+  if (value === false) return false;
+  return null;
+}
+
+function buildChartValidationEvidence(parsed = {}) {
+  const visibleCandleCount =
+    Number.isFinite(Number(parsed?.visibleCandleCount))
+      ? Math.max(0, Number(parsed.visibleCandleCount))
+      : 0;
+
+  const occupancy =
+    Number.isFinite(Number(parsed?.chartOccupancyPercent))
+      ? Math.max(0, Math.min(100, Number(parsed.chartOccupancyPercent)))
+      : 0;
+
+  const hasVisiblePriceMovement =
+    optionalBoolean(parsed?.hasVisiblePriceMovement);
+  const hasPriceScale =
+    optionalBoolean(parsed?.hasPriceScale);
+  const hasTimeAxis =
+    optionalBoolean(parsed?.hasTimeAxis);
+  const chartIsMainSubject =
+    optionalBoolean(parsed?.chartIsMainSubject);
+  const chartPlatformDetected =
+    optionalBoolean(parsed?.chartPlatformDetected);
+  const hasUsablePriceData =
+    optionalBoolean(parsed?.hasUsablePriceData);
+  const isReadable =
+    optionalBoolean(parsed?.isChartReadableAtCurrentSize);
+  const isNested =
+    optionalBoolean(parsed?.isNestedChart);
+
+  const quality =
+    String(parsed?.chartDataQuality || "").trim().toLowerCase();
+
+  let score = 0;
+  const reasons = [];
+
+  if (hasVisiblePriceMovement === true) {
+    score += 3;
+    reasons.push("visible_price_movement");
+  }
+
+  if (visibleCandleCount >= 15) {
+    score += 3;
+    reasons.push("enough_visible_bars");
+  } else if (visibleCandleCount >= 8) {
+    score += 1;
+    reasons.push("some_visible_bars");
+  }
+
+  if (hasPriceScale === true) {
+    score += 2;
+    reasons.push("price_scale");
+  }
+
+  if (hasTimeAxis === true) {
+    score += 2;
+    reasons.push("time_axis");
+  }
+
+  if (chartIsMainSubject === true) {
+    score += 2;
+    reasons.push("main_subject");
+  }
+
+  if (chartPlatformDetected === true) {
+    score += 1;
+    reasons.push("trading_platform_context");
+  }
+
+  if (hasUsablePriceData === true) {
+    score += 2;
+    reasons.push("usable_price_data");
+  }
+
+  if (isReadable === true) {
+    score += 2;
+    reasons.push("readable");
+  }
+
+  if (occupancy >= 25) {
+    score += 1;
+    reasons.push("sufficient_occupancy");
+  }
+
+  if (parsed?.detectedInstrument) {
+    score += 1;
+    reasons.push("instrument_visible");
+  }
+
+  if (parsed?.detectedTimeframe) {
+    score += 1;
+    reasons.push("timeframe_visible");
+  }
+
+  if (parsed?.latestVisibleDate) {
+    score += 1;
+    reasons.push("date_axis_context");
+  }
+
+  if (
+    Number.isFinite(Number(parsed?.latestVisiblePrice)) &&
+    Number(parsed.latestVisiblePrice) > 0
+  ) {
+    score += 1;
+    reasons.push("visible_price_value");
+  }
+
+  const explicitSevereQuality =
+    ["blank", "loading", "corrupt", "corrupted", "unreadable"]
+      .includes(quality);
+
+  const genuinelyTinyNestedChart =
+    isNested === true &&
+    chartIsMainSubject === false &&
+    occupancy > 0 &&
+    occupancy < 25;
+
+  const strongChartEvidence =
+    score >= 8 ||
+    (
+      visibleCandleCount >= 15 &&
+      (
+        hasVisiblePriceMovement === true ||
+        hasUsablePriceData === true
+      ) &&
+      (
+        hasPriceScale === true ||
+        hasTimeAxis === true ||
+        isReadable === true ||
+        occupancy >= 25 ||
+        Boolean(parsed?.detectedInstrument) ||
+        Boolean(parsed?.detectedTimeframe)
+      )
+    );
+
+  const hardReject =
+    genuinelyTinyNestedChart ||
+    (
+      explicitSevereQuality &&
+      !strongChartEvidence
+    ) ||
+    (
+      hasVisiblePriceMovement === false &&
+      visibleCandleCount === 0 &&
+      hasUsablePriceData === false &&
+      score < 4
+    );
+
+  return {
+    score,
+    reasons,
+    visibleCandleCount,
+    occupancy,
+    hasVisiblePriceMovement,
+    hasPriceScale,
+    hasTimeAxis,
+    chartIsMainSubject,
+    chartPlatformDetected,
+    hasUsablePriceData,
+    isReadable,
+    isNested,
+    quality,
+    strongChartEvidence,
+    genuinelyTinyNestedChart,
+    hardReject,
+  };
+}
+
+function mergeChartValidationPasses(first = {}, rescue = {}) {
+  const preferBoolean = (firstValue, rescueValue) => {
+    if (rescueValue === true) return true;
+    if (firstValue === true) return true;
+    if (rescueValue === false && firstValue === false) return false;
+    if (rescueValue !== undefined) return rescueValue;
+    return firstValue;
+  };
+
+  return {
+    ...first,
+    isTradingChart:
+      first?.isTradingChart === true ||
+      rescue?.isTradingChart === true,
+    validationConfidence:
+      rescue?.validationConfidence ||
+      first?.validationConfidence ||
+      "low",
+    hasVisiblePriceMovement:
+      preferBoolean(
+        first?.hasVisiblePriceMovement,
+        rescue?.hasVisiblePriceMovement
+      ),
+    hasPriceScale:
+      preferBoolean(first?.hasPriceScale, rescue?.hasPriceScale),
+    hasTimeAxis:
+      preferBoolean(first?.hasTimeAxis, rescue?.hasTimeAxis),
+    chartIsMainSubject:
+      preferBoolean(first?.chartIsMainSubject, rescue?.chartIsMainSubject),
+    chartPlatformDetected:
+      preferBoolean(first?.chartPlatformDetected, rescue?.chartPlatformDetected),
+    hasUsablePriceData:
+      preferBoolean(first?.hasUsablePriceData, rescue?.hasUsablePriceData),
+    isNestedChart:
+      rescue?.isNestedChart === false
+        ? false
+        : first?.isNestedChart,
+    isChartReadableAtCurrentSize:
+      preferBoolean(
+        first?.isChartReadableAtCurrentSize,
+        rescue?.isChartReadableAtCurrentSize
+      ),
+    visibleCandleCount:
+      Math.max(
+        Number(first?.visibleCandleCount || 0),
+        Number(rescue?.visibleCandleCount || 0)
+      ),
+    chartOccupancyPercent:
+      Math.max(
+        Number(first?.chartOccupancyPercent || 0),
+        Number(rescue?.chartOccupancyPercent || 0)
+      ),
+    chartDataQuality:
+      rescue?.chartDataQuality ||
+      first?.chartDataQuality ||
+      "usable",
+  };
+}
+
+async function runChartValidationRescue({ imageBase64, mimeType }) {
+  try {
+    const response = await runVisionModel({
+      systemPrompt: CHART_VALIDATION_RESCUE_PROMPT,
+      userText:
+        "Verify whether this uploaded image is a usable financial trading chart. Return only JSON.",
+      imageBase64,
+      mimeType,
+      maxTokens: 350,
+      openaiModel: "gpt-4.1",
+      claudeModel: CLAUDE_MODEL,
+      temperature: 0,
+      imageDetail: "high",
+    });
+
+    return extractJsonObject(response.text || "") || null;
+  } catch (error) {
+    console.error("Chart validation rescue error:", error);
+    return null;
+  }
+}
+
 async function detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument = "", selectedTimeframe = "", selectedDateText = "", analysisType = "post-trade" }) {
-  const fallback = (reason) => ({ ok: false, isTradingChart: false, chartValidityReason: reason, hasUsablePriceData: false, visibleCandleCount: 0, chartDataQuality: "unclear", chartOccupancyPercent: 0, isNestedChart: false, isChartReadableAtCurrentSize: false, selectedDateVisible: false, insufficientDataReason: reason, detectedInstrument: null, detectedTimeframe: null, latestVisibleDate: null, latestVisibleTime: null, latestVisibleTimeConfidence: "low", latestVisiblePrice: null, latestVisiblePriceConfidence: "low", dateConfidence: "low", visibleTrigger: null, rejectedTriggerContext: null, triggerDirection: null, triggerConfidence: "low", notes: reason, raw: "" });
+  const fallback = (reason) => ({
+    ok: false,
+    isTradingChart: false,
+    chartValidityReason: reason,
+    validationConfidence: "low",
+    hasVisiblePriceMovement: null,
+    hasPriceScale: null,
+    hasTimeAxis: null,
+    chartIsMainSubject: null,
+    chartPlatformDetected: null,
+    hasUsablePriceData: false,
+    visibleCandleCount: 0,
+    chartDataQuality: "unclear",
+    chartOccupancyPercent: 0,
+    isNestedChart: false,
+    isChartReadableAtCurrentSize: false,
+    selectedDateVisible: false,
+    insufficientDataReason: reason,
+    detectedInstrument: null,
+    detectedTimeframe: null,
+    latestVisibleDate: null,
+    latestVisibleTime: null,
+    latestVisibleTimeConfidence: "low",
+    latestVisiblePrice: null,
+    latestVisiblePriceConfidence: "low",
+    dateConfidence: "low",
+    visibleTrigger: null,
+    rejectedTriggerContext: null,
+    triggerDirection: null,
+    triggerConfidence: "low",
+    notes: reason,
+    raw: "",
+    validationEvidenceScore: 0,
+    validationRescueUsed: false,
+    validationHardReject: true,
+  });
   if (!isAiProviderConfigured()) return fallback(getAiConfigurationError());
 
   try {
@@ -3376,39 +3726,76 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
       imageDetail: "high",
     });
 
-    const parsed = extractJsonObject(response.text || "");
-    if (!parsed) return fallback("Chart validation did not return usable JSON.");
-    const visibleCandleCount = Number.isFinite(
-      Number(parsed?.visibleCandleCount)
-    )
-      ? Number(parsed.visibleCandleCount)
-      : 0;
+    let parsed =
+      extractJsonObject(response.text || "");
 
-    const occupancy = Number.isFinite(
-      Number(parsed?.chartOccupancyPercent)
-    )
-      ? Math.max(
-          0,
-          Math.min(100, Number(parsed.chartOccupancyPercent))
-        )
-      : 0;
+    if (!parsed) {
+      return fallback(
+        "Chart validation did not return usable JSON."
+      );
+    }
+
+    let evidence =
+      buildChartValidationEvidence(parsed);
 
     const modelMarkedValid =
       parsed?.isTradingChart === true;
 
-    const readableChartEvidence =
-      visibleCandleCount >= 15 &&
-      parsed?.hasUsablePriceData !== false &&
-      parsed?.isChartReadableAtCurrentSize !== false &&
-      parsed?.isNestedChart !== true &&
-      (occupancy === 0 || occupancy >= 35);
+    let rescueUsed = false;
+    let rescueParsed = null;
 
     /*
-     * Rescue normal trading-platform screenshots when the model is overly
-     * cautious but its own evidence says the chart is readable and usable.
+     * V4.5.2:
+     * If the first pass rejects the image but there is still plausible
+     * chart evidence, run one focused chart-only verification pass.
      */
+    const shouldTryRescue =
+      !modelMarkedValid;
+
+    if (shouldTryRescue) {
+      rescueParsed =
+        await runChartValidationRescue({
+          imageBase64,
+          mimeType,
+        });
+
+      if (rescueParsed) {
+        rescueUsed = true;
+        parsed =
+          mergeChartValidationPasses(
+            parsed,
+            rescueParsed
+          );
+        evidence =
+          buildChartValidationEvidence(
+            parsed
+          );
+      }
+    }
+
+    const visibleCandleCount =
+      evidence.visibleCandleCount;
+
+    const occupancy =
+      evidence.occupancy;
+
+    const rescueModelMarkedValid =
+      rescueParsed?.isTradingChart ===
+      true;
+
+    const rescuedByEvidence =
+      !modelMarkedValid &&
+      !rescueModelMarkedValid &&
+      evidence.strongChartEvidence &&
+      !evidence.hardReject;
+
     const isTradingChart =
-      modelMarkedValid || readableChartEvidence;
+      !evidence.hardReject &&
+      (
+        modelMarkedValid ||
+        rescueModelMarkedValid ||
+        rescuedByEvidence
+      );
 
     const rawTrigger = parsed?.visibleTrigger || null;
     const triggerConfidence =
@@ -3419,43 +3806,162 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
       triggerConfidence
     );
 
-    const quality = isTradingChart
-      ? parsed?.chartDataQuality || "usable"
-      : "unclear";
+    const rawQuality =
+      String(
+        parsed?.chartDataQuality || ""
+      )
+        .trim()
+        .toLowerCase();
 
-    console.log("Chart validation result:", {
-      modelMarkedValid,
-      rescuedByEvidence: !modelMarkedValid && readableChartEvidence,
-      isTradingChart,
-      visibleCandleCount,
-      occupancy,
-      hasUsablePriceData: parsed?.hasUsablePriceData,
-      isNestedChart: parsed?.isNestedChart,
-      isChartReadableAtCurrentSize:
-        parsed?.isChartReadableAtCurrentSize,
-      detectedInstrument: parsed?.detectedInstrument,
-      detectedTimeframe: parsed?.detectedTimeframe,
-      latestVisibleDate: parsed?.latestVisibleDate || null,
-      latestVisibleTime: parsed?.latestVisibleTime || null,
-      latestVisiblePrice:
-        Number.isFinite(Number(parsed?.latestVisiblePrice))
-          ? Number(parsed.latestVisiblePrice)
-          : null,
-      latestVisiblePriceConfidence:
-        parsed?.latestVisiblePriceConfidence || "low",
-      reason: parsed?.chartValidityReason,
-    });
+    const quality =
+      isTradingChart
+        ? (
+            ["blank", "loading", "corrupt", "corrupted"].includes(rawQuality)
+              ? "usable"
+              : rawQuality || "usable"
+          )
+        : rawQuality || "unclear";
+
+    const normalizedReadable =
+      isTradingChart
+        ? (
+            parsed?.isChartReadableAtCurrentSize === false
+              ? evidence.strongChartEvidence
+              : true
+          )
+        : false;
+
+    const normalizedNested =
+      isTradingChart &&
+      evidence.strongChartEvidence &&
+      (
+        evidence.chartIsMainSubject === true ||
+        occupancy >= 25
+      )
+        ? false
+        : parsed?.isNestedChart === true;
+
+    const normalizedUsablePriceData =
+      isTradingChart
+        ? (
+            parsed?.hasUsablePriceData === false
+              ? evidence.strongChartEvidence
+              : true
+          )
+        : false;
+
+    console.log(
+      "CSA v4.5.2 chart validation:",
+      {
+        buildId: CSA_BUILD_ID,
+        modelMarkedValid,
+        rescueUsed,
+        rescueModelMarkedValid,
+        rescuedByEvidence,
+        isTradingChart,
+        evidenceScore: evidence.score,
+        evidenceReasons: evidence.reasons,
+        strongChartEvidence:
+          evidence.strongChartEvidence,
+        hardReject: evidence.hardReject,
+        visibleCandleCount,
+        occupancy,
+        hasVisiblePriceMovement:
+          evidence.hasVisiblePriceMovement,
+        hasPriceScale:
+          evidence.hasPriceScale,
+        hasTimeAxis:
+          evidence.hasTimeAxis,
+        chartIsMainSubject:
+          evidence.chartIsMainSubject,
+        chartPlatformDetected:
+          evidence.chartPlatformDetected,
+        rawHasUsablePriceData:
+          parsed?.hasUsablePriceData,
+        normalizedUsablePriceData,
+        rawIsNestedChart:
+          parsed?.isNestedChart,
+        normalizedNested,
+        rawReadable:
+          parsed?.isChartReadableAtCurrentSize,
+        normalizedReadable,
+        detectedInstrument:
+          parsed?.detectedInstrument,
+        detectedTimeframe:
+          parsed?.detectedTimeframe,
+        latestVisibleDate:
+          parsed?.latestVisibleDate || null,
+        latestVisibleTime:
+          parsed?.latestVisibleTime || null,
+        latestVisiblePrice:
+          Number.isFinite(
+            Number(parsed?.latestVisiblePrice)
+          )
+            ? Number(parsed.latestVisiblePrice)
+            : null,
+        reason:
+          parsed?.chartValidityReason ||
+          rescueParsed?.reason ||
+          null,
+      }
+    );
 
     return {
       ok: true,
       isTradingChart,
-      chartValidityReason: parsed?.chartValidityReason || (isTradingChart ? "The uploaded image appears to be a valid trading chart." : "The uploaded image does not appear to be a valid financial trading chart."),
-      hasUsablePriceData: isTradingChart ? parsed?.hasUsablePriceData !== false : false,
+      chartValidityReason:
+        isTradingChart &&
+        !modelMarkedValid
+          ? (
+              rescueParsed?.reason ||
+              "The uploaded image contains sufficient evidence of a usable financial trading chart."
+            )
+          : (
+              parsed?.chartValidityReason ||
+              rescueParsed?.reason ||
+              (
+                isTradingChart
+                  ? "The uploaded image contains sufficient evidence of a usable financial trading chart."
+                  : "The uploaded image could not be verified as a usable financial trading chart."
+              )
+            ),
+      validationConfidence:
+        parsed?.validationConfidence ||
+        rescueParsed?.validationConfidence ||
+        (
+          evidence.score >= 10
+            ? "high"
+            : evidence.score >= 7
+            ? "medium"
+            : "low"
+        ),
+      validationEvidenceScore:
+        evidence.score,
+      validationEvidenceReasons:
+        evidence.reasons,
+      validationRescueUsed:
+        rescueUsed,
+      validationHardReject:
+        evidence.hardReject,
+      hasVisiblePriceMovement:
+        evidence.hasVisiblePriceMovement,
+      hasPriceScale:
+        evidence.hasPriceScale,
+      hasTimeAxis:
+        evidence.hasTimeAxis,
+      chartIsMainSubject:
+        evidence.chartIsMainSubject,
+      chartPlatformDetected:
+        evidence.chartPlatformDetected,
+      hasUsablePriceData:
+        normalizedUsablePriceData,
       visibleCandleCount,
       chartDataQuality: quality,
       chartOccupancyPercent: occupancy,
-      isNestedChart: parsed?.isNestedChart === true,
-      isChartReadableAtCurrentSize: parsed?.isChartReadableAtCurrentSize === true,
+      isNestedChart:
+        normalizedNested,
+      isChartReadableAtCurrentSize:
+        normalizedReadable,
       selectedDateVisible: isTradingChart ? parsed?.selectedDateVisible === true : false,
       insufficientDataReason: parsed?.insufficientDataReason || (!isTradingChart ? "The uploaded image is not a financial trading chart." : null),
       detectedInstrument: isTradingChart ? parsed?.detectedInstrument || null : null,
@@ -3491,28 +3997,92 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
   }
 }
 
-function isUploadedChartDataUsable(chartDetection, selectedDateText = "") {
-  if (!chartDetection?.isTradingChart) return false;
+function isUploadedChartDataUsable(
+  chartDetection,
+  selectedDateText = ""
+) {
+  if (!chartDetection?.isTradingChart) {
+    return false;
+  }
 
-  const quality = String(chartDetection.chartDataQuality || "").toLowerCase();
-  if (["blank", "insufficient", "unreadable", "nested"].includes(quality)) return false;
-
-  if (chartDetection.isNestedChart === true) return false;
-  if (chartDetection.isChartReadableAtCurrentSize === false) return false;
-
-  const occupancy = Number(chartDetection.chartOccupancyPercent || 0);
   if (
-    Number.isFinite(occupancy) &&
-    occupancy > 0 &&
-    occupancy < 35
+    chartDetection?.validationHardReject === true
   ) {
     return false;
   }
 
-  if (chartDetection.hasUsablePriceData === false) return false;
+  const quality =
+    String(chartDetection.chartDataQuality || "")
+      .trim()
+      .toLowerCase();
 
-  const candles = Number(chartDetection.visibleCandleCount || 0);
-  if (Number.isFinite(candles) && candles > 0 && candles < 15) return false;
+  const evidenceScore =
+    Number(
+      chartDetection?.validationEvidenceScore || 0
+    );
+
+  const strongEvidence =
+    evidenceScore >= 8;
+
+  if (
+    [
+      "blank",
+      "loading",
+      "corrupt",
+      "corrupted",
+      "unreadable",
+      "nested",
+      "insufficient",
+    ].includes(quality) &&
+    !strongEvidence
+  ) {
+    return false;
+  }
+
+  if (
+    chartDetection.isNestedChart === true &&
+    !strongEvidence
+  ) {
+    return false;
+  }
+
+  if (
+    chartDetection.isChartReadableAtCurrentSize === false &&
+    !strongEvidence
+  ) {
+    return false;
+  }
+
+  const occupancy =
+    Number(chartDetection.chartOccupancyPercent || 0);
+
+  if (
+    Number.isFinite(occupancy) &&
+    occupancy > 0 &&
+    occupancy < 20 &&
+    !strongEvidence
+  ) {
+    return false;
+  }
+
+  if (
+    chartDetection.hasUsablePriceData === false &&
+    !strongEvidence
+  ) {
+    return false;
+  }
+
+  const candles =
+    Number(chartDetection.visibleCandleCount || 0);
+
+  if (
+    Number.isFinite(candles) &&
+    candles > 0 &&
+    candles < 8 &&
+    !strongEvidence
+  ) {
+    return false;
+  }
 
   return true;
 }
@@ -8721,8 +9291,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.5.1";
-const CSA_BUILD_ID = "CSA-v4.5.1-clean-outer-origin-hotfix";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.5.2";
+const CSA_BUILD_ID = "CSA-v4.5.2-robust-chart-validation";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -19119,6 +19689,11 @@ app.post("/create-billing-portal-session", async (req, res) => {
     console.error("Create billing portal error:", error);
     return res.status(statusCode).json({
       success: false,
+      buildId: CSA_BUILD_ID,
+      feedbackEngineVersion:
+        CSA_FEEDBACK_ENGINE_VERSION,
+      selectorVersion:
+        CSA_SELECTOR_VERSION,
       error:
         statusCode >= 500
           ? "The billing portal could not be opened."
@@ -19789,7 +20364,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       analysisFacts,
       regressionSnapshot: {
         engineVersion:
-          "4.5.0-outer-structural-impulse-origin",
+          "4.5.2-robust-chart-validation",
         instrument: submittedInstrument,
         timeframe,
         analysisType: mode,
@@ -19806,6 +20381,26 @@ ${(visualReview?.strategyMissingInformation || []).length
           entry2:
             finalFeedback?.entry2 ||
             null,
+        },
+        chartValidation: {
+          isTradingChart:
+            chartDetection?.isTradingChart === true,
+          confidence:
+            chartDetection?.validationConfidence || null,
+          evidenceScore:
+            Number(
+              chartDetection?.validationEvidenceScore || 0
+            ),
+          rescueUsed:
+            chartDetection?.validationRescueUsed === true,
+          hardReject:
+            chartDetection?.validationHardReject === true,
+          quality:
+            chartDetection?.chartDataQuality || null,
+          candleCount:
+            Number(chartDetection?.visibleCandleCount || 0),
+          occupancy:
+            Number(chartDetection?.chartOccupancyPercent || 0),
         },
         fibOrigin: {
           model:
@@ -19914,6 +20509,23 @@ ${(visualReview?.strategyMissingInformation || []).length
       journalTags: ["setup review", "directional bias", "entry area", "visual csa comparison", "uploaded chart comparison", "risk reward", marketReference.profile?.selectedTimeframe || selectedTimeframeProfile.selectedTimeframe, marketReference.profile?.structureMode || selectedTimeframeProfile.structureMode, marketReference.ok ? "market-data-backed" : "vision-only fallback", visualReview?.frameworkMatch || "visual-not-reviewed", bias.biasCode || "bias-unavailable"],
       visualReview,
       chartDetection,
+      chartValidationAudit: {
+        buildId: CSA_BUILD_ID,
+        isTradingChart:
+          chartDetection?.isTradingChart === true,
+        confidence:
+          chartDetection?.validationConfidence || null,
+        evidenceScore:
+          Number(chartDetection?.validationEvidenceScore || 0),
+        rescueUsed:
+          chartDetection?.validationRescueUsed === true,
+        hardReject:
+          chartDetection?.validationHardReject === true,
+        visibleCandleCount:
+          Number(chartDetection?.visibleCandleCount || 0),
+        occupancy:
+          Number(chartDetection?.chartOccupancyPercent || 0),
+      },
       marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, filteredCandleCount: marketReference.filteredCandleCount, frameworkCandleCount: marketReference.frameworkCandleCount, impulseCandleCount: marketReference.impulseCandleCount, weekRange: marketReference.weekRange, impulseRange: marketReference.impulseRange, dailyLevels: marketReference.dailyLevels, timeframeCandles: marketReference.timeframeCandles, impulseCandles: marketReference.impulseCandles, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
     };
 
