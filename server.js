@@ -9626,8 +9626,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.6.4";
-const CSA_BUILD_ID = "CSA-v4.6.4-deterministic-final-visible-regime";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.6.5";
+const CSA_BUILD_ID = "CSA-v4.6.5-final-visible-direction-engine";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14621,6 +14621,212 @@ function attachPivotConfirmationToFrameworkCandidates({
   });
 }
 
+function resolveFinalVisibleDirectionEngine({
+  marketReference = {},
+  timeframe = "H1",
+  symbol = "",
+  fallbackDirection = "range",
+}) {
+  const candles = Array.isArray(marketReference?.timeframeCandles)
+    ? marketReference.timeframeCandles
+        .filter((c) =>
+          c?.datetime &&
+          [c?.open, c?.high, c?.low, c?.close].every((v) =>
+            Number.isFinite(Number(v))
+          )
+        )
+        .sort((a, b) => String(a.datetime).localeCompare(String(b.datetime)))
+    : [];
+
+  const fallback = ["bullish", "bearish", "range"].includes(
+    String(fallbackDirection || "").toLowerCase()
+  )
+    ? String(fallbackDirection).toLowerCase()
+    : "range";
+
+  if (candles.length < 12) {
+    return {
+      direction: fallback,
+      confidence: "low",
+      source: "insufficient_recent_candles",
+      latestBreak: null,
+      diagnostics: { candleCount: candles.length },
+    };
+  }
+
+  const cfg = getStructureEngineConfig(timeframe);
+  const atr = averageTrueRange(candles, cfg.atrPeriod);
+  const tolerance = Math.max(
+    getApprovedPriceTolerance(symbol),
+    Number(atr || 0) * 0.07
+  );
+
+  const tf = comparableTimeframe(timeframe) || "H1";
+  const lookbacks = {
+    M1: 90,
+    M5: 84,
+    M15: 76,
+    M30: 68,
+    H1: 64,
+    H4: 52,
+    D1: 42,
+    W1: 32,
+    MN: 24,
+  };
+  const recentLookback = lookbacks[tf] || 64;
+  const recentStart = Math.max(0, candles.length - recentLookback);
+  const recent = candles.slice(recentStart);
+  const pivots = detectConfirmedSwingPivots(recent, cfg).map((p) => ({
+    ...p,
+    pivotIndex: recentStart + Number(p.pivotIndex || 0),
+    confirmedAtIndex: recentStart + Number(p.confirmedAtIndex || 0),
+  }));
+
+  const resistances = pivots.filter((p) => p.type === "resistance");
+  const supports = pivots.filter((p) => p.type === "support");
+  const lastTwoHighs = resistances.slice(-2);
+  const lastTwoLows = supports.slice(-2);
+
+  const higherHigh =
+    lastTwoHighs.length === 2 &&
+    Number(lastTwoHighs[1].price) > Number(lastTwoHighs[0].price) + tolerance;
+  const lowerHigh =
+    lastTwoHighs.length === 2 &&
+    Number(lastTwoHighs[1].price) < Number(lastTwoHighs[0].price) - tolerance;
+  const higherLow =
+    lastTwoLows.length === 2 &&
+    Number(lastTwoLows[1].price) > Number(lastTwoLows[0].price) + tolerance;
+  const lowerLow =
+    lastTwoLows.length === 2 &&
+    Number(lastTwoLows[1].price) < Number(lastTwoLows[0].price) - tolerance;
+
+  const recentBreakEvents = [];
+  for (const pivot of pivots) {
+    const level = Number(pivot.price);
+    if (!Number.isFinite(level)) continue;
+    const side = pivot.type === "resistance" ? "bullish" : "bearish";
+    const searchFrom = Math.max(pivot.confirmedAtIndex + 1, recentStart + 1);
+
+    for (let i = searchFrom; i < candles.length; i += 1) {
+      const multipleCloses = countConsecutiveBreakCloses({
+        candles,
+        index: i,
+        level,
+        tolerance,
+        side,
+        count: Math.max(2, Number(cfg.confirmationCloses || 2)),
+      });
+      const displacement = isStrongDisplacementBreak({
+        candles,
+        index: i,
+        level,
+        tolerance,
+        atr,
+        side,
+        timeframe,
+      });
+      if (!multipleCloses && !displacement) continue;
+
+      const nextClose = Number(candles[i + 1]?.close);
+      const holds = !Number.isFinite(nextClose)
+        ? true
+        : side === "bullish"
+        ? nextClose > level - tolerance
+        : nextClose < level + tolerance;
+      if (!holds) continue;
+
+      recentBreakEvents.push({
+        direction: side,
+        breakIndex: i,
+        datetime: candles[i]?.datetime || null,
+        level,
+        pivotIndex: pivot.pivotIndex,
+        pivotDatetime: pivot.datetime || null,
+        confirmation: multipleCloses
+          ? "multiple_closes"
+          : "strong_displacement_and_hold",
+        source: "recent_confirmed_pivot_break",
+      });
+      break;
+    }
+  }
+
+  recentBreakEvents.sort((a, b) => a.breakIndex - b.breakIndex);
+  const latestBreak = recentBreakEvents.length
+    ? recentBreakEvents[recentBreakEvents.length - 1]
+    : null;
+
+  const recentSlope = recentCloseSlope(candles, Math.min(8, candles.length));
+  const slopeThreshold = Math.max(Number(atr || 0) * 0.08, tolerance * 0.5);
+
+  let direction = "range";
+  let source = "recent_structure_unclear";
+  let confidence = "low";
+
+  if (latestBreak) {
+    direction = latestBreak.direction;
+    source = "latest_confirmed_recent_pivot_break";
+    confidence = "high";
+  } else if (higherHigh && higherLow) {
+    direction = "bullish";
+    source = "recent_higher_high_higher_low";
+    confidence = "high";
+  } else if (lowerHigh && lowerLow) {
+    direction = "bearish";
+    source = "recent_lower_high_lower_low";
+    confidence = "high";
+  } else if ((higherHigh || higherLow) && recentSlope > slopeThreshold) {
+    direction = "bullish";
+    source = "recent_bullish_structure_and_slope";
+    confidence = "medium";
+  } else if ((lowerHigh || lowerLow) && recentSlope < -slopeThreshold) {
+    direction = "bearish";
+    source = "recent_bearish_structure_and_slope";
+    confidence = "medium";
+  } else if (recentSlope > slopeThreshold * 2) {
+    direction = "bullish";
+    source = "strong_recent_bullish_slope";
+    confidence = "medium";
+  } else if (recentSlope < -slopeThreshold * 2) {
+    direction = "bearish";
+    source = "strong_recent_bearish_slope";
+    confidence = "medium";
+  }
+
+  return {
+    direction,
+    confidence,
+    source,
+    latestBreak,
+    diagnostics: {
+      timeframe: tf,
+      candleCount: candles.length,
+      recentLookback,
+      recentStart,
+      atr,
+      tolerance,
+      recentSlope,
+      slopeThreshold,
+      higherHigh,
+      higherLow,
+      lowerHigh,
+      lowerLow,
+      lastTwoHighs: lastTwoHighs.map((p) => ({
+        index: p.pivotIndex,
+        price: Number(p.price),
+        datetime: p.datetime || null,
+      })),
+      lastTwoLows: lastTwoLows.map((p) => ({
+        index: p.pivotIndex,
+        price: Number(p.price),
+        datetime: p.datetime || null,
+      })),
+      recentBreakEvents: recentBreakEvents.slice(-8),
+      fallbackDirection: fallback,
+    },
+  };
+}
+
 function resolveFinalVisibleCurrentStructureRegime({
   marketReference = {},
   timeframe = "H1",
@@ -15932,7 +16138,7 @@ function rankRawEntryAreas({
       })),
   };
 
-  console.log("CSA v4.6.4 structural-strength decision:", {
+  console.log("CSA v4.6.5 structural-strength decision:", {
     buildId: CSA_BUILD_ID,
     direction,
     initializationOrder: "strength_before_structural_diagnostics",
@@ -17389,17 +17595,28 @@ function buildValidatedAnalysisFacts({
     normalizeCutoffMode(marketReference?.chartCutoff?.mode || "final_visible") ===
     "final_visible";
 
-  // V4.6.3 CURRENT STRUCTURE REGIME:
-  // Final-visible mode must be controlled by the most recent confirmed
-  // regime-changing break, not an older structural event that has already
-  // been superseded. Historical cutoff modes deliberately do NOT use this
-  // override; their period direction lock remains authoritative.
+  // V4.6.5 FINAL-VISIBLE DIRECTION ENGINE:
+  // Resolve CURRENT direction from recent chronological candle structure first.
+  // Older high-scoring structural events remain useful context, but they cannot
+  // overrule a newer confirmed break or a clear recent HH/HL or LH/LL sequence.
+  const finalVisibleDirection = finalVisibleMode
+    ? resolveFinalVisibleDirectionEngine({
+        marketReference,
+        timeframe,
+        symbol: submittedInstrument,
+        fallbackDirection: direction,
+      })
+    : null;
+
   const currentStructureRegime = finalVisibleMode
     ? resolveFinalVisibleCurrentStructureRegime({
         marketReference,
         timeframe,
         symbol: submittedInstrument,
-        fallbackDirection: direction,
+        fallbackDirection:
+          ["bullish", "bearish"].includes(finalVisibleDirection?.direction)
+            ? finalVisibleDirection.direction
+            : direction,
         visualDirection,
         visualBreakoutState,
       })
@@ -17409,6 +17626,34 @@ function buildValidatedAnalysisFacts({
         event: historicalPhase?.diagnostics?.latestEvent || null,
         priorDirection: direction,
       };
+
+  // The dedicated recent-direction engine is authoritative in final-visible mode
+  // whenever it resolves a clear bullish or bearish side.
+  if (
+    finalVisibleMode &&
+    ["bullish", "bearish"].includes(finalVisibleDirection?.direction)
+  ) {
+    currentStructureRegime.direction = finalVisibleDirection.direction;
+    currentStructureRegime.source = finalVisibleDirection.source;
+    currentStructureRegime.event =
+      finalVisibleDirection.latestBreak || currentStructureRegime.event || null;
+    currentStructureRegime.phase =
+      finalVisibleDirection.direction === "bullish"
+        ? "bullish_breakout"
+        : "bearish_breakdown";
+    currentStructureRegime.bullishBreakout =
+      finalVisibleDirection.direction === "bullish";
+    currentStructureRegime.bearishBreakdown =
+      finalVisibleDirection.direction === "bearish";
+    currentStructureRegime.bullishRecoveryAfterBreakdown = false;
+    currentStructureRegime.bearishPullbackAfterBreakout = false;
+  }
+
+  console.log("CSA FINAL VISIBLE DIRECTION ENGINE:", {
+    buildId: CSA_BUILD_ID,
+    cutoffMode: marketReference?.chartCutoff?.mode || "final_visible",
+    result: finalVisibleDirection,
+  });
 
   if (
     finalVisibleMode &&
@@ -17751,8 +17996,8 @@ function buildValidatedAnalysisFacts({
     direction,
     directionSource:
       finalVisibleMode &&
-      currentStructureRegime?.source
-        ? "final_visible_deterministic_regime"
+      finalVisibleDirection?.source
+        ? "final_visible_recent_direction_engine"
         : historicalCutoff.active
         ? "historical_cutoff_period_classifier"
         : ["bullish", "bearish"].includes(
@@ -21813,7 +22058,7 @@ ${(visualReview?.strategyMissingInformation || []).length
     );
 
     console.log(
-      "CSA v4.6.4 completed analysis commit:",
+      "CSA v4.6.5 completed analysis commit:",
       {
         buildId:
           CSA_BUILD_ID,
