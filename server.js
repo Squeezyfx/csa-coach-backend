@@ -1468,7 +1468,7 @@ Return exactly this JSON shape:
   "isChartReadableAtCurrentSize": true,
   "selectedDateVisible": true,
   "insufficientDataReason": null,
-  "detectedInstrument": "GBPUSD or null",
+  "detectedInstrument": "exact visible instrument/ticker such as GBPUSD, XAUUSD, BTCUSD, ETHUSD, AAPL, NVDA, US30, NAS100, or null",
   "detectedTimeframe": "H1 or M5 or H4 or D1 or W1 or MN or null",
   "latestVisibleDate": "YYYY-MM-DD or null",
   "latestVisibleTime": "HH:mm in 24-hour time or null",
@@ -9626,8 +9626,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.6.2";
-const CSA_BUILD_ID = "CSA-v4.6.2-performance-pass-3";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.6.3";
+const CSA_BUILD_ID = "CSA-v4.6.3-current-structure-regime";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14621,6 +14621,159 @@ function attachPivotConfirmationToFrameworkCandidates({
   });
 }
 
+function resolveFinalVisibleCurrentStructureRegime({
+  marketReference = {},
+  timeframe = "H1",
+  symbol = "",
+  fallbackDirection = "range",
+  visualDirection = "range",
+  visualBreakoutState = {},
+}) {
+  const candles = Array.isArray(marketReference?.timeframeCandles)
+    ? marketReference.timeframeCandles
+        .filter((c) =>
+          c?.datetime &&
+          [c?.open, c?.high, c?.low, c?.close].every((v) =>
+            Number.isFinite(Number(v))
+          )
+        )
+        .sort((a, b) => String(a.datetime).localeCompare(String(b.datetime)))
+    : [];
+
+  const normalizedFallback = ["bullish", "bearish", "range"].includes(
+    String(fallbackDirection || "").toLowerCase()
+  )
+    ? String(fallbackDirection).toLowerCase()
+    : "range";
+
+  const normalizedVisual = ["bullish", "bearish"].includes(
+    String(visualDirection || "").toLowerCase()
+  )
+    ? String(visualDirection).toLowerCase()
+    : "range";
+
+  // A one-sided final-visible breakout identified by the chart reader is
+  // strong evidence, but we still confirm it against deterministic candle
+  // structure below whenever enough candles are available.
+  const visualBreakDirection =
+    visualBreakoutState?.bullishBreakout === true &&
+    visualBreakoutState?.bearishBreakdown !== true
+      ? "bullish"
+      : visualBreakoutState?.bearishBreakdown === true &&
+        visualBreakoutState?.bullishBreakout !== true
+      ? "bearish"
+      : null;
+
+  if (candles.length < 8) {
+    return {
+      direction: visualBreakDirection || normalizedFallback,
+      source: visualBreakDirection
+        ? "final_visible_visual_breakout_fallback"
+        : "insufficient_candles_fallback",
+      event: null,
+      priorDirection: normalizedFallback,
+    };
+  }
+
+  const config = getAreaEngineConfig(timeframe);
+  const structureConfig = getStructureEngineConfig(timeframe);
+  const atr = averageTrueRange(candles, structureConfig.atrPeriod);
+  const tolerance = Math.max(
+    getApprovedPriceTolerance(symbol),
+    Number(atr || 0) * 0.08
+  );
+  const pivots = detectConfirmedSwingPivots(candles, {
+    pivotLeft: config.pivotLeft,
+    pivotRight: config.pivotRight,
+  });
+
+  const events = [];
+
+  pivots.forEach((pivot) => {
+    const side = pivot.type === "resistance" ? "bullish" : "bearish";
+    const start = Math.max(
+      Number(pivot.confirmedAtIndex || 0) + 1,
+      Number(pivot.pivotIndex || 0) + 1
+    );
+
+    for (let index = start; index < candles.length; index += 1) {
+      const multipleCloses = countConsecutiveBreakCloses({
+        candles,
+        index,
+        level: Number(pivot.price),
+        tolerance,
+        side,
+        count: Math.max(2, Number(structureConfig.confirmationCloses || 2)),
+      });
+
+      const displacement = isStrongDisplacementBreak({
+        candles,
+        index,
+        level: Number(pivot.price),
+        tolerance,
+        atr,
+        side,
+        timeframe,
+      });
+
+      if (!multipleCloses && !displacement) continue;
+
+      // Require evidence that price did not merely wick through and instantly
+      // reverse. A confirmed break must either have consecutive closes or a
+      // displacement close with at least one later candle that remains on the
+      // broken side when such a candle exists.
+      const nextClose = Number(candles[index + 1]?.close);
+      const laterHold = !Number.isFinite(nextClose)
+        ? true
+        : side === "bullish"
+        ? nextClose > Number(pivot.price) - tolerance
+        : nextClose < Number(pivot.price) + tolerance;
+
+      if (!multipleCloses && !laterHold) continue;
+
+      events.push({
+        direction: side,
+        breakIndex: index,
+        breakDatetime: candles[index]?.datetime || null,
+        pivotPrice: Number(pivot.price),
+        pivotDatetime: pivot.datetime || null,
+        confirmationPath: multipleCloses
+          ? "multiple_closes"
+          : "strong_displacement_and_hold",
+      });
+      break;
+    }
+  });
+
+  const latestEvent = events.sort((a, b) => b.breakIndex - a.breakIndex)[0] || null;
+
+  if (!latestEvent) {
+    return {
+      direction: visualBreakDirection || normalizedFallback,
+      source: visualBreakDirection
+        ? "final_visible_visual_breakout_no_new_pivot_event"
+        : "no_new_confirmed_regime_break",
+      event: null,
+      priorDirection: normalizedFallback,
+    };
+  }
+
+  // If deterministic recent structure and the visual reader agree, confidence
+  // is strongest. If they disagree, deterministic candle chronology wins.
+  return {
+    direction: latestEvent.direction,
+    source:
+      visualBreakDirection === latestEvent.direction ||
+      normalizedVisual === latestEvent.direction
+        ? "latest_confirmed_break_visual_agreement"
+        : "latest_confirmed_break_deterministic",
+    event: latestEvent,
+    priorDirection: normalizedFallback,
+    visualBreakDirection,
+    visualDirection: normalizedVisual,
+  };
+}
+
 function rankRawEntryAreas({
   visualReview = {},
   marketReference = {},
@@ -15418,7 +15571,7 @@ function rankRawEntryAreas({
       })),
   };
 
-  console.log("CSA v4.6.2 structural-strength decision:", {
+  console.log("CSA v4.6.3 structural-strength decision:", {
     buildId: CSA_BUILD_ID,
     direction,
     initializationOrder: "strength_before_structural_diagnostics",
@@ -16874,6 +17027,45 @@ function buildValidatedAnalysisFacts({
   const finalVisibleMode =
     normalizeCutoffMode(marketReference?.chartCutoff?.mode || "final_visible") ===
     "final_visible";
+
+  // V4.6.3 CURRENT STRUCTURE REGIME:
+  // Final-visible mode must be controlled by the most recent confirmed
+  // regime-changing break, not an older structural event that has already
+  // been superseded. Historical cutoff modes deliberately do NOT use this
+  // override; their period direction lock remains authoritative.
+  const currentStructureRegime = finalVisibleMode
+    ? resolveFinalVisibleCurrentStructureRegime({
+        marketReference,
+        timeframe,
+        symbol: submittedInstrument,
+        fallbackDirection: direction,
+        visualDirection,
+        visualBreakoutState,
+      })
+    : {
+        direction,
+        source: "historical_cutoff_direction_lock",
+        event: historicalPhase?.diagnostics?.latestEvent || null,
+        priorDirection: direction,
+      };
+
+  if (
+    finalVisibleMode &&
+    ["bullish", "bearish"].includes(currentStructureRegime.direction)
+  ) {
+    direction = currentStructureRegime.direction;
+  }
+
+  console.log("CSA CURRENT STRUCTURE REGIME:", {
+    buildId: CSA_BUILD_ID,
+    cutoffMode: marketReference?.chartCutoff?.mode || "final_visible",
+    historicalDirection: historicalPhase?.direction || null,
+    resolvedDirection: direction,
+    source: currentStructureRegime.source,
+    event: currentStructureRegime.event,
+    rule:
+      "most_recent_confirmed_regime_break_supersedes_older_structure_in_final_visible_only",
+  });
 
   const currentPrice = finalVisibleMode
     ? asPositiveNumber(visualReview?.latestVisiblePrice) ||
@@ -21174,7 +21366,7 @@ ${(visualReview?.strategyMissingInformation || []).length
     );
 
     console.log(
-      "CSA v4.6.2 completed analysis commit:",
+      "CSA v4.6.3 completed analysis commit:",
       {
         buildId:
           CSA_BUILD_ID,
