@@ -9632,8 +9632,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.7.0";
-const CSA_BUILD_ID = "CSA-v4.7.0-historical-takeover-intraday-structure";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.7.1";
+const CSA_BUILD_ID = "CSA-v4.7.1-historical-takeover-intraday-trigger-fixed";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14701,21 +14701,78 @@ function buildHistoricalTakeoverIntradayCandidate({
   );
   const tf = comparableTimeframe(timeframe) || "H1";
   const intradayTimeframes = new Set(["M1", "M5", "M15", "M30", "H1"]);
-  const cutoffPhase = marketReference?.directionalBias?.cutoffPhase || null;
-  const diagnostics = cutoffPhase?.diagnostics || {};
+  // V4.7.1: resolve the historical phase directly instead of depending on
+  // marketReference.directionalBias.cutoffPhase already being populated.
+  // The earlier v4.7.0 branch could therefore be skipped even when the
+  // historical engine had correctly handed control to the new direction.
+  const storedCutoffPhase = marketReference?.directionalBias?.cutoffPhase || null;
+  const resolvedCutoffPhase =
+    deriveAuthoritativeCsaHistoricalPhase({
+      marketReference,
+      symbol,
+      timeframe: tf,
+    }) || storedCutoffPhase;
 
-  if (
-    !["selected_day", "exact"].includes(cutoffMode) ||
-    !intradayTimeframes.has(tf) ||
-    diagnostics?.handoffApplied !== true ||
-    !["bullish", "bearish"].includes(direction)
-  ) {
-    return null;
-  }
+  const cutoffPhase = resolvedCutoffPhase || storedCutoffPhase || null;
+  const diagnostics = cutoffPhase?.diagnostics || {};
 
   const resolvedDate = String(
     marketReference?.chartCutoff?.resolvedDate || ""
   ).slice(0, 10);
+
+  const phaseShowsCurrentTakeover =
+    diagnostics?.handoffApplied === true ||
+    String(cutoffPhase?.source || "").includes("historical_current_structure_handoff") ||
+    ["bullish_structure_takeover", "bearish_structure_takeover"].includes(
+      String(cutoffPhase?.phase || "")
+    );
+
+  // Secondary safety path: if the resolved phase is already directional and
+  // the controlling structural break itself occurred on the selected cutoff
+  // date, this is also a valid current-period takeover context. This prevents
+  // the intraday-base extractor from being disabled merely because the outer
+  // period phase was already labelled bullish/bearish before diagnostics were
+  // attached.
+  const controllingBreakDate = String(
+    cutoffPhase?.diagnostics?.secondaryCandlePhase?.latestEvent?.datetime ||
+    cutoffPhase?.diagnostics?.latestEvent?.datetime ||
+    cutoffPhase?.breakoutDatetime ||
+    cutoffPhase?.breakdownDatetime ||
+    ""
+  ).slice(0, 10);
+
+  const currentPeriodBreakContext =
+    !!resolvedDate &&
+    controllingBreakDate === resolvedDate &&
+    cutoffPhase?.direction === direction;
+
+  if (
+    !["selected_day", "exact"].includes(cutoffMode) ||
+    !intradayTimeframes.has(tf) ||
+    !["bullish", "bearish"].includes(direction) ||
+    !(phaseShowsCurrentTakeover || currentPeriodBreakContext)
+  ) {
+    console.log("CSA HISTORICAL TAKEOVER INTRADAY STRUCTURE SKIP:", {
+      buildId: CSA_BUILD_ID,
+      cutoffMode,
+      resolvedDate,
+      timeframe: tf,
+      direction,
+      phase: cutoffPhase?.phase || null,
+      phaseSource: cutoffPhase?.source || null,
+      handoffApplied: diagnostics?.handoffApplied === true,
+      controllingBreakDate: controllingBreakDate || null,
+      reason: !["selected_day", "exact"].includes(cutoffMode)
+        ? "not_historical_cutoff"
+        : !intradayTimeframes.has(tf)
+        ? "not_intraday_timeframe"
+        : !["bullish", "bearish"].includes(direction)
+        ? "direction_not_actionable"
+        : "no_current_period_takeover_context",
+    });
+    return null;
+  }
+
   if (!resolvedDate) return null;
 
   const allCandles = Array.isArray(marketReference?.timeframeCandles)
@@ -14874,6 +14931,7 @@ function buildHistoricalTakeoverIntradayCandidate({
     lifecycleEvents: [],
     authorityRank: 1,
     intradayTakeoverBase: true,
+    authoritativeStructuralException: true,
     takeoverBreakLevel: brokenLevel,
     takeoverBreakDatetime: dayCandles[breakIndex]?.datetime || null,
     baseDatetime: selectedBase?.candle?.datetime || null,
@@ -16243,10 +16301,17 @@ function rankRawEntryAreas({
     ).size;
     const memberCount = (rawZone.members || []).length;
 
+    const isHistoricalTakeoverIntradayLevel =
+      rawZone?.members?.some?.((member) =>
+        member?.intradayTakeoverBase === true &&
+        member?.authoritativeStructuralException === true &&
+        member?.source === "historical_takeover_intraday_base"
+      ) === true;
+
     const isAuthoritativeFrameworkLevel =
       String(rawZone?.source || "").startsWith(
         "authoritative_framework_"
-      );
+      ) || isHistoricalTakeoverIntradayLevel;
 
     const isConfirmedConversion =
       rawZone?.authoritativeType === "converted resistance" ||
@@ -16349,6 +16414,8 @@ function rankRawEntryAreas({
       pivotConfirmationCount: Number(rawZone?.pivotConfirmationCount || 0),
       conversionBreakConfirmed:
         rawZone?.conversionBreakConfirmed === true,
+      historicalTakeoverIntradayCandidate:
+        isHistoricalTakeoverIntradayLevel,
       structurallyValid,
       qualityReason: quality.reason,
       qualityScore: quality.score,
