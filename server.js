@@ -9632,8 +9632,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.7.4";
-const CSA_BUILD_ID = "CSA-v4.7.4-intraday-fib-zone-handoff-fixed";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.7.5";
+const CSA_BUILD_ID = "CSA-v4.7.5-structural-zone-validation-fixed";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -13413,10 +13413,83 @@ function validateAndSequenceEntryAreas({
       Number.EPSILON * 100
     );
 
-    if (
-      !Number.isFinite(authoritativeCenter) ||
-      Math.abs(zoneCenter - authoritativeCenter) > centerTolerance
-    ) {
+    const isSupplyDemandZone = ["supply", "demand"].includes(
+      String(area?.areaType || "").toLowerCase()
+    );
+
+    if (!Number.isFinite(authoritativeCenter)) {
+      errors.push("resolved_csa_level_missing_authoritative_anchor");
+      return false;
+    }
+
+    if (isSupplyDemandZone) {
+      // Supply/demand is an AREA, not a single-price level. The authoritative
+      // structural anchor may legitimately sit at an edge of the zone. Do not
+      // force it to equal the midpoint as we do for support/resistance levels.
+      const zoneContainmentTolerance = Math.max(
+        centerTolerance,
+        Number(atr || 0) * 0.01
+      );
+      const anchorInsideZone =
+        authoritativeCenter >= low - zoneContainmentTolerance &&
+        authoritativeCenter <= high + zoneContainmentTolerance;
+
+      const frameworkCenter = Number(area?.frameworkCenter);
+      const chartReconciledCenter = Number(area?.chartReconciledCenter);
+      const anchorReconciliationTolerance = Math.max(
+        centerTolerance,
+        Number(atr || 0) * 0.05
+      );
+      const frameworkAnchorConsistent =
+        !Number.isFinite(frameworkCenter) ||
+        Math.abs(frameworkCenter - authoritativeCenter) <=
+          anchorReconciliationTolerance;
+      const chartAnchorConsistent =
+        !Number.isFinite(chartReconciledCenter) ||
+        Math.abs(chartReconciledCenter - authoritativeCenter) <=
+          anchorReconciliationTolerance;
+
+      if (
+        !anchorInsideZone ||
+        !frameworkAnchorConsistent ||
+        !chartAnchorConsistent
+      ) {
+        errors.push("resolved_csa_zone_anchor_mismatch");
+        console.log("CSA selector v3 structural-zone anchor mismatch:", {
+          levelText: area?.levelText || null,
+          areaType: area?.areaType || null,
+          frameworkPeriod: area?.frameworkPeriod || null,
+          zoneLow: low,
+          zoneHigh: high,
+          zoneCenter,
+          authoritativeCenter,
+          frameworkCenter: area?.frameworkCenter ?? null,
+          chartReconciledCenter: area?.chartReconciledCenter ?? null,
+          anchorInsideZone,
+          frameworkAnchorConsistent,
+          chartAnchorConsistent,
+          zoneContainmentTolerance,
+          anchorReconciliationTolerance,
+        });
+        return false;
+      }
+
+      console.log("CSA selector v3 structural-zone anchor accepted:", {
+        levelText: area?.levelText || null,
+        areaType: area?.areaType || null,
+        frameworkPeriod: area?.frameworkPeriod || null,
+        zoneLow: low,
+        zoneHigh: high,
+        zoneCenter,
+        authoritativeCenter,
+        frameworkCenter: area?.frameworkCenter ?? null,
+        chartReconciledCenter: area?.chartReconciledCenter ?? null,
+        historicalTakeoverIntradayCandidate:
+          area?.historicalTakeoverIntradayCandidate === true,
+      });
+    } else if (Math.abs(zoneCenter - authoritativeCenter) > centerTolerance) {
+      // Support/resistance remains a single authoritative framework level, so
+      // its resolved tolerance-zone must stay centred on that level.
       errors.push("resolved_csa_level_not_zone_center");
       console.log("CSA selector v3 zone-center mismatch:", {
         levelText: area?.levelText || null,
