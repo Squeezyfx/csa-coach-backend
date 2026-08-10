@@ -9626,8 +9626,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.6.5";
-const CSA_BUILD_ID = "CSA-v4.6.5-final-visible-direction-engine";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.6.6";
+const CSA_BUILD_ID = "CSA-v4.6.6-final-visible-endpoint-authority";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14626,6 +14626,9 @@ function resolveFinalVisibleDirectionEngine({
   timeframe = "H1",
   symbol = "",
   fallbackDirection = "range",
+  chartDetection = {},
+  visualReview = {},
+  visualBreakoutState = {},
 }) {
   const candles = Array.isArray(marketReference?.timeframeCandles)
     ? marketReference.timeframeCandles
@@ -14793,11 +14796,114 @@ function resolveFinalVisibleDirectionEngine({
     confidence = "medium";
   }
 
+  /*
+   * V4.6.6 FINAL-VISIBLE ENDPOINT AUTHORITY
+   * Final-visible mode must describe the uploaded chart endpoint, not an older
+   * external-OHLC regime. This only resolves direction; entries remain gated.
+   */
+  const chartVisiblePrice =
+    asPositiveNumber(chartDetection?.latestVisiblePrice) ||
+    asPositiveNumber(visualReview?.latestVisiblePrice);
+
+  const externalFinalClose = asPositiveNumber(
+    candles[candles.length - 1]?.close
+  );
+
+  const endpointDifference =
+    chartVisiblePrice !== null && externalFinalClose !== null
+      ? Math.abs(chartVisiblePrice - externalFinalClose)
+      : null;
+
+  const endpointMismatchTolerance = Math.max(
+    getApprovedPriceTolerance(symbol) * 6,
+    Number(atr || 0) * 2.25
+  );
+
+  const endpointMateriallyDiverged =
+    endpointDifference !== null &&
+    endpointDifference > endpointMismatchTolerance;
+
+  const normalizedVisualDirection = normalizedDirectionCode(
+    visualReview?.plainMarketDirection ||
+      visualReview?.shortTermDirection ||
+      visualReview?.preferredEntryArea?.direction ||
+      ""
+  );
+
+  const explicitVisualBreakDirection =
+    visualBreakoutState?.bullishBreakout === true &&
+    visualBreakoutState?.bearishBreakdown !== true
+      ? "bullish"
+      : visualBreakoutState?.bearishBreakdown === true &&
+        visualBreakoutState?.bullishBreakout !== true
+      ? "bearish"
+      : null;
+
+  const barsSinceLatestBreak = latestBreak
+    ? Math.max(0, candles.length - 1 - Number(latestBreak.breakIndex || 0))
+    : null;
+
+  const oldBreakOpposedByCurrentChart =
+    latestBreak &&
+    explicitVisualBreakDirection &&
+    explicitVisualBreakDirection !== latestBreak.direction &&
+    Number.isFinite(barsSinceLatestBreak) &&
+    barsSinceLatestBreak >= 6;
+
+  const visualSlopeAgreement =
+    explicitVisualBreakDirection === "bullish"
+      ? recentSlope > 0
+      : explicitVisualBreakDirection === "bearish"
+      ? recentSlope < 0
+      : false;
+
+  let endpointOverrideApplied = false;
+  let endpointOverrideReason = null;
+
+  if (endpointMateriallyDiverged && explicitVisualBreakDirection) {
+    direction = explicitVisualBreakDirection;
+    source = "final_visible_chart_endpoint_external_ohlc_mismatch";
+    confidence = "high";
+    endpointOverrideApplied = true;
+    endpointOverrideReason =
+      "verified_chart_endpoint_materially_differs_from_external_ohlc_and_visual_breakout_is_clear";
+  } else if (
+    endpointMateriallyDiverged &&
+    ["bullish", "bearish"].includes(normalizedVisualDirection)
+  ) {
+    direction = normalizedVisualDirection;
+    source = "final_visible_chart_endpoint_visual_direction_fallback";
+    confidence = "medium";
+    endpointOverrideApplied = true;
+    endpointOverrideReason =
+      "verified_chart_endpoint_materially_differs_from_external_ohlc";
+  } else if (oldBreakOpposedByCurrentChart && visualSlopeAgreement) {
+    direction = explicitVisualBreakDirection;
+    source = "final_visible_newer_visual_break_supersedes_old_structural_event";
+    confidence = "high";
+    endpointOverrideApplied = true;
+    endpointOverrideReason =
+      "newer_opposite_visual_break_with_supporting_recent_slope";
+  }
+
   return {
     direction,
     confidence,
     source,
     latestBreak,
+    chartEndpointAuthority: {
+      chartVisiblePrice,
+      externalFinalClose,
+      endpointDifference,
+      endpointMismatchTolerance,
+      endpointMateriallyDiverged,
+      explicitVisualBreakDirection,
+      normalizedVisualDirection,
+      barsSinceLatestBreak,
+      visualSlopeAgreement,
+      overrideApplied: endpointOverrideApplied,
+      overrideReason: endpointOverrideReason,
+    },
     diagnostics: {
       timeframe: tf,
       candleCount: candles.length,
@@ -16138,7 +16244,7 @@ function rankRawEntryAreas({
       })),
   };
 
-  console.log("CSA v4.6.5 structural-strength decision:", {
+  console.log("CSA v4.6.6 structural-strength decision:", {
     buildId: CSA_BUILD_ID,
     direction,
     initializationOrder: "strength_before_structural_diagnostics",
@@ -17605,6 +17711,9 @@ function buildValidatedAnalysisFacts({
         timeframe,
         symbol: submittedInstrument,
         fallbackDirection: direction,
+        chartDetection,
+        visualReview,
+        visualBreakoutState,
       })
     : null;
 
@@ -17738,11 +17847,14 @@ function buildValidatedAnalysisFacts({
   });
 
   const currentPrice = finalVisibleMode
-    ? asPositiveNumber(visualReview?.latestVisiblePrice) ||
+    ? asPositiveNumber(chartDetection?.latestVisiblePrice) ||
+      asPositiveNumber(visualReview?.latestVisiblePrice) ||
+      asPositiveNumber(finalVisibleDirection?.chartEndpointAuthority?.chartVisiblePrice) ||
       asPositiveNumber(historicalPhase?.latestClose) ||
       extractLastMarketPrice(marketReference)
     : asPositiveNumber(historicalPhase?.latestClose) ||
       extractLastMarketPrice(marketReference) ||
+      asPositiveNumber(chartDetection?.latestVisiblePrice) ||
       asPositiveNumber(visualReview?.latestVisiblePrice);
 
   const lockedMarketState = Object.freeze({
@@ -18028,7 +18140,9 @@ function buildValidatedAnalysisFacts({
         : null,
     shortTermCondition,
     currentPrice,
-    latestVisiblePrice: asPositiveNumber(visualReview?.latestVisiblePrice),
+    latestVisiblePrice:
+      asPositiveNumber(chartDetection?.latestVisiblePrice) ||
+      asPositiveNumber(visualReview?.latestVisiblePrice),
     structuralReferenceAreas: structuralReferenceAreas.map((candidate) => ({
       direction: candidate.direction,
       areaType: candidate.areaType,
@@ -22058,7 +22172,7 @@ ${(visualReview?.strategyMissingInformation || []).length
     );
 
     console.log(
-      "CSA v4.6.5 completed analysis commit:",
+      "CSA v4.6.6 completed analysis commit:",
       {
         buildId:
           CSA_BUILD_ID,
@@ -22145,5 +22259,11 @@ app.listen(PORT, "0.0.0.0", () => {
     feedbackEngineVersion: CSA_FEEDBACK_ENGINE_VERSION,
     selectorVersion: CSA_SELECTOR_VERSION,
     cleanBuild: true,
+  });
+  console.log("CSA FINAL VISIBLE ENGINE SELF-CHECK:", {
+    buildId: CSA_BUILD_ID,
+    endpointAuthority: true,
+    chartDetectionPricePriority: true,
+    historicalCutoffIsolation: true,
   });
 });
