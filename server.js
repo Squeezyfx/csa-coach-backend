@@ -9626,8 +9626,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.6.7";
-const CSA_BUILD_ID = "CSA-v4.6.7-final-visible-fib-endpoint-authority";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.6.8";
+const CSA_BUILD_ID = "CSA-v4.6.8-historical-framework-local-fib-impulse";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -9946,6 +9946,100 @@ function getAreaEngineConfig(timeframe = "H1") {
   return { timeframe: tf, ...(configs[tf] || configs.H1) };
 }
 
+function deriveHistoricalFrameworkLocalFibImpulse({
+  marketReference = {},
+  direction = "range",
+  timeframe = "H1",
+}) {
+  const cutoffMode = normalizeCutoffMode(
+    marketReference?.chartCutoff?.mode || "final_visible"
+  );
+
+  const historicalMode = ["selected_day", "exact"].includes(cutoffMode);
+  const tf = comparableTimeframe(timeframe) || "H1";
+  const intradayFramework = ["M1", "M5", "M15", "M30", "H1"].includes(tf);
+  const levels = Array.isArray(marketReference?.dailyLevels)
+    ? [...marketReference.dailyLevels].sort((a, b) =>
+        String(a?.key || a?.date || "").localeCompare(
+          String(b?.key || b?.date || "")
+        )
+      )
+    : [];
+
+  if (!historicalMode || !intradayFramework || levels.length < 2) {
+    return {
+      enabled: false,
+      cutoffMode,
+      timeframe: tf,
+      reason: !historicalMode
+        ? "not_historical_cutoff"
+        : !intradayFramework
+        ? "not_intraday_daily_framework"
+        : "fewer_than_two_framework_periods",
+    };
+  }
+
+  const terminalPeriod = levels[levels.length - 1];
+  const originPeriod = levels[levels.length - 2];
+
+  const originPrice =
+    direction === "bearish"
+      ? asPositiveNumber(originPeriod?.high)
+      : direction === "bullish"
+      ? asPositiveNumber(originPeriod?.low)
+      : null;
+
+  const terminalPrice =
+    direction === "bearish"
+      ? asPositiveNumber(terminalPeriod?.low)
+      : direction === "bullish"
+      ? asPositiveNumber(terminalPeriod?.high)
+      : null;
+
+  const validMove =
+    originPrice !== null &&
+    terminalPrice !== null &&
+    ((direction === "bearish" && originPrice > terminalPrice) ||
+      (direction === "bullish" && terminalPrice > originPrice));
+
+  if (!validMove) {
+    return {
+      enabled: false,
+      cutoffMode,
+      timeframe: tf,
+      direction,
+      originPeriod: originPeriod?.periodLabel || originPeriod?.day || originPeriod?.key || null,
+      terminalPeriod: terminalPeriod?.periodLabel || terminalPeriod?.day || terminalPeriod?.key || null,
+      originPrice,
+      terminalPrice,
+      reason: "adjacent_framework_periods_do_not_form_directional_impulse",
+    };
+  }
+
+  return {
+    enabled: true,
+    cutoffMode,
+    timeframe: tf,
+    direction,
+    originPrice,
+    terminalPrice,
+    originTime: originPeriod?.date
+      ? `${originPeriod.date}T00:00:00`
+      : originPeriod?.key || null,
+    terminalTime: terminalPeriod?.date
+      ? `${terminalPeriod.date}T23:59:59`
+      : terminalPeriod?.key || null,
+    originPeriod: originPeriod?.periodLabel || originPeriod?.day || originPeriod?.key || null,
+    terminalPeriod: terminalPeriod?.periodLabel || terminalPeriod?.day || terminalPeriod?.key || null,
+    originPeriodKey: originPeriod?.key || originPeriod?.date || null,
+    terminalPeriodKey: terminalPeriod?.key || terminalPeriod?.date || null,
+    rule: "historical_intraday_fib_uses_immediately_preceding_framework_period_origin_to_cutoff_period_terminal",
+    reason: direction === "bearish"
+      ? "previous_framework_period_high_to_cutoff_period_low"
+      : "previous_framework_period_low_to_cutoff_period_high",
+  };
+}
+
 function buildLatestImpulseFibonacci({
   candles = [],
   historicalPhase = null,
@@ -9954,6 +10048,7 @@ function buildLatestImpulseFibonacci({
   symbol = "",
   chartNativeImpulse = null,
   finalVisibleEndpointAuthority = null,
+  historicalFrameworkImpulseAuthority = null,
   suppressImpulseLog = false,
 }) {
   if (!Array.isArray(candles) || candles.length < 10) {
@@ -12029,6 +12124,82 @@ function buildLatestImpulseFibonacci({
   }
 
   /*
+   * V4.6.8 HISTORICAL FRAMEWORK-LOCAL FIB IMPULSE AUTHORITY
+   *
+   * For M1-H1 selected-day / exact historical reviews, the relevant CSA Fib
+   * impulse is the completed move joining the immediately preceding daily
+   * framework period to the current cutoff period. This prevents an older
+   * 60-day protected swing from replacing the local Monday->Tuesday (etc.)
+   * impulse that the historical CSA framework is actually evaluating.
+   *
+   * Bearish: previous period HIGH -> cutoff period LOW.
+   * Bullish: previous period LOW -> cutoff period HIGH.
+   *
+   * Final-visible behavior is deliberately untouched.
+   */
+  const historicalFrameworkImpulseEnabled =
+    historicalFrameworkImpulseAuthority?.enabled === true &&
+    historicalFrameworkImpulseAuthority?.direction === direction;
+
+  let historicalFrameworkImpulseApplied = false;
+
+  if (historicalFrameworkImpulseEnabled) {
+    const historicalOrigin = asPositiveNumber(
+      historicalFrameworkImpulseAuthority?.originPrice
+    );
+    const historicalTerminal = asPositiveNumber(
+      historicalFrameworkImpulseAuthority?.terminalPrice
+    );
+
+    if (
+      historicalOrigin !== null &&
+      historicalTerminal !== null &&
+      ((direction === "bearish" && historicalOrigin > historicalTerminal) ||
+        (direction === "bullish" && historicalTerminal > historicalOrigin))
+    ) {
+      if (direction === "bearish") {
+        selectedSwingHigh = historicalOrigin;
+        selectedSwingLow = historicalTerminal;
+        selectedSwingHighTime =
+          historicalFrameworkImpulseAuthority?.originTime || selectedSwingHighTime;
+        selectedSwingLowTime =
+          historicalFrameworkImpulseAuthority?.terminalTime || selectedSwingLowTime;
+      } else {
+        selectedSwingLow = historicalOrigin;
+        selectedSwingHigh = historicalTerminal;
+        selectedSwingLowTime =
+          historicalFrameworkImpulseAuthority?.originTime || selectedSwingLowTime;
+        selectedSwingHighTime =
+          historicalFrameworkImpulseAuthority?.terminalTime || selectedSwingHighTime;
+      }
+
+      priceSource = "historical_framework_local_impulse";
+      selectionReason =
+        `${selectionReason}_historical_framework_local_impulse_override`;
+      historicalFrameworkImpulseApplied = true;
+    }
+  }
+
+  if (historicalFrameworkImpulseEnabled && !suppressImpulseLog) {
+    console.log("CSA HISTORICAL FRAMEWORK FIB IMPULSE AUTHORITY:", {
+      buildId: CSA_BUILD_ID,
+      direction,
+      cutoffMode: historicalFrameworkImpulseAuthority?.cutoffMode || null,
+      timeframe: historicalFrameworkImpulseAuthority?.timeframe || timeframe,
+      originPeriod: historicalFrameworkImpulseAuthority?.originPeriod || null,
+      terminalPeriod: historicalFrameworkImpulseAuthority?.terminalPeriod || null,
+      originPrice: historicalFrameworkImpulseAuthority?.originPrice ?? null,
+      terminalPrice: historicalFrameworkImpulseAuthority?.terminalPrice ?? null,
+      selectedSwingLow,
+      selectedSwingHigh,
+      applied: historicalFrameworkImpulseApplied,
+      reason: historicalFrameworkImpulseAuthority?.reason || null,
+      rule: historicalFrameworkImpulseAuthority?.rule || null,
+      futureCandlesExcluded: true,
+    });
+  }
+
+  /*
    * V4.6.7 FINAL-VISIBLE FIB ENDPOINT AUTHORITY
    *
    * Direction and the Fibonacci terminal must describe the same visible chart
@@ -12331,6 +12502,17 @@ function buildLatestImpulseFibonacci({
       finalSwingLow,
     priceSource,
     chartNativeConfidence,
+    historicalFrameworkImpulseAuthority: historicalFrameworkImpulseEnabled
+      ? {
+          applied: historicalFrameworkImpulseApplied,
+          originPrice: historicalFrameworkImpulseAuthority?.originPrice ?? null,
+          terminalPrice: historicalFrameworkImpulseAuthority?.terminalPrice ?? null,
+          originPeriod: historicalFrameworkImpulseAuthority?.originPeriod || null,
+          terminalPeriod: historicalFrameworkImpulseAuthority?.terminalPeriod || null,
+          reason: historicalFrameworkImpulseAuthority?.reason || null,
+          rule: historicalFrameworkImpulseAuthority?.rule || null,
+        }
+      : null,
     finalVisibleEndpointAuthority: finalVisibleEndpointEnabled
       ? {
           price: finalVisibleEndpointPrice,
@@ -12363,7 +12545,9 @@ function buildLatestImpulseFibonacci({
         })
       ),
     source:
-      majorSelection
+      historicalFrameworkImpulseApplied
+        ? "historical_framework_local_impulse"
+        : majorSelection
         ? "major_break_significance_protected_swing_impulse"
         : "broad_fallback_structure_impulse",
     selectionReason,
@@ -12429,7 +12613,9 @@ function buildLatestImpulseFibonacci({
       outerStructuralOrigin ||
       null,
     fibOriginModel:
-      outerStructuralOrigin
+      historicalFrameworkImpulseApplied
+        ? "historical_framework_local_period_impulse"
+        : outerStructuralOrigin
         ? "outer_structural_pre_major_pivot"
         : majorSelection
         ? "local_protected_swing_fallback"
@@ -15720,6 +15906,13 @@ function rankRawEntryAreas({
           source: "historical_cutoff_locked",
         };
 
+  const historicalFrameworkFibImpulseAuthority =
+    deriveHistoricalFrameworkLocalFibImpulse({
+      marketReference,
+      direction,
+      timeframe,
+    });
+
   const fibonacci =
     buildLatestImpulseFibonacci({
     candles: impulseCandles,
@@ -15731,6 +15924,8 @@ function rankRawEntryAreas({
       visualReview?.chartNativeImpulse || null,
     finalVisibleEndpointAuthority:
       finalVisibleFibEndpointAuthority,
+    historicalFrameworkImpulseAuthority:
+      historicalFrameworkFibImpulseAuthority,
   });
 
   const rawZones = frameworkCandidates.map((candidate) => {
@@ -16372,7 +16567,7 @@ function rankRawEntryAreas({
       })),
   };
 
-  console.log("CSA v4.6.7 structural-strength decision:", {
+  console.log("CSA v4.6.8 structural-strength decision:", {
     buildId: CSA_BUILD_ID,
     direction,
     initializationOrder: "strength_before_structural_diagnostics",
@@ -16438,6 +16633,8 @@ function rankRawEntryAreas({
       fibonacci?.chartNativeConfidence || null,
     finalVisibleEndpointAuthority:
       fibonacci?.finalVisibleEndpointAuthority || null,
+    historicalFrameworkImpulseAuthority:
+      fibonacci?.historicalFrameworkImpulseAuthority || null,
     pixelCalibrationUsed:
       fibonacci?.priceSource ===
       "uploaded_chart_pixel_calibration",
