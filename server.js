@@ -2952,6 +2952,12 @@ async function fetchTwelveDataStructureLevels({
     direction: phaseForBias?.direction || null,
     phase: phaseForBias?.phase || null,
     phaseSource: phaseForBias?.source || null,
+    handoffApplied: phaseForBias?.diagnostics?.handoffApplied === true,
+    handoffDirection: phaseForBias?.diagnostics?.handoffDirection || null,
+    handoffReason: phaseForBias?.diagnostics?.handoffReason || null,
+    currentPeriod: phaseForBias?.diagnostics?.currentPeriod || null,
+    previousPeriod: phaseForBias?.diagnostics?.previousPeriod || null,
+    secondaryCandlePhase: phaseForBias?.diagnostics?.secondaryCandlePhase || null,
     lastIncludedCandle,
     firstExcludedCandle,
   });
@@ -9626,8 +9632,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.6.8";
-const CSA_BUILD_ID = "CSA-v4.6.8-historical-framework-local-fib-impulse";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.6.9";
+const CSA_BUILD_ID = "CSA-v4.6.9-historical-current-structure-handoff";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -17849,6 +17855,221 @@ function shouldUseAuthoritativePeriodPhase(marketReference = {}) {
   return ["selected_day", "exact"].includes(cutoffMode);
 }
 
+/*
+ * V4.6.9 HISTORICAL CURRENT-STRUCTURE HANDOFF
+ *
+ * A selected historical day must be judged by the latest structure that exists
+ * at that cutoff, not by an older breakdown/breakout forever. The daily CSA
+ * framework remains authoritative for period identity and cutoff safety, but a
+ * strong same-day recovery/rejection can hand control to the opposite side when
+ * the cutoff-period structure itself confirms that takeover.
+ *
+ * This is intentionally conservative:
+ * - clear period breakout/breakdown remains authoritative;
+ * - a transitional recovery only flips bullish when the cutoff day makes a
+ *   higher high versus the immediately preceding framework period, finishes
+ *   firmly in its upper half, and closes meaningfully above the prior close;
+ * - the bearish mirror requires a lower low, lower close and lower-half finish;
+ * - a confirmed newer timeframe swing event may also confirm the handoff.
+ *
+ * Later candles to the right of the historical cutoff are never used.
+ */
+function resolveHistoricalCurrentStructureHandoff({
+  marketReference = {},
+  symbol = "",
+  timeframe = "H1",
+  periodPhase = null,
+  candlePhase = null,
+}) {
+  if (!shouldUseAuthoritativePeriodPhase(marketReference) || !periodPhase) {
+    return periodPhase || candlePhase || null;
+  }
+
+  const levels = Array.isArray(marketReference?.dailyLevels)
+    ? marketReference.dailyLevels
+        .filter(
+          (item) =>
+            Number.isFinite(Number(item?.open)) &&
+            Number.isFinite(Number(item?.high)) &&
+            Number.isFinite(Number(item?.low)) &&
+            Number.isFinite(Number(item?.close))
+        )
+        .sort((a, b) =>
+          String(a?.key || a?.date || "").localeCompare(
+            String(b?.key || b?.date || "")
+          )
+        )
+    : [];
+
+  if (levels.length < 2) return periodPhase;
+
+  const current = levels[levels.length - 1];
+  const previous = levels[levels.length - 2];
+  const currentOpen = Number(current.open);
+  const currentHigh = Number(current.high);
+  const currentLow = Number(current.low);
+  const currentClose = Number(current.close);
+  const previousHigh = Number(previous.high);
+  const previousLow = Number(previous.low);
+  const previousClose = Number(previous.close);
+  const currentRange = Math.max(0, currentHigh - currentLow);
+  const rangePosition = periodRangePosition(current);
+  const moveThreshold = historicalMoveThreshold(symbol, currentClose);
+  const structuralTolerance = Math.max(
+    Number(getCleanBreakTolerance(symbol)) || 0,
+    moveThreshold * 0.5
+  );
+
+  const candleBullishConfirmation =
+    candlePhase?.direction === "bullish" &&
+    candlePhase?.confirmedReversal === true;
+  const candleBearishConfirmation =
+    candlePhase?.direction === "bearish" &&
+    candlePhase?.confirmedReversal === true;
+
+  const bullishTakeover =
+    periodPhase?.bullishRecoveryAfterBreakdown === true &&
+    currentHigh > previousHigh + structuralTolerance &&
+    currentClose > previousClose + Math.max(moveThreshold * 0.35, structuralTolerance * 0.25) &&
+    currentClose > currentOpen &&
+    rangePosition >= 0.58 &&
+    currentRange > 0 &&
+    currentClose - currentLow >= currentRange * 0.55;
+
+  const bearishTakeover =
+    periodPhase?.bearishPullbackAfterBreakout === true &&
+    currentLow < previousLow - structuralTolerance &&
+    currentClose < previousClose - Math.max(moveThreshold * 0.35, structuralTolerance * 0.25) &&
+    currentClose < currentOpen &&
+    rangePosition <= 0.42 &&
+    currentRange > 0 &&
+    currentHigh - currentClose >= currentRange * 0.55;
+
+  if (candleBullishConfirmation || bullishTakeover) {
+    return {
+      ...periodPhase,
+      direction: "bullish",
+      phase: "bullish_structure_takeover",
+      state: "bullish_structure_takeover",
+      bullishBreakout: true,
+      bearishBreakdown: false,
+      bullishRecoveryAfterBreakdown: false,
+      bearishPullbackAfterBreakout: false,
+      confirmedReversal: true,
+      latestClose: currentClose,
+      brokenLevel:
+        candlePhase?.brokenLevel ??
+        previousHigh,
+      source: "historical_current_structure_handoff",
+      diagnostics: {
+        ...(periodPhase?.diagnostics || {}),
+        handoffApplied: true,
+        handoffDirection: "bullish",
+        handoffReason: candleBullishConfirmation
+          ? "newer_confirmed_bullish_timeframe_structure_event"
+          : "cutoff_period_higher_high_strong_upper_close_after_bearish_recovery",
+        currentPeriod: current?.periodLabel || current?.day || current?.key || current?.date || null,
+        previousPeriod: previous?.periodLabel || previous?.day || previous?.key || previous?.date || null,
+        currentOpen,
+        currentHigh,
+        currentLow,
+        currentClose,
+        previousHigh,
+        previousLow,
+        previousClose,
+        rangePosition,
+        structuralTolerance,
+        secondaryCandlePhase: candlePhase
+          ? {
+              direction: candlePhase.direction || null,
+              phase: candlePhase.phase || null,
+              confirmedReversal: candlePhase.confirmedReversal === true,
+              source: candlePhase.source || null,
+              latestEvent: candlePhase?.diagnostics?.latestEvent || null,
+            }
+          : null,
+      },
+    };
+  }
+
+  if (candleBearishConfirmation || bearishTakeover) {
+    return {
+      ...periodPhase,
+      direction: "bearish",
+      phase: "bearish_structure_takeover",
+      state: "bearish_structure_takeover",
+      bullishBreakout: false,
+      bearishBreakdown: true,
+      bullishRecoveryAfterBreakdown: false,
+      bearishPullbackAfterBreakout: false,
+      confirmedReversal: true,
+      latestClose: currentClose,
+      brokenLevel:
+        candlePhase?.brokenLevel ??
+        previousLow,
+      source: "historical_current_structure_handoff",
+      diagnostics: {
+        ...(periodPhase?.diagnostics || {}),
+        handoffApplied: true,
+        handoffDirection: "bearish",
+        handoffReason: candleBearishConfirmation
+          ? "newer_confirmed_bearish_timeframe_structure_event"
+          : "cutoff_period_lower_low_strong_lower_close_after_bullish_pullback",
+        currentPeriod: current?.periodLabel || current?.day || current?.key || current?.date || null,
+        previousPeriod: previous?.periodLabel || previous?.day || previous?.key || previous?.date || null,
+        currentOpen,
+        currentHigh,
+        currentLow,
+        currentClose,
+        previousHigh,
+        previousLow,
+        previousClose,
+        rangePosition,
+        structuralTolerance,
+        secondaryCandlePhase: candlePhase
+          ? {
+              direction: candlePhase.direction || null,
+              phase: candlePhase.phase || null,
+              confirmedReversal: candlePhase.confirmedReversal === true,
+              source: candlePhase.source || null,
+              latestEvent: candlePhase?.diagnostics?.latestEvent || null,
+            }
+          : null,
+      },
+    };
+  }
+
+  return {
+    ...periodPhase,
+    diagnostics: {
+      ...(periodPhase?.diagnostics || {}),
+      handoffApplied: false,
+      handoffDirection: null,
+      handoffReason: "no_newer_confirmed_opposite_structure_at_cutoff",
+      currentPeriod: current?.periodLabel || current?.day || current?.key || current?.date || null,
+      previousPeriod: previous?.periodLabel || previous?.day || previous?.key || previous?.date || null,
+      currentOpen,
+      currentHigh,
+      currentLow,
+      currentClose,
+      previousHigh,
+      previousLow,
+      previousClose,
+      rangePosition,
+      structuralTolerance,
+      secondaryCandlePhase: candlePhase
+        ? {
+            direction: candlePhase.direction || null,
+            phase: candlePhase.phase || null,
+            confirmedReversal: candlePhase.confirmedReversal === true,
+            source: candlePhase.source || null,
+            latestEvent: candlePhase?.diagnostics?.latestEvent || null,
+          }
+        : null,
+    },
+  };
+}
+
 function deriveAuthoritativeCsaHistoricalPhase({
   marketReference = {},
   symbol = "",
@@ -17873,23 +18094,43 @@ function deriveAuthoritativeCsaHistoricalPhase({
     periodPhase &&
     ["bullish", "bearish", "range"].includes(periodPhase.direction)
   ) {
+    const resolvedHistoricalRegime =
+      resolveHistoricalCurrentStructureHandoff({
+        marketReference,
+        symbol,
+        timeframe,
+        periodPhase,
+        candlePhase,
+      }) || periodPhase;
+
     return {
-      ...periodPhase,
-      source: `${periodPhase.source || "cutoff_period_levels"}_authoritative`,
+      ...resolvedHistoricalRegime,
+      source:
+        resolvedHistoricalRegime?.source === "historical_current_structure_handoff"
+          ? "historical_current_structure_handoff_authoritative"
+          : `${resolvedHistoricalRegime?.source || periodPhase.source || "cutoff_period_levels"}_authoritative`,
       diagnostics: {
-        ...(periodPhase.diagnostics || {}),
+        ...(resolvedHistoricalRegime?.diagnostics || periodPhase.diagnostics || {}),
         cutoffMode:
           marketReference?.chartCutoff?.mode || "selected_day",
-        directionAuthority: "csa_source_period_levels",
-        secondaryCandlePhase: candlePhase
-          ? {
-              direction: candlePhase.direction || null,
-              phase: candlePhase.phase || null,
-              source: candlePhase.source || null,
-              finalCandle:
-                candlePhase?.diagnostics?.finalCandle || null,
-            }
-          : null,
+        directionAuthority:
+          resolvedHistoricalRegime?.source === "historical_current_structure_handoff"
+            ? "latest_confirmed_historical_structure_at_cutoff"
+            : "csa_source_period_levels",
+        secondaryCandlePhase:
+          resolvedHistoricalRegime?.diagnostics?.secondaryCandlePhase ||
+          (candlePhase
+            ? {
+                direction: candlePhase.direction || null,
+                phase: candlePhase.phase || null,
+                confirmedReversal: candlePhase.confirmedReversal === true,
+                source: candlePhase.source || null,
+                finalCandle:
+                  candlePhase?.diagnostics?.finalCandle || null,
+                latestEvent:
+                  candlePhase?.diagnostics?.latestEvent || null,
+              }
+            : null),
       },
     };
   }
