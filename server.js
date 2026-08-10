@@ -9626,8 +9626,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.6.6";
-const CSA_BUILD_ID = "CSA-v4.6.6-final-visible-endpoint-authority";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.6.7";
+const CSA_BUILD_ID = "CSA-v4.6.7-final-visible-fib-endpoint-authority";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -9953,6 +9953,7 @@ function buildLatestImpulseFibonacci({
   timeframe = "H1",
   symbol = "",
   chartNativeImpulse = null,
+  finalVisibleEndpointAuthority = null,
   suppressImpulseLog = false,
 }) {
   if (!Array.isArray(candles) || candles.length < 10) {
@@ -12027,6 +12028,99 @@ function buildLatestImpulseFibonacci({
       `${selectionReason}_chart_native_price_scale`;
   }
 
+  /*
+   * V4.6.7 FINAL-VISIBLE FIB ENDPOINT AUTHORITY
+   *
+   * Direction and the Fibonacci terminal must describe the same visible chart
+   * state. When the uploaded chart endpoint has moved materially beyond the
+   * last external-OHLC terminal, use that verified final-visible endpoint as a
+   * conservative terminal anchor. This rule is FINAL-VISIBLE ONLY and does not
+   * change selected-day/exact historical reconstruction.
+   *
+   * A validated chart-native wick remains preferable because it gives the
+   * actual wick price. Endpoint authority is therefore a fallback used only
+   * while the impulse is still sourced from external OHLC.
+   */
+  const finalVisibleEndpointPrice =
+    asPositiveNumber(
+      finalVisibleEndpointAuthority?.price
+    );
+
+  const finalVisibleEndpointEnabled =
+    finalVisibleEndpointAuthority?.enabled === true &&
+    finalVisibleEndpointPrice !== null;
+
+  const finalVisibleEndpointTolerance = Math.max(
+    getApprovedPriceTolerance(symbol) * 4,
+    Number(atr || 0) * 0.35
+  );
+
+  let finalVisibleEndpointApplied = false;
+  let finalVisibleEndpointReason = null;
+
+  if (
+    finalVisibleEndpointEnabled &&
+    priceSource === "external_ohlc"
+  ) {
+    if (
+      direction === "bullish" &&
+      finalVisibleEndpointPrice >
+        selectedSwingHigh + finalVisibleEndpointTolerance
+    ) {
+      selectedSwingHigh = finalVisibleEndpointPrice;
+      selectedSwingHighTime =
+        finalVisibleEndpointAuthority?.datetime ||
+        selectedSwingHighTime;
+      priceSource =
+        "final_visible_chart_endpoint";
+      selectionReason =
+        `${selectionReason}_final_visible_terminal_override`;
+      finalVisibleEndpointApplied = true;
+      finalVisibleEndpointReason =
+        "bullish_chart_endpoint_materially_above_external_terminal";
+    } else if (
+      direction === "bearish" &&
+      finalVisibleEndpointPrice <
+        selectedSwingLow - finalVisibleEndpointTolerance
+    ) {
+      selectedSwingLow = finalVisibleEndpointPrice;
+      selectedSwingLowTime =
+        finalVisibleEndpointAuthority?.datetime ||
+        selectedSwingLowTime;
+      priceSource =
+        "final_visible_chart_endpoint";
+      selectionReason =
+        `${selectionReason}_final_visible_terminal_override`;
+      finalVisibleEndpointApplied = true;
+      finalVisibleEndpointReason =
+        "bearish_chart_endpoint_materially_below_external_terminal";
+    }
+  }
+
+  if (finalVisibleEndpointEnabled && !suppressImpulseLog) {
+    console.log("CSA FINAL VISIBLE FIB ENDPOINT AUTHORITY:", {
+      buildId: CSA_BUILD_ID,
+      direction,
+      enabled: true,
+      externalSwingLow: finalSwingLow,
+      externalSwingHigh: finalSwingHigh,
+      chartVisibleEndpoint: finalVisibleEndpointPrice,
+      selectedSwingLow,
+      selectedSwingHigh,
+      endpointSource:
+        finalVisibleEndpointAuthority?.source ||
+        "final_visible_chart_price",
+      endpointTolerance: finalVisibleEndpointTolerance,
+      applied: finalVisibleEndpointApplied,
+      reason:
+        finalVisibleEndpointReason ||
+        (priceSource !== "external_ohlc"
+          ? "validated_chart_native_wick_retained"
+          : "chart_endpoint_did_not_extend_beyond_external_terminal"),
+      historicalCutoffIsolation: true,
+    });
+  }
+
   console.log(
     "CSA v4.5 Fibonacci structural origin:",
     {
@@ -12237,6 +12331,17 @@ function buildLatestImpulseFibonacci({
       finalSwingLow,
     priceSource,
     chartNativeConfidence,
+    finalVisibleEndpointAuthority: finalVisibleEndpointEnabled
+      ? {
+          price: finalVisibleEndpointPrice,
+          applied: finalVisibleEndpointApplied,
+          reason: finalVisibleEndpointReason,
+          tolerance: finalVisibleEndpointTolerance,
+          source:
+            finalVisibleEndpointAuthority?.source ||
+            "final_visible_chart_price",
+        }
+      : null,
     impulseRange:
       range,
     levels:
@@ -15594,6 +15699,27 @@ function rankRawEntryAreas({
     symbol,
   });
 
+  const finalVisibleFibEndpointAuthority =
+    normalizeCutoffMode(
+      marketReference?.chartCutoff?.mode ||
+        "final_visible"
+    ) === "final_visible"
+      ? {
+          enabled: true,
+          price: asPositiveNumber(currentPrice),
+          datetime:
+            visualReview?.latestVisibleDateTime ||
+            visualReview?.latestVisibleDatetime ||
+            null,
+          source: "locked_final_visible_current_price",
+        }
+      : {
+          enabled: false,
+          price: null,
+          datetime: null,
+          source: "historical_cutoff_locked",
+        };
+
   const fibonacci =
     buildLatestImpulseFibonacci({
     candles: impulseCandles,
@@ -15603,6 +15729,8 @@ function rankRawEntryAreas({
     symbol,
     chartNativeImpulse:
       visualReview?.chartNativeImpulse || null,
+    finalVisibleEndpointAuthority:
+      finalVisibleFibEndpointAuthority,
   });
 
   const rawZones = frameworkCandidates.map((candidate) => {
@@ -16244,7 +16372,7 @@ function rankRawEntryAreas({
       })),
   };
 
-  console.log("CSA v4.6.6 structural-strength decision:", {
+  console.log("CSA v4.6.7 structural-strength decision:", {
     buildId: CSA_BUILD_ID,
     direction,
     initializationOrder: "strength_before_structural_diagnostics",
@@ -16308,6 +16436,8 @@ function rankRawEntryAreas({
       fibonacci?.priceSource || "external_ohlc",
     chartNativeConfidence:
       fibonacci?.chartNativeConfidence || null,
+    finalVisibleEndpointAuthority:
+      fibonacci?.finalVisibleEndpointAuthority || null,
     pixelCalibrationUsed:
       fibonacci?.priceSource ===
       "uploaded_chart_pixel_calibration",
@@ -22172,7 +22302,7 @@ ${(visualReview?.strategyMissingInformation || []).length
     );
 
     console.log(
-      "CSA v4.6.6 completed analysis commit:",
+      "CSA v4.6.7 completed analysis commit:",
       {
         buildId:
           CSA_BUILD_ID,
@@ -22264,6 +22394,7 @@ app.listen(PORT, "0.0.0.0", () => {
     buildId: CSA_BUILD_ID,
     endpointAuthority: true,
     chartDetectionPricePriority: true,
+    fibEndpointAuthority: true,
     historicalCutoffIsolation: true,
   });
 });
