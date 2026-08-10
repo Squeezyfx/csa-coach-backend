@@ -9632,8 +9632,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.7.1";
-const CSA_BUILD_ID = "CSA-v4.7.1-historical-takeover-intraday-trigger-fixed";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.7.2";
+const CSA_BUILD_ID = "CSA-v4.7.2-historical-intraday-main-pipeline-scan";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14688,6 +14688,323 @@ function shouldBypassNearerPlainArea({
 }
 
 
+
+function buildHistoricalTakeoverIntradayCandidateFromMainPipeline({
+  marketReference = {},
+  candles = [],
+  fibonacci = null,
+  direction = "range",
+  currentPrice = null,
+  symbol = "",
+  timeframe = "H1",
+  atr = 0,
+}) {
+  const cutoffMode = normalizeCutoffMode(
+    marketReference?.chartCutoff?.mode || "final_visible"
+  );
+  const tf = comparableTimeframe(timeframe) || "H1";
+  const intradayTimeframes = new Set(["M1", "M5", "M15", "M30", "H1"]);
+  const resolvedDate = String(
+    marketReference?.chartCutoff?.resolvedDate || ""
+  ).slice(0, 10);
+
+  const logBase = {
+    buildId: CSA_BUILD_ID,
+    cutoffMode,
+    resolvedDate: resolvedDate || null,
+    timeframe: tf,
+    direction,
+    stage: "main_deterministic_candidate_pipeline",
+  };
+
+  if (!["selected_day", "exact"].includes(cutoffMode)) {
+    console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE SCAN:", {
+      ...logBase,
+      result: "not_applicable",
+      reason: "not_historical_cutoff",
+    });
+    return null;
+  }
+  if (!intradayTimeframes.has(tf)) {
+    console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE SCAN:", {
+      ...logBase,
+      result: "not_applicable",
+      reason: "not_intraday_timeframe",
+    });
+    return null;
+  }
+  if (!["bullish", "bearish"].includes(direction)) {
+    console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE SCAN:", {
+      ...logBase,
+      result: "no_candidate",
+      reason: "direction_not_actionable",
+    });
+    return null;
+  }
+  if (!resolvedDate) {
+    console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE SCAN:", {
+      ...logBase,
+      result: "no_candidate",
+      reason: "missing_resolved_cutoff_date",
+    });
+    return null;
+  }
+
+  const usableCandles = Array.isArray(candles)
+    ? candles
+        .filter((candle) =>
+          candle?.datetime &&
+          [candle?.open, candle?.high, candle?.low, candle?.close].every((v) =>
+            Number.isFinite(Number(v))
+          )
+        )
+        .sort((a, b) => String(a.datetime).localeCompare(String(b.datetime)))
+    : [];
+
+  const dayCandles = usableCandles.filter(
+    (candle) => String(candle.datetime || "").slice(0, 10) === resolvedDate
+  );
+
+  if (dayCandles.length < 6) {
+    console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE SCAN:", {
+      ...logBase,
+      result: "no_candidate",
+      reason: "insufficient_cutoff_day_candles",
+      cutoffDayCandleCount: dayCandles.length,
+    });
+    return null;
+  }
+
+  const tolerance = Math.max(
+    frameworkLevelTolerance({ symbol, atr }),
+    Number(atr || 0) * 0.05
+  );
+
+  const brokenLevel =
+    asPositiveNumber(fibonacci?.brokenMajorLevel?.price) ||
+    asPositiveNumber(fibonacci?.majorBrokenLevel?.price) ||
+    null;
+  const breakDatetime = String(
+    fibonacci?.brokenMajorLevel?.breakoutDatetime ||
+    fibonacci?.majorBrokenLevel?.breakoutDatetime ||
+    ""
+  );
+
+  let breakIndex = -1;
+  let breakReason = "";
+
+  if (breakDatetime && breakDatetime.slice(0, 10) === resolvedDate) {
+    const target = breakDatetime.replace("T", " ").slice(0, 16);
+    const exactIndex = dayCandles.findIndex((candle) =>
+      String(candle.datetime || "").replace("T", " ").slice(0, 16) === target
+    );
+    if (exactIndex >= 1) {
+      breakIndex = exactIndex;
+      breakReason = "fibonacci_controlling_break_datetime";
+    }
+  }
+
+  if (breakIndex < 0 && brokenLevel !== null) {
+    for (let i = 1; i < dayCandles.length; i += 1) {
+      const priorClose = Number(dayCandles[i - 1]?.close);
+      const close = Number(dayCandles[i]?.close);
+      if (!Number.isFinite(priorClose) || !Number.isFinite(close)) continue;
+      const crossed = direction === "bullish"
+        ? priorClose <= brokenLevel + tolerance && close > brokenLevel + tolerance
+        : priorClose >= brokenLevel - tolerance && close < brokenLevel - tolerance;
+      if (crossed) {
+        breakIndex = i;
+        breakReason = "cross_of_controlling_broken_level";
+        break;
+      }
+    }
+  }
+
+  if (breakIndex < 1) {
+    // Final deterministic fallback: identify the strongest same-day directional
+    // displacement, but never silently skip the scan.
+    let bestScore = -Infinity;
+    for (let i = 1; i < dayCandles.length; i += 1) {
+      const candle = dayCandles[i];
+      const open = Number(candle.open);
+      const close = Number(candle.close);
+      const high = Number(candle.high);
+      const low = Number(candle.low);
+      const body = Math.abs(close - open);
+      const range = Math.max(Number.EPSILON, high - low);
+      const directional = direction === "bullish" ? close > open : close < open;
+      if (!directional) continue;
+      const score = body / range + body / Math.max(Number(atr || 0), tolerance, Number.EPSILON);
+      if (score > bestScore) {
+        bestScore = score;
+        breakIndex = i;
+      }
+    }
+    if (breakIndex >= 1) breakReason = "strongest_cutoff_day_directional_displacement";
+  }
+
+  if (breakIndex < 1) {
+    console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE SCAN:", {
+      ...logBase,
+      result: "no_candidate",
+      reason: "no_same_day_controlling_break_or_displacement",
+      brokenLevel,
+      breakDatetime: breakDatetime || null,
+      cutoffDayCandleCount: dayCandles.length,
+    });
+    return null;
+  }
+
+  // Search the bars immediately before the controlling break. The latest
+  // structurally valid pivot/base is preferred over the whole-day extreme.
+  const searchStart = Math.max(1, breakIndex - 14);
+  const searchEnd = Math.max(searchStart, breakIndex - 1);
+  const bases = [];
+
+  for (let i = searchStart; i <= searchEnd; i += 1) {
+    const candle = dayCandles[i];
+    const prev = dayCandles[i - 1];
+    const next = dayCandles[i + 1];
+    if (!candle || !prev || !next) continue;
+
+    if (direction === "bullish") {
+      const low = Number(candle.low);
+      const localPivot = low <= Number(prev.low) + tolerance && low <= Number(next.low) + tolerance;
+      if (!localPivot) continue;
+      const post = dayCandles.slice(i + 1, Math.min(dayCandles.length, breakIndex + 1));
+      const departure = post.length
+        ? Math.max(...post.map((c) => Number(c.high))) - low
+        : 0;
+      bases.push({ index: i, price: low, candle, departure });
+    } else {
+      const high = Number(candle.high);
+      const localPivot = high >= Number(prev.high) - tolerance && high >= Number(next.high) - tolerance;
+      if (!localPivot) continue;
+      const post = dayCandles.slice(i + 1, Math.min(dayCandles.length, breakIndex + 1));
+      const departure = post.length
+        ? high - Math.min(...post.map((c) => Number(c.low)))
+        : 0;
+      bases.push({ index: i, price: high, candle, departure });
+    }
+  }
+
+  // Prefer the most recent base with a meaningful departure. If none reaches
+  // that threshold, use the most recent local pivot; never fall back to the
+  // whole-day low/high unless there are no local pivots at all.
+  const minDeparture = Math.max(Number(atr || 0) * 0.35, tolerance * 3);
+  const meaningfulBases = bases.filter((base) => Number(base.departure || 0) >= minDeparture);
+  let selectedBase = meaningfulBases.length
+    ? meaningfulBases[meaningfulBases.length - 1]
+    : bases.length
+    ? bases[bases.length - 1]
+    : null;
+
+  if (!selectedBase) {
+    const fallback = dayCandles.slice(searchStart, breakIndex);
+    if (fallback.length) {
+      const relativeIndex = fallback.reduce((best, candle, idx, arr) => {
+        if (best === null) return idx;
+        return direction === "bullish"
+          ? Number(candle.low) < Number(arr[best].low) ? idx : best
+          : Number(candle.high) > Number(arr[best].high) ? idx : best;
+      }, null);
+      const candle = fallback[relativeIndex];
+      selectedBase = {
+        index: searchStart + relativeIndex,
+        price: direction === "bullish" ? Number(candle.low) : Number(candle.high),
+        candle,
+        departure: null,
+      };
+    }
+  }
+
+  const price = asPositiveNumber(selectedBase?.price);
+  if (price === null) {
+    console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE SCAN:", {
+      ...logBase,
+      result: "no_candidate",
+      reason: "no_valid_pre_break_base",
+      breakIndex,
+      breakDatetime: dayCandles[breakIndex]?.datetime || null,
+      brokenLevel,
+    });
+    return null;
+  }
+
+  const validPriceSide = Number.isFinite(Number(currentPrice))
+    ? direction === "bullish"
+      ? price < Number(currentPrice) - tolerance
+      : price > Number(currentPrice) + tolerance
+    : true;
+
+  if (!validPriceSide) {
+    console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE SCAN:", {
+      ...logBase,
+      result: "no_candidate",
+      reason: "base_on_wrong_side_of_current_price",
+      price,
+      currentPrice,
+    });
+    return null;
+  }
+
+  const levels = Array.isArray(marketReference?.dailyLevels)
+    ? marketReference.dailyLevels
+    : [];
+  let sourceIndex = levels.findIndex((level) =>
+    String(level?.date || level?.key || "").slice(0, 10) === resolvedDate
+  );
+  if (sourceIndex < 0) sourceIndex = Math.max(0, levels.length - 1);
+  const sourcePeriod = levels[sourceIndex] || {};
+  const periodLabel =
+    sourcePeriod?.periodLabel || sourcePeriod?.day || sourcePeriod?.key || resolvedDate;
+
+  const candidate = {
+    price,
+    frameworkPrice: price,
+    type: direction === "bullish" ? "demand" : "supply",
+    originalType: direction === "bullish" ? "demand" : "supply",
+    source: "historical_takeover_intraday_base",
+    priceSource: "cutoff_day_intraday_structure_main_pipeline",
+    chartReconciled: false,
+    reconciliationEvidence: null,
+    reconciliationPeriodHint: periodLabel,
+    reconciliationConfidence: 0,
+    reconciliationDifference: null,
+    period: periodLabel,
+    date: resolvedDate,
+    sourceIndex,
+    conversionBreakConfirmed: false,
+    conversionConfirmed: false,
+    lifecycleFlipCount: 0,
+    lifecycleEvents: [],
+    authorityRank: 1,
+    intradayTakeoverBase: true,
+    authoritativeStructuralException: true,
+    historicalTakeoverIntradayCandidate: true,
+    takeoverBreakLevel: brokenLevel,
+    takeoverBreakDatetime: dayCandles[breakIndex]?.datetime || null,
+    baseDatetime: selectedBase?.candle?.datetime || null,
+  };
+
+  console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE SCAN:", {
+    ...logBase,
+    result: "candidate_found",
+    reason: "fresh_local_base_before_cutoff_day_controlling_break",
+    breakReason,
+    brokenLevel,
+    breakDatetime: candidate.takeoverBreakDatetime,
+    baseDatetime: candidate.baseDatetime,
+    areaType: candidate.type,
+    price: candidate.price,
+    departure: selectedBase?.departure ?? null,
+    localBaseCount: bases.length,
+    meaningfulBaseCount: meaningfulBases.length,
+  });
+
+  return candidate;
+}
+
 function buildHistoricalTakeoverIntradayCandidate({
   marketReference = {},
   direction = "range",
@@ -16160,7 +16477,7 @@ function rankRawEntryAreas({
   // directional takeover may additionally contribute the fresh intraday
   // demand/supply base that directly launched the break. Generic pivots and
   // chart markings still may only confirm/refine candidates.
-  const frameworkCandidates = attachPivotConfirmationToFrameworkCandidates({
+  let frameworkCandidates = attachPivotConfirmationToFrameworkCandidates({
     frameworkCandidates: buildAuthoritativeFrameworkCandidates({
       marketReference,
       visualReview,
@@ -16217,6 +16534,63 @@ function rankRawEntryAreas({
     historicalFrameworkImpulseAuthority:
       historicalFrameworkFibImpulseAuthority,
   });
+
+
+  // V4.7.2: force the cutoff-day intraday base scan inside the main
+  // deterministic entry pipeline, after the controlling break/Fib impulse is
+  // known and before structural/Fib gating begins. This avoids silent skips
+  // caused by earlier preprocessing branches.
+  const pipelineIntradayCandidate =
+    buildHistoricalTakeoverIntradayCandidateFromMainPipeline({
+      marketReference,
+      candles,
+      fibonacci,
+      direction,
+      currentPrice,
+      symbol,
+      timeframe,
+      atr,
+    });
+
+  if (pipelineIntradayCandidate) {
+    const [confirmedPipelineCandidate] =
+      attachPivotConfirmationToFrameworkCandidates({
+        frameworkCandidates: [pipelineIntradayCandidate],
+        pivots: confirmedPivots,
+        atr,
+        symbol,
+      });
+
+    const duplicateTolerance = Math.max(
+      getApprovedPriceTolerance(symbol) * 2,
+      Number(atr || 0) * 0.05
+    );
+
+    const duplicate = frameworkCandidates.some((existing) =>
+      String(existing?.type || "") === String(confirmedPipelineCandidate?.type || "") &&
+      Math.abs(
+        Number(existing?.frameworkPrice || existing?.price) -
+        Number(confirmedPipelineCandidate?.frameworkPrice || confirmedPipelineCandidate?.price)
+      ) <= duplicateTolerance
+    );
+
+    if (!duplicate) {
+      frameworkCandidates = [
+        ...frameworkCandidates,
+        confirmedPipelineCandidate,
+      ].sort(
+        (a, b) => Number(a?.frameworkPrice || 0) - Number(b?.frameworkPrice || 0)
+      );
+    } else {
+      console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE MERGE:", {
+        buildId: CSA_BUILD_ID,
+        result: "duplicate_suppressed",
+        price: confirmedPipelineCandidate?.frameworkPrice || null,
+        areaType: confirmedPipelineCandidate?.type || null,
+        duplicateTolerance,
+      });
+    }
+  }
 
   const rawZones = frameworkCandidates.map((candidate) => {
     const resolvedEntryPrice = resolveCsaEntryPrice({
