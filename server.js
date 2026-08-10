@@ -9632,8 +9632,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.7.5";
-const CSA_BUILD_ID = "CSA-v4.7.5-structural-zone-validation-fixed";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.7.6";
+const CSA_BUILD_ID = "CSA-v4.7.6-converted-sr-reinforced-by-intraday-structure";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -13416,16 +13416,23 @@ function validateAndSequenceEntryAreas({
     const isSupplyDemandZone = ["supply", "demand"].includes(
       String(area?.areaType || "").toLowerCase()
     );
+    const isFrameworkSrWithValidatedStructuralZone =
+      area?.structuralZoneReinforcedByIntradayStructure === true &&
+      ["support", "resistance", "converted support", "converted resistance"].includes(
+        String(area?.areaType || "").toLowerCase()
+      );
 
     if (!Number.isFinite(authoritativeCenter)) {
       errors.push("resolved_csa_level_missing_authoritative_anchor");
       return false;
     }
 
-    if (isSupplyDemandZone) {
-      // Supply/demand is an AREA, not a single-price level. The authoritative
-      // structural anchor may legitimately sit at an edge of the zone. Do not
-      // force it to equal the midpoint as we do for support/resistance levels.
+    if (isSupplyDemandZone || isFrameworkSrWithValidatedStructuralZone) {
+      // Supply/demand is an AREA. In v4.7.6, an authoritative framework S/R
+      // level may also carry a candle-derived reinforcement zone when a fresh
+      // intraday base overlaps that SAME level. In both cases the authoritative
+      // anchor may legitimately sit away from the midpoint; what matters is
+      // that it remains inside/near the validated structural zone.
       const zoneContainmentTolerance = Math.max(
         centerTolerance,
         Number(atr || 0) * 0.01
@@ -13486,6 +13493,8 @@ function validateAndSequenceEntryAreas({
         chartReconciledCenter: area?.chartReconciledCenter ?? null,
         historicalTakeoverIntradayCandidate:
           area?.historicalTakeoverIntradayCandidate === true,
+        structuralZoneReinforcedByIntradayStructure:
+          area?.structuralZoneReinforcedByIntradayStructure === true,
       });
     } else if (Math.abs(zoneCenter - authoritativeCenter) > centerTolerance) {
       // Support/resistance remains a single authoritative framework level, so
@@ -16812,29 +16821,138 @@ function rankRawEntryAreas({
       Number(atr || 0) * 0.05
     );
 
-    const duplicate = frameworkCandidates.some((existing) =>
-      String(existing?.type || "") === String(confirmedPipelineCandidate?.type || "") &&
-      Math.abs(
-        Number(existing?.frameworkPrice || existing?.price) -
-        Number(confirmedPipelineCandidate?.frameworkPrice || confirmedPipelineCandidate?.price)
-      ) <= duplicateTolerance
+    /*
+     * V4.7.6 — FRAMEWORK S/R REMAINS THE ENTRY IDENTITY.
+     *
+     * A fresh cutoff-day intraday base is useful structural EVIDENCE, but it
+     * must not overwrite the CSA framework hierarchy. When that base overlaps
+     * an already-valid converted support/resistance level, reinforce that
+     * framework level with the candle-defined structural zone instead of
+     * inventing a second demand/supply entry at nearly the same location.
+     *
+     * Example benchmark: Monday support -> resistance -> support around
+     * 4064.74. The July-30 intraday base around 4062.79-4072.36 reinforces that
+     * converted support. The displayed/actionable identity therefore remains
+     * converted support around 4064.74. Thursday daily demand around 4029
+     * remains a deeper structural reference and is evaluated independently.
+     */
+    const intradayZoneLow = Number(
+      confirmedPipelineCandidate?.intradayStructuralZoneLow
     );
+    const intradayZoneHigh = Number(
+      confirmedPipelineCandidate?.intradayStructuralZoneHigh
+    );
+    const normalizedIntradayLow = Math.min(intradayZoneLow, intradayZoneHigh);
+    const normalizedIntradayHigh = Math.max(intradayZoneLow, intradayZoneHigh);
 
-    if (!duplicate) {
-      frameworkCandidates = [
-        ...frameworkCandidates,
-        confirmedPipelineCandidate,
-      ].sort(
-        (a, b) => Number(a?.frameworkPrice || 0) - Number(b?.frameworkPrice || 0)
+    const compatibleConvertedTypes =
+      direction === "bullish"
+        ? new Set(["support", "converted support"])
+        : new Set(["resistance", "converted resistance"]);
+
+    const reinforcementCandidates = frameworkCandidates
+      .map((existing, index) => {
+        const existingType = String(existing?.type || "").toLowerCase();
+        const existingPrice = Number(
+          existing?.frameworkPrice || existing?.price
+        );
+        const insideOrNearZone =
+          Number.isFinite(existingPrice) &&
+          Number.isFinite(normalizedIntradayLow) &&
+          Number.isFinite(normalizedIntradayHigh) &&
+          existingPrice >= normalizedIntradayLow - duplicateTolerance &&
+          existingPrice <= normalizedIntradayHigh + duplicateTolerance;
+        return {
+          index,
+          existing,
+          existingPrice,
+          eligible:
+            compatibleConvertedTypes.has(existingType) && insideOrNearZone,
+          distance: Number.isFinite(existingPrice)
+            ? Math.abs(
+                existingPrice -
+                Number(confirmedPipelineCandidate?.frameworkPrice || 0)
+              )
+            : Number.POSITIVE_INFINITY,
+        };
+      })
+      .filter((item) => item.eligible)
+      .sort((a, b) => a.distance - b.distance);
+
+    if (reinforcementCandidates.length) {
+      const winner = reinforcementCandidates[0];
+      const reinforced = {
+        ...winner.existing,
+        reinforcedByHistoricalIntradayStructure: true,
+        reinforcedStructuralZoneLow: normalizedIntradayLow,
+        reinforcedStructuralZoneHigh: normalizedIntradayHigh,
+        reinforcedStructuralBasePrice: Number(
+          confirmedPipelineCandidate?.frameworkPrice ||
+            confirmedPipelineCandidate?.price
+        ),
+        reinforcedStructuralBaseDatetime:
+          confirmedPipelineCandidate?.baseDatetime || null,
+        reinforcedNearestFibDistance:
+          Number.isFinite(
+            Number(confirmedPipelineCandidate?.nearestFibDistance)
+          )
+            ? Number(confirmedPipelineCandidate.nearestFibDistance)
+            : null,
+        reinforcedNearestFibLabel:
+          confirmedPipelineCandidate?.nearestFibLabel || null,
+        reinforcedNearestFibPrice:
+          Number.isFinite(Number(confirmedPipelineCandidate?.nearestFibPrice))
+            ? Number(confirmedPipelineCandidate.nearestFibPrice)
+            : null,
+      };
+      frameworkCandidates = frameworkCandidates.map((item, index) =>
+        index === winner.index ? reinforced : item
       );
-    } else {
+
       console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE MERGE:", {
         buildId: CSA_BUILD_ID,
-        result: "duplicate_suppressed",
-        price: confirmedPipelineCandidate?.frameworkPrice || null,
-        areaType: confirmedPipelineCandidate?.type || null,
-        duplicateTolerance,
+        result: "framework_sr_reinforced",
+        frameworkAreaType: reinforced?.type || null,
+        frameworkPeriod: reinforced?.period || null,
+        frameworkPrice:
+          reinforced?.frameworkPrice || reinforced?.price || null,
+        intradayBasePrice:
+          confirmedPipelineCandidate?.frameworkPrice || null,
+        structuralZoneLow: normalizedIntradayLow,
+        structuralZoneHigh: normalizedIntradayHigh,
+        rule: "intraday_base_reinforces_overlapping_framework_sr_instead_of_becoming_separate_entry",
       });
+    } else {
+      const duplicate = frameworkCandidates.some((existing) =>
+        String(existing?.type || "") ===
+          String(confirmedPipelineCandidate?.type || "") &&
+        Math.abs(
+          Number(existing?.frameworkPrice || existing?.price) -
+            Number(
+              confirmedPipelineCandidate?.frameworkPrice ||
+                confirmedPipelineCandidate?.price
+            )
+        ) <= duplicateTolerance
+      );
+
+      if (!duplicate) {
+        frameworkCandidates = [
+          ...frameworkCandidates,
+          confirmedPipelineCandidate,
+        ].sort(
+          (a, b) =>
+            Number(a?.frameworkPrice || 0) -
+            Number(b?.frameworkPrice || 0)
+        );
+      } else {
+        console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE MERGE:", {
+          buildId: CSA_BUILD_ID,
+          result: "duplicate_suppressed",
+          price: confirmedPipelineCandidate?.frameworkPrice || null,
+          areaType: confirmedPipelineCandidate?.type || null,
+          duplicateTolerance,
+        });
+      }
     }
   }
 
@@ -16851,16 +16969,25 @@ function rankRawEntryAreas({
       Number.isFinite(Number(candidate?.intradayStructuralZoneLow)) &&
       Number.isFinite(Number(candidate?.intradayStructuralZoneHigh));
 
+    const isFrameworkSrReinforcedByIntradayStructure =
+      candidate?.reinforcedByHistoricalIntradayStructure === true &&
+      Number.isFinite(Number(candidate?.reinforcedStructuralZoneLow)) &&
+      Number.isFinite(Number(candidate?.reinforcedStructuralZoneHigh));
+
     return {
       // Framework period identity remains authoritative. The final level price
       // may be refined only by validated same-period chart reconciliation.
       // Historical takeover supply/demand is the one deliberate exception:
       // preserve the candle-defined structural AREA so Fib is measured to the
       // zone rather than to an arbitrary single anchor.
-      zoneLow: isIntradayStructuralZone
+      zoneLow: isFrameworkSrReinforcedByIntradayStructure
+        ? Number(candidate.reinforcedStructuralZoneLow)
+        : isIntradayStructuralZone
         ? Number(candidate.intradayStructuralZoneLow)
         : resolvedEntryPrice,
-      zoneHigh: isIntradayStructuralZone
+      zoneHigh: isFrameworkSrReinforcedByIntradayStructure
+        ? Number(candidate.reinforcedStructuralZoneHigh)
+        : isIntradayStructuralZone
         ? Number(candidate.intradayStructuralZoneHigh)
         : resolvedEntryPrice,
       resolvedEntryPrice,
@@ -16899,7 +17026,15 @@ function rankRawEntryAreas({
       Number.isFinite(Number(rawZone?.zoneHigh)) &&
       Number(rawZone.zoneHigh) > Number(rawZone.zoneLow);
 
-    const compacted = hasHistoricalIntradayZone
+    const hasFrameworkSrReinforcementZone =
+      rawZone?.members?.some?.((member) =>
+        member?.reinforcedByHistoricalIntradayStructure === true
+      ) === true &&
+      Number.isFinite(Number(rawZone?.zoneLow)) &&
+      Number.isFinite(Number(rawZone?.zoneHigh)) &&
+      Number(rawZone.zoneHigh) > Number(rawZone.zoneLow);
+
+    const compacted = hasHistoricalIntradayZone || hasFrameworkSrReinforcementZone
       ? {
           zoneLow: Math.min(Number(rawZone.zoneLow), Number(rawZone.zoneHigh)),
           zoneHigh: Math.max(Number(rawZone.zoneLow), Number(rawZone.zoneHigh)),
@@ -17313,6 +17448,16 @@ function rankRawEntryAreas({
           ? Number(rawZone.members[0].reconciliationDifference)
           : null,
       authoritativeFrameworkLevel: true,
+      structuralZoneReinforcedByIntradayStructure:
+        rawZone?.members?.[0]?.reinforcedByHistoricalIntradayStructure === true,
+      structuralZoneEvidence: rawZone?.members?.[0]?.reinforcedByHistoricalIntradayStructure === true
+        ? {
+            zoneLow: Number(rawZone?.zoneLow),
+            zoneHigh: Number(rawZone?.zoneHigh),
+            basePrice: Number(rawZone?.members?.[0]?.reinforcedStructuralBasePrice),
+            baseDatetime: rawZone?.members?.[0]?.reinforcedStructuralBaseDatetime || null,
+          }
+        : null,
       conversionSourceRule:
         ["converted resistance", "converted support"].includes(areaType)
           ? "original_csa_support_or_resistance_only"
