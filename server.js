@@ -9632,8 +9632,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.7.3";
-const CSA_BUILD_ID = "CSA-v4.7.3-displacement-origin-base-selection";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.7.4";
+const CSA_BUILD_ID = "CSA-v4.7.4-intraday-fib-zone-handoff-fixed";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14898,16 +14898,72 @@ function buildHistoricalTakeoverIntradayCandidateFromMainPipeline({
   // wiggle (such as the prior 4081 candidate) from hiding the actual launch
   // base deeper in the displacement leg.
   const minDeparture = Math.max(Number(atr || 0) * 0.35, tolerance * 3);
-  const fibLevels = Array.isArray(fibonacci?.retracementLevels)
+  // V4.7.4: buildLatestImpulseFibonacci() exposes the authoritative
+  // retracement set on `levels`, not `retracementLevels`. The v4.7.3
+  // intraday ranker was therefore receiving an empty Fib set and every
+  // nearestFibDistance became null/Infinity. Accept `levels` first and keep
+  // `retracementLevels` only as a backward-compatible fallback.
+  const fibLevelObjects = Array.isArray(fibonacci?.levels)
+    ? fibonacci.levels
+    : Array.isArray(fibonacci?.retracementLevels)
     ? fibonacci.retracementLevels
-        .map((level) => asPositiveNumber(level?.price))
-        .filter((price) => price !== null)
     : [];
+
+  const allowedFibRatios = new Set([0.382, 0.5, 0.618]);
+  const fibLevels = fibLevelObjects
+    .filter((level) =>
+      level?.ratio === undefined || allowedFibRatios.has(Number(level?.ratio))
+    )
+    .map((level) => ({
+      ratio: Number(level?.ratio),
+      label: String(level?.label || ""),
+      price: asPositiveNumber(level?.price),
+    }))
+    .filter((level) => level.price !== null);
 
   const enrichedBases = bases.map((base) => {
     const barsToBreak = Math.max(0, breakIndex - Number(base.index || 0));
-    const fibDistance = fibLevels.length
-      ? Math.min(...fibLevels.map((level) => Math.abs(Number(base.price) - Number(level))))
+
+    // Supply/demand is an AREA. Preserve the actual base candle range used
+    // to launch the move instead of judging Fib relevance only against one
+    // anchor price. For demand use the distal low through the lower body edge;
+    // for supply use the upper body edge through the distal high.
+    const baseOpen = Number(base?.candle?.open);
+    const baseClose = Number(base?.candle?.close);
+    const baseLow = Number(base?.candle?.low);
+    const baseHigh = Number(base?.candle?.high);
+    let structuralZoneLow = Number(base.price);
+    let structuralZoneHigh = Number(base.price);
+
+    if ([baseOpen, baseClose, baseLow, baseHigh].every(Number.isFinite)) {
+      if (direction === "bullish") {
+        structuralZoneLow = Math.min(baseLow, baseHigh);
+        structuralZoneHigh = Math.max(
+          structuralZoneLow,
+          Math.min(baseOpen, baseClose)
+        );
+      } else {
+        structuralZoneHigh = Math.max(baseLow, baseHigh);
+        structuralZoneLow = Math.min(
+          structuralZoneHigh,
+          Math.max(baseOpen, baseClose)
+        );
+      }
+    }
+
+    const fibDistances = fibLevels.map((level) => ({
+      ...level,
+      distance: distanceFromPriceToZone(
+        level.price,
+        structuralZoneLow,
+        structuralZoneHigh
+      ),
+    }));
+    const nearestFib = fibDistances.length
+      ? [...fibDistances].sort((a, b) => a.distance - b.distance)[0]
+      : null;
+    const fibDistance = Number.isFinite(Number(nearestFib?.distance))
+      ? Number(nearestFib.distance)
       : Number.POSITIVE_INFINITY;
 
     // Measure whether this pivot followed an actual pullback rather than a
@@ -14925,7 +14981,21 @@ function buildHistoricalTakeoverIntradayCandidateFromMainPipeline({
       }
     }
 
-    return { ...base, barsToBreak, fibDistance, pullbackDepth };
+    return {
+      ...base,
+      barsToBreak,
+      fibDistance,
+      nearestFibLabel: nearestFib?.label || null,
+      nearestFibRatio: Number.isFinite(Number(nearestFib?.ratio))
+        ? Number(nearestFib.ratio)
+        : null,
+      nearestFibPrice: Number.isFinite(Number(nearestFib?.price))
+        ? Number(nearestFib.price)
+        : null,
+      structuralZoneLow,
+      structuralZoneHigh,
+      pullbackDepth,
+    };
   });
 
   const meaningfulBases = enrichedBases.filter(
@@ -15046,6 +15116,19 @@ function buildHistoricalTakeoverIntradayCandidateFromMainPipeline({
     takeoverBreakLevel: brokenLevel,
     takeoverBreakDatetime: dayCandles[breakIndex]?.datetime || null,
     baseDatetime: selectedBase?.candle?.datetime || null,
+    intradayStructuralZoneLow: Number.isFinite(Number(selectedBase?.structuralZoneLow))
+      ? Number(selectedBase.structuralZoneLow)
+      : price,
+    intradayStructuralZoneHigh: Number.isFinite(Number(selectedBase?.structuralZoneHigh))
+      ? Number(selectedBase.structuralZoneHigh)
+      : price,
+    nearestFibDistance: Number.isFinite(Number(selectedBase?.fibDistance))
+      ? Number(selectedBase.fibDistance)
+      : null,
+    nearestFibLabel: selectedBase?.nearestFibLabel || null,
+    nearestFibPrice: Number.isFinite(Number(selectedBase?.nearestFibPrice))
+      ? Number(selectedBase.nearestFibPrice)
+      : null,
   };
 
   console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE SCAN:", {
@@ -15065,6 +15148,12 @@ function buildHistoricalTakeoverIntradayCandidateFromMainPipeline({
     nearestFibDistance: Number.isFinite(selectedBase?.fibDistance)
       ? selectedBase.fibDistance
       : null,
+    nearestFibLabel: selectedBase?.nearestFibLabel || null,
+    nearestFibPrice: Number.isFinite(Number(selectedBase?.nearestFibPrice))
+      ? Number(selectedBase.nearestFibPrice)
+      : null,
+    structuralZoneLow: selectedBase?.structuralZoneLow ?? null,
+    structuralZoneHigh: selectedBase?.structuralZoneHigh ?? null,
     localBaseCount: bases.length,
     meaningfulBaseCount: meaningfulBases.length,
     launchBaseCount: launchBases.length,
@@ -15077,6 +15166,12 @@ function buildHistoricalTakeoverIntradayCandidateFromMainPipeline({
       nearestFibDistance: Number.isFinite(base?.fibDistance)
         ? base.fibDistance
         : null,
+      nearestFibLabel: base?.nearestFibLabel || null,
+      nearestFibPrice: Number.isFinite(Number(base?.nearestFibPrice))
+        ? Number(base.nearestFibPrice)
+        : null,
+      structuralZoneLow: base?.structuralZoneLow ?? null,
+      structuralZoneHigh: base?.structuralZoneHigh ?? null,
     })),
   });
 
@@ -16678,11 +16773,23 @@ function rankRawEntryAreas({
       symbol,
     });
 
+    const isIntradayStructuralZone =
+      candidate?.historicalTakeoverIntradayCandidate === true &&
+      Number.isFinite(Number(candidate?.intradayStructuralZoneLow)) &&
+      Number.isFinite(Number(candidate?.intradayStructuralZoneHigh));
+
     return {
       // Framework period identity remains authoritative. The final level price
       // may be refined only by validated same-period chart reconciliation.
-      zoneLow: resolvedEntryPrice,
-      zoneHigh: resolvedEntryPrice,
+      // Historical takeover supply/demand is the one deliberate exception:
+      // preserve the candle-defined structural AREA so Fib is measured to the
+      // zone rather than to an arbitrary single anchor.
+      zoneLow: isIntradayStructuralZone
+        ? Number(candidate.intradayStructuralZoneLow)
+        : resolvedEntryPrice,
+      zoneHigh: isIntradayStructuralZone
+        ? Number(candidate.intradayStructuralZoneHigh)
+        : resolvedEntryPrice,
       resolvedEntryPrice,
       members: [candidate],
       source: candidate.source,
@@ -16710,14 +16817,30 @@ function rankRawEntryAreas({
   const structuralReferenceAreas = [];
 
   const evaluated = rawZones.map((rawZone) => {
-    const compacted = compactZoneBounds({
-      rawLow: rawZone.zoneLow,
-      rawHigh: rawZone.zoneHigh,
-      members: rawZone.members,
-      atr,
-      priceTolerance,
-      preferredCenter: rawZone.resolvedEntryPrice,
-    });
+    const hasHistoricalIntradayZone =
+      rawZone?.members?.some?.((member) =>
+        member?.historicalTakeoverIntradayCandidate === true &&
+        member?.intradayTakeoverBase === true
+      ) === true &&
+      Number.isFinite(Number(rawZone?.zoneLow)) &&
+      Number.isFinite(Number(rawZone?.zoneHigh)) &&
+      Number(rawZone.zoneHigh) > Number(rawZone.zoneLow);
+
+    const compacted = hasHistoricalIntradayZone
+      ? {
+          zoneLow: Math.min(Number(rawZone.zoneLow), Number(rawZone.zoneHigh)),
+          zoneHigh: Math.max(Number(rawZone.zoneLow), Number(rawZone.zoneHigh)),
+          center: Number(rawZone.resolvedEntryPrice),
+          halfWidth: Math.abs(Number(rawZone.zoneHigh) - Number(rawZone.zoneLow)) / 2,
+        }
+      : compactZoneBounds({
+          rawLow: rawZone.zoneLow,
+          rawHigh: rawZone.zoneHigh,
+          members: rawZone.members,
+          atr,
+          priceTolerance,
+          preferredCenter: rawZone.resolvedEntryPrice,
+        });
 
     const zoneLow = compacted.zoneLow;
     const zoneHigh = compacted.zoneHigh;
