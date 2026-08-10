@@ -6919,7 +6919,7 @@ STRICT MARKED/UNMARKED RULE:
 - Do not say only "wait for support" or "wait for resistance"; say "support around X" or "resistance around X".
 - For unmarked charts, strengths should explain what useful chart information is still visible, such as enough price history to identify direction and key areas. Avoid vague statements such as only saying that the direction was checked.
 - Do not add a separate Market Direction section when the Quick Verdict already states the bullish, bearish, or range plan.
-- Do not use support, resistance, supply, or demand created on the selected chart date when giving entry areas or a trade plan. Use only earlier completed days or periods.
+- Normally do not create entry areas from the selected chart date. EXCEPTION: in End-of-selected-day or Exact-historical-time mode, when the backend has confirmed that the cutoff period itself created a new directional takeover, a fresh intraday demand/supply base formed BEFORE the confirmed takeover break may be used as a structural candidate. It must still pass the same structural-quality and 38.2%/50%/61.8% gate. Do not use later candles or a base formed after the cutoff.
 - If the chart is unclear, do not guess. Use UNCLEAR and state what cannot be verified.
 - The user is likely a beginner. Use very simple trading language.
 - The backend can use the internal method, but user-facing fields must NOT say "CSA", "framework", or "daily high/low logic". Simple terms such as support, resistance, supply area, and demand area are allowed when they help the beginner understand the setup.
@@ -9632,8 +9632,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.6.9";
-const CSA_BUILD_ID = "CSA-v4.6.9-historical-current-structure-handoff";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.7.0";
+const CSA_BUILD_ID = "CSA-v4.7.0-historical-takeover-intraday-structure";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14687,6 +14687,217 @@ function shouldBypassNearerPlainArea({
   });
 }
 
+
+function buildHistoricalTakeoverIntradayCandidate({
+  marketReference = {},
+  direction = "range",
+  currentPrice = null,
+  symbol = "",
+  timeframe = "H1",
+  atr = 0,
+}) {
+  const cutoffMode = normalizeCutoffMode(
+    marketReference?.chartCutoff?.mode || "final_visible"
+  );
+  const tf = comparableTimeframe(timeframe) || "H1";
+  const intradayTimeframes = new Set(["M1", "M5", "M15", "M30", "H1"]);
+  const cutoffPhase = marketReference?.directionalBias?.cutoffPhase || null;
+  const diagnostics = cutoffPhase?.diagnostics || {};
+
+  if (
+    !["selected_day", "exact"].includes(cutoffMode) ||
+    !intradayTimeframes.has(tf) ||
+    diagnostics?.handoffApplied !== true ||
+    !["bullish", "bearish"].includes(direction)
+  ) {
+    return null;
+  }
+
+  const resolvedDate = String(
+    marketReference?.chartCutoff?.resolvedDate || ""
+  ).slice(0, 10);
+  if (!resolvedDate) return null;
+
+  const allCandles = Array.isArray(marketReference?.timeframeCandles)
+    ? marketReference.timeframeCandles
+        .filter((candle) =>
+          candle?.datetime &&
+          [candle?.open, candle?.high, candle?.low, candle?.close].every((v) =>
+            Number.isFinite(Number(v))
+          )
+        )
+        .sort((a, b) => String(a.datetime).localeCompare(String(b.datetime)))
+    : [];
+
+  const dayCandles = allCandles.filter(
+    (candle) => String(candle.datetime || "").slice(0, 10) === resolvedDate
+  );
+  if (dayCandles.length < 5) return null;
+
+  const tolerance = Math.max(
+    frameworkLevelTolerance({ symbol, atr }),
+    Number(atr || 0) * 0.05
+  );
+
+  const brokenLevel = asPositiveNumber(cutoffPhase?.brokenLevel);
+  let breakIndex = -1;
+
+  if (brokenLevel !== null) {
+    for (let i = 1; i < dayCandles.length; i += 1) {
+      const close = Number(dayCandles[i]?.close);
+      const priorClose = Number(dayCandles[i - 1]?.close);
+      if (!Number.isFinite(close) || !Number.isFinite(priorClose)) continue;
+
+      const crossed =
+        direction === "bullish"
+          ? priorClose <= brokenLevel + tolerance && close > brokenLevel + tolerance
+          : priorClose >= brokenLevel - tolerance && close < brokenLevel - tolerance;
+
+      if (crossed) {
+        breakIndex = i;
+        break;
+      }
+    }
+  }
+
+  if (breakIndex < 0) {
+    // Fall back to the strongest directional expansion in the cutoff day.
+    let bestScore = -Infinity;
+    for (let i = 1; i < dayCandles.length; i += 1) {
+      const candle = dayCandles[i];
+      const open = Number(candle.open);
+      const close = Number(candle.close);
+      const high = Number(candle.high);
+      const low = Number(candle.low);
+      const body = Math.abs(close - open);
+      const range = Math.max(Number.EPSILON, high - low);
+      const directional = direction === "bullish" ? close > open : close < open;
+      if (!directional) continue;
+      const score = body / range + body / Math.max(Number(atr || 0), tolerance, Number.EPSILON);
+      if (score > bestScore) {
+        bestScore = score;
+        breakIndex = i;
+      }
+    }
+  }
+
+  if (breakIndex < 1) return null;
+
+  // Find the most recent local base that directly preceded the takeover break.
+  // This deliberately avoids using the whole-day extreme when a fresher
+  // intraday demand/supply base launched the displacement.
+  const searchStart = Math.max(1, breakIndex - 12);
+  const searchEnd = Math.max(searchStart, breakIndex - 1);
+  const localExtremes = [];
+
+  for (let i = searchStart; i <= searchEnd; i += 1) {
+    const candle = dayCandles[i];
+    const prev = dayCandles[i - 1];
+    const next = dayCandles[i + 1];
+    if (!candle || !prev || !next) continue;
+
+    if (direction === "bullish") {
+      const low = Number(candle.low);
+      const isLocalLow =
+        low <= Number(prev.low) + tolerance &&
+        low <= Number(next.low) + tolerance;
+      if (isLocalLow) {
+        localExtremes.push({ index: i, price: low, candle });
+      }
+    } else {
+      const high = Number(candle.high);
+      const isLocalHigh =
+        high >= Number(prev.high) - tolerance &&
+        high >= Number(next.high) - tolerance;
+      if (isLocalHigh) {
+        localExtremes.push({ index: i, price: high, candle });
+      }
+    }
+  }
+
+  let selectedBase = localExtremes.length
+    ? localExtremes[localExtremes.length - 1]
+    : null;
+
+  if (!selectedBase) {
+    const fallbackSlice = dayCandles.slice(searchStart, breakIndex);
+    if (!fallbackSlice.length) return null;
+    const relativeIndex = fallbackSlice.reduce((best, candle, idx, arr) => {
+      if (best === null) return idx;
+      return direction === "bullish"
+        ? Number(candle.low) < Number(arr[best].low) ? idx : best
+        : Number(candle.high) > Number(arr[best].high) ? idx : best;
+    }, null);
+    const candle = fallbackSlice[relativeIndex];
+    selectedBase = {
+      index: searchStart + relativeIndex,
+      price: direction === "bullish" ? Number(candle.low) : Number(candle.high),
+      candle,
+    };
+  }
+
+  const price = asPositiveNumber(selectedBase?.price);
+  if (price === null) return null;
+
+  const validPriceSide =
+    Number.isFinite(Number(currentPrice))
+      ? direction === "bullish"
+        ? price < Number(currentPrice) - tolerance
+        : price > Number(currentPrice) + tolerance
+      : true;
+  if (!validPriceSide) return null;
+
+  const currentPeriod =
+    diagnostics?.currentPeriod ||
+    marketReference?.dailyLevels?.[marketReference.dailyLevels.length - 1]?.periodLabel ||
+    marketReference?.dailyLevels?.[marketReference.dailyLevels.length - 1]?.day ||
+    resolvedDate;
+
+  const candidate = {
+    price,
+    frameworkPrice: price,
+    type: direction === "bullish" ? "demand" : "supply",
+    originalType: direction === "bullish" ? "demand" : "supply",
+    source: "historical_takeover_intraday_base",
+    priceSource: "cutoff_day_intraday_structure",
+    chartReconciled: false,
+    reconciliationEvidence: null,
+    reconciliationPeriodHint: currentPeriod,
+    reconciliationConfidence: 0,
+    reconciliationDifference: null,
+    period: currentPeriod,
+    date: resolvedDate,
+    sourceIndex: Math.max(0, Number(marketReference?.dailyLevels?.length || 1) - 1),
+    conversionBreakConfirmed: false,
+    conversionConfirmed: false,
+    lifecycleFlipCount: 0,
+    lifecycleEvents: [],
+    authorityRank: 1,
+    intradayTakeoverBase: true,
+    takeoverBreakLevel: brokenLevel,
+    takeoverBreakDatetime: dayCandles[breakIndex]?.datetime || null,
+    baseDatetime: selectedBase?.candle?.datetime || null,
+  };
+
+  console.log("CSA HISTORICAL TAKEOVER INTRADAY STRUCTURE:", {
+    buildId: CSA_BUILD_ID,
+    cutoffMode,
+    resolvedDate,
+    timeframe: tf,
+    direction,
+    handoffApplied: true,
+    handoffReason: diagnostics?.handoffReason || null,
+    brokenLevel,
+    breakDatetime: candidate.takeoverBreakDatetime,
+    baseDatetime: candidate.baseDatetime,
+    areaType: candidate.type,
+    price: candidate.price,
+    rule: "latest_local_base_before_confirmed_cutoff_day_takeover_break",
+  });
+
+  return candidate;
+}
+
 function buildAuthoritativeFrameworkCandidates({
   marketReference = {},
   visualReview = {},
@@ -14817,6 +15028,19 @@ function buildAuthoritativeFrameworkCandidates({
         lifecycle.state === "converted" ? 1 : 2,
     });
   });
+
+  const takeoverIntradayCandidate = buildHistoricalTakeoverIntradayCandidate({
+    marketReference,
+    direction,
+    currentPrice,
+    symbol,
+    timeframe,
+    atr,
+  });
+
+  if (takeoverIntradayCandidate) {
+    candidates.push(takeoverIntradayCandidate);
+  }
 
   // Do not collapse nearby levels from different authoritative periods here.
   // Each distinct framework level must reach structural + Fibonacci validation
@@ -15873,9 +16097,11 @@ function rankRawEntryAreas({
     pivotConfig
   );
 
-  // Authoritative framework periods are the only source allowed to create
-  // entry candidates. Generic pivots and chart markings may confirm/refine
-  // them, but may not replace them.
+  // Authoritative framework periods remain the primary source of entry
+  // candidates. In historical cutoff mode, a confirmed current-period
+  // directional takeover may additionally contribute the fresh intraday
+  // demand/supply base that directly launched the break. Generic pivots and
+  // chart markings still may only confirm/refine candidates.
   const frameworkCandidates = attachPivotConfirmationToFrameworkCandidates({
     frameworkCandidates: buildAuthoritativeFrameworkCandidates({
       marketReference,
