@@ -9632,8 +9632,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.7.2";
-const CSA_BUILD_ID = "CSA-v4.7.2-historical-intraday-main-pipeline-scan";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.7.3";
+const CSA_BUILD_ID = "CSA-v4.7.3-displacement-origin-base-selection";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14888,15 +14888,76 @@ function buildHistoricalTakeoverIntradayCandidateFromMainPipeline({
     }
   }
 
-  // Prefer the most recent base with a meaningful departure. If none reaches
-  // that threshold, use the most recent local pivot; never fall back to the
-  // whole-day low/high unless there are no local pivots at all.
+  // V4.7.3: choose the structural base that launched the displacement, not
+  // merely the last tiny pivot immediately before the breakout.
+  //
+  // Stage 1 remains structural: a base must be a local pivot with meaningful
+  // departure. Fibonacci is NEVER allowed to create a base.
+  // Stage 2 only ranks already-valid structural bases by relevance to the
+  // existing 38.2/50/61.8 retracement set. This prevents a one-bar pre-break
+  // wiggle (such as the prior 4081 candidate) from hiding the actual launch
+  // base deeper in the displacement leg.
   const minDeparture = Math.max(Number(atr || 0) * 0.35, tolerance * 3);
-  const meaningfulBases = bases.filter((base) => Number(base.departure || 0) >= minDeparture);
-  let selectedBase = meaningfulBases.length
-    ? meaningfulBases[meaningfulBases.length - 1]
-    : bases.length
-    ? bases[bases.length - 1]
+  const fibLevels = Array.isArray(fibonacci?.retracementLevels)
+    ? fibonacci.retracementLevels
+        .map((level) => asPositiveNumber(level?.price))
+        .filter((price) => price !== null)
+    : [];
+
+  const enrichedBases = bases.map((base) => {
+    const barsToBreak = Math.max(0, breakIndex - Number(base.index || 0));
+    const fibDistance = fibLevels.length
+      ? Math.min(...fibLevels.map((level) => Math.abs(Number(base.price) - Number(level))))
+      : Number.POSITIVE_INFINITY;
+
+    // Measure whether this pivot followed an actual pullback rather than a
+    // negligible one-candle pause. This is descriptive only; it does not make
+    // an otherwise invalid pivot valid.
+    const lookback = dayCandles.slice(Math.max(0, base.index - 5), base.index);
+    let pullbackDepth = 0;
+    if (lookback.length) {
+      if (direction === "bullish") {
+        const priorHigh = Math.max(...lookback.map((c) => Number(c.high)));
+        pullbackDepth = Math.max(0, priorHigh - Number(base.price));
+      } else {
+        const priorLow = Math.min(...lookback.map((c) => Number(c.low)));
+        pullbackDepth = Math.max(0, Number(base.price) - priorLow);
+      }
+    }
+
+    return { ...base, barsToBreak, fibDistance, pullbackDepth };
+  });
+
+  const meaningfulBases = enrichedBases.filter(
+    (base) => Number(base.departure || 0) >= minDeparture
+  );
+
+  // A displacement-origin base should normally have at least two completed
+  // bars between the pivot and the controlling break. Keep the one-bar pivot
+  // only as a fallback when no better structural launch base exists.
+  const launchBases = meaningfulBases.filter((base) => base.barsToBreak >= 2);
+  const rankedPool = launchBases.length
+    ? launchBases
+    : meaningfulBases.length
+    ? meaningfulBases
+    : enrichedBases;
+
+  let selectedBase = rankedPool.length
+    ? [...rankedPool].sort((a, b) => {
+        // First prefer a structurally valid base that is relevant to the
+        // already-computed Fib retracement set. This is ranking, not creation.
+        if (Number.isFinite(a.fibDistance) || Number.isFinite(b.fibDistance)) {
+          const fibDiff = Number(a.fibDistance) - Number(b.fibDistance);
+          if (Math.abs(fibDiff) > 1e-9) return fibDiff;
+        }
+
+        // Then prefer the stronger displacement departure.
+        const departureDiff = Number(b.departure || 0) - Number(a.departure || 0);
+        if (Math.abs(departureDiff) > 1e-9) return departureDiff;
+
+        // Finally prefer the more recent structural base.
+        return Number(b.index || 0) - Number(a.index || 0);
+      })[0]
     : null;
 
   if (!selectedBase) {
@@ -14990,7 +15051,8 @@ function buildHistoricalTakeoverIntradayCandidateFromMainPipeline({
   console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE SCAN:", {
     ...logBase,
     result: "candidate_found",
-    reason: "fresh_local_base_before_cutoff_day_controlling_break",
+    reason: "displacement_origin_base_before_cutoff_day_controlling_break",
+    selectionMode: "structural_base_first_then_fib_relevance_ranking",
     breakReason,
     brokenLevel,
     breakDatetime: candidate.takeoverBreakDatetime,
@@ -14998,8 +15060,24 @@ function buildHistoricalTakeoverIntradayCandidateFromMainPipeline({
     areaType: candidate.type,
     price: candidate.price,
     departure: selectedBase?.departure ?? null,
+    barsToBreak: selectedBase?.barsToBreak ?? null,
+    pullbackDepth: selectedBase?.pullbackDepth ?? null,
+    nearestFibDistance: Number.isFinite(selectedBase?.fibDistance)
+      ? selectedBase.fibDistance
+      : null,
     localBaseCount: bases.length,
     meaningfulBaseCount: meaningfulBases.length,
+    launchBaseCount: launchBases.length,
+    rankedBases: rankedPool.slice(0, 8).map((base) => ({
+      datetime: base?.candle?.datetime || null,
+      price: base?.price ?? null,
+      departure: base?.departure ?? null,
+      barsToBreak: base?.barsToBreak ?? null,
+      pullbackDepth: base?.pullbackDepth ?? null,
+      nearestFibDistance: Number.isFinite(base?.fibDistance)
+        ? base.fibDistance
+        : null,
+    })),
   });
 
   return candidate;
