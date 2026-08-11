@@ -1426,6 +1426,9 @@ AREA RANKING RULES:
 - When the review uses End of selected day or Exact historical time, ignore any later candles visible to the right of that cutoff when describing direction, breakout state, entry readiness, strengths, weaknesses, or next action. Those later candles are outside the review.
 - Identify up to 3 active entry areas that agree with the locked directional bias.
 - The timeframe-specific CSA framework levels are authoritative: M1-H1 daily, H4 weekly, D1 monthly, W1 quarterly, MN yearly/multi-year.
+- The timeframe-specific CSA framework levels supplied by the backend are FINAL market-data facts. Do not recalculate, replace, visually estimate, or reinterpret a different high/low for the same period.
+- Completed framework periods come from native higher-timeframe candles (D1 for M1-H1, W1 for H4, MN for D1; monthly candles grouped for W1/MN). Only the current incomplete framework period may be reconstructed from cutoff-safe lower-timeframe candles.
+- Vision may confirm interaction, retest, trigger, markings, and display rounding for the SAME supplied framework level, but must never create a different period high/low or change period identity.
 - A converted resistance may only come from a level originally classified by the CSA period engine as support; a converted support may only come from original resistance. Do not convert demand or supply levels.
 - When a new authoritative period breaks a previous period support/resistance, preserve BOTH facts: classify the new period high/low by the S/R-vs-S/D hierarchy, and carry the broken previous S/R forward in its converted role. Example: if Tuesday breaks Monday support, Tuesday may create a new support/demand classification while Monday support remains potential converted resistance. Never replace that broken Monday support with Monday's older high simply because both are resistance-side references.
 - For entry relevance, a nearer broken previous support/resistance that has converted in the current directional path outranks a farther untouched historical resistance/support when both are otherwise valid.
@@ -3181,18 +3184,25 @@ async function fetchTwelveDataStructureLevels({
       executionFrameworkRawCandles
     );
 
-  // V4.8.6 SESSION-ALIGNED FRAMEWORK PERIOD FIX
-  // CSA framework periods must match the calendar/session boundaries used by
-  // the selected chart and historical cutoff. Provider-built D1/W1 candles
-  // can use a different broker/session rollover and may therefore shift part
-  // of Monday into Tuesday (or one week into another). For M1-H1 and H4,
-  // derive the authoritative daily/weekly framework OHLC directly from the
-  // already cutoff-safe selected-timeframe candles. Provider higher-timeframe
-  // candles remain diagnostic only for these modes.
+  // V4.9.0 — NATIVE HIGHER-TIMEFRAME AUTHORITY
+  // -------------------------------------------------
+  // Completed CSA framework periods are owned by the provider's native
+  // higher-timeframe candle:
+  //   M1-H1 -> D1
+  //   H4    -> W1
+  //   D1    -> MN
+  //   W1    -> MN grouped by quarter
+  //   MN    -> MN grouped by year
   //
-  // D1/W1/MN keep the dedicated higher-timeframe source because their source
-  // periods are monthly/quarterly/yearly and are not affected by this intraday
-  // daily-session mismatch in the same way.
+  // Lower/selected-timeframe candles have two jobs only:
+  //   1) identify which CSA period a native higher-timeframe bar belongs to
+  //      when provider/session timestamps are shifted, and
+  //   2) reconstruct ONLY the current incomplete higher-timeframe period up
+  //      to the historical/final-visible cutoff.
+  //
+  // This prevents a completed D1/W1/MN high/low from being redefined by an
+  // arbitrary UTC aggregation while still preventing future-candle leakage.
+
   const providerFrameworkLevels = buildStructureLevelsFromCandles(
     frameworkRawCandles,
     structureRange,
@@ -3204,26 +3214,198 @@ async function fetchTwelveDataStructureLevels({
     profile
   );
 
-  const useSessionAlignedExecutionAuthority = [
-    "daily-in-week",
-    "weekly-in-month",
-  ].includes(profile?.structureMode);
+  const nativeSourceBars = normalizeMarketCandles(
+    filteredFrameworkSourceCandles
+  );
+
+  const alignNativeBarsToExpectedPeriods = ({
+    nativeBars = [],
+    expectedLevels = [],
+    currentPeriodKey = null,
+    currentPeriodComplete = false,
+    structureMode = "",
+  }) => {
+    const expected = [...expectedLevels]
+      .sort((a, b) => String(a.key).localeCompare(String(b.key)));
+
+    const isDaily = structureMode === "daily-in-week";
+    const isWeekly = structureMode === "weekly-in-month";
+    const useDirectNativeAlignment = isDaily || isWeekly;
+
+    if (!useDirectNativeAlignment) {
+      return {
+        resolved: null,
+        matches: [],
+        unmatchedNative: [],
+      };
+    }
+
+    const candidates = nativeBars
+      .map((bar, index) => ({ ...bar, __index: index }))
+      .filter((bar) =>
+        [bar.open, bar.high, bar.low, bar.close].every(Number.isFinite)
+      );
+    const used = new Set();
+    const matches = [];
+    const resolved = [];
+
+    const dateDistanceDays = (a, b) => {
+      const da = candleDateOnly(a);
+      const db = candleDateOnly(b);
+      if (!da || !db) return 999;
+      const ta = new Date(`${da}T00:00:00.000Z`).getTime();
+      const tb = new Date(`${db}T00:00:00.000Z`).getTime();
+      if (!Number.isFinite(ta) || !Number.isFinite(tb)) return 999;
+      return Math.abs(ta - tb) / 86400000;
+    };
+
+    for (const level of expected) {
+      const isCurrentIncomplete =
+        currentPeriodKey &&
+        String(level.key) === String(currentPeriodKey) &&
+        currentPeriodComplete !== true;
+
+      if (isCurrentIncomplete) {
+        resolved.push({
+          ...level,
+          source: "partial_period_from_cutoff_safe_selected_timeframe",
+          nativeHigherTimeframeAuthority: false,
+          partialPeriod: true,
+        });
+        matches.push({
+          key: level.key,
+          label: level.periodLabel || level.day || level.key,
+          mode: "partial_reconstruction",
+          sourceDatetime: null,
+          high: level.high,
+          low: level.low,
+        });
+        continue;
+      }
+
+      let best = null;
+      for (const bar of candidates) {
+        if (used.has(bar.__index)) continue;
+
+        const expectedRange = Math.max(
+          Math.abs(Number(level.high) - Number(level.low)),
+          1e-9
+        );
+        const nativeRange = Math.max(
+          Math.abs(Number(bar.high) - Number(bar.low)),
+          1e-9
+        );
+        const scale = Math.max(expectedRange, nativeRange, 1);
+
+        // Price shape identifies the same completed market period even when
+        // the provider labels its D1/W1 candle at a different session date.
+        const priceCost =
+          (
+            Math.abs(Number(bar.high) - Number(level.high)) +
+            Math.abs(Number(bar.low) - Number(level.low)) +
+            0.25 * Math.abs(Number(bar.open) - Number(level.open)) +
+            0.25 * Math.abs(Number(bar.close) - Number(level.close))
+          ) / scale;
+
+        const days = dateDistanceDays(bar.datetime, level.date || level.key);
+        const maxReasonableDays = isDaily ? 3 : 12;
+        if (days > maxReasonableDays) continue;
+
+        // Date is a secondary clue, never the authority, because provider
+        // session rollovers may label the same completed candle one day away.
+        const dateCost = Math.min(days, maxReasonableDays) * (isDaily ? 0.12 : 0.04);
+        const score = priceCost + dateCost;
+
+        if (!best || score < best.score) {
+          best = { bar, score, priceCost, dateCost, days };
+        }
+      }
+
+      // A deliberately generous ceiling: alignment chooses identity only.
+      // The native OHLC itself remains authoritative after the match.
+      if (best && best.score <= 1.35) {
+        used.add(best.bar.__index);
+        resolved.push({
+          ...level,
+          open: Number(best.bar.open),
+          high: Number(best.bar.high),
+          low: Number(best.bar.low),
+          close: Number(best.bar.close),
+          candleCount: 1,
+          source: isDaily
+            ? "native_D1_aligned_to_CSA_day"
+            : "native_W1_aligned_to_CSA_week",
+          sourceDatetime: best.bar.datetime,
+          nativeHigherTimeframeAuthority: true,
+          partialPeriod: false,
+        });
+        matches.push({
+          key: level.key,
+          label: level.periodLabel || level.day || level.key,
+          mode: "native_completed_period",
+          sourceDatetime: best.bar.datetime,
+          nativeHigh: Number(best.bar.high),
+          nativeLow: Number(best.bar.low),
+          reconstructionHigh: level.high,
+          reconstructionLow: level.low,
+          alignmentScore: best.score,
+          priceCost: best.priceCost,
+          dateCost: best.dateCost,
+          dateDistanceDays: best.days,
+        });
+      } else {
+        // Fail safe: do not silently invent a completed higher-timeframe bar.
+        // Keep the cutoff-safe reconstruction but mark the source-integrity
+        // state so diagnostics can expose that native alignment failed.
+        resolved.push({
+          ...level,
+          source: "native_htf_alignment_failed_cutoff_safe_fallback",
+          nativeHigherTimeframeAuthority: false,
+          sourceIntegrityWarning: true,
+          partialPeriod: false,
+        });
+        matches.push({
+          key: level.key,
+          label: level.periodLabel || level.day || level.key,
+          mode: "completed_period_alignment_failed",
+          sourceDatetime: best?.bar?.datetime || null,
+          bestScore: best?.score ?? null,
+          reconstructionHigh: level.high,
+          reconstructionLow: level.low,
+        });
+      }
+    }
+
+    return {
+      resolved: resolved.sort((a, b) => String(a.key).localeCompare(String(b.key))),
+      matches,
+      unmatchedNative: candidates
+        .filter((bar) => !used.has(bar.__index))
+        .map((bar) => ({
+          datetime: bar.datetime,
+          high: bar.high,
+          low: bar.low,
+        })),
+    };
+  };
+
+  const alignedNative = alignNativeBarsToExpectedPeriods({
+    nativeBars: nativeSourceBars,
+    expectedLevels: executionReconstructedLevels,
+    currentPeriodKey: currentFrameworkPeriod?.key || null,
+    currentPeriodComplete: currentFrameworkPeriodComplete,
+    structureMode: profile?.structureMode || "",
+  });
 
   const reconstructedMissingKeys = [];
   let dailyLevels = [];
 
-  if (useSessionAlignedExecutionAuthority) {
-    dailyLevels = executionReconstructedLevels
-      .map((level) => ({
-        ...level,
-        source:
-          profile.structureMode === "daily-in-week"
-            ? "session_aligned_D1_from_selected_timeframe_candles"
-            : "session_aligned_W1_from_selected_timeframe_candles",
-        sessionAlignedAuthority: true,
-      }))
-      .sort((a, b) => String(a.key).localeCompare(String(b.key)));
+  if (Array.isArray(alignedNative.resolved)) {
+    dailyLevels = alignedNative.resolved;
   } else {
+    // D1/W1/MN analysis modes: provider higher-timeframe periods remain
+    // authoritative for completed periods. The pre-existing safe fallback is
+    // retained only for a missing/incomplete source period.
     const authoritativeLevelMap = new Map(
       providerFrameworkLevels.map((level) => [String(level.key), level])
     );
@@ -3242,61 +3424,43 @@ async function fetchTwelveDataStructureLevels({
       .sort((a, b) => String(a.key).localeCompare(String(b.key)));
   }
 
-  const providerByKey = new Map(
-    providerFrameworkLevels.map((level) => [String(level.key), level])
-  );
-  const sessionBoundaryDifferences = dailyLevels
-    .map((level) => {
-      const provider = providerByKey.get(String(level.key));
-      if (!provider) return null;
-      const highDifference = Number(level.high) - Number(provider.high);
-      const lowDifference = Number(level.low) - Number(provider.low);
-      return {
-        key: level.key,
-        label: level.periodLabel || level.day || level.key,
-        selectedHigh: level.high,
-        providerHigh: provider.high,
-        highDifference: Number.isFinite(highDifference) ? highDifference : null,
-        selectedLow: level.low,
-        providerLow: provider.low,
-        lowDifference: Number.isFinite(lowDifference) ? lowDifference : null,
-      };
-    })
-    .filter(Boolean);
+  const sourceIntegrityWarnings = dailyLevels
+    .filter((level) => level?.sourceIntegrityWarning === true)
+    .map((level) => String(level.key));
 
   console.log("CSA AUTHORITATIVE FRAMEWORK PERIODS:", {
-    source: useSessionAlignedExecutionAuthority
-      ? "session-aligned aggregation from selected-timeframe candles"
+    source: ["daily-in-week", "weekly-in-month"].includes(profile?.structureMode)
+      ? "native higher-timeframe candles aligned to CSA period identity"
       : profile.frameworkSourceLabel || null,
     providerSource: profile.frameworkSourceLabel || null,
     structureMode: profile.structureMode || null,
-    authorityMode: useSessionAlignedExecutionAuthority
-      ? "selected_timeframe_calendar_aggregation"
+    authorityMode: ["daily-in-week", "weekly-in-month"].includes(profile?.structureMode)
+      ? "native_completed_period_htf_partial_period_reconstruction_only"
       : "provider_higher_timeframe_first",
+    currentFrameworkPeriod: currentFrameworkPeriod?.key || null,
+    currentFrameworkPeriodComplete,
     expectedFromExecution: executionReconstructedLevels.map((level) => ({
       key: level.key,
       label: level.periodLabel || level.day || level.key,
       high: level.high,
       low: level.low,
     })),
-    providerAuthoritative: providerFrameworkLevels.map((level) => ({
-      key: level.key,
-      label: level.periodLabel || level.day || level.key,
-      high: level.high,
-      low: level.low,
-    })),
-    sessionBoundaryDifferences,
+    nativeAlignment: alignedNative.matches || [],
+    unmatchedNative: alignedNative.unmatchedNative || [],
     reconstructedMissingKeys,
+    sourceIntegrityWarnings,
     resolved: dailyLevels.map((level) => ({
       key: level.key,
       label: level.periodLabel || level.day || level.key,
       high: level.high,
       low: level.low,
       source: level.source || profile.frameworkSourceLabel || null,
+      sourceDatetime: level.sourceDatetime || null,
+      nativeHigherTimeframeAuthority:
+        level.nativeHigherTimeframeAuthority === true,
+      partialPeriod: level.partialPeriod === true,
     })),
-    rule: useSessionAlignedExecutionAuthority
-      ? "m1_h1_daily_and_h4_weekly_framework_levels_use_cutoff_safe_selected_timeframe_calendar_aggregation_provider_htf_is_diagnostic_only"
-      : "provider_higher_timeframe_first_reconstruct_only_missing_periods_from_cutoff_safe_execution_candles",
+    rule: "completed_framework_periods_use_native_D1_W1_MN_OHLC; selected_timeframe_reconstruction_is_identity_mapping_or_current_incomplete_period_only",
   });
   const csaAreas =
     buildCsaAreas(
@@ -5105,6 +5269,8 @@ FIBONACCI
 - Major broken-level selection must rank all actually broken confirmed prior swing highs/lows within the active lookback by structural significance rather than recency alone. Significance should consider time-to-break, prominence versus nearby same-side pivots, number of pre-break reactions, percentage of time price remained on the original side, opposing excursion size, separation from the final directional extreme, confirmed protected-pivot quality, and break displacement. Strongly penalize very recent/local pivots and raw-extreme-only protected swings. When two candidates are similarly significant, prefer the older structural pivot rather than the nearer local level.
 - Structural-hierarchy major-break selection must scan each confirmed prior pivot independently for its first valid break, because the normal active-pivot event sequence can miss an older outer resistance/support after newer nested pivots form. Use a broader hierarchy lookback than the normal entry-area lookback. In bullish structure, rank higher/outer broken resistance above lower nested resistance when quality is comparable; in bearish structure rank lower/outer broken support above higher nested support. Reward outer levels broken later in the terminal expansion and penalize deeply nested local levels. Do not choose an outer level merely because it creates desired Fib confluence; it must still have a valid confirmed break and protected swing.
 - Market-data windows are intentionally separate. The authoritative CSA framework window remains timeframe-specific (M1-H1 daily-in-selected-week, H4 weekly-in-selected-month, D1 monthly-in-selected-year, W1 quarterly-in-selected-year, MN yearly across the selected multi-year range). Fibonacci impulse discovery must use a broader historical context ending at the exact same cutoff. Broader impulse candles may identify the relevant protected swing and major broken level, but they must never create extra current-framework support/resistance candidates or change framework period identity.
+- Completed higher-timeframe framework OHLC supplied by the backend is immutable. Claude must never recalculate Monday/Tuesday daily highs/lows, weekly highs/lows, monthly highs/lows, quarterly highs/lows, or yearly highs/lows from the screenshot when those backend values are present.
+- If visual evidence appears to disagree with an authoritative market-data high/low, preserve the backend value and describe only the visible interaction; do not substitute a visually estimated price.
 - When the same authoritative framework period/side has an exact printed broker/platform price label, that exact chart label may refine the market-data framework price; never borrow a price from a different period or side.
 - Do not mention Fibonacci, retracement percentages, 38.2%, 50%, or 61.8% in normal beginner-facing feedback. You may simply say one structural area is stronger or offers a cleaner opportunity.
 
@@ -10107,8 +10273,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.8.7";
-const CSA_BUILD_ID = "CSA-v4.8.7-session-aligned-framework-reference-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.9.0";
+const CSA_BUILD_ID = "CSA-v4.9.0-native-htf-authority";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
