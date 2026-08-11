@@ -2911,9 +2911,22 @@ async function fetchTwelveDataStructureLevels({
     if (frameworkInterval === profile.interval) {
       rawFrameworkCandles = rawCandles;
     } else {
+      // V4.8.1: request one full source period before the framework window.
+      // Some providers timestamp D1/W1/MN bars at a session boundary that can
+      // cause the first requested framework candle (for example Monday D1)
+      // to be omitted when start_date equals the exact framework boundary.
+      // We intentionally over-fetch, then filter back to the CSA range below.
+      const frameworkBufferDays =
+        profile.structureMode === "daily-in-week" ? 4 :
+        profile.structureMode === "weekly-in-month" ? 14 :
+        ["monthly-in-year", "quarterly-in-year"].includes(profile.structureMode) ? 45 :
+        profile.structureMode === "yearly-in-multi-year" ? 45 : 4;
+      const frameworkFetchStartDate = formatDateOnly(
+        addDays(new Date(`${structureRange.startDate}T00:00:00.000Z`), -frameworkBufferDays)
+      );
       rawFrameworkCandles = await fetchTwelveSeries({
         interval: frameworkInterval,
-        startDate: structureRange.startDate,
+        startDate: frameworkFetchStartDate,
         purpose: "authoritative framework",
       });
     }
@@ -3077,12 +3090,66 @@ async function fetchTwelveDataStructureLevels({
       executionFrameworkRawCandles
     );
 
-  const dailyLevels =
-    buildStructureLevelsFromCandles(
-      frameworkRawCandles,
-      structureRange,
-      profile
-    );
+  // V4.8.1 AUTHORITATIVE PERIOD COMPLETENESS FIX
+  // Higher-timeframe candles remain the first authority. However, if the
+  // provider omits one period from the requested window (the v4.8.0 test
+  // returned only Tuesday D1 and silently lost Monday), reconstruct ONLY the
+  // missing period from the already-cut-off selected-timeframe candles.
+  // The reconstruction is mathematically the same OHLC aggregation and never
+  // replaces a higher-timeframe candle that the provider actually returned.
+  const authoritativeLevels = buildStructureLevelsFromCandles(
+    frameworkRawCandles,
+    structureRange,
+    profile
+  );
+  const executionReconstructedLevels = buildStructureLevelsFromCandles(
+    executionFrameworkRawCandles,
+    structureRange,
+    profile
+  );
+  const authoritativeLevelMap = new Map(
+    authoritativeLevels.map((level) => [String(level.key), level])
+  );
+  const reconstructedMissingKeys = [];
+  for (const level of executionReconstructedLevels) {
+    const key = String(level.key);
+    if (!authoritativeLevelMap.has(key)) {
+      authoritativeLevelMap.set(key, {
+        ...level,
+        source: "selected_timeframe_reconstruction_for_missing_authoritative_period",
+        authoritativeSourceMissing: true,
+      });
+      reconstructedMissingKeys.push(key);
+    }
+  }
+  const dailyLevels = Array.from(authoritativeLevelMap.values())
+    .sort((a, b) => String(a.key).localeCompare(String(b.key)));
+
+  console.log("CSA AUTHORITATIVE FRAMEWORK PERIODS:", {
+    source: profile.frameworkSourceLabel || null,
+    structureMode: profile.structureMode || null,
+    expectedFromExecution: executionReconstructedLevels.map((level) => ({
+      key: level.key,
+      label: level.periodLabel || level.day || level.key,
+      high: level.high,
+      low: level.low,
+    })),
+    providerAuthoritative: authoritativeLevels.map((level) => ({
+      key: level.key,
+      label: level.periodLabel || level.day || level.key,
+      high: level.high,
+      low: level.low,
+    })),
+    reconstructedMissingKeys,
+    resolved: dailyLevels.map((level) => ({
+      key: level.key,
+      label: level.periodLabel || level.day || level.key,
+      high: level.high,
+      low: level.low,
+      source: level.source || profile.frameworkSourceLabel || null,
+    })),
+    rule: "provider_higher_timeframe_first_reconstruct_only_missing_periods_from_cutoff_safe_execution_candles",
+  });
   const csaAreas =
     buildCsaAreas(
       dailyLevels,
@@ -3107,7 +3174,11 @@ async function fetchTwelveDataStructureLevels({
       authoritativeFrameworkSource:
         profile.frameworkSourceLabel || null,
       authoritativeFrameworkCandleCount:
-        normalizeMarketCandles(frameworkRawCandles).length,
+        authoritativeLevels.length,
+      resolvedFrameworkPeriodCount:
+        dailyLevels.length,
+      reconstructedMissingFrameworkPeriods:
+        reconstructedMissingKeys,
       currentFrameworkPeriod:
         currentFrameworkPeriod?.key || null,
       currentFrameworkPeriodComplete,
@@ -9884,8 +9955,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.8.0";
-const CSA_BUILD_ID = "CSA-v4.8.0-authoritative-higher-timeframe-framework-levels";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.8.1";
+const CSA_BUILD_ID = "CSA-v4.8.1-authoritative-period-completeness-fix";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
