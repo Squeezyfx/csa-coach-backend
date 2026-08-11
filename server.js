@@ -9632,8 +9632,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.7.6";
-const CSA_BUILD_ID = "CSA-v4.7.6-converted-sr-reinforced-by-intraday-structure";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.7.7";
+const CSA_BUILD_ID = "CSA-v4.7.7-entry-selection-and-reference-relevance-fixed";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -17272,6 +17272,11 @@ function rankRawEntryAreas({
             : null,
         conversionConfirmed:
           rawZone?.members?.[0]?.conversionConfirmed === true,
+        sourceIndex: Number.isInteger(rawZone?.sourceIndex)
+          ? rawZone.sourceIndex
+          : Number.isInteger(rawZone?.members?.[0]?.sourceIndex)
+          ? rawZone.members[0].sourceIndex
+          : -1,
         referenceOnly: true,
       });
     }
@@ -17328,7 +17333,15 @@ function rankRawEntryAreas({
 
     const fibMatches = fibConfluence.matches;
     const fibonacciScore = 1;
-    const structuralScore = quality.score;
+
+    // v4.7.7 — a level that re-earns strong structural status through the
+    // required reaction/departure evidence must carry a positive structural
+    // score into final sequencing. Previously a re-earned converted S/R could
+    // be strongStructure=true while quality.score remained 0, causing the
+    // final selector to reject it as a false "Fibonacci-only" area.
+    const structuralScore = structuralEvidenceStrong
+      ? Math.max(Number(quality.score || 0), 50)
+      : Number(quality.score || 0);
 
     const brokenLevel = asPositiveNumber(historicalPhase?.brokenLevel);
     const conversionTolerance = Math.max(
@@ -17781,7 +17794,77 @@ function rankRawEntryAreas({
     })),
   });
 
-  const referenceAreas = structuralReferenceAreas
+  // v4.7.7 — USER-FACING STRUCTURAL RELEVANCE FILTER
+  // Keep historical levels internally, but do not talk about an older/deeper
+  // converted S/R when a later-period demand/supply now sits between that old
+  // level and current price. This follows the CSA progression rule: the newer
+  // structural area supersedes the older deeper converted level for coaching
+  // relevance, even though the older level may remain in the internal map.
+  const userFacingReferenceAreas = structuralReferenceAreas.filter((candidate) => {
+    const candidateType = String(candidate?.areaType || "").toLowerCase();
+    const candidatePrice = Number(candidate?.authoritativeCenter);
+    const candidateIndex = Number(candidate?.sourceIndex ?? -1);
+
+    if (!Number.isFinite(candidatePrice)) return false;
+
+    if (direction === "bullish" && candidateType === "converted support") {
+      const supersededByLaterDemand = structuralReferenceAreas.some((other) => {
+        if (other === candidate) return false;
+        const otherType = String(other?.areaType || "").toLowerCase();
+        const otherPrice = Number(other?.authoritativeCenter);
+        const otherIndex = Number(other?.sourceIndex ?? -1);
+        return (
+          otherType === "demand" &&
+          Number.isFinite(otherPrice) &&
+          otherIndex > candidateIndex &&
+          otherPrice > candidatePrice &&
+          otherPrice < Number(currentPrice)
+        );
+      });
+
+      if (supersededByLaterDemand) {
+        console.log("CSA user-facing reference suppressed:", {
+          direction,
+          areaType: candidate.areaType,
+          levelText: candidate.levelText,
+          frameworkPeriod: candidate.frameworkPeriod,
+          reason: "older_deeper_converted_support_superseded_by_later_demand",
+        });
+        return false;
+      }
+    }
+
+    if (direction === "bearish" && candidateType === "converted resistance") {
+      const supersededByLaterSupply = structuralReferenceAreas.some((other) => {
+        if (other === candidate) return false;
+        const otherType = String(other?.areaType || "").toLowerCase();
+        const otherPrice = Number(other?.authoritativeCenter);
+        const otherIndex = Number(other?.sourceIndex ?? -1);
+        return (
+          otherType === "supply" &&
+          Number.isFinite(otherPrice) &&
+          otherIndex > candidateIndex &&
+          otherPrice < candidatePrice &&
+          otherPrice > Number(currentPrice)
+        );
+      });
+
+      if (supersededByLaterSupply) {
+        console.log("CSA user-facing reference suppressed:", {
+          direction,
+          areaType: candidate.areaType,
+          levelText: candidate.levelText,
+          frameworkPeriod: candidate.frameworkPeriod,
+          reason: "older_farther_converted_resistance_superseded_by_later_supply",
+        });
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  const referenceAreas = userFacingReferenceAreas
     .sort((a, b) => {
       if (a.distanceFromPrice !== b.distanceFromPrice) {
         return a.distanceFromPrice - b.distanceFromPrice;
@@ -19820,6 +19903,9 @@ function buildValidatedAnalysisFacts({
           : null,
       conversionConfirmed:
         candidate.conversionConfirmed === true,
+      sourceIndex: Number.isInteger(candidate.sourceIndex)
+        ? candidate.sourceIndex
+        : -1,
       referenceOnly: true,
     })),
     selectedEntryAreas:
