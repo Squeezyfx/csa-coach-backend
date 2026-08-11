@@ -10046,8 +10046,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.8.4";
-const CSA_BUILD_ID = "CSA-v4.8.4-authoritative-prior-sr-conversion-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.8.5";
+const CSA_BUILD_ID = "CSA-v4.8.5-authoritative-prior-sr-synthesis-fix";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -16074,7 +16074,7 @@ function buildAuthoritativeFrameworkCandidates({
   });
 
   /*
-   * V4.8.4 — PRIOR-PERIOD S/R CONVERSION PRESERVATION
+   * V4.8.5 — PRIOR-PERIOD S/R CONVERSION PRESERVATION
    *
    * A new period's H/L classification and the PREVIOUS period's lifecycle are
    * two different jobs. Example on H1/D1 framework:
@@ -16138,7 +16138,7 @@ function buildAuthoritativeFrameworkCandidates({
 
       // Only true S/R has conversion memory. Supply/demand is invalidated when
       // broken and must never be silently converted into S/R.
-      const originalArea = sourceAreas.find((area) => {
+      const sourceAreaMatch = sourceAreas.find((area) => {
         const type = String(area?.type || '').toLowerCase();
         if (type !== originalType) return false;
 
@@ -16161,7 +16161,39 @@ function buildAuthoritativeFrameworkCandidates({
         );
       });
 
-      if (!originalArea) return;
+      /*
+       * V4.8.5 — AUTHORITATIVE PRIOR S/R SYNTHESIS
+       *
+       * The previous period's HIGH/LOW is itself the authoritative framework
+       * resistance/support. It must not disappear merely because sourceAreas
+       * omitted one side after directional filtering/classification.
+       *
+       * Example: Monday D1 low is Monday support. If Tuesday closes cleanly
+       * below it, Monday support must survive as potential converted resistance
+       * even when sourceAreas contains only Monday resistance + Tuesday supply.
+       */
+      const originalArea = sourceAreaMatch || {
+        type: originalType,
+        price: frameworkPrice,
+        period: previousPeriodLabel,
+        day: previousPeriodLabel,
+        date: previousPeriod?.date || previousPeriod?.key || null,
+        source: 'authoritative_period_sr_synthesized',
+        authoritativeFrameworkLevel: true,
+        synthesizedFromPeriodExtreme: true,
+      };
+
+      if (!sourceAreaMatch) {
+        console.log('CSA PRIOR-PERIOD S/R SOURCE SYNTHESIZED:', {
+          buildId: CSA_BUILD_ID,
+          direction,
+          sourcePeriod: previousPeriodLabel,
+          sourceIndex: index - 1,
+          originalType,
+          authoritativePrice: frameworkPrice,
+          reason: 'authoritative_period_extreme_exists_even_when_sourceAreas_omits_that_side',
+        });
+      }
 
       const lifecycle = resolveDeterministicFrameworkLifecycle({
         area: originalArea,
