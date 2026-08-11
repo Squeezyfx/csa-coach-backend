@@ -1427,6 +1427,8 @@ AREA RANKING RULES:
 - Identify up to 3 active entry areas that agree with the locked directional bias.
 - The timeframe-specific CSA framework levels are authoritative: M1-H1 daily, H4 weekly, D1 monthly, W1 quarterly, MN yearly/multi-year.
 - A converted resistance may only come from a level originally classified by the CSA period engine as support; a converted support may only come from original resistance. Do not convert demand or supply levels.
+- When a new authoritative period breaks a previous period support/resistance, preserve BOTH facts: classify the new period high/low by the S/R-vs-S/D hierarchy, and carry the broken previous S/R forward in its converted role. Example: if Tuesday breaks Monday support, Tuesday may create a new support/demand classification while Monday support remains potential converted resistance. Never replace that broken Monday support with Monday's older high simply because both are resistance-side references.
+- For entry relevance, a nearer broken previous support/resistance that has converted in the current directional path outranks a farther untouched historical resistance/support when both are otherwise valid.
 - Generic pivots and chart markings may only confirm or refine an authoritative framework level; they must never create or replace the primary area.
 - Validate genuine support/resistance or supply/demand structure before considering distance.
 - Fibonacci retracement is a silent mandatory quality filter only after an authoritative structural area already exists. Only 38.2%, 50%, and 61.8% are used.
@@ -2127,7 +2129,7 @@ function buildStructureLevelsFromCandles(candles, structureRange, profile) {
 
 function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
   /*
-   * V4.8.2 — AUTHORITATIVE HIERARCHICAL S/R vs S/D CLASSIFICATION
+   * V4.8.3 — AUTHORITATIVE HIERARCHICAL S/R vs S/D + PRIOR S/R MEMORY
    *
    * The higher-timeframe source candle owns the framework high/low. Each new
    * period is classified ONLY against the immediately preceding authoritative
@@ -10044,8 +10046,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.8.2";
-const CSA_BUILD_ID = "CSA-v4.8.2-hierarchical-sr-sd-classification";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.8.3";
+const CSA_BUILD_ID = "CSA-v4.8.3-prior-sr-conversion-priority";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -16070,6 +16072,205 @@ function buildAuthoritativeFrameworkCandidates({
         lifecycle.state === "converted" ? 1 : 2,
     });
   });
+
+  /*
+   * V4.8.3 — PRIOR-PERIOD S/R CONVERSION PRESERVATION
+   *
+   * A new period's H/L classification and the PREVIOUS period's lifecycle are
+   * two different jobs. Example on H1/D1 framework:
+   *   Monday low = support.
+   *   Tuesday trades cleanly below that Monday low.
+   *   Tuesday low may become NEW SUPPORT, while Monday support must remain in
+   *   memory as POTENTIAL CONVERTED RESISTANCE.
+   *
+   * Do not let the new Tuesday classification erase Monday's broken support.
+   * The same applies inversely to a previous resistance broken to the upside.
+   * This synthesis uses the authoritative higher-timeframe periods first and
+   * still requires the lower-timeframe deterministic break confirmation from
+   * resolveDeterministicFrameworkLifecycle().
+   */
+  for (let index = 1; index < levels.length; index += 1) {
+    const previousPeriod = levels[index - 1];
+    const currentPeriod = levels[index];
+
+    const previousHigh = asPositiveNumber(previousPeriod?.high);
+    const previousLow = asPositiveNumber(previousPeriod?.low);
+    const currentHigh = asPositiveNumber(currentPeriod?.high);
+    const currentLow = asPositiveNumber(currentPeriod?.low);
+
+    if (
+      previousHigh === null ||
+      previousLow === null ||
+      currentHigh === null ||
+      currentLow === null
+    ) {
+      continue;
+    }
+
+    const previousPeriodLabel =
+      previousPeriod?.periodLabel ||
+      previousPeriod?.day ||
+      previousPeriod?.key ||
+      `Period ${index}`;
+
+    const synthesizePriorConversion = ({
+      originalType,
+      expectedFinalType,
+      frameworkPrice,
+      frameworkSide,
+      breachComparison,
+    }) => {
+      if (!breachComparison?.cleanBreak) return;
+
+      // Only true S/R has conversion memory. Supply/demand is invalidated when
+      // broken and must never be silently converted into S/R.
+      const originalArea = sourceAreas.find((area) => {
+        const type = String(area?.type || '').toLowerCase();
+        if (type !== originalType) return false;
+
+        const areaPrice = asPositiveNumber(area?.price);
+        if (areaPrice === null) return false;
+
+        const areaPeriod = String(
+          area?.period || area?.day || area?.date || ''
+        ).trim();
+        const periodMatches =
+          !areaPeriod ||
+          areaPeriod === String(previousPeriodLabel).trim() ||
+          areaPeriod === String(previousPeriod?.date || '').trim() ||
+          areaPeriod === String(previousPeriod?.key || '').trim();
+
+        return (
+          periodMatches &&
+          Math.abs(areaPrice - frameworkPrice) <=
+            Math.max(tolerance, Number.EPSILON * 100)
+        );
+      });
+
+      if (!originalArea) return;
+
+      const lifecycle = resolveDeterministicFrameworkLifecycle({
+        area: originalArea,
+        levels,
+        sourceIndex: index - 1,
+        marketReference,
+        symbol,
+        timeframe,
+        atr,
+      });
+
+      if (
+        lifecycle.state !== 'converted' ||
+        lifecycle.finalType !== expectedFinalType
+      ) {
+        return;
+      }
+
+      const alreadyPresent = candidates.some((candidate) =>
+        Number(candidate?.sourceIndex) === index - 1 &&
+        String(candidate?.type || '').toLowerCase() === expectedFinalType &&
+        Math.abs(
+          Number(candidate?.frameworkPrice) - Number(frameworkPrice)
+        ) <= Math.max(tolerance, Number.EPSILON * 100)
+      );
+
+      if (alreadyPresent) return;
+
+      const validDirectionType =
+        direction === 'bearish'
+          ? expectedFinalType === 'converted resistance'
+          : expectedFinalType === 'converted support';
+      if (!validDirectionType) return;
+
+      const validPriceSide =
+        direction === 'bearish'
+          ? frameworkPrice > Number(currentPrice) + tolerance
+          : frameworkPrice < Number(currentPrice) - tolerance;
+      if (!validPriceSide) return;
+
+      const reconciled = reconcileFrameworkLevelWithVisibleChart({
+        frameworkPrice,
+        frameworkType: expectedFinalType,
+        frameworkPeriod: previousPeriodLabel,
+        frameworkSide,
+        visualReview,
+        symbol,
+        atr,
+      });
+
+      candidates.push({
+        price: reconciled.price,
+        frameworkPrice,
+        type: expectedFinalType,
+        originalType,
+        source: 'authoritative_prior_period_sr_conversion',
+        priceSource: reconciled.source,
+        chartReconciled: reconciled.reconciled === true,
+        reconciliationEvidence: reconciled.evidence || null,
+        reconciliationPeriodHint: reconciled.periodHint || null,
+        reconciliationConfidence: Number(reconciled.confidence || 0),
+        reconciliationDifference:
+          Number.isFinite(Number(reconciled.difference))
+            ? Number(reconciled.difference)
+            : null,
+        period: previousPeriodLabel,
+        date:
+          previousPeriod?.date || previousPeriod?.key || null,
+        sourceIndex: index - 1,
+        conversionBreakConfirmed: true,
+        conversionConfirmed: false,
+        lifecycleFlipCount: Number(lifecycle.flipCount || 0),
+        lifecycleEvents: Array.isArray(lifecycle.events)
+          ? lifecycle.events
+          : [],
+        authorityRank: 0,
+        priorPeriodSrConversion: true,
+      });
+
+      console.log('CSA PRIOR-PERIOD S/R CONVERSION PRESERVED:', {
+        buildId: CSA_BUILD_ID,
+        direction,
+        sourcePeriod: previousPeriodLabel,
+        sourceIndex: index - 1,
+        originalType,
+        finalType: expectedFinalType,
+        authoritativePrice: frameworkPrice,
+        chartReconciledPrice: reconciled.price,
+        breachedByPeriod:
+          currentPeriod?.periodLabel || currentPeriod?.day || currentPeriod?.key || null,
+        lifecycleFlipCount: Number(lifecycle.flipCount || 0),
+        rule: 'new_period_high_low_classification_must_not_erase_previous_sr_conversion_memory',
+      });
+    };
+
+    if (direction === 'bearish') {
+      synthesizePriorConversion({
+        originalType: 'support',
+        expectedFinalType: 'converted resistance',
+        frameworkPrice: previousLow,
+        frameworkSide: 'low',
+        breachComparison: compareLowWithTolerance(
+          currentLow,
+          previousLow,
+          symbol
+        ),
+      });
+    }
+
+    if (direction === 'bullish') {
+      synthesizePriorConversion({
+        originalType: 'resistance',
+        expectedFinalType: 'converted support',
+        frameworkPrice: previousHigh,
+        frameworkSide: 'high',
+        breachComparison: compareHighWithTolerance(
+          currentHigh,
+          previousHigh,
+          symbol
+        ),
+      });
+    }
+  }
 
   // V4.8.2: an intraday takeover base is NOT a framework S/R or S/D area.
   // It may reinforce an already-classified authoritative framework level later
