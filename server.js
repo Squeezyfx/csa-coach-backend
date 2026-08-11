@@ -10046,8 +10046,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.8.3";
-const CSA_BUILD_ID = "CSA-v4.8.3-prior-sr-conversion-priority";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.8.4";
+const CSA_BUILD_ID = "CSA-v4.8.4-authoritative-prior-sr-conversion-fix";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -16074,7 +16074,7 @@ function buildAuthoritativeFrameworkCandidates({
   });
 
   /*
-   * V4.8.3 — PRIOR-PERIOD S/R CONVERSION PRESERVATION
+   * V4.8.4 — PRIOR-PERIOD S/R CONVERSION PRESERVATION
    *
    * A new period's H/L classification and the PREVIOUS period's lifecycle are
    * two different jobs. Example on H1/D1 framework:
@@ -16122,6 +16122,20 @@ function buildAuthoritativeFrameworkCandidates({
     }) => {
       if (!breachComparison?.cleanBreak) return;
 
+      // V4.8.4: for a completed authoritative next period, a clean breach plus
+      // an end-period close beyond the prior S/R is sufficient to preserve the
+      // prior level as a POTENTIAL converted S/R candidate. This prevents the
+      // lower-timeframe lifecycle scanner from accidentally erasing a valid
+      // daily/weekly/monthly framework conversion merely because its internal
+      // event sequence was ambiguous. A wick-only breach that closes back
+      // inside the old level still does NOT qualify.
+      const currentPeriodClose = asPositiveNumber(currentPeriod?.close);
+      const authoritativeCloseConfirmed =
+        currentPeriodClose !== null &&
+        (expectedFinalType === 'converted resistance'
+          ? currentPeriodClose < frameworkPrice - Math.max(tolerance, getCleanBreakTolerance(symbol))
+          : currentPeriodClose > frameworkPrice + Math.max(tolerance, getCleanBreakTolerance(symbol)));
+
       // Only true S/R has conversion memory. Supply/demand is invalidated when
       // broken and must never be silently converted into S/R.
       const originalArea = sourceAreas.find((area) => {
@@ -16159,10 +16173,11 @@ function buildAuthoritativeFrameworkCandidates({
         atr,
       });
 
-      if (
-        lifecycle.state !== 'converted' ||
-        lifecycle.finalType !== expectedFinalType
-      ) {
+      const lifecycleConfirmed =
+        lifecycle.state === 'converted' &&
+        lifecycle.finalType === expectedFinalType;
+
+      if (!lifecycleConfirmed && !authoritativeCloseConfirmed) {
         return;
       }
 
@@ -16219,6 +16234,9 @@ function buildAuthoritativeFrameworkCandidates({
         sourceIndex: index - 1,
         conversionBreakConfirmed: true,
         conversionConfirmed: false,
+        conversionEvidenceSource: lifecycleConfirmed
+          ? 'lower_timeframe_confirmed_break'
+          : 'authoritative_next_period_close_beyond_prior_sr',
         lifecycleFlipCount: Number(lifecycle.flipCount || 0),
         lifecycleEvents: Array.isArray(lifecycle.events)
           ? lifecycle.events
@@ -16239,7 +16257,10 @@ function buildAuthoritativeFrameworkCandidates({
         breachedByPeriod:
           currentPeriod?.periodLabel || currentPeriod?.day || currentPeriod?.key || null,
         lifecycleFlipCount: Number(lifecycle.flipCount || 0),
-        rule: 'new_period_high_low_classification_must_not_erase_previous_sr_conversion_memory',
+        lifecycleConfirmed,
+        authoritativeCloseConfirmed,
+        currentPeriodClose,
+        rule: 'previous_authoritative_sr_survives_when_next_period_cleanly_breaks_and_closes_beyond_it',
       });
     };
 
