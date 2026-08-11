@@ -1752,13 +1752,95 @@ function compareLowWithTolerance(currentLow, previousLow, symbol = "") {
 
 function getSupportedCsaTimeframeProfile(timeframe = "H1") {
   const tf = comparableTimeframe(timeframe) || "H1";
+
+  // V4.8.0 FRAMEWORK SOURCE LOCK
+  // The selected chart timeframe is used for execution/lifecycle detail and
+  // Fibonacci impulse discovery. The authoritative CSA framework highs/lows
+  // come from the next higher source candle wherever one exists:
+  //   M1-H1 -> D1 candle high/low for each weekday
+  //   H4    -> W1 candle high/low for each week
+  //   D1    -> MN candle high/low for each month
+  //   W1    -> MN candles grouped into quarters
+  //   MN    -> MN candles grouped into years
+  // This prevents an intraday pivot from silently replacing the actual
+  // authoritative period high/low.
   if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) {
-    return { selectedTimeframe: tf, interval: normalizeTimeframe(tf), structureMode: "daily-in-week", structureLabel: "Daily highs/lows inside the selected Monday-to-Friday week", sourceUnitSingular: "day", sourceUnitPlural: "daily levels", firstPeriodText: "Monday high/low creates first support and resistance.", startPriceLabel: "Monday open", currentPriceLabel: "latest close for selected week", rangeKind: "week", breakdownTitle: "Monday-to-Friday CSA Breakdown" };
+    return {
+      selectedTimeframe: tf,
+      interval: normalizeTimeframe(tf),
+      frameworkInterval: "1day",
+      frameworkSourceLabel: "authoritative D1 candles",
+      structureMode: "daily-in-week",
+      structureLabel: "Daily highs/lows inside the selected Monday-to-Friday week",
+      sourceUnitSingular: "day",
+      sourceUnitPlural: "daily levels",
+      firstPeriodText: "Monday D1 candle high/low creates first resistance and support.",
+      startPriceLabel: "Monday D1 open",
+      currentPriceLabel: "latest close for selected week",
+      rangeKind: "week",
+      breakdownTitle: "Monday-to-Friday CSA Breakdown",
+    };
   }
-  if (tf === "H4") return { selectedTimeframe: tf, interval: "4h", structureMode: "weekly-in-month", structureLabel: "Weekly highs/lows inside the selected calendar month", sourceUnitSingular: "week", sourceUnitPlural: "weekly levels", firstPeriodText: "First week high/low creates first support and resistance.", startPriceLabel: "first week open", currentPriceLabel: "latest close for selected month", rangeKind: "month", breakdownTitle: "Weekly CSA Breakdown For Selected Month" };
-  if (tf === "D1") return { selectedTimeframe: tf, interval: "1day", structureMode: "monthly-in-year", structureLabel: "Monthly highs/lows inside the selected calendar year", sourceUnitSingular: "month", sourceUnitPlural: "monthly levels", firstPeriodText: "First month high/low creates first support and resistance.", startPriceLabel: "first month open", currentPriceLabel: "latest close for selected year", rangeKind: "year", breakdownTitle: "Monthly CSA Breakdown For Selected Year" };
-  if (tf === "W1") return { selectedTimeframe: tf, interval: "1week", structureMode: "quarterly-in-year", structureLabel: "Quarterly highs/lows inside the selected calendar year", sourceUnitSingular: "quarter", sourceUnitPlural: "quarterly levels", firstPeriodText: "First quarter high/low creates first support and resistance.", startPriceLabel: "first quarter open", currentPriceLabel: "latest close for selected year", rangeKind: "year", breakdownTitle: "Quarterly CSA Breakdown For Selected Year" };
-  if (tf === "MN") return { selectedTimeframe: tf, interval: "1month", structureMode: "yearly-in-multi-year", structureLabel: "Yearly highs/lows across selected year plus previous 4 years", sourceUnitSingular: "year", sourceUnitPlural: "yearly levels", firstPeriodText: "First year high/low creates first support and resistance.", startPriceLabel: "first year open", currentPriceLabel: "latest close for selected multi-year range", rangeKind: "multi-year range", breakdownTitle: "Yearly CSA Breakdown For Monthly Chart" };
+  if (tf === "H4") return {
+    selectedTimeframe: tf,
+    interval: "4h",
+    frameworkInterval: "1week",
+    frameworkSourceLabel: "authoritative W1 candles",
+    structureMode: "weekly-in-month",
+    structureLabel: "Weekly highs/lows inside the selected calendar month",
+    sourceUnitSingular: "week",
+    sourceUnitPlural: "weekly levels",
+    firstPeriodText: "First W1 candle high/low creates first resistance and support.",
+    startPriceLabel: "first week open",
+    currentPriceLabel: "latest close for selected month",
+    rangeKind: "month",
+    breakdownTitle: "Weekly CSA Breakdown For Selected Month",
+  };
+  if (tf === "D1") return {
+    selectedTimeframe: tf,
+    interval: "1day",
+    frameworkInterval: "1month",
+    frameworkSourceLabel: "authoritative MN candles",
+    structureMode: "monthly-in-year",
+    structureLabel: "Monthly highs/lows inside the selected calendar year",
+    sourceUnitSingular: "month",
+    sourceUnitPlural: "monthly levels",
+    firstPeriodText: "First MN candle high/low creates first resistance and support.",
+    startPriceLabel: "first month open",
+    currentPriceLabel: "latest close for selected year",
+    rangeKind: "year",
+    breakdownTitle: "Monthly CSA Breakdown For Selected Year",
+  };
+  if (tf === "W1") return {
+    selectedTimeframe: tf,
+    interval: "1week",
+    frameworkInterval: "1month",
+    frameworkSourceLabel: "authoritative MN candles grouped by quarter",
+    structureMode: "quarterly-in-year",
+    structureLabel: "Quarterly highs/lows inside the selected calendar year",
+    sourceUnitSingular: "quarter",
+    sourceUnitPlural: "quarterly levels",
+    firstPeriodText: "First quarter high/low creates first resistance and support.",
+    startPriceLabel: "first quarter open",
+    currentPriceLabel: "latest close for selected year",
+    rangeKind: "year",
+    breakdownTitle: "Quarterly CSA Breakdown For Selected Year",
+  };
+  if (tf === "MN") return {
+    selectedTimeframe: tf,
+    interval: "1month",
+    frameworkInterval: "1month",
+    frameworkSourceLabel: "authoritative MN candles grouped by year",
+    structureMode: "yearly-in-multi-year",
+    structureLabel: "Yearly highs/lows across selected year plus previous 4 years",
+    sourceUnitSingular: "year",
+    sourceUnitPlural: "yearly levels",
+    firstPeriodText: "First year high/low creates first resistance and support.",
+    startPriceLabel: "first year open",
+    currentPriceLabel: "latest close for selected multi-year range",
+    rangeKind: "multi-year range",
+    breakdownTitle: "Yearly CSA Breakdown For Monthly Chart",
+  };
   return getSupportedCsaTimeframeProfile("H1");
 }
 
@@ -1825,6 +1907,61 @@ function getPeriodKeyAndLabel(date, profile) {
   if (profile.structureMode === "yearly-in-multi-year") return { key: String(year), label: String(year), date: `${year}-01-01` };
   const dateOnly = formatDateOnly(date);
   return { key: dateOnly, label: dateOnly, date: dateOnly };
+}
+
+function getFrameworkPeriodEndDate(date, profile = getSupportedCsaTimeframeProfile("H1")) {
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return null;
+  const year = d.getUTCFullYear();
+  const month = d.getUTCMonth();
+
+  if (profile.structureMode === "daily-in-week") {
+    return formatDateOnly(d);
+  }
+
+  if (profile.structureMode === "weekly-in-month") {
+    // CSA trading week is Monday-Friday. Saturday/Sunday do not create
+    // authoritative intraday framework levels.
+    const day = d.getUTCDay();
+    const daysToFriday = day === 0 ? -2 : day === 6 ? -1 : 5 - day;
+    return formatDateOnly(addDays(d, daysToFriday));
+  }
+
+  if (profile.structureMode === "monthly-in-year") {
+    return formatDateOnly(new Date(Date.UTC(year, month + 1, 0)));
+  }
+
+  if (profile.structureMode === "quarterly-in-year") {
+    const quarterEndMonth = month <= 2 ? 2 : month <= 5 ? 5 : month <= 8 ? 8 : 11;
+    return formatDateOnly(new Date(Date.UTC(year, quarterEndMonth + 1, 0)));
+  }
+
+  if (profile.structureMode === "yearly-in-multi-year") {
+    return `${year}-12-31`;
+  }
+
+  return formatDateOnly(d);
+}
+
+function isFrameworkPeriodCompleteAtCutoff({
+  cutoffDateTime = "",
+  profile = getSupportedCsaTimeframeProfile("H1"),
+}) {
+  const normalized = normalizeTwelveDataDateTime(cutoffDateTime);
+  if (!normalized) return false;
+  const cutoffDate = candleDateOnly(normalized);
+  const cutoffTime = normalized.slice(11, 19) || "00:00:00";
+  if (!cutoffDate) return false;
+
+  const periodEndDate = getFrameworkPeriodEndDate(
+    new Date(`${cutoffDate}T00:00:00.000Z`),
+    profile
+  );
+
+  if (!periodEndDate) return false;
+  if (cutoffDate > periodEndDate) return true;
+  if (cutoffDate < periodEndDate) return false;
+  return cutoffTime >= "23:59:00";
 }
 
 function getOutputSizeForInterval(interval) {
@@ -2658,6 +2795,8 @@ async function fetchTwelveDataStructureLevels({
     symbol,
     timezone,
     interval: profile.interval,
+    frameworkInterval: profile.frameworkInterval || profile.interval,
+    frameworkSourceLabel: profile.frameworkSourceLabel || null,
     profile,
     chartCutoff: chartCutoff || null,
   });
@@ -2690,21 +2829,60 @@ async function fetchTwelveDataStructureLevels({
     );
   }
 
-  const params = new URLSearchParams({
-    symbol,
-    interval: profile.interval,
-    start_date: `${impulseRange.startDate} 00:00:00`,
-    end_date: endDateTime,
-    timezone,
-    order: "ASC",
-    outputsize: getOutputSizeForInterval(profile.interval),
-    apikey: apiKey,
-  });
+  const frameworkInterval =
+    profile.frameworkInterval || profile.interval;
+
+  const buildTwelveParams = ({
+    interval,
+    startDate,
+  }) =>
+    new URLSearchParams({
+      symbol,
+      interval,
+      start_date: `${startDate} 00:00:00`,
+      end_date: endDateTime,
+      timezone,
+      order: "ASC",
+      outputsize: getOutputSizeForInterval(interval),
+      apikey: apiKey,
+    });
+
+  const fetchTwelveSeries = async ({
+    interval,
+    startDate,
+    purpose,
+  }) => {
+    const params = buildTwelveParams({ interval, startDate });
+    const response = await fetch(
+      `${TWELVE_DATA_BASE_URL}?${params.toString()}`
+    );
+    const data = await response.json();
+
+    if (
+      !response.ok ||
+      data.status === "error" ||
+      !Array.isArray(data.values)
+    ) {
+      const message =
+        data.message ||
+        data.error ||
+        `Twelve Data ${purpose} request failed with status ${response.status}.`;
+      const error = new Error(message);
+      error.twelveDataStatus = data.status || "unknown";
+      throw error;
+    }
+
+    return data.values || [];
+  };
 
   console.log("Twelve Data historical cutoff:", {
     symbol,
     timeframe,
     analysisType,
+    executionInterval: profile.interval,
+    authoritativeFrameworkInterval: frameworkInterval,
+    authoritativeFrameworkSource:
+      profile.frameworkSourceLabel || null,
     frameworkStartDate:
       `${structureRange.startDate} 00:00:00`,
     impulseStartDate:
@@ -2720,28 +2898,31 @@ async function fetchTwelveDataStructureLevels({
       chartCutoff?.allowMarketDirectionalBias !== false,
   });
 
-  const response = await fetch(
-    `${TWELVE_DATA_BASE_URL}?${params.toString()}`
-  );
-  const data = await response.json();
+  let rawCandles = [];
+  let rawFrameworkCandles = [];
 
-  if (
-    !response.ok ||
-    data.status === "error" ||
-    !Array.isArray(data.values)
-  ) {
+  try {
+    rawCandles = await fetchTwelveSeries({
+      interval: profile.interval,
+      startDate: impulseRange.startDate,
+      purpose: "execution/impulse",
+    });
+
+    if (frameworkInterval === profile.interval) {
+      rawFrameworkCandles = rawCandles;
+    } else {
+      rawFrameworkCandles = await fetchTwelveSeries({
+        interval: frameworkInterval,
+        startDate: structureRange.startDate,
+        purpose: "authoritative framework",
+      });
+    }
+  } catch (error) {
     return {
-      ...empty(
-        data.message ||
-          data.error ||
-          `Twelve Data request failed with status ${response.status}.`,
-        structureRange
-      ),
-      twelveDataStatus: data.status || "unknown",
+      ...empty(error.message, structureRange),
+      twelveDataStatus: error.twelveDataStatus || "unknown",
     };
   }
-
-  const rawCandles = data.values || [];
   const normalizedCutoff = normalizeTwelveDataDateTime(endDateTime);
 
   // Defence in depth: discard anything later than the screenshot cutoff
@@ -2761,6 +2942,19 @@ async function fetchTwelveDataStructureLevels({
       normalizedCutoff &&
       candleDateTime &&
       candleDateTime > normalizedCutoff
+    );
+  });
+
+  // V4.8.0: framework highs/lows come from dedicated higher-timeframe
+  // source candles rather than reconstructed intraday pivots. The same
+  // historical cutoff is applied defensively so future source candles can
+  // never leak into an End-of-selected-day / Exact-time review.
+  const filteredFrameworkSourceCandles = rawFrameworkCandles.filter((bar) => {
+    const candleDateTime = normalizeTwelveDataDateTime(bar?.datetime);
+    return (
+      !normalizedCutoff ||
+      !candleDateTime ||
+      candleDateTime <= normalizedCutoff
     );
   });
 
@@ -2826,16 +3020,61 @@ async function fetchTwelveDataStructureLevels({
   // NARROW authoritative framework history: used by CSA daily/weekly/monthly
   // period levels, historical direction, conversion lifecycle and structural
   // candidate quality. This preserves the existing CSA timeframe rules.
-  const frameworkRawCandles =
+  // Keep selected-timeframe candles for break/retest/lifecycle and trigger
+  // detail. Do NOT use them to redefine COMPLETED authoritative period
+  // highs/lows. If the cutoff falls inside the current D1/W1/MN/quarter/year
+  // source period, however, using the provider's full higher-timeframe candle
+  // could leak later price action. In that one partial period we reconstruct
+  // only the current period from selected-timeframe candles up to the cutoff.
+  const executionFrameworkRawCandles =
     filterCandlesToStructureRange(
       filteredCandles,
       structureRange,
       profile
     );
 
+  const cutoffDateOnly = candleDateOnly(endDateTime);
+  const currentFrameworkPeriod = cutoffDateOnly
+    ? getPeriodKeyAndLabel(
+        new Date(`${cutoffDateOnly}T00:00:00.000Z`),
+        profile
+      )
+    : null;
+  const currentFrameworkPeriodComplete =
+    isFrameworkPeriodCompleteAtCutoff({
+      cutoffDateTime: endDateTime,
+      profile,
+    });
+
+  const sourceFrameworkCandlesInRange =
+    filterCandlesToStructureRange(
+      filteredFrameworkSourceCandles,
+      structureRange,
+      profile
+    );
+
+  const frameworkRawCandles = currentFrameworkPeriodComplete
+    ? sourceFrameworkCandlesInRange
+    : [
+        ...sourceFrameworkCandlesInRange.filter((bar) => {
+          const dateOnly = candleDateOnly(bar?.datetime);
+          if (!dateOnly || !currentFrameworkPeriod?.key) return true;
+          const date = new Date(`${dateOnly}T00:00:00.000Z`);
+          if (Number.isNaN(date.getTime())) return true;
+          return getPeriodKeyAndLabel(date, profile).key !== currentFrameworkPeriod.key;
+        }),
+        ...executionFrameworkRawCandles.filter((bar) => {
+          const dateOnly = candleDateOnly(bar?.datetime);
+          if (!dateOnly || !currentFrameworkPeriod?.key) return false;
+          const date = new Date(`${dateOnly}T00:00:00.000Z`);
+          if (Number.isNaN(date.getTime())) return false;
+          return getPeriodKeyAndLabel(date, profile).key === currentFrameworkPeriod.key;
+        }),
+      ];
+
   const timeframeCandles =
     normalizeMarketCandles(
-      frameworkRawCandles
+      executionFrameworkRawCandles
     );
 
   const dailyLevels =
@@ -2863,7 +3102,20 @@ async function fetchTwelveDataStructureLevels({
         structureRange.startDate,
       frameworkEndDate:
         structureRange.endDate,
-      frameworkCandleCount:
+      authoritativeFrameworkInterval:
+        frameworkInterval,
+      authoritativeFrameworkSource:
+        profile.frameworkSourceLabel || null,
+      authoritativeFrameworkCandleCount:
+        normalizeMarketCandles(frameworkRawCandles).length,
+      currentFrameworkPeriod:
+        currentFrameworkPeriod?.key || null,
+      currentFrameworkPeriodComplete,
+      partialPeriodSource:
+        currentFrameworkPeriodComplete
+          ? profile.frameworkSourceLabel || null
+          : "selected_timeframe_candles_up_to_cutoff",
+      executionFrameworkCandleCount:
         timeframeCandles.length,
       impulseStartDate:
         impulseRange.startDate,
@@ -2879,7 +3131,7 @@ async function fetchTwelveDataStructureLevels({
       sameCutoff:
         true,
       rule:
-        "framework_window_authoritative_impulse_window_context_only",
+        "higher_timeframe_source_candle_owns_framework_high_low_execution_timeframe_only_handles_lifecycle",
     }
   );
 
@@ -9632,8 +9884,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.7.7";
-const CSA_BUILD_ID = "CSA-v4.7.7-entry-selection-and-reference-relevance-fixed";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.8.0";
+const CSA_BUILD_ID = "CSA-v4.8.0-authoritative-higher-timeframe-framework-levels";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
