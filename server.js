@@ -3181,14 +3181,19 @@ async function fetchTwelveDataStructureLevels({
       executionFrameworkRawCandles
     );
 
-  // V4.8.1 AUTHORITATIVE PERIOD COMPLETENESS FIX
-  // Higher-timeframe candles remain the first authority. However, if the
-  // provider omits one period from the requested window (the v4.8.0 test
-  // returned only Tuesday D1 and silently lost Monday), reconstruct ONLY the
-  // missing period from the already-cut-off selected-timeframe candles.
-  // The reconstruction is mathematically the same OHLC aggregation and never
-  // replaces a higher-timeframe candle that the provider actually returned.
-  const authoritativeLevels = buildStructureLevelsFromCandles(
+  // V4.8.6 SESSION-ALIGNED FRAMEWORK PERIOD FIX
+  // CSA framework periods must match the calendar/session boundaries used by
+  // the selected chart and historical cutoff. Provider-built D1/W1 candles
+  // can use a different broker/session rollover and may therefore shift part
+  // of Monday into Tuesday (or one week into another). For M1-H1 and H4,
+  // derive the authoritative daily/weekly framework OHLC directly from the
+  // already cutoff-safe selected-timeframe candles. Provider higher-timeframe
+  // candles remain diagnostic only for these modes.
+  //
+  // D1/W1/MN keep the dedicated higher-timeframe source because their source
+  // periods are monthly/quarterly/yearly and are not affected by this intraday
+  // daily-session mismatch in the same way.
+  const providerFrameworkLevels = buildStructureLevelsFromCandles(
     frameworkRawCandles,
     structureRange,
     profile
@@ -3198,39 +3203,89 @@ async function fetchTwelveDataStructureLevels({
     structureRange,
     profile
   );
-  const authoritativeLevelMap = new Map(
-    authoritativeLevels.map((level) => [String(level.key), level])
-  );
+
+  const useSessionAlignedExecutionAuthority = [
+    "daily-in-week",
+    "weekly-in-month",
+  ].includes(profile?.structureMode);
+
   const reconstructedMissingKeys = [];
-  for (const level of executionReconstructedLevels) {
-    const key = String(level.key);
-    if (!authoritativeLevelMap.has(key)) {
-      authoritativeLevelMap.set(key, {
+  let dailyLevels = [];
+
+  if (useSessionAlignedExecutionAuthority) {
+    dailyLevels = executionReconstructedLevels
+      .map((level) => ({
         ...level,
-        source: "selected_timeframe_reconstruction_for_missing_authoritative_period",
-        authoritativeSourceMissing: true,
-      });
-      reconstructedMissingKeys.push(key);
+        source:
+          profile.structureMode === "daily-in-week"
+            ? "session_aligned_D1_from_selected_timeframe_candles"
+            : "session_aligned_W1_from_selected_timeframe_candles",
+        sessionAlignedAuthority: true,
+      }))
+      .sort((a, b) => String(a.key).localeCompare(String(b.key)));
+  } else {
+    const authoritativeLevelMap = new Map(
+      providerFrameworkLevels.map((level) => [String(level.key), level])
+    );
+    for (const level of executionReconstructedLevels) {
+      const key = String(level.key);
+      if (!authoritativeLevelMap.has(key)) {
+        authoritativeLevelMap.set(key, {
+          ...level,
+          source: "selected_timeframe_reconstruction_for_missing_authoritative_period",
+          authoritativeSourceMissing: true,
+        });
+        reconstructedMissingKeys.push(key);
+      }
     }
+    dailyLevels = Array.from(authoritativeLevelMap.values())
+      .sort((a, b) => String(a.key).localeCompare(String(b.key)));
   }
-  const dailyLevels = Array.from(authoritativeLevelMap.values())
-    .sort((a, b) => String(a.key).localeCompare(String(b.key)));
+
+  const providerByKey = new Map(
+    providerFrameworkLevels.map((level) => [String(level.key), level])
+  );
+  const sessionBoundaryDifferences = dailyLevels
+    .map((level) => {
+      const provider = providerByKey.get(String(level.key));
+      if (!provider) return null;
+      const highDifference = Number(level.high) - Number(provider.high);
+      const lowDifference = Number(level.low) - Number(provider.low);
+      return {
+        key: level.key,
+        label: level.periodLabel || level.day || level.key,
+        selectedHigh: level.high,
+        providerHigh: provider.high,
+        highDifference: Number.isFinite(highDifference) ? highDifference : null,
+        selectedLow: level.low,
+        providerLow: provider.low,
+        lowDifference: Number.isFinite(lowDifference) ? lowDifference : null,
+      };
+    })
+    .filter(Boolean);
 
   console.log("CSA AUTHORITATIVE FRAMEWORK PERIODS:", {
-    source: profile.frameworkSourceLabel || null,
+    source: useSessionAlignedExecutionAuthority
+      ? "session-aligned aggregation from selected-timeframe candles"
+      : profile.frameworkSourceLabel || null,
+    providerSource: profile.frameworkSourceLabel || null,
     structureMode: profile.structureMode || null,
+    authorityMode: useSessionAlignedExecutionAuthority
+      ? "selected_timeframe_calendar_aggregation"
+      : "provider_higher_timeframe_first",
     expectedFromExecution: executionReconstructedLevels.map((level) => ({
       key: level.key,
       label: level.periodLabel || level.day || level.key,
       high: level.high,
       low: level.low,
     })),
-    providerAuthoritative: authoritativeLevels.map((level) => ({
+    providerAuthoritative: providerFrameworkLevels.map((level) => ({
       key: level.key,
       label: level.periodLabel || level.day || level.key,
       high: level.high,
       low: level.low,
     })),
+    sessionBoundaryDifferences,
     reconstructedMissingKeys,
     resolved: dailyLevels.map((level) => ({
       key: level.key,
@@ -3239,7 +3294,9 @@ async function fetchTwelveDataStructureLevels({
       low: level.low,
       source: level.source || profile.frameworkSourceLabel || null,
     })),
-    rule: "provider_higher_timeframe_first_reconstruct_only_missing_periods_from_cutoff_safe_execution_candles",
+    rule: useSessionAlignedExecutionAuthority
+      ? "m1_h1_daily_and_h4_weekly_framework_levels_use_cutoff_safe_selected_timeframe_calendar_aggregation_provider_htf_is_diagnostic_only"
+      : "provider_higher_timeframe_first_reconstruct_only_missing_periods_from_cutoff_safe_execution_candles",
   });
   const csaAreas =
     buildCsaAreas(
@@ -10046,8 +10103,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.8.5";
-const CSA_BUILD_ID = "CSA-v4.8.5-authoritative-prior-sr-synthesis-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.8.6";
+const CSA_BUILD_ID = "CSA-v4.8.6-session-aligned-framework-periods";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
