@@ -3259,6 +3259,38 @@ async function fetchTwelveDataStructureLevels({
       return Math.abs(ta - tb) / 86400000;
     };
 
+    // V4.9.2 — EXTREME-BY-EXTREME SOURCE INTEGRITY RECONCILIATION
+    // A provider's native D1/W1 bar can use a different session boundary from
+    // the broker/chart. We therefore do not allow one obviously contaminated
+    // extreme to redefine the CSA day/week. Each native HIGH and LOW must be
+    // individually plausible relative to the cutoff-safe reconstruction.
+    // Modest extensions are accepted (they can represent broker-session bars
+    // that the UTC reconstruction missed); extreme extensions are rejected.
+    const reconcileNativeExtreme = ({ nativeValue, reconstructedValue, reconstructedRange }) => {
+      const native = Number(nativeValue);
+      const reconstructed = Number(reconstructedValue);
+      const range = Math.max(Math.abs(Number(reconstructedRange) || 0), 1e-9);
+      if (!Number.isFinite(native)) {
+        return { value: reconstructed, source: 'reconstruction_native_missing', delta: null, allowance: null, acceptedNative: false };
+      }
+      if (!Number.isFinite(reconstructed)) {
+        return { value: native, source: 'native_reconstruction_missing', delta: null, allowance: null, acceptedNative: true };
+      }
+
+      // 20% of the reconstructed period range, with a tiny 0.05% price floor.
+      // This is intentionally an integrity check, not an entry/Fib tolerance.
+      const allowance = Math.max(range * 0.20, Math.abs(reconstructed) * 0.0005);
+      const delta = Math.abs(native - reconstructed);
+      const acceptedNative = delta <= allowance;
+      return {
+        value: acceptedNative ? native : reconstructed,
+        source: acceptedNative ? 'native_extreme_integrity_pass' : 'reconstruction_extreme_native_session_mismatch',
+        delta,
+        allowance,
+        acceptedNative,
+      };
+    };
+
     for (const level of expected) {
       const isCurrentIncomplete =
         currentPeriodKey &&
@@ -3325,29 +3357,58 @@ async function fetchTwelveDataStructureLevels({
       // The native OHLC itself remains authoritative after the match.
       if (best && best.score <= 1.35) {
         used.add(best.bar.__index);
+
+        const reconstructionRange = Math.max(
+          Math.abs(Number(level.high) - Number(level.low)),
+          1e-9
+        );
+        const highResolution = reconcileNativeExtreme({
+          nativeValue: best.bar.high,
+          reconstructedValue: level.high,
+          reconstructedRange: reconstructionRange,
+        });
+        const lowResolution = reconcileNativeExtreme({
+          nativeValue: best.bar.low,
+          reconstructedValue: level.low,
+          reconstructedRange: reconstructionRange,
+        });
+        const allNativeExtremesAccepted =
+          highResolution.acceptedNative && lowResolution.acceptedNative;
+
         resolved.push({
           ...level,
-          open: Number(best.bar.open),
-          high: Number(best.bar.high),
-          low: Number(best.bar.low),
-          close: Number(best.bar.close),
+          open: Number.isFinite(Number(best.bar.open)) ? Number(best.bar.open) : Number(level.open),
+          high: highResolution.value,
+          low: lowResolution.value,
+          close: Number.isFinite(Number(best.bar.close)) ? Number(best.bar.close) : Number(level.close),
           candleCount: 1,
-          source: isDaily
-            ? "native_D1_aligned_to_CSA_day"
-            : "native_W1_aligned_to_CSA_week",
+          source: allNativeExtremesAccepted
+            ? (isDaily ? "native_D1_extremes_integrity_pass" : "native_W1_extremes_integrity_pass")
+            : (isDaily ? "D1_extreme_integrity_reconciled_to_CSA_day" : "W1_extreme_integrity_reconciled_to_CSA_week"),
           sourceDatetime: best.bar.datetime,
-          nativeHigherTimeframeAuthority: true,
+          nativeHigherTimeframeAuthority: allNativeExtremesAccepted,
+          hybridHigherTimeframeAuthority: !allNativeExtremesAccepted,
+          highSource: highResolution.source,
+          lowSource: lowResolution.source,
           partialPeriod: false,
         });
         matches.push({
           key: level.key,
           label: level.periodLabel || level.day || level.key,
-          mode: "native_completed_period",
+          mode: allNativeExtremesAccepted ? "native_completed_period" : "completed_period_extreme_integrity_reconciled",
           sourceDatetime: best.bar.datetime,
           nativeHigh: Number(best.bar.high),
           nativeLow: Number(best.bar.low),
           reconstructionHigh: level.high,
           reconstructionLow: level.low,
+          resolvedHigh: highResolution.value,
+          resolvedLow: lowResolution.value,
+          highSource: highResolution.source,
+          lowSource: lowResolution.source,
+          highDelta: highResolution.delta,
+          lowDelta: lowResolution.delta,
+          highAllowance: highResolution.allowance,
+          lowAllowance: lowResolution.allowance,
           alignmentScore: best.score,
           priceCost: best.priceCost,
           dateCost: best.dateCost,
@@ -3430,12 +3491,12 @@ async function fetchTwelveDataStructureLevels({
 
   console.log("CSA AUTHORITATIVE FRAMEWORK PERIODS:", {
     source: ["daily-in-week", "weekly-in-month"].includes(profile?.structureMode)
-      ? "native higher-timeframe candles aligned to CSA period identity"
+      ? "native higher-timeframe candles reconciled extreme-by-extreme against CSA period integrity"
       : profile.frameworkSourceLabel || null,
     providerSource: profile.frameworkSourceLabel || null,
     structureMode: profile.structureMode || null,
     authorityMode: ["daily-in-week", "weekly-in-month"].includes(profile?.structureMode)
-      ? "native_completed_period_htf_partial_period_reconstruction_only"
+      ? "native_completed_period_extreme_integrity_reconciliation_partial_period_reconstruction_only"
       : "provider_higher_timeframe_first",
     currentFrameworkPeriod: currentFrameworkPeriod?.key || null,
     currentFrameworkPeriodComplete,
@@ -3458,9 +3519,13 @@ async function fetchTwelveDataStructureLevels({
       sourceDatetime: level.sourceDatetime || null,
       nativeHigherTimeframeAuthority:
         level.nativeHigherTimeframeAuthority === true,
+      hybridHigherTimeframeAuthority:
+        level.hybridHigherTimeframeAuthority === true,
+      highSource: level.highSource || null,
+      lowSource: level.lowSource || null,
       partialPeriod: level.partialPeriod === true,
     })),
-    rule: "completed_framework_periods_use_native_D1_W1_MN_OHLC; selected_timeframe_reconstruction_is_identity_mapping_or_current_incomplete_period_only",
+    rule: "completed_framework_periods_use_native_D1_W1_extremes_only_when_each_extreme_passes_session_integrity; contaminated_extremes_fall_back_to_cutoff_safe_same_period_reconstruction; incomplete_periods_reconstruct_only_to_cutoff",
   });
   const csaAreas =
     buildCsaAreas(
@@ -10272,7 +10337,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "9.9.1";
-const CSA_BUILD_ID = "CSA-v4.9.1-native-htf-authority-reference-fix";
+const CSA_BUILD_ID = "CSA-v4.9.2-htf-extreme-integrity-reconciliation";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
