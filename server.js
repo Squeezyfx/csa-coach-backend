@@ -2126,20 +2126,109 @@ function buildStructureLevelsFromCandles(candles, structureRange, profile) {
 }
 
 function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
+  /*
+   * V4.8.2 — AUTHORITATIVE HIERARCHICAL S/R vs S/D CLASSIFICATION
+   *
+   * The higher-timeframe source candle owns the framework high/low. Each new
+   * period is classified ONLY against the immediately preceding authoritative
+   * period:
+   *
+   *   high outside/above previous high  -> RESISTANCE
+   *   high inside previous range        -> SUPPLY
+   *   low outside/below previous low    -> SUPPORT
+   *   low inside previous range         -> DEMAND
+   *
+   * For H1 this means D1 highs/lows. For H4 it means W1 highs/lows, etc.
+   * Lower-timeframe pivots/bases may later CONFIRM or REINFORCE these areas,
+   * but they cannot invent a separate framework supply/demand identity.
+   */
   const areas = [];
   levels.forEach((period, index) => {
     const label = period.periodLabel || period.day || period.key;
     if (index === 0) {
-      areas.push({ day: label, period: label, date: period.date, type: "resistance", price: period.high, priceText: formatPrice(period.high) });
-      areas.push({ day: label, period: label, date: period.date, type: "support", price: period.low, priceText: formatPrice(period.low) });
+      areas.push({
+        day: label,
+        period: label,
+        date: period.date,
+        type: "resistance",
+        price: period.high,
+        priceText: formatPrice(period.high),
+        hierarchyClassification: "first_period_high_is_resistance",
+        authoritativeFrameworkLevel: true,
+      });
+      areas.push({
+        day: label,
+        period: label,
+        date: period.date,
+        type: "support",
+        price: period.low,
+        priceText: formatPrice(period.low),
+        hierarchyClassification: "first_period_low_is_support",
+        authoritativeFrameworkLevel: true,
+      });
       return;
     }
+
     const previous = levels[index - 1];
     const highComparison = compareHighWithTolerance(period.high, previous.high, symbol);
     const lowComparison = compareLowWithTolerance(period.low, previous.low, symbol);
-    areas.push({ day: label, period: label, date: period.date, type: highComparison.cleanBreak ? "resistance" : "supply", price: period.high, priceText: formatPrice(period.high), comparison: highComparison });
-    areas.push({ day: label, period: label, date: period.date, type: lowComparison.cleanBreak ? "support" : "demand", price: period.low, priceText: formatPrice(period.low), comparison: lowComparison });
+
+    const highType = highComparison.cleanBreak ? "resistance" : "supply";
+    const lowType = lowComparison.cleanBreak ? "support" : "demand";
+
+    areas.push({
+      day: label,
+      period: label,
+      date: period.date,
+      type: highType,
+      price: period.high,
+      priceText: formatPrice(period.high),
+      comparison: highComparison,
+      previousFrameworkHigh: previous.high,
+      previousFrameworkLow: previous.low,
+      hierarchyClassification:
+        highType === "resistance"
+          ? "current_high_outside_previous_high_new_resistance"
+          : "current_high_inside_previous_range_supply",
+      authoritativeFrameworkLevel: true,
+    });
+
+    areas.push({
+      day: label,
+      period: label,
+      date: period.date,
+      type: lowType,
+      price: period.low,
+      priceText: formatPrice(period.low),
+      comparison: lowComparison,
+      previousFrameworkHigh: previous.high,
+      previousFrameworkLow: previous.low,
+      hierarchyClassification:
+        lowType === "support"
+          ? "current_low_outside_previous_low_new_support"
+          : "current_low_inside_previous_range_demand",
+      authoritativeFrameworkLevel: true,
+    });
   });
+
+  console.log("CSA HIERARCHICAL S/R-S/D CLASSIFICATION:", {
+    buildId: CSA_BUILD_ID,
+    frameworkSource: profile?.frameworkSourceLabel || null,
+    structureMode: profile?.structureMode || null,
+    periods: levels.map((period) => ({
+      period: period?.periodLabel || period?.day || period?.key || null,
+      high: period?.high ?? null,
+      low: period?.low ?? null,
+    })),
+    areas: areas.map((area) => ({
+      period: area.period,
+      type: area.type,
+      price: area.price,
+      hierarchyClassification: area.hierarchyClassification,
+    })),
+    rule: "authoritative_period_high_low_classifies_sr_vs_sd_before_intraday_structure",
+  });
+
   return areas;
 }
 
@@ -9955,8 +10044,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.8.1";
-const CSA_BUILD_ID = "CSA-v4.8.1-authoritative-period-completeness-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.8.2";
+const CSA_BUILD_ID = "CSA-v4.8.2-hierarchical-sr-sd-classification";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15982,6 +16071,9 @@ function buildAuthoritativeFrameworkCandidates({
     });
   });
 
+  // V4.8.2: an intraday takeover base is NOT a framework S/R or S/D area.
+  // It may reinforce an already-classified authoritative framework level later
+  // in the main pipeline, but it must never enter the candidate set by itself.
   const takeoverIntradayCandidate = buildHistoricalTakeoverIntradayCandidate({
     marketReference,
     direction,
@@ -15992,7 +16084,13 @@ function buildAuthoritativeFrameworkCandidates({
   });
 
   if (takeoverIntradayCandidate) {
-    candidates.push(takeoverIntradayCandidate);
+    console.log("CSA HIERARCHY INTRADAY STANDALONE SUPPRESSED:", {
+      buildId: CSA_BUILD_ID,
+      price: takeoverIntradayCandidate.frameworkPrice || takeoverIntradayCandidate.price || null,
+      proposedType: takeoverIntradayCandidate.type || null,
+      period: takeoverIntradayCandidate.period || null,
+      rule: "intraday_base_may_reinforce_authoritative_framework_area_but_cannot_create_framework_sd",
+    });
   }
 
   // Do not collapse nearby levels from different authoritative periods here.
@@ -17246,36 +17344,20 @@ function rankRawEntryAreas({
         rule: "intraday_base_reinforces_overlapping_framework_sr_instead_of_becoming_separate_entry",
       });
     } else {
-      const duplicate = frameworkCandidates.some((existing) =>
-        String(existing?.type || "") ===
-          String(confirmedPipelineCandidate?.type || "") &&
-        Math.abs(
-          Number(existing?.frameworkPrice || existing?.price) -
-            Number(
-              confirmedPipelineCandidate?.frameworkPrice ||
-                confirmedPipelineCandidate?.price
-            )
-        ) <= duplicateTolerance
-      );
-
-      if (!duplicate) {
-        frameworkCandidates = [
-          ...frameworkCandidates,
-          confirmedPipelineCandidate,
-        ].sort(
-          (a, b) =>
-            Number(a?.frameworkPrice || 0) -
-            Number(b?.frameworkPrice || 0)
-        );
-      } else {
-        console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE MERGE:", {
-          buildId: CSA_BUILD_ID,
-          result: "duplicate_suppressed",
-          price: confirmedPipelineCandidate?.frameworkPrice || null,
-          areaType: confirmedPipelineCandidate?.type || null,
-          duplicateTolerance,
-        });
-      }
+      // V4.8.2 HIERARCHY LOCK:
+      // A lower-timeframe displacement base cannot become a standalone CSA
+      // supply/demand area. If it does not overlap/reinforce an authoritative
+      // framework support/resistance (including a converted one), keep it as
+      // internal context only and do not send it into Fib/Entry 1/Entry 2.
+      console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE MERGE:", {
+        buildId: CSA_BUILD_ID,
+        result: "context_only_suppressed_not_framework_area",
+        price: confirmedPipelineCandidate?.frameworkPrice || null,
+        proposedAreaType: confirmedPipelineCandidate?.type || null,
+        structuralZoneLow: normalizedIntradayLow,
+        structuralZoneHigh: normalizedIntradayHigh,
+        rule: "standalone_intraday_base_cannot_override_authoritative_period_sr_sd_classification",
+      });
     }
   }
 
@@ -17300,9 +17382,9 @@ function rankRawEntryAreas({
     return {
       // Framework period identity remains authoritative. The final level price
       // may be refined only by validated same-period chart reconciliation.
-      // Historical takeover supply/demand is the one deliberate exception:
-      // preserve the candle-defined structural AREA so Fib is measured to the
-      // zone rather than to an arbitrary single anchor.
+      // Intraday takeover structure may only reinforce an authoritative
+      // framework S/R level. If reinforced, preserve the candle-defined zone
+      // so Fib is measured to the real structural area rather than one anchor.
       zoneLow: isFrameworkSrReinforcedByIntradayStructure
         ? Number(candidate.reinforcedStructuralZoneLow)
         : isIntradayStructuralZone
@@ -17417,7 +17499,7 @@ function rankRawEntryAreas({
     const isAuthoritativeFrameworkLevel =
       String(rawZone?.source || "").startsWith(
         "authoritative_framework_"
-      ) || isHistoricalTakeoverIntradayLevel;
+      );
 
     const isConfirmedConversion =
       rawZone?.authoritativeType === "converted resistance" ||
