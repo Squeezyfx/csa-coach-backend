@@ -3496,10 +3496,10 @@ async function fetchTwelveDataStructureLevels({
       currentFrameworkPeriodComplete,
       partialPeriodSource:
         currentFrameworkPeriodComplete
-          ? (useSessionAlignedExecutionAuthority
-              ? "session_aligned_aggregation_from_selected_timeframe_candles"
+          ? (['daily-in-week', 'weekly-in-month'].includes(profile?.structureMode)
+              ? 'native_higher_timeframe_candle_aligned_to_CSA_period'
               : profile.frameworkSourceLabel || null)
-          : "selected_timeframe_candles_up_to_cutoff",
+          : 'selected_timeframe_candles_up_to_cutoff',
       executionFrameworkCandleCount:
         timeframeCandles.length,
       impulseStartDate:
@@ -3516,9 +3516,7 @@ async function fetchTwelveDataStructureLevels({
       sameCutoff:
         true,
       rule:
-        useSessionAlignedExecutionAuthority
-          ? "session_aligned_selected_timeframe_aggregation_owns_framework_high_low_provider_htf_is_diagnostic"
-          : "higher_timeframe_source_candle_owns_framework_high_low_execution_timeframe_only_handles_lifecycle",
+        "completed_higher_timeframe_source_candle_owns_framework_high_low; selected_timeframe_only_maps_period_identity_and_handles_incomplete_period_lifecycle",
     }
   );
 
@@ -10273,8 +10271,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.9.0";
-const CSA_BUILD_ID = "CSA-v4.9.0-native-htf-authority";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.9.1";
+const CSA_BUILD_ID = "CSA-v4.9.1-native-htf-authority-reference-fix";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
