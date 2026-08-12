@@ -10337,7 +10337,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "9.9.3";
-const CSA_BUILD_ID = "CSA-v4.9.3-fib-band-proximity-rule";
+const CSA_BUILD_ID = "CSA-v4.9.4-reconciled-anchor-consistency-fix";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14283,10 +14283,29 @@ function validateAndSequenceEntryAreas({
         Math.abs(chartReconciledCenter - authoritativeCenter) <=
           anchorReconciliationTolerance;
 
+      // v4.9.4 — A same-period chart reconciliation that was already accepted
+      // upstream must not be invalidated here merely because the native HTF
+      // framework center and the broker/chart label differ slightly. This is
+      // especially important for supply/demand areas, where the chart-facing
+      // zone can be centred on the accepted broker label while the underlying
+      // framework identity remains the native higher-timeframe high/low.
+      //
+      // Upstream reconciliation is already period/type constrained, so this
+      // downstream validator only needs to ensure the selected authoritative
+      // (chart-reconciled) anchor is actually inside the validated zone.
+      const acceptedSamePeriodChartReconciliation =
+        area?.chartReconciled === true &&
+        Number.isFinite(chartReconciledCenter) &&
+        chartAnchorConsistent;
+
+      const frameworkMismatchCoveredByAcceptedReconciliation =
+        !frameworkAnchorConsistent && acceptedSamePeriodChartReconciliation;
+
       if (
         !anchorInsideZone ||
-        !frameworkAnchorConsistent ||
-        !chartAnchorConsistent
+        !chartAnchorConsistent ||
+        (!frameworkAnchorConsistent &&
+          !frameworkMismatchCoveredByAcceptedReconciliation)
       ) {
         errors.push("resolved_csa_zone_anchor_mismatch");
         console.log("CSA selector v3 structural-zone anchor mismatch:", {
@@ -14302,6 +14321,8 @@ function validateAndSequenceEntryAreas({
           anchorInsideZone,
           frameworkAnchorConsistent,
           chartAnchorConsistent,
+          acceptedSamePeriodChartReconciliation,
+          frameworkMismatchCoveredByAcceptedReconciliation,
           zoneContainmentTolerance,
           anchorReconciliationTolerance,
         });
@@ -14318,6 +14339,10 @@ function validateAndSequenceEntryAreas({
         authoritativeCenter,
         frameworkCenter: area?.frameworkCenter ?? null,
         chartReconciledCenter: area?.chartReconciledCenter ?? null,
+        frameworkAnchorConsistent,
+        chartAnchorConsistent,
+        acceptedSamePeriodChartReconciliation,
+        frameworkMismatchCoveredByAcceptedReconciliation,
         historicalTakeoverIntradayCandidate:
           area?.historicalTakeoverIntradayCandidate === true,
         structuralZoneReinforcedByIntradayStructure:
