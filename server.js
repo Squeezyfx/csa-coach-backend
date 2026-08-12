@@ -10336,8 +10336,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.9.3";
-const CSA_BUILD_ID = "CSA-v4.9.4-reconciled-anchor-consistency-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.9.5";
+const CSA_BUILD_ID = "CSA-v4.9.5-authoritative-display-price";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -18468,6 +18468,13 @@ function rankRawEntryAreas({
       !isConvertedArea ||
       rawZone?.conversionConfirmed === true;
 
+    // v4.9.5 DISPLAY AUTHORITY:
+    // The deterministic framework price owns the user-facing level label.
+    // A validated same-period chart reconciliation may still shape the internal
+    // structural zone / Fib validation, but it must not replace the native
+    // higher-timeframe framework high/low shown to the user.
+    const displayCenter =
+      asPositiveNumber(frameworkCenter) || authoritativeCenter;
     const center = authoritativeCenter;
     const distance = Math.abs(center - Number(currentPrice));
 
@@ -18479,10 +18486,11 @@ function rankRawEntryAreas({
       authoritativeCenter,
       frameworkCenter,
       chartReconciledCenter,
-      // Keep the internal zone bounds for validation, but present the
-      // authoritative framework level simply as "around X" to the user.
-      zoneText: `around ${formatPrice(authoritativeCenter, symbol)}`,
-      levelText: formatPrice(authoritativeCenter, symbol),
+      displayCenter,
+      // Internal validation can use the reconciled structural zone, while
+      // beginner-facing feedback displays the authoritative framework level.
+      zoneText: `around ${formatPrice(displayCenter, symbol)}`,
+      levelText: formatPrice(displayCenter, symbol),
       state:
         isConvertedArea
           ? conversionConfirmed
