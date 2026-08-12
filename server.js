@@ -3249,6 +3249,14 @@ async function fetchTwelveDataStructureLevels({
     const matches = [];
     const resolved = [];
 
+    // V4.9.8 — PERIOD-ORDER LOCK
+    // Native D1/W1 bars must map to CSA periods in chronological order.
+    // A Monday framework period may never borrow a later native Tuesday bar
+    // merely because its OHLC shape happens to be numerically closer.
+    // This was the remaining source of missing prior-period support/resistance
+    // on some H1 regression charts (for example AUDUSD).
+    let lastMatchedNativeIndex = -1;
+
     const dateDistanceDays = (a, b) => {
       const da = candleDateOnly(a);
       const db = candleDateOnly(b);
@@ -3318,6 +3326,7 @@ async function fetchTwelveDataStructureLevels({
       let best = null;
       for (const bar of candidates) {
         if (used.has(bar.__index)) continue;
+        if (Number(bar.__index) <= Number(lastMatchedNativeIndex)) continue;
 
         const expectedRange = Math.max(
           Math.abs(Number(level.high) - Number(level.low)),
@@ -3357,6 +3366,7 @@ async function fetchTwelveDataStructureLevels({
       // The native OHLC itself remains authoritative after the match.
       if (best && best.score <= 1.35) {
         used.add(best.bar.__index);
+        lastMatchedNativeIndex = Number(best.bar.__index);
 
         const reconstructionRange = Math.max(
           Math.abs(Number(level.high) - Number(level.low)),
@@ -3413,6 +3423,8 @@ async function fetchTwelveDataStructureLevels({
           priceCost: best.priceCost,
           dateCost: best.dateCost,
           dateDistanceDays: best.days,
+          nativeSequenceIndex: Number(best.bar.__index),
+          periodOrderLocked: true,
         });
       } else {
         // Fail safe: do not silently invent a completed higher-timeframe bar.
@@ -3525,7 +3537,7 @@ async function fetchTwelveDataStructureLevels({
       lowSource: level.lowSource || null,
       partialPeriod: level.partialPeriod === true,
     })),
-    rule: "completed_framework_periods_use_native_D1_W1_extremes_only_when_each_extreme_passes_session_integrity; contaminated_extremes_fall_back_to_cutoff_safe_same_period_reconstruction; incomplete_periods_reconstruct_only_to_cutoff",
+    rule: "completed_framework_periods_use_native_D1_W1_extremes_only_when_each_extreme_passes_session_integrity; native_period_mapping_is_chronologically_locked; contaminated_extremes_fall_back_to_cutoff_safe_same_period_reconstruction; incomplete_periods_reconstruct_only_to_cutoff",
   });
   const csaAreas =
     buildCsaAreas(
@@ -10336,8 +10348,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.9.7";
-const CSA_BUILD_ID = "CSA-v4.9.7-stepwise-authority-pipeline";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.9.8";
+const CSA_BUILD_ID = "CSA-v4.9.8-stepwise-period-alignment-fix";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15089,7 +15101,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.3.0";
+const CSA_SELECTOR_VERSION = "4.4.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -16590,6 +16602,19 @@ function buildAuthoritativeFrameworkCandidates({
   for (let index = 1; index < levels.length; index += 1) {
     const previousPeriod = levels[index - 1];
     const currentPeriod = levels[index];
+
+    console.log('CSA STEP 1 PRIOR-PERIOD S/R CHECK:', {
+      buildId: CSA_BUILD_ID,
+      direction,
+      previousPeriod: previousPeriod?.periodLabel || previousPeriod?.day || previousPeriod?.key || null,
+      previousHigh: previousPeriod?.high ?? null,
+      previousLow: previousPeriod?.low ?? null,
+      currentPeriod: currentPeriod?.periodLabel || currentPeriod?.day || currentPeriod?.key || null,
+      currentHigh: currentPeriod?.high ?? null,
+      currentLow: currentPeriod?.low ?? null,
+      currentClose: currentPeriod?.close ?? null,
+      rule: 'check_immediate_prior_authoritative_sr_before_current_period_sd_or_other_structure',
+    });
 
     const previousHigh = asPositiveNumber(previousPeriod?.high);
     const previousLow = asPositiveNumber(previousPeriod?.low);
@@ -18362,7 +18387,13 @@ function rankRawEntryAreas({
     // of requiring a later retest before the zone can even qualify as a setup.
     const samePeriodDisplacementBaseValidated =
       rawZone?.members?.some?.((member) =>
-        member?.samePeriodDisplacementBaseValidated === true
+        member?.samePeriodDisplacementBaseValidated === true ||
+        member?.supplyDemandRefinedBySamePeriodBase === true ||
+        (
+          member?.reinforcedByHistoricalIntradayStructure === true &&
+          Number.isFinite(Number(member?.reinforcedStructuralZoneLow)) &&
+          Number.isFinite(Number(member?.reinforcedStructuralZoneHigh))
+        )
       ) === true;
 
     const effectiveReactionStats = samePeriodDisplacementBaseValidated
