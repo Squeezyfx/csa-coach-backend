@@ -10336,8 +10336,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.9.6";
-const CSA_BUILD_ID = "CSA-v4.9.6-stepwise-h1-entry-check";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.9.7";
+const CSA_BUILD_ID = "CSA-v4.9.7-stepwise-authority-pipeline";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15089,7 +15089,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.2.0";
+const CSA_SELECTOR_VERSION = "4.3.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -16405,12 +16405,64 @@ function buildAuthoritativeFrameworkCandidates({
       )
     : [];
 
-  const sourceAreas = Array.isArray(marketReference?.csaAreas)
+  // V4.9.7 — SINGLE AUTHORITATIVE AREA SOURCE
+  // Rebuild the CSA S/R vs S/D hierarchy from the FINAL resolved higher-
+  // timeframe periods immediately before candidate selection. This prevents
+  // stale csaAreas (created before native/reconstruction reconciliation) from
+  // dropping a valid period extreme such as Monday support.
+  const profile =
+    marketReference?.profile ||
+    getSupportedCsaTimeframeProfile(timeframe);
+
+  const freshlyDerivedAreas = buildCsaAreas(levels, symbol, profile);
+  const legacyAreas = Array.isArray(marketReference?.csaAreas)
     ? marketReference.csaAreas
     : [];
 
+  // The freshly derived hierarchy is authoritative. Legacy areas may carry
+  // useful non-price metadata, but they never replace period/type/price.
+  const sourceAreas = freshlyDerivedAreas.map((area) => {
+    const areaPeriod = String(area?.period || area?.day || area?.date || '').trim();
+    const areaType = String(area?.type || '').toLowerCase();
+    const areaPrice = asPositiveNumber(area?.price);
+    const legacyMatch = legacyAreas.find((legacy) => {
+      const legacyPeriod = String(legacy?.period || legacy?.day || legacy?.date || '').trim();
+      const legacyType = String(legacy?.type || '').toLowerCase();
+      const legacyPrice = asPositiveNumber(legacy?.price);
+      return (
+        legacyPeriod === areaPeriod &&
+        legacyType === areaType &&
+        areaPrice !== null &&
+        legacyPrice !== null &&
+        Math.abs(legacyPrice - areaPrice) <= Math.max(getCleanBreakTolerance(symbol), Number.EPSILON * 100)
+      );
+    });
+    return legacyMatch
+      ? { ...legacyMatch, ...area, authoritativeFrameworkLevel: true, source: 'fresh_authoritative_period_hierarchy' }
+      : { ...area, authoritativeFrameworkLevel: true, source: 'fresh_authoritative_period_hierarchy' };
+  });
+
   const tolerance = frameworkLevelTolerance({ symbol, atr });
   const candidates = [];
+
+  console.log('CSA STEPWISE AUTHORITATIVE AREA REBUILD:', {
+    buildId: CSA_BUILD_ID,
+    timeframe,
+    direction,
+    periods: levels.map((period) => ({
+      period: period?.periodLabel || period?.day || period?.key || null,
+      high: period?.high ?? null,
+      low: period?.low ?? null,
+      source: period?.source || null,
+    })),
+    areas: sourceAreas.map((area) => ({
+      period: area?.period || area?.day || null,
+      type: area?.type || null,
+      price: area?.price ?? null,
+      hierarchyClassification: area?.hierarchyClassification || null,
+    })),
+    rule: 'rebuild_sr_sd_from_final_resolved_periods_before_lifecycle_and_fib',
+  });
 
   sourceAreas.forEach((area) => {
     const frameworkPrice = asPositiveNumber(area?.price);
@@ -18072,6 +18124,22 @@ function rankRawEntryAreas({
           Number.isFinite(Number(confirmedPipelineCandidate?.nearestFibPrice))
             ? Number(confirmedPipelineCandidate.nearestFibPrice)
             : null,
+        reinforcedDeparture:
+          Number.isFinite(Number(confirmedPipelineCandidate?.departure))
+            ? Number(confirmedPipelineCandidate.departure)
+            : null,
+        reinforcedBarsToBreak:
+          Number.isFinite(Number(confirmedPipelineCandidate?.barsToBreak))
+            ? Number(confirmedPipelineCandidate.barsToBreak)
+            : null,
+        reinforcedPullbackDepth:
+          Number.isFinite(Number(confirmedPipelineCandidate?.pullbackDepth))
+            ? Number(confirmedPipelineCandidate.pullbackDepth)
+            : null,
+        samePeriodDisplacementBaseValidated:
+          isSamePeriodSdRefinement &&
+          Number.isFinite(Number(confirmedPipelineCandidate?.departure)) &&
+          Number(confirmedPipelineCandidate.departure) > 0,
       };
       frameworkCandidates = frameworkCandidates.map((item, index) =>
         index === winner.index ? reinforced : item
@@ -18288,6 +18356,22 @@ function rankRawEntryAreas({
 
     // Structural validity is deliberately assessed WITHOUT Fibonacci.
     // Fibonacci is not allowed to rescue or create a weak level.
+    // However, when an authoritative current-period supply/demand area has
+    // already been refined by a confirmed same-period displacement base, that
+    // displacement is genuine structural evidence. Preserve it here instead
+    // of requiring a later retest before the zone can even qualify as a setup.
+    const samePeriodDisplacementBaseValidated =
+      rawZone?.members?.some?.((member) =>
+        member?.samePeriodDisplacementBaseValidated === true
+      ) === true;
+
+    const effectiveReactionStats = samePeriodDisplacementBaseValidated
+      ? {
+          ...reactionStats,
+          strongDepartures: Math.max(1, Number(reactionStats?.strongDepartures || 0)),
+        }
+      : reactionStats;
+
     const quality = selectorAreaQuality({
       areaType: rawZone?.authoritativeType,
       lifecycleFlipCount: Number(
@@ -18297,7 +18381,7 @@ function rankRawEntryAreas({
         ? rawZone.lifecycleEvents
         : [],
       sideChangeCount,
-      reactionStats,
+      reactionStats: effectiveReactionStats,
       pivotConfirmationCount: Number(
         rawZone?.pivotConfirmationCount || 0
       ),
@@ -18324,8 +18408,8 @@ function rankRawEntryAreas({
 
     const reEarnedStrongStructure =
       quality.valid === true &&
-      Number(reactionStats?.reactions || 0) >= 2 &&
-      Number(reactionStats?.strongDepartures || 0) >= 1;
+      Number(effectiveReactionStats?.reactions || 0) >= 2 &&
+      Number(effectiveReactionStats?.strongDepartures || 0) >= 1;
 
     const structuralEvidenceStrong =
       cleanStrongStructure ||
@@ -18355,8 +18439,9 @@ function rankRawEntryAreas({
         null,
       lifecycleFlipCount: Number(rawZone?.lifecycleFlipCount || 0),
       sideChangeCount,
-      reactionCount: Number(reactionStats?.reactions || 0),
-      strongDepartureCount: Number(reactionStats?.strongDepartures || 0),
+      reactionCount: Number(effectiveReactionStats?.reactions || 0),
+      strongDepartureCount: Number(effectiveReactionStats?.strongDepartures || 0),
+      samePeriodDisplacementBaseValidated,
       pivotConfirmationCount: Number(rawZone?.pivotConfirmationCount || 0),
       conversionBreakConfirmed:
         rawZone?.conversionBreakConfirmed === true,
