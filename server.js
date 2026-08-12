@@ -10336,8 +10336,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.9.5";
-const CSA_BUILD_ID = "CSA-v4.9.5-authoritative-display-price";
+const CSA_FEEDBACK_ENGINE_VERSION = "9.9.6";
+const CSA_BUILD_ID = "CSA-v4.9.6-stepwise-h1-entry-check";
 const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14301,11 +14301,17 @@ function validateAndSequenceEntryAreas({
       const frameworkMismatchCoveredByAcceptedReconciliation =
         !frameworkAnchorConsistent && acceptedSamePeriodChartReconciliation;
 
+      const frameworkMismatchCoveredBySamePeriodSdRefinement =
+        isSupplyDemandZone &&
+        area?.supplyDemandRefinedBySamePeriodBase === true &&
+        area?.structuralZoneReinforcedByIntradayStructure === true;
+
       if (
         !anchorInsideZone ||
-        !chartAnchorConsistent ||
+        (!chartAnchorConsistent && !frameworkMismatchCoveredBySamePeriodSdRefinement) ||
         (!frameworkAnchorConsistent &&
-          !frameworkMismatchCoveredByAcceptedReconciliation)
+          !frameworkMismatchCoveredByAcceptedReconciliation &&
+          !frameworkMismatchCoveredBySamePeriodSdRefinement)
       ) {
         errors.push("resolved_csa_zone_anchor_mismatch");
         console.log("CSA selector v3 structural-zone anchor mismatch:", {
@@ -14323,6 +14329,7 @@ function validateAndSequenceEntryAreas({
           chartAnchorConsistent,
           acceptedSamePeriodChartReconciliation,
           frameworkMismatchCoveredByAcceptedReconciliation,
+          frameworkMismatchCoveredBySamePeriodSdRefinement,
           zoneContainmentTolerance,
           anchorReconciliationTolerance,
         });
@@ -14343,6 +14350,7 @@ function validateAndSequenceEntryAreas({
         chartAnchorConsistent,
         acceptedSamePeriodChartReconciliation,
         frameworkMismatchCoveredByAcceptedReconciliation,
+        frameworkMismatchCoveredBySamePeriodSdRefinement,
         historicalTakeoverIntradayCandidate:
           area?.historicalTakeoverIntradayCandidate === true,
         structuralZoneReinforcedByIntradayStructure:
@@ -15081,7 +15089,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.1.0";
+const CSA_SELECTOR_VERSION = "4.2.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -16713,6 +16721,8 @@ function buildAuthoritativeFrameworkCandidates({
           : [],
         authorityRank: 0,
         priorPeriodSrConversion: true,
+        authoritativeFrameworkLevel: true,
+        stepwiseEntryStage: 'immediate_prior_broken_sr',
       });
 
       console.log('CSA PRIOR-PERIOD S/R CONVERSION PRESERVED:', {
@@ -17963,9 +17973,26 @@ function rankRawEntryAreas({
         ? new Set(["support", "converted support"])
         : new Set(["resistance", "converted resistance"]);
 
+    // v4.9.6 STEPWISE ENTRY CHECK:
+    // A cutoff-period displacement base may do TWO legitimate jobs:
+    // 1) reinforce an overlapping converted/plain S/R level; OR
+    // 2) refine the already-authoritative SAME-PERIOD supply/demand area.
+    // It still cannot invent a new framework S/D identity by itself.
+    const expectedSamePeriodSdType = direction === "bearish" ? "supply" : "demand";
+    const currentFrameworkPeriod = Array.isArray(marketReference?.dailyLevels) && marketReference.dailyLevels.length
+      ? marketReference.dailyLevels[marketReference.dailyLevels.length - 1]
+      : null;
+    const currentFrameworkPeriodLabel = String(
+      currentFrameworkPeriod?.periodLabel ||
+      currentFrameworkPeriod?.day ||
+      currentFrameworkPeriod?.key ||
+      ""
+    ).trim();
+
     const reinforcementCandidates = frameworkCandidates
       .map((existing, index) => {
         const existingType = String(existing?.type || "").toLowerCase();
+        const existingPeriod = String(existing?.period || "").trim();
         const existingPrice = Number(
           existing?.frameworkPrice || existing?.price
         );
@@ -17975,12 +18002,22 @@ function rankRawEntryAreas({
           Number.isFinite(normalizedIntradayHigh) &&
           existingPrice >= normalizedIntradayLow - duplicateTolerance &&
           existingPrice <= normalizedIntradayHigh + duplicateTolerance;
+
+        const convertedSrReinforcement =
+          compatibleConvertedTypes.has(existingType) && insideOrNearZone;
+
+        const samePeriodSdRefinement =
+          existingType === expectedSamePeriodSdType &&
+          currentFrameworkPeriodLabel &&
+          existingPeriod === currentFrameworkPeriodLabel;
+
         return {
           index,
           existing,
           existingPrice,
-          eligible:
-            compatibleConvertedTypes.has(existingType) && insideOrNearZone,
+          convertedSrReinforcement,
+          samePeriodSdRefinement,
+          eligible: convertedSrReinforcement || samePeriodSdRefinement,
           distance: Number.isFinite(existingPrice)
             ? Math.abs(
                 existingPrice -
@@ -17990,19 +18027,37 @@ function rankRawEntryAreas({
         };
       })
       .filter((item) => item.eligible)
-      .sort((a, b) => a.distance - b.distance);
+      .sort((a, b) => {
+        // First preserve an overlapping S/R conversion. If there is no such
+        // overlap, prefer the authoritative same-period S/D identity.
+        if (a.convertedSrReinforcement !== b.convertedSrReinforcement) {
+          return a.convertedSrReinforcement ? -1 : 1;
+        }
+        return a.distance - b.distance;
+      });
 
     if (reinforcementCandidates.length) {
       const winner = reinforcementCandidates[0];
+      const isSamePeriodSdRefinement = winner.samePeriodSdRefinement === true;
       const reinforced = {
         ...winner.existing,
         reinforcedByHistoricalIntradayStructure: true,
+        supplyDemandRefinedBySamePeriodBase: isSamePeriodSdRefinement,
+        stepwiseEntryStage: isSamePeriodSdRefinement
+          ? 'current_period_supply_demand'
+          : (winner.existing?.stepwiseEntryStage || 'framework_sr_reinforced'),
         reinforcedStructuralZoneLow: normalizedIntradayLow,
         reinforcedStructuralZoneHigh: normalizedIntradayHigh,
         reinforcedStructuralBasePrice: Number(
           confirmedPipelineCandidate?.frameworkPrice ||
             confirmedPipelineCandidate?.price
         ),
+        refinedSupplyDemandEntryPrice: isSamePeriodSdRefinement
+          ? Number(
+              confirmedPipelineCandidate?.frameworkPrice ||
+                confirmedPipelineCandidate?.price
+            )
+          : null,
         reinforcedStructuralBaseDatetime:
           confirmedPipelineCandidate?.baseDatetime || null,
         reinforcedNearestFibDistance:
@@ -18024,7 +18079,7 @@ function rankRawEntryAreas({
 
       console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE MERGE:", {
         buildId: CSA_BUILD_ID,
-        result: "framework_sr_reinforced",
+        result: isSamePeriodSdRefinement ? "same_period_sd_refined" : "framework_sr_reinforced",
         frameworkAreaType: reinforced?.type || null,
         frameworkPeriod: reinforced?.period || null,
         frameworkPrice:
@@ -18033,7 +18088,9 @@ function rankRawEntryAreas({
           confirmedPipelineCandidate?.frameworkPrice || null,
         structuralZoneLow: normalizedIntradayLow,
         structuralZoneHigh: normalizedIntradayHigh,
-        rule: "intraday_base_reinforces_overlapping_framework_sr_instead_of_becoming_separate_entry",
+        rule: isSamePeriodSdRefinement
+          ? "intraday_base_refines_existing_same_period_supply_demand_without_inventing_new_framework_area"
+          : "intraday_base_reinforces_overlapping_framework_sr_instead_of_becoming_separate_entry",
       });
     } else {
       // V4.8.2 HIERARCHY LOCK:
@@ -18054,12 +18111,19 @@ function rankRawEntryAreas({
   }
 
   const rawZones = frameworkCandidates.map((candidate) => {
-    const resolvedEntryPrice = resolveCsaEntryPrice({
-      frameworkPrice: candidate.frameworkPrice,
-      chartPrice: candidate.price,
-      chartReconciled: candidate.chartReconciled === true,
-      symbol,
-    });
+    const refinedSamePeriodSdPrice =
+      candidate?.supplyDemandRefinedBySamePeriodBase === true
+        ? asPositiveNumber(candidate?.refinedSupplyDemandEntryPrice)
+        : null;
+
+    const resolvedEntryPrice =
+      refinedSamePeriodSdPrice ||
+      resolveCsaEntryPrice({
+        frameworkPrice: candidate.frameworkPrice,
+        chartPrice: candidate.price,
+        chartReconciled: candidate.chartReconciled === true,
+        symbol,
+      });
 
     const isIntradayStructuralZone =
       candidate?.historicalTakeoverIntradayCandidate === true &&
@@ -18191,7 +18255,9 @@ function rankRawEntryAreas({
     const isAuthoritativeFrameworkLevel =
       String(rawZone?.source || "").startsWith(
         "authoritative_framework_"
-      );
+      ) ||
+      String(rawZone?.source || "") === "authoritative_prior_period_sr_conversion" ||
+      rawZone?.members?.some?.((member) => member?.authoritativeFrameworkLevel === true) === true;
 
     const isConfirmedConversion =
       rawZone?.authoritativeType === "converted resistance" ||
@@ -18473,8 +18539,13 @@ function rankRawEntryAreas({
     // A validated same-period chart reconciliation may still shape the internal
     // structural zone / Fib validation, but it must not replace the native
     // higher-timeframe framework high/low shown to the user.
+    const samePeriodSdRefined =
+      rawZone?.members?.[0]?.supplyDemandRefinedBySamePeriodBase === true;
+
     const displayCenter =
-      asPositiveNumber(frameworkCenter) || authoritativeCenter;
+      samePeriodSdRefined
+        ? authoritativeCenter
+        : (asPositiveNumber(frameworkCenter) || authoritativeCenter);
     const center = authoritativeCenter;
     const distance = Math.abs(center - Number(currentPrice));
 
@@ -18568,6 +18639,10 @@ function rankRawEntryAreas({
       authoritativeFrameworkLevel: true,
       structuralZoneReinforcedByIntradayStructure:
         rawZone?.members?.[0]?.reinforcedByHistoricalIntradayStructure === true,
+      supplyDemandRefinedBySamePeriodBase:
+        rawZone?.members?.[0]?.supplyDemandRefinedBySamePeriodBase === true,
+      stepwiseEntryStage:
+        rawZone?.members?.[0]?.stepwiseEntryStage || null,
       structuralZoneEvidence: rawZone?.members?.[0]?.reinforcedByHistoricalIntradayStructure === true
         ? {
             zoneLow: Number(rawZone?.zoneLow),
@@ -18821,6 +18896,39 @@ function rankRawEntryAreas({
         fibonacciMatches:
           area.fibonacciMatches || [],
       })),
+  });
+
+  console.log("CSA STEPWISE ENTRY CHECK:", {
+    buildId: CSA_BUILD_ID,
+    selectorVersion: CSA_SELECTOR_VERSION,
+    direction,
+    procedure: [
+      "1_immediate_prior_broken_sr",
+      "2_current_period_supply_demand",
+      "3_other_authoritative_structure",
+      "4_fibonacci_gate",
+      "5_price_path_entry_order"
+    ],
+    candidates: evaluated.filter(Boolean).map((area) => ({
+      stage: area.stepwiseEntryStage || "other_authoritative_structure",
+      executionOrder: area.executionOrder || null,
+      areaType: area.areaType || null,
+      frameworkPeriod: area.frameworkPeriod || null,
+      levelText: area.levelText || null,
+      zoneLow: area.zoneLow ?? null,
+      zoneHigh: area.zoneHigh ?? null,
+      fibPassed: area.requiredFibConfluence === true && Number(area.fibonacciScore || 0) > 0,
+      fibMatches: (area.fibonacciMatches || []).map((m) => m.label),
+      samePeriodSdRefined: area.supplyDemandRefinedBySamePeriodBase === true,
+    })),
+    selectedEntries: (sequencedResult?.areas || []).map((area) => ({
+      executionOrder: area.executionOrder,
+      stage: area.stepwiseEntryStage || "other_authoritative_structure",
+      areaType: area.areaType,
+      frameworkPeriod: area.frameworkPeriod,
+      levelText: area.levelText,
+    })),
+    rule: "check_immediate_broken_sr_first_then_current_period_sd_then_other_structure; fib_qualifies_but_never_creates_area; final_order_follows_price_path"
   });
 
   console.log("CSA regression snapshot:", regressionDiagnostics);
