@@ -2132,7 +2132,7 @@ function buildStructureLevelsFromCandles(candles, structureRange, profile) {
 
 function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
   /*
-   * V4.8.3 — AUTHORITATIVE HIERARCHICAL S/R vs S/D + PRIOR S/R MEMORY
+   * V4.8.3 â€” AUTHORITATIVE HIERARCHICAL S/R vs S/D + PRIOR S/R MEMORY
    *
    * The higher-timeframe source candle owns the framework high/low. Each new
    * period is classified ONLY against the immediately preceding authoritative
@@ -3184,7 +3184,7 @@ async function fetchTwelveDataStructureLevels({
       executionFrameworkRawCandles
     );
 
-  // V4.9.0 — NATIVE HIGHER-TIMEFRAME AUTHORITY
+  // V4.9.0 â€” NATIVE HIGHER-TIMEFRAME AUTHORITY
   // -------------------------------------------------
   // Completed CSA framework periods are owned by the provider's native
   // higher-timeframe candle:
@@ -3249,7 +3249,7 @@ async function fetchTwelveDataStructureLevels({
     const matches = [];
     const resolved = [];
 
-    // V4.9.8 — PERIOD-ORDER LOCK
+    // V4.9.8 â€” PERIOD-ORDER LOCK
     // Native D1/W1 bars must map to CSA periods in chronological order.
     // A Monday framework period may never borrow a later native Tuesday bar
     // merely because its OHLC shape happens to be numerically closer.
@@ -3267,7 +3267,7 @@ async function fetchTwelveDataStructureLevels({
       return Math.abs(ta - tb) / 86400000;
     };
 
-    // V4.9.2 — EXTREME-BY-EXTREME SOURCE INTEGRITY RECONCILIATION
+    // V4.9.2 â€” EXTREME-BY-EXTREME SOURCE INTEGRITY RECONCILIATION
     // A provider's native D1/W1 bar can use a different session boundary from
     // the broker/chart. We therefore do not allow one obviously contaminated
     // extreme to redefine the CSA day/week. Each native HIGH and LOW must be
@@ -5049,7 +5049,7 @@ function isBadVisualReview(parsed) {
 function extractVisibleZoneRange(text = "") {
   const value = String(text || "").replace(/,/g, "");
   const rangeMatch = value.match(
-    /(\d{1,6}(?:\.\d{1,8})?)\s*(?:-|–|—|to)\s*(\d{1,6}(?:\.\d{1,8})?)/i
+    /(\d{1,6}(?:\.\d{1,8})?)\s*(?:-|â€“|â€”|to)\s*(\d{1,6}(?:\.\d{1,8})?)/i
   );
 
   if (!rangeMatch) return { low: null, high: null };
@@ -5194,7 +5194,7 @@ function normalizePreferredEntryAreaFromVisual(parsed = {}) {
   const zoneText = safeUserText(
     raw.zoneText ||
       (zoneLow !== null && zoneHigh !== null
-        ? `around ${formatPrice(zoneLow)}–${formatPrice(zoneHigh)}`
+        ? `around ${formatPrice(zoneLow)}â€“${formatPrice(zoneHigh)}`
         : parsed.bestAreaToWatch || "")
   );
 
@@ -5339,7 +5339,7 @@ FIBONACCI
 - In Final Visible Candle mode, when the uploaded broker/platform chart and external OHLC feed use materially different price scales, use deterministic OHLC only to identify the relevant structure/impulse sequence and use the uploaded chart's own price scale for the impulse swing prices. Exact printed chart OHLC/labels outrank estimates. Never choose swing anchors to force Fibonacci confluence.
 - A marked horizontal support/resistance/supply/demand price may calibrate the chart scale but must never automatically become the Fib swing origin. The swing origin is the actual candle wick/extreme; if a proposed origin collides with a marked reference line, independently verify the wick or reject the chart-native anchor.
 - For Final Visible Candle reviews, prefer pixel-calibrated chart-native swing prices when the right-side price axis can be calibrated from at least two exact visible prices. Vision locates wick coordinates only; JavaScript converts Y coordinates to broker-chart prices. If calibration or wick geometry is unreliable, fall back to deterministic external OHLC rather than guessing.
-- The deterministic structure engine must choose the impulse origin/terminal candle times. Vision must map those specific timestamps (allowing at most ±2 candles for broker/timezone alignment) to wick coordinates on the uploaded chart; vision must not choose a different swing. Origin and terminal should be located in separate narrow visual tasks.
+- The deterministic structure engine must choose the impulse origin/terminal candle times. Vision must map those specific timestamps (allowing at most Â±2 candles for broker/timezone alignment) to wick coordinates on the uploaded chart; vision must not choose a different swing. Origin and terminal should be located in separate narrow visual tasks.
 - The deterministic Fib origin must be the protected swing associated with the major structural level broken by the current directional breakout/breakdown, not merely the most recent higher low/lower high. For bullish structure, identify the major resistance pivot being broken and use the lowest confirmed protected swing low formed after that resistance pivot and before its breakout; bearish is the mirror image. Prefer the current breakout sequence and score major breaks by structural excursion, pivot age, and confirmed-pivot quality. Never select an old extreme solely because it creates better Fib confluence.
 - Major broken-level selection must rank all actually broken confirmed prior swing highs/lows within the active lookback by structural significance rather than recency alone. Significance should consider time-to-break, prominence versus nearby same-side pivots, number of pre-break reactions, percentage of time price remained on the original side, opposing excursion size, separation from the final directional extreme, confirmed protected-pivot quality, and break displacement. Strongly penalize very recent/local pivots and raw-extreme-only protected swings. When two candidates are similarly significant, prefer the older structural pivot rather than the nearer local level.
 - Structural-hierarchy major-break selection must scan each confirmed prior pivot independently for its first valid break, because the normal active-pivot event sequence can miss an older outer resistance/support after newer nested pivots form. Use a broader hierarchy lookback than the normal entry-area lookback. In bullish structure, rank higher/outer broken resistance above lower nested resistance when quality is comparable; in bearish structure rank lower/outer broken support above higher nested support. Reward outer levels broken later in the terminal expansion and penalize deeply nested local levels. Do not choose an outer level merely because it creates desired Fib confluence; it must still have a valid confirmed break and protected swing.
@@ -6291,7 +6291,7 @@ function fitChartPixelPriceCalibration({
     priceSpan > 0;
 
   // Exact price scale should be very close to linear. Coordinates are
-  // vision-read, so use a tolerant but meaningful R²/residual threshold.
+  // vision-read, so use a tolerant but meaningful RÂ²/residual threshold.
   const fitQualityGood =
     fitted.rSquared >= 0.985 &&
     fitted.maxResidual <= residualAllowance;
@@ -6616,7 +6616,7 @@ MANDATORY RULES:
 4. You may shift at most 2 candles left or right if the broker chart timezone/session alignment differs slightly from the external-data timestamp.
 5. Report that shift as candleOffsetFromTarget:
    -2, -1, 0, 1, or 2.
-6. Do not use a candle farther than ±2 candles from the target.
+6. Do not use a candle farther than Â±2 candles from the target.
 7. Return the ACTUAL candle-wick tip, not the body, not the close, not a horizontal S/R line, and not a price-axis label.
 8. Ignore horizontal support/resistance/supply/demand lines when locating the wick tip. Follow the wick through/beyond any line that crosses the candle.
 9. Return COORDINATES ONLY. Do not estimate or return a price.
@@ -7519,7 +7519,7 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
 
     const description =
       `${match?.period || "framework period"} ${match?.side || "level"}` +
-      (match?.evidence ? ` — ${match.evidence}` : "");
+      (match?.evidence ? ` â€” ${match.evidence}` : "");
 
     if (exact !== null) {
       exactLevels.push({
@@ -7721,7 +7721,7 @@ Initial image validation:
 - Cutoff rule: ${marketReference?.chartCutoff?.reason || "The uploaded chart remains the primary source of truth."}
 - Detected trigger: ${chartDetection?.visibleTrigger || "none confirmed"}
 
-MANDATORY PRICE-READING PASS — DO THIS BEFORE ANALYSING DIRECTION OR ENTRY AREAS:
+MANDATORY PRICE-READING PASS â€” DO THIS BEFORE ANALYSING DIRECTION OR ENTRY AREAS:
 - Inspect the chart's price axis, every horizontal line, rectangle boundary, and any printed platform price label.
 - When a price is visibly printed beside a line/level/zone boundary, copy that exact printed number into displayedPrice. Do not replace it with an estimate.
 - Also copy the exact visible label text into platformLabel.
@@ -8738,7 +8738,7 @@ function enrichVisualReviewForFinalFeedback({
         zoneHigh: marketZone.high,
         zoneText:
           Math.abs(marketZone.high - marketZone.low) > 1e-10
-            ? `around ${formatPrice(marketZone.low)}–${formatPrice(marketZone.high)}`
+            ? `around ${formatPrice(marketZone.low)}â€“${formatPrice(marketZone.high)}`
             : `around ${formatPrice(marketZone.low)}`,
         priceStatus:
           Number.isFinite(currentPrice) &&
@@ -9066,7 +9066,7 @@ function buildDashboardFeedback({
     if (hasUsefulMarkedPlan || hasPlannedArea) setupQualityScore = Math.max(setupQualityScore, 60);
     else setupQualityScore = Math.max(setupQualityScore, isPreTrade ? 45 : 40);
 
-    // No trigger yet means “not ready”, not “zero accuracy”.
+    // No trigger yet means â€œnot readyâ€, not â€œzero accuracyâ€.
     entryAccuracyScore = Math.max(entryAccuracyScore, hasConfirmedTrigger ? 65 : 45);
 
     // Missing SL/TP reduces the score, but does not erase the quality of the plan.
@@ -10083,13 +10083,13 @@ function formatPreferredEntryZone(visualReview = null, directionalBias = "") {
   const zoneText = String(area.zoneText || "").trim();
 
   const zoneTextHasRange =
-    /\d+(?:\.\d+)?\s*(?:-|–|to)\s*\d+(?:\.\d+)?/i.test(zoneText);
+    /\d+(?:\.\d+)?\s*(?:-|â€“|to)\s*\d+(?:\.\d+)?/i.test(zoneText);
 
   let priceText = zoneText;
   if (hasLow && hasHigh) {
     const zoneMin = Math.min(low, high);
     const zoneMax = Math.max(low, high);
-    priceText = `${formatPrice(zoneMin)}–${formatPrice(zoneMax)}`;
+    priceText = `${formatPrice(zoneMin)}â€“${formatPrice(zoneMax)}`;
   } else if (zoneTextHasRange) {
     priceText = zoneText;
   } else if (hasLow) {
@@ -10139,12 +10139,12 @@ function formatPreferredEntryZone(visualReview = null, directionalBias = "") {
 function containsMalformedPriceRange(value = "") {
   const text = String(value || "").trim();
 
-  if (/\d+(?:\.\d+)?\s*(?:-|–|—|to)\s*$/i.test(text)) {
+  if (/\d+(?:\.\d+)?\s*(?:-|â€“|â€”|to)\s*$/i.test(text)) {
     return true;
   }
 
   const range = text.match(
-    /(\d+(?:\.\d+)?)\s*(?:-|–|—|to)\s*(\d+\.?\d*)\s*$/i
+    /(\d+(?:\.\d+)?)\s*(?:-|â€“|â€”|to)\s*(\d+\.?\d*)\s*$/i
   );
 
   if (!range) return false;
@@ -10182,6 +10182,14 @@ function cleanUserFeedbackItems(items = []) {
 
 function feedbackMeaningKey(value = "") {
   const text = String(value || "").toLowerCase();
+
+  if (
+    /no completed trade|no executed trade|no visible trade|no trade (?:or )?entry|trade entry is (?:not shown|not visible)/.test(
+      text
+    )
+  ) {
+    return "trade_evidence_missing";
+  }
 
   if (/has not yet (?:retested|reached)|not yet (?:retested|reached)/.test(text)) {
     return "area_not_retested";
@@ -10315,6 +10323,7 @@ function prioritizeStarterWeaknesses(items = []) {
   const seen = new Set();
 
   const preferredOrder = [
+    "trade_evidence_missing",
     "area_not_retested",
     "trigger_missing",
     "risk_plan_missing",
@@ -10348,9 +10357,9 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "9.9.8";
-const CSA_BUILD_ID = "CSA-v4.9.8-stepwise-period-alignment-fix";
-const CSA_SCORING_MODEL_VERSION = "2.0.0-evidence-aware";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.0.0";
+const CSA_BUILD_ID = "CSA-v4.10.0-universal-entry-hierarchy-fix";
+const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -10552,7 +10561,7 @@ function normalizeZone(preferredArea = {}, symbol = "") {
   if (zoneLow !== null && zoneHigh !== null) {
     zoneText =
       Math.abs(zoneHigh - zoneLow) > 1e-10
-        ? `${formatPrice(zoneLow, symbol)}–${formatPrice(zoneHigh, symbol)}`
+        ? `${formatPrice(zoneLow, symbol)}â€“${formatPrice(zoneHigh, symbol)}`
         : `${formatPrice(zoneLow, symbol)}`;
   } else if (zoneLow !== null || zoneHigh !== null) {
     zoneText = formatPrice(zoneLow ?? zoneHigh, symbol);
@@ -10759,6 +10768,102 @@ function deriveHistoricalFrameworkLocalFibImpulse({
     reason: direction === "bearish"
       ? "previous_framework_period_high_to_cutoff_period_low"
       : "previous_framework_period_low_to_cutoff_period_high",
+  };
+}
+
+/*
+ * UNIVERSAL ENTRY-HIERARCHY FIBONACCI SOURCE
+ *
+ * An immediately prior broken S/R level is created by the NEXT authoritative
+ * period's completed directional move. Its relevant impulse is therefore the
+ * break period's own high-to-low move (bearish) or low-to-high move (bullish),
+ * not automatically the broader outer-period impulse used to evaluate a
+ * current-period supply/demand area.
+ *
+ * Example: Monday support is broken during Tuesday. Monday support is checked
+ * against Tuesday's completed breakdown impulse; Tuesday supply remains
+ * checked against the broader controlling impulse. Structure still exists
+ * independently and Fibonacci remains a qualification filter only.
+ */
+function buildPriorConversionRelevantFibonacci({
+  candidate = null,
+  levels = [],
+  direction = "range",
+}) {
+  if (
+    !candidate ||
+    candidate?.stepwiseEntryStage !== "immediate_prior_broken_sr" ||
+    !["bullish", "bearish"].includes(direction)
+  ) {
+    return null;
+  }
+
+  const sourceIndex = Number(candidate?.sourceIndex);
+  const breakPeriodIndex = Number.isInteger(Number(candidate?.breakPeriodIndex))
+    ? Number(candidate.breakPeriodIndex)
+    : sourceIndex + 1;
+
+  if (
+    !Number.isInteger(sourceIndex) ||
+    sourceIndex < 0 ||
+    !Number.isInteger(breakPeriodIndex) ||
+    breakPeriodIndex <= sourceIndex ||
+    breakPeriodIndex >= levels.length
+  ) {
+    return null;
+  }
+
+  const sourcePeriod = levels[sourceIndex] || {};
+  const breakPeriod = levels[breakPeriodIndex] || {};
+  const swingHigh = asPositiveNumber(breakPeriod?.high);
+  const swingLow = asPositiveNumber(breakPeriod?.low);
+
+  if (
+    swingHigh === null ||
+    swingLow === null ||
+    swingHigh <= swingLow
+  ) {
+    return null;
+  }
+
+  const range = swingHigh - swingLow;
+  const ratios = [0.382, 0.5, 0.618];
+  const sourcePeriodLabel =
+    sourcePeriod?.periodLabel ||
+    sourcePeriod?.day ||
+    sourcePeriod?.key ||
+    `Period ${sourceIndex + 1}`;
+  const breakPeriodLabel =
+    breakPeriod?.periodLabel ||
+    breakPeriod?.day ||
+    breakPeriod?.key ||
+    `Period ${breakPeriodIndex + 1}`;
+
+  return {
+    direction,
+    swingHigh,
+    swingLow,
+    swingHighTime:
+      breakPeriod?.date || breakPeriod?.key || null,
+    swingLowTime:
+      breakPeriod?.date || breakPeriod?.key || null,
+    impulseRange: range,
+    levels: ratios.map((ratio) => ({
+      ratio,
+      label: ratio === 0.5 ? "50%" : `${(ratio * 100).toFixed(1)}%`,
+      price:
+        direction === "bearish"
+          ? swingLow + range * ratio
+          : swingHigh - range * ratio,
+    })),
+    source: "candidate_specific_prior_sr_break_period_impulse",
+    priceSource: "authoritative_break_period_ohlc",
+    fibOriginModel: "prior_sr_break_period_impulse",
+    selectionReason: "immediate_prior_broken_sr_uses_break_period_completed_impulse",
+    sourcePeriod: sourcePeriodLabel,
+    breakPeriod: breakPeriodLabel,
+    sourceIndex,
+    breakPeriodIndex,
   };
 }
 
@@ -13654,7 +13759,7 @@ function evaluateRequiredFibonacciConfluence({
     };
   }
 
-  // UNIVERSAL CSA FIB-CONFLUENCE RULE — v4.9.3
+  // UNIVERSAL CSA FIB-CONFLUENCE RULE â€” v4.9.3
   //
   // Structure remains primary. Fibonacci NEVER creates an entry area.
   // It only validates an already-authoritative S/R or S/D area.
@@ -14295,7 +14400,7 @@ function validateAndSequenceEntryAreas({
         Math.abs(chartReconciledCenter - authoritativeCenter) <=
           anchorReconciliationTolerance;
 
-      // v4.9.4 — A same-period chart reconciliation that was already accepted
+      // v4.9.4 â€” A same-period chart reconciliation that was already accepted
       // upstream must not be invalidated here merely because the native HTF
       // framework center and the broker/chart label differ slightly. This is
       // especially important for supply/demand areas, where the chart-facing
@@ -15101,7 +15206,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.4.0";
+const CSA_SELECTOR_VERSION = "4.5.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -16417,7 +16522,7 @@ function buildAuthoritativeFrameworkCandidates({
       )
     : [];
 
-  // V4.9.7 — SINGLE AUTHORITATIVE AREA SOURCE
+  // V4.9.7 â€” SINGLE AUTHORITATIVE AREA SOURCE
   // Rebuild the CSA S/R vs S/D hierarchy from the FINAL resolved higher-
   // timeframe periods immediately before candidate selection. This prevents
   // stale csaAreas (created before native/reconstruction reconciliation) from
@@ -16584,7 +16689,7 @@ function buildAuthoritativeFrameworkCandidates({
   });
 
   /*
-   * V4.8.5 — PRIOR-PERIOD S/R CONVERSION PRESERVATION
+   * V4.8.5 â€” PRIOR-PERIOD S/R CONVERSION PRESERVATION
    *
    * A new period's H/L classification and the PREVIOUS period's lifecycle are
    * two different jobs. Example on H1/D1 framework:
@@ -16685,7 +16790,7 @@ function buildAuthoritativeFrameworkCandidates({
       });
 
       /*
-       * V4.8.5 — AUTHORITATIVE PRIOR S/R SYNTHESIS
+       * V4.8.5 â€” AUTHORITATIVE PRIOR S/R SYNTHESIS
        *
        * The previous period's HIGH/LOW is itself the authoritative framework
        * resistance/support. It must not disappear merely because sourceAreas
@@ -16784,6 +16889,12 @@ function buildAuthoritativeFrameworkCandidates({
             ? Number(reconciled.difference)
             : null,
         period: previousPeriodLabel,
+        breakPeriod:
+          currentPeriod?.periodLabel ||
+          currentPeriod?.day ||
+          currentPeriod?.key ||
+          `Period ${index + 1}`,
+        breakPeriodIndex: index,
         date:
           previousPeriod?.date || previousPeriod?.key || null,
         sourceIndex: index - 1,
@@ -16846,6 +16957,135 @@ function buildAuthoritativeFrameworkCandidates({
           previousHigh,
           symbol
         ),
+      });
+    }
+  }
+
+  /*
+   * V4.10.0 â€” IMMEDIATE-PRIOR S/R HIERARCHY LOCK
+   *
+   * The latest adjacent authoritative periods receive one final deterministic
+   * check before any current-period supply/demand refinement or Fibonacci
+   * filtering. This is deliberately independent of buildCsaAreas(), because
+   * that classifier may correctly describe the NEW period while omitting the
+   * previous period extreme whose role has just changed.
+   */
+  if (levels.length >= 2 && ["bullish", "bearish"].includes(direction)) {
+    const sourceIndex = levels.length - 2;
+    const breakPeriodIndex = levels.length - 1;
+    const previousPeriod = levels[sourceIndex] || {};
+    const breakPeriod = levels[breakPeriodIndex] || {};
+    const previousPeriodLabel =
+      previousPeriod?.periodLabel ||
+      previousPeriod?.day ||
+      previousPeriod?.key ||
+      `Period ${sourceIndex + 1}`;
+    const breakPeriodLabel =
+      breakPeriod?.periodLabel ||
+      breakPeriod?.day ||
+      breakPeriod?.key ||
+      `Period ${breakPeriodIndex + 1}`;
+
+    const originalType = direction === "bearish" ? "support" : "resistance";
+    const convertedType =
+      direction === "bearish" ? "converted resistance" : "converted support";
+    const frameworkSide = direction === "bearish" ? "low" : "high";
+    const frameworkPrice = asPositiveNumber(
+      direction === "bearish" ? previousPeriod?.low : previousPeriod?.high
+    );
+    const breakExtreme = asPositiveNumber(
+      direction === "bearish" ? breakPeriod?.low : breakPeriod?.high
+    );
+    const breakClose = asPositiveNumber(breakPeriod?.close);
+    const cleanBreak =
+      frameworkPrice !== null &&
+      breakExtreme !== null &&
+      (direction === "bearish"
+        ? compareLowWithTolerance(breakExtreme, frameworkPrice, symbol).cleanBreak
+        : compareHighWithTolerance(breakExtreme, frameworkPrice, symbol).cleanBreak);
+    const closeConfirmed =
+      frameworkPrice !== null &&
+      breakClose !== null &&
+      (direction === "bearish"
+        ? breakClose < frameworkPrice - Math.max(tolerance, getCleanBreakTolerance(symbol))
+        : breakClose > frameworkPrice + Math.max(tolerance, getCleanBreakTolerance(symbol)));
+    const validPriceSide =
+      frameworkPrice !== null &&
+      Number.isFinite(Number(currentPrice)) &&
+      (direction === "bearish"
+        ? frameworkPrice > Number(currentPrice) + tolerance
+        : frameworkPrice < Number(currentPrice) - tolerance);
+    const alreadyPresent =
+      frameworkPrice !== null &&
+      candidates.some(
+        (candidate) =>
+          Number(candidate?.sourceIndex) === sourceIndex &&
+          String(candidate?.type || "").toLowerCase() === convertedType &&
+          Math.abs(Number(candidate?.frameworkPrice) - frameworkPrice) <=
+            Math.max(tolerance, Number.EPSILON * 100)
+      );
+
+    if (cleanBreak && closeConfirmed && validPriceSide && !alreadyPresent) {
+      const reconciled = reconcileFrameworkLevelWithVisibleChart({
+        frameworkPrice,
+        frameworkType: convertedType,
+        frameworkPeriod: previousPeriodLabel,
+        frameworkSide,
+        visualReview,
+        symbol,
+        atr,
+      });
+
+      candidates.push({
+        price: reconciled.price,
+        frameworkPrice,
+        type: convertedType,
+        originalType,
+        source: "authoritative_immediate_prior_sr_hierarchy_lock",
+        priceSource: reconciled.source,
+        chartReconciled: reconciled.reconciled === true,
+        reconciliationEvidence: reconciled.evidence || null,
+        reconciliationPeriodHint: reconciled.periodHint || null,
+        reconciliationConfidence: Number(reconciled.confidence || 0),
+        reconciliationDifference: Number.isFinite(Number(reconciled.difference))
+          ? Number(reconciled.difference)
+          : null,
+        period: previousPeriodLabel,
+        breakPeriod: breakPeriodLabel,
+        breakPeriodIndex,
+        date: previousPeriod?.date || previousPeriod?.key || null,
+        sourceIndex,
+        conversionBreakConfirmed: true,
+        conversionConfirmed: false,
+        conversionEvidenceSource: "adjacent_authoritative_period_break_and_close",
+        lifecycleFlipCount: 1,
+        lifecycleEvents: [
+          {
+            direction,
+            datetime: breakPeriod?.date || breakPeriod?.key || null,
+            confirmationPath: "authoritative_period_break_and_close",
+          },
+        ],
+        authorityRank: 0,
+        priorPeriodSrConversion: true,
+        hierarchyRegressionLock: true,
+        authoritativeFrameworkLevel: true,
+        stepwiseEntryStage: "immediate_prior_broken_sr",
+      });
+
+      console.log("CSA IMMEDIATE-PRIOR S/R HIERARCHY LOCK RESTORED:", {
+        buildId: CSA_BUILD_ID,
+        selectorVersion: CSA_SELECTOR_VERSION,
+        direction,
+        sourcePeriod: previousPeriodLabel,
+        breakPeriod: breakPeriodLabel,
+        originalType,
+        convertedType,
+        frameworkPrice,
+        chartReconciledPrice: reconciled.price,
+        breakExtreme,
+        breakClose,
+        rule: "immediate_prior_broken_sr_must_reach_candidate_fib_gate_before_current_period_sd",
       });
     }
   }
@@ -17906,6 +18146,16 @@ function rankRawEntryAreas({
   );
   const priceTolerance = getApprovedPriceTolerance(symbol);
 
+  const authoritativeFrameworkLevels = Array.isArray(
+    marketReference?.dailyLevels
+  )
+    ? [...marketReference.dailyLevels].sort((a, b) =>
+        String(a?.key || a?.date || "").localeCompare(
+          String(b?.key || b?.date || "")
+        )
+      )
+    : [];
+
   const sideGap = Math.max(
     priceTolerance,
     Number(atr || 0) * 0.06
@@ -18022,7 +18272,7 @@ function rankRawEntryAreas({
     );
 
     /*
-     * V4.7.6 — FRAMEWORK S/R REMAINS THE ENTRY IDENTITY.
+     * V4.7.6 â€” FRAMEWORK S/R REMAINS THE ENTRY IDENTITY.
      *
      * A fresh cutoff-day intraday base is useful structural EVIDENCE, but it
      * must not overwrite the CSA framework hierarchy. When that base overlaps
@@ -18420,7 +18670,7 @@ function rankRawEntryAreas({
     });
 
     /*
-     * V4.5.4 — RE-EARNED STRUCTURAL STRENGTH
+     * V4.5.4 â€” RE-EARNED STRUCTURAL STRENGTH
      *
      * A historically busy authoritative S/R area is not automatically a
      * strong entry area. However, it may re-earn strong structural status
@@ -18430,7 +18680,7 @@ function rankRawEntryAreas({
      *
      * Fibonacci distance rules remain unchanged:
      *   <= 15% ATR = close confluence
-     *   15–20% ATR = borderline, requires strong structure
+     *   15â€“20% ATR = borderline, requires strong structure
      *   > 20% ATR = fail
      */
     const cleanStrongStructure =
@@ -18500,8 +18750,16 @@ function rankRawEntryAreas({
       atr,
     });
 
+    const primaryCandidate = rawZone?.members?.[0] || null;
+    const candidateSpecificFibonacci = buildPriorConversionRelevantFibonacci({
+      candidate: primaryCandidate,
+      levels: authoritativeFrameworkLevels,
+      direction,
+    });
+    const relevantFibonacci = candidateSpecificFibonacci || fibonacci;
+
     const fibConfluence = evaluateRequiredFibonacciConfluence({
-      fibonacci,
+      fibonacci: relevantFibonacci,
       zoneLow,
       zoneHigh,
       atr,
@@ -18603,6 +18861,21 @@ function rankRawEntryAreas({
       reactionCount: Number(reactionStats?.reactions || 0),
       strongDepartureCount: Number(reactionStats?.strongDepartures || 0),
       proximityAllowance: fibConfluence.proximityAllowance,
+      fibonacciSource:
+        relevantFibonacci?.source ||
+        relevantFibonacci?.priceSource ||
+        "unavailable",
+      fibOriginModel:
+        relevantFibonacci?.fibOriginModel ||
+        null,
+      candidateSpecificImpulse:
+        candidateSpecificFibonacci !== null,
+      fibSourcePeriod:
+        candidateSpecificFibonacci?.sourcePeriod ||
+        null,
+      fibBreakPeriod:
+        candidateSpecificFibonacci?.breakPeriod ||
+        null,
     });
 
     // HARD CSA ENTRY GATE:
@@ -18613,7 +18886,7 @@ function rankRawEntryAreas({
     const fibMatches = fibConfluence.matches;
     const fibonacciScore = 1;
 
-    // v4.7.7 — a level that re-earns strong structural status through the
+    // v4.7.7 â€” a level that re-earns strong structural status through the
     // required reaction/departure evidence must carry a positive structural
     // score into final sequencing. Previously a re-earned converted S/R could
     // be strongStructure=true while quality.score remained 0, causing the
@@ -18703,6 +18976,21 @@ function rankRawEntryAreas({
       reactionCount: reactionStats.reactions,
       strongDepartureCount: reactionStats.strongDepartures,
       fibonacciMatches: fibMatches,
+      fibonacciSource:
+        relevantFibonacci?.source ||
+        relevantFibonacci?.priceSource ||
+        "unavailable",
+      fibOriginModel:
+        relevantFibonacci?.fibOriginModel ||
+        null,
+      candidateSpecificFibImpulse:
+        candidateSpecificFibonacci !== null,
+      fibSourcePeriod:
+        candidateSpecificFibonacci?.sourcePeriod ||
+        null,
+      fibBreakPeriod:
+        candidateSpecificFibonacci?.breakPeriod ||
+        null,
       lifecycleFlipCount: Number(
         rawZone?.lifecycleFlipCount || 0
       ),
@@ -18933,6 +19221,16 @@ function rankRawEntryAreas({
           candidate.strongStructure === true,
         proximityAllowance:
           candidate.proximityAllowance ?? null,
+        fibonacciSource:
+          candidate.fibonacciSource || null,
+        fibOriginModel:
+          candidate.fibOriginModel || null,
+        candidateSpecificImpulse:
+          candidate.candidateSpecificImpulse === true,
+        fibSourcePeriod:
+          candidate.fibSourcePeriod || null,
+        fibBreakPeriod:
+          candidate.fibBreakPeriod || null,
       })),
     selectedEntries:
       (sequencedResult?.areas || []).map((area) => ({
@@ -19036,6 +19334,10 @@ function rankRawEntryAreas({
       fibPassed: area.requiredFibConfluence === true && Number(area.fibonacciScore || 0) > 0,
       fibMatches: (area.fibonacciMatches || []).map((m) => m.label),
       samePeriodSdRefined: area.supplyDemandRefinedBySamePeriodBase === true,
+      fibonacciSource: area.fibonacciSource || null,
+      fibOriginModel: area.fibOriginModel || null,
+      fibSourcePeriod: area.fibSourcePeriod || null,
+      fibBreakPeriod: area.fibBreakPeriod || null,
     })),
     selectedEntries: (sequencedResult?.areas || []).map((area) => ({
       executionOrder: area.executionOrder,
@@ -19123,7 +19425,7 @@ function rankRawEntryAreas({
     })),
   });
 
-  // v4.7.7 — USER-FACING STRUCTURAL RELEVANCE FILTER
+  // v4.7.7 â€” USER-FACING STRUCTURAL RELEVANCE FILTER
   // Keep historical levels internally, but do not talk about an older/deeper
   // converted S/R when a later-period demand/supply now sits between that old
   // level and current price. This follows the CSA progression rule: the newer
@@ -21119,11 +21421,69 @@ function buildValidatedAnalysisFacts({
     : "identified";
 
   const risk = inferRiskVisibility(visualReview);
-  const tradeVisible =
-    visualReview?.tradeVisible === true ||
-    visualReview?.entryShown === true ||
-    /entry.*(shown|visible|marked|taken)|trade.*(shown|visible|taken)/i.test(
-      `${visualReview?.entryEvidence || ""} ${submittedNotes || ""}`
+  const chartMarkingStatus = getChartMarkingStatus(visualReview);
+  const tradeVisibility = getTradeVisibility({
+    visualReview,
+    submittedNotes,
+  });
+  const tradeVisible = tradeVisibility === "visible";
+
+  // Keep trader-owned evidence separate from coach-generated structure.
+  // A deterministic Entry 1 is coaching guidance; it is not something the
+  // trader "did well" unless the screenshot or notes actually show it.
+  const visibleUserMarkedLevels = Array.isArray(
+    visualReview?.visibleMarkedLevels
+  )
+    ? visualReview.visibleMarkedLevels
+    : [];
+
+  const visibleUserMarkedPrices = visibleUserMarkedLevels
+    .map(
+      (item) =>
+        nullablePositiveNumber(item?.displayedPrice) ||
+        nullablePositiveNumber(item?.approximatePrice) ||
+        extractNumericPriceFromLabel(item?.platformLabel)
+    )
+    .filter((price) => price !== null);
+
+  const zoneMarkingTolerance = Math.max(
+    getCleanBreakTolerance(submittedInstrument) * 2,
+    Math.abs(Number(currentPrice || 0)) * 0.00002
+  );
+
+  const preferredAreaMarked =
+    chartMarkingStatus === "marked" &&
+    zone.zoneLow !== null &&
+    zone.zoneHigh !== null &&
+    visibleUserMarkedPrices.some(
+      (price) =>
+        price >= zone.zoneLow - zoneMarkingTolerance &&
+        price <= zone.zoneHigh + zoneMarkingTolerance
+    );
+
+  const normalizedSubmittedNotes = String(submittedNotes || "").trim();
+  const planNotesProvided = normalizedSubmittedNotes.length > 0;
+  const entryPlanDescribed =
+    planNotesProvided &&
+    /\b(entry|buy|sell|support|resistance|supply|demand|retest|trigger)\b/i.test(
+      normalizedSubmittedNotes
+    );
+  const directionClaimed =
+    planNotesProvided &&
+    /\b(bullish|bearish|buy bias|sell bias|directional bias)\b/i.test(
+      normalizedSubmittedNotes
+    );
+  const claimedDirection = !directionClaimed
+    ? null
+    : /\b(bearish|sell bias)\b/i.test(normalizedSubmittedNotes)
+    ? "bearish"
+    : /\b(bullish|buy bias)\b/i.test(normalizedSubmittedNotes)
+    ? "bullish"
+    : null;
+  const waitingForConfirmationClaimed =
+    planNotesProvided &&
+    /\b(wait|waiting|retest|confirmation|confirm|trigger|reject|hold)\b/i.test(
+      normalizedSubmittedNotes
     );
 
   const tradeOutcomeText = [
@@ -21166,11 +21526,21 @@ function buildValidatedAnalysisFacts({
     instrument: submittedInstrument,
     timeframe,
     analysisType,
-    chartMarkingStatus: String(
-      visualReview?.chartMarkingStatus ||
-        visualReview?.markingStatus ||
-        "unclear"
-    ).toLowerCase(),
+    chartMarkingStatus,
+    userEvidence: {
+      chartMarked: chartMarkingStatus === "marked",
+      preferredAreaMarked,
+      visibleMarkedLevelCount: visibleUserMarkedLevels.length,
+      planNotesProvided,
+      entryPlanDescribed,
+      directionClaimed,
+      claimedDirection,
+      waitingForConfirmationClaimed,
+      tradeVisible,
+      tradeVisibility,
+      stopShown: risk.stopShown,
+      targetShown: risk.targetShown,
+    },
     direction,
     directionSource:
       finalVisibleMode &&
@@ -21349,7 +21719,12 @@ function buildValidatedAnalysisFacts({
       zoneLow: zone.zoneLow,
       zoneHigh: zone.zoneHigh,
       zoneText:
-        safeUserText(preferredArea?.levelText || "")
+        ["supply", "demand"].includes(String(areaType || "").toLowerCase()) &&
+        zone.zoneLow !== null &&
+        zone.zoneHigh !== null &&
+        Math.abs(zone.zoneHigh - zone.zoneLow) > 1e-10
+          ? `around ${zone.zoneText}`
+          : safeUserText(preferredArea?.levelText || "")
           ? `around ${safeUserText(preferredArea.levelText)}`
           : safeUserText(preferredArea?.zoneText || zone.zoneText),
       priceStatus,
@@ -21777,6 +22152,23 @@ function formatRankedArea(area, fallbackType = "entry") {
         ? formatPrice(area.authoritativeCenter)
         : ""
     );
+
+  const zoneLow = asPositiveNumber(area?.zoneLow);
+  const zoneHigh = asPositiveNumber(area?.zoneHigh);
+  const shouldDisplayFullZone =
+    ["supply", "demand"].includes(normalizedType) ||
+    area?.structuralZoneReinforcedByIntradayStructure === true;
+
+  if (
+    shouldDisplayFullZone &&
+    zoneLow !== null &&
+    zoneHigh !== null &&
+    Math.abs(zoneHigh - zoneLow) > 1e-10
+  ) {
+    const low = Math.min(zoneLow, zoneHigh);
+    const high = Math.max(zoneLow, zoneHigh);
+    return `${base} around ${formatPrice(low)}â€“${formatPrice(high)}`;
+  }
 
   if (exactLevel) return `${base} around ${exactLevel}`;
   return area.zoneText ? `${base} ${String(area.zoneText).replace(/^around\\s+/i, "around ")}` : `marked ${base}`;
@@ -22387,66 +22779,76 @@ function buildControlledFeedback({
   const action = area.direction === "sell" ? "sell" : area.direction === "buy" ? "buy" : "trade";
   const opposingLevel = facts.direction === "bearish" ? "support" : "resistance";
   const triggerSide = facts.direction === "bearish" ? "bearish" : facts.direction === "bullish" ? "bullish" : "valid";
+  const userEvidence = facts?.userEvidence || {};
+  const isPostTrade = normalizeAnalysisType(facts?.analysisType) === "post-trade";
 
   const strengths = [];
 
   if (facts.historicalCutoff?.active) {
     strengths.push(
-      `The analysis is restricted to market information available up to ${facts.historicalCutoff.selectedDate}.`
+      `The historical review point is clearly defined at ${facts.historicalCutoff.selectedDate}, so later candles are excluded.`
     );
   }
 
-  if (facts.direction === "bearish") {
+  if (
+    userEvidence.claimedDirection &&
+    userEvidence.claimedDirection === facts.direction
+  ) {
     strengths.push(
-      facts.transitionState?.bullishRecoveryAfterBreakdown
-        ? "The earlier bearish breakdown and the strong bullish recovery are identified separately."
-        : facts.breakoutState?.bearishBreakdown
-        ? "The strong bearish breakdown and continuation are identified correctly."
-        : "The bearish market direction is identified correctly."
-    );
-  } else if (facts.direction === "bullish") {
-    strengths.push(
-      facts.transitionState?.bearishPullbackAfterBreakout
-        ? "The earlier bullish breakout and the strong bearish pullback are identified separately."
-        : facts.breakoutState?.bullishBreakout
-        ? "The strong bullish breakout and continuation are identified correctly."
-        : "The bullish market direction is identified correctly."
-    );
-  } else {
-    strengths.push("The chart correctly shows that price is currently range-bound.");
-  }
-
-  if (!hasValidatedArea) {
-    strengths.push(
-      "The analysis avoids forcing a weak or contradictory entry area."
+      `The ${facts.direction} direction described in the trade notes agrees with the market structure at the review point.`
     );
   }
 
-  if (facts.confluence.strength === "high") {
+  if (
+    userEvidence.preferredAreaMarked &&
+    hasValidatedArea
+  ) {
     strengths.push(
-      "The planned area is supported by several matching chart factors, which improves its quality."
+      `The marked ${area.areaType} area ${area.zoneText} agrees with the first ${action} area identified from the chart structure.`
+    );
+  } else if (userEvidence.chartMarked) {
+    strengths.push(
+      "The chart includes visible support or resistance markings, which makes the price structure easier to review."
     );
   } else {
     strengths.push(
-      "The important support and resistance areas are visible and can be used to judge where price is trading."
+      "The uploaded chart is clear enough to assess market direction and important price areas."
     );
   }
 
-  if (facts.direction === "bearish") {
+  if (
+    userEvidence.entryPlanDescribed &&
+    userEvidence.waitingForConfirmationClaimed &&
+    !facts.trade.visible
+  ) {
     strengths.push(
-      "The plan avoids chasing a sell while price remains close to support."
+      "The trade notes show that confirmation is required before entry, which helps avoid entering too early."
     );
-  } else if (facts.direction === "bullish") {
+  }
+
+  if (
+    facts.trade.visible &&
+    facts.risk.stopShown &&
+    facts.risk.targetShown
+  ) {
     strengths.push(
-      "The plan avoids chasing a buy while price remains close to resistance."
+      "The visible stop loss and target make the trade risk possible to assess."
     );
-  } else {
+  }
+
+  if (!strengths.length) {
     strengths.push(
-      "The plan waits for price to reach a better area instead of entering in the middle."
+      "The uploaded chart provides enough visible price history for a basic structure review."
     );
   }
 
   const weaknesses = [];
+
+  if (isPostTrade && !facts.trade.visible) {
+    weaknesses.push(
+      "No completed trade or entry is visible or described, so execution accuracy cannot be assessed."
+    );
+  }
 
   if (facts.entryAreaValidation?.passed === false) {
     weaknesses.push(
@@ -22535,47 +22937,16 @@ function buildControlledFeedback({
   }
 
   const lockedStrengths =
-    sanitizeRawEntryNarrativeItems({
-      items:
-        cleanUserFeedbackItems(
-          strengths
-        ),
-      facts,
-    });
+    cleanUserFeedbackItems(
+      strengths
+    );
 
-  // Re-add only the canonical deterministic entry statements after
-  // removing any raw/legacy recommendation-like wording.
+  // Keep WHAT YOU DID WELL limited to trader-owned evidence. Deterministic
+  // Entry 1 / Entry 2 areas belong in Next Action and Chart Levels, not in
+  // strengths, unless a matching trader marking was already credited above.
   const canonicalStrengths = [
     ...lockedStrengths,
   ];
-
-  if (
-    hasValidatedArea &&
-    !area.invalidated
-  ) {
-    const canonicalPrimaryText =
-      area.areaType ===
-        "converted resistance"
-        ? area.conversionConfirmed
-          ? `The broken support ${area.zoneText} has been confirmed as converted resistance and is the first sell area to monitor.`
-          : `The broken support ${area.zoneText} is a potential converted resistance and is the first sell area to monitor if price retests it from below.`
-        : area.areaType ===
-          "converted support"
-        ? area.conversionConfirmed
-          ? `The broken resistance ${area.zoneText} has been confirmed as converted support and is the first buy area to monitor.`
-          : `The broken resistance ${area.zoneText} is a potential converted support and is the first buy area to monitor if price retests it from above.`
-        : `Entry 1 is the ${areaText}; this is the first ${action} area to monitor.`;
-
-    canonicalStrengths.push(
-      canonicalPrimaryText
-    );
-  }
-
-  if (secondaryAreaText) {
-    canonicalStrengths.push(
-      `Entry 2 is the ${secondaryAreaText}; consider it only if Entry 1 fails and a fresh ${triggerSide} trigger appears there.`
-    );
-  }
 
   const finalStrengths =
     removeSemanticFeedbackDuplicates(
@@ -22857,7 +23228,7 @@ function buildControlledFeedback({
           ? "The previous area has failed and the setup must be rebuilt."
           : area.triggerPresent
           ? "The location and trigger are aligned."
-          : "The plan has a useful area, but the setup is not fully ready.",
+          : "A useful area was identified, but the setup is not fully ready.",
     },
     entryAccuracy: {
       displayLabel:
@@ -23100,7 +23471,7 @@ function buildStarterCoachSummary(options = {}) {
 
     zoneText =
       Math.abs(high - low) > 1e-10
-        ? `around ${formatPrice(low)}–${formatPrice(high)}`
+        ? `around ${formatPrice(low)}â€“${formatPrice(high)}`
         : `around ${formatPrice(low)}`;
   }
 
