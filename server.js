@@ -10357,8 +10357,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.2.0";
-const CSA_BUILD_ID = "CSA-v4.10.2-adjacent-conversion-regression-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.4.0";
+const CSA_BUILD_ID = "CSA-v4.10.4-prior-conversion-structural-gate-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15217,7 +15217,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.2";
+const CSA_SELECTOR_VERSION = "4.5.4";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -17149,6 +17149,37 @@ function buildAuthoritativeFrameworkCandidates({
     });
   }
 
+  // FINAL ADJACENT-CONVERSION INVARIANT. This is deliberately placed after
+  // every lifecycle/classification branch: when the last completed framework
+  // period closes through the immediately previous true S/R, the prior level
+  // MUST enter the candidate set in its converted role. It cannot be omitted
+  // by an earlier classifier or treated as the next period's new S/D area.
+  if (levels.length >= 2 && ["bearish", "bullish"].includes(direction)) {
+    const sourceIndex = levels.length - 2;
+    const breakPeriodIndex = levels.length - 1;
+    const previous = levels[sourceIndex] || {};
+    const breaker = levels[breakPeriodIndex] || {};
+    const originalType = direction === "bearish" ? "support" : "resistance";
+    const convertedType = direction === "bearish" ? "converted resistance" : "converted support";
+    const frameworkPrice = asPositiveNumber(direction === "bearish" ? previous.low : previous.high);
+    const breakClose = asPositiveNumber(breaker.close);
+    const closeBeyond = frameworkPrice !== null && breakClose !== null &&
+      (direction === "bearish" ? breakClose < frameworkPrice - tolerance : breakClose > frameworkPrice + tolerance);
+    const correctSide = frameworkPrice !== null &&
+      (direction === "bearish" ? frameworkPrice > Number(currentPrice) : frameworkPrice < Number(currentPrice));
+    const alreadyPresent = candidates.some((candidate) =>
+      Number(candidate?.sourceIndex) === sourceIndex &&
+      String(candidate?.type || "").toLowerCase() === convertedType
+    );
+    if (closeBeyond && correctSide && !alreadyPresent) {
+      const period = previous.periodLabel || previous.day || previous.key || `Period ${sourceIndex + 1}`;
+      const breakPeriod = breaker.periodLabel || breaker.day || breaker.key || `Period ${breakPeriodIndex + 1}`;
+      const reconciled = reconcileFrameworkLevelWithVisibleChart({ frameworkPrice, frameworkType: convertedType, frameworkPeriod: period, frameworkSide: direction === "bearish" ? "low" : "high", visualReview, symbol, atr });
+      candidates.push({ price: reconciled.price, frameworkPrice, type: convertedType, originalType, source: "final_adjacent_conversion_invariant", priceSource: reconciled.source, chartReconciled: reconciled.reconciled === true, period, breakPeriod, breakPeriodIndex, sourceIndex, conversionBreakConfirmed: true, conversionConfirmed: false, authorityRank: 0, priorPeriodSrConversion: true, hierarchyRegressionLock: true, authoritativeFrameworkLevel: true, stepwiseEntryStage: "immediate_prior_broken_sr" });
+      console.log("CSA FINAL ADJACENT-CONVERSION INVARIANT INSERTED:", { sourcePeriod: period, breakPeriod, originalType, convertedType, frameworkPrice, breakClose });
+    }
+  }
+
   // Do not collapse nearby levels from different authoritative periods here.
   // Each distinct framework level must reach structural + Fibonacci validation
   // before any overlap/deduplication decision is made.
@@ -18740,9 +18771,21 @@ function rankRawEntryAreas({
         ? "reearned_by_reactions_and_departure"
         : "not_strong";
 
+    // A prior S/R level that has a clean authoritative break-and-close has
+    // already earned potential converted status. It must not be rejected only
+    // because there has not yet been a later retest/reaction; that retest is
+    // the entry trigger, not a prerequisite for listing the area. Fibonacci
+    // confluence remains mandatory below.
+    const priorBreakAndCloseConversion =
+      rawZone?.members?.some?.((member) =>
+        member?.priorPeriodSrConversion === true &&
+        member?.conversionBreakConfirmed === true &&
+        member?.stepwiseEntryStage === "immediate_prior_broken_sr"
+      ) === true;
+
     const structurallyValid =
       isAuthoritativeFrameworkLevel &&
-      quality.valid;
+      (quality.valid || priorBreakAndCloseConversion);
 
     structuralGateDiagnostics.push({
       frameworkPrice:
@@ -18763,6 +18806,7 @@ function rankRawEntryAreas({
       pivotConfirmationCount: Number(rawZone?.pivotConfirmationCount || 0),
       conversionBreakConfirmed:
         rawZone?.conversionBreakConfirmed === true,
+      priorBreakAndCloseConversion,
       historicalTakeoverIntradayCandidate:
         isHistoricalTakeoverIntradayLevel,
       structurallyValid,
