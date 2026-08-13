@@ -10357,8 +10357,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.4.0";
-const CSA_BUILD_ID = "CSA-v4.10.4-prior-conversion-structural-gate-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.5.0";
+const CSA_BUILD_ID = "CSA-v4.10.5-main-selector-conversion-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15217,7 +15217,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.4";
+const CSA_SELECTOR_VERSION = "4.5.5";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -18264,6 +18264,98 @@ function rankRawEntryAreas({
     atr,
     symbol,
   });
+
+  // MAIN SELECTOR ADJACENT-CONVERSION INSERTION.
+  // This runs inside the active entry selector, after framework candidates
+  // are assembled and before any supply/demand refinement, structural gate,
+  // Fibonacci gate, or path ordering. It preserves the immediately preceding
+  // true S/R in its new role when the next completed framework period closes
+  // clearly beyond it. The later retest remains an entry trigger, not a
+  // reason to omit the potential converted level.
+  if (
+    authoritativeFrameworkLevels.length >= 2 &&
+    ["bearish", "bullish"].includes(direction)
+  ) {
+    const sourceIndex = authoritativeFrameworkLevels.length - 2;
+    const breakPeriodIndex = authoritativeFrameworkLevels.length - 1;
+    const priorPeriod = authoritativeFrameworkLevels[sourceIndex] || {};
+    const breakPeriod = authoritativeFrameworkLevels[breakPeriodIndex] || {};
+    const originalType = direction === "bearish" ? "support" : "resistance";
+    const convertedType = direction === "bearish" ? "converted resistance" : "converted support";
+    const frameworkPrice = asPositiveNumber(
+      direction === "bearish" ? priorPeriod.low : priorPeriod.high
+    );
+    const breakClose = asPositiveNumber(breakPeriod.close);
+    const conversionTolerance = frameworkLevelTolerance({ symbol, atr });
+    const closeBeyond =
+      frameworkPrice !== null &&
+      breakClose !== null &&
+      (direction === "bearish"
+        ? breakClose < frameworkPrice - conversionTolerance
+        : breakClose > frameworkPrice + conversionTolerance);
+    const priceIsOnCorrectSide =
+      frameworkPrice !== null &&
+      (direction === "bearish"
+        ? frameworkPrice > Number(currentPrice) + conversionTolerance
+        : frameworkPrice < Number(currentPrice) - conversionTolerance);
+    const alreadyPresent = frameworkCandidates.some((candidate) =>
+      Number(candidate?.sourceIndex) === sourceIndex &&
+      String(candidate?.type || "").toLowerCase() === convertedType
+    );
+
+    if (closeBeyond && priceIsOnCorrectSide && !alreadyPresent) {
+      const period = priorPeriod.periodLabel || priorPeriod.day || priorPeriod.key || `Period ${sourceIndex + 1}`;
+      const brokenByPeriod = breakPeriod.periodLabel || breakPeriod.day || breakPeriod.key || `Period ${breakPeriodIndex + 1}`;
+      const reconciled = reconcileFrameworkLevelWithVisibleChart({
+        frameworkPrice,
+        frameworkType: convertedType,
+        frameworkPeriod: period,
+        frameworkSide: direction === "bearish" ? "low" : "high",
+        visualReview,
+        symbol,
+        atr,
+      });
+
+      frameworkCandidates = attachPivotConfirmationToFrameworkCandidates({
+        frameworkCandidates: [
+          ...frameworkCandidates,
+          {
+            price: reconciled.price,
+            frameworkPrice,
+            type: convertedType,
+            originalType,
+            source: "main_selector_adjacent_prior_sr_conversion",
+            priceSource: reconciled.source,
+            chartReconciled: reconciled.reconciled === true,
+            period,
+            breakPeriod: brokenByPeriod,
+            breakPeriodIndex,
+            sourceIndex,
+            conversionBreakConfirmed: true,
+            conversionConfirmed: false,
+            conversionEvidenceSource: "adjacent_completed_period_close_beyond_prior_sr",
+            authorityRank: 0,
+            priorPeriodSrConversion: true,
+            authoritativeFrameworkLevel: true,
+            stepwiseEntryStage: "immediate_prior_broken_sr",
+          },
+        ],
+        pivots: confirmedPivots,
+        atr,
+        symbol,
+      });
+
+      console.log("CSA MAIN SELECTOR PRIOR-CONVERSION INSERTED:", {
+        sourcePeriod: period,
+        breakPeriod: brokenByPeriod,
+        originalType,
+        convertedType,
+        frameworkPrice,
+        chartPrice: reconciled.price,
+        breakClose,
+      });
+    }
+  }
 
   const finalVisibleFibEndpointAuthority =
     normalizeCutoffMode(
