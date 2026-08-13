@@ -10357,8 +10357,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.5.0";
-const CSA_BUILD_ID = "CSA-v4.10.5-main-selector-conversion-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.6.0";
+const CSA_BUILD_ID = "CSA-v4.10.6-cutoff-close-conversion-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15217,7 +15217,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.5";
+const CSA_SELECTOR_VERSION = "4.5.6";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -18285,7 +18285,15 @@ function rankRawEntryAreas({
     const frameworkPrice = asPositiveNumber(
       direction === "bearish" ? priorPeriod.low : priorPeriod.high
     );
-    const breakClose = asPositiveNumber(breakPeriod.close);
+    // Completed historical-period records do not always retain `close` after
+    // framework reconciliation. In selected-day mode, currentPrice is the
+    // cutoff-safe final completed candle price and is the deterministic
+    // fallback for confirming that the immediately prior S/R was held beyond.
+    const recordedBreakClose = asPositiveNumber(breakPeriod.close);
+    const breakClose =
+      recordedBreakClose !== null
+        ? recordedBreakClose
+        : asPositiveNumber(currentPrice);
     const conversionTolerance = frameworkLevelTolerance({ symbol, atr });
     const closeBeyond =
       frameworkPrice !== null &&
@@ -18302,6 +18310,23 @@ function rankRawEntryAreas({
       Number(candidate?.sourceIndex) === sourceIndex &&
       String(candidate?.type || "").toLowerCase() === convertedType
     );
+
+    console.log("CSA MAIN SELECTOR PRIOR-CONVERSION AUDIT:", {
+      direction,
+      frameworkLevelCount: authoritativeFrameworkLevels.length,
+      sourceIndex,
+      breakPeriodIndex,
+      originalType,
+      convertedType,
+      frameworkPrice,
+      recordedBreakClose,
+      resolvedBreakClose: breakClose,
+      currentPrice: Number(currentPrice),
+      conversionTolerance,
+      closeBeyond,
+      priceIsOnCorrectSide,
+      alreadyPresent,
+    });
 
     if (closeBeyond && priceIsOnCorrectSide && !alreadyPresent) {
       const period = priorPeriod.periodLabel || priorPeriod.day || priorPeriod.key || `Period ${sourceIndex + 1}`;
