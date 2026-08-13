@@ -10357,8 +10357,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.6.0";
-const CSA_BUILD_ID = "CSA-v4.10.6-cutoff-close-conversion-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.7.0";
+const CSA_BUILD_ID = "CSA-v4.10.7-structural-break-tolerance-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14645,6 +14645,19 @@ function frameworkLevelTolerance({
   );
 }
 
+// Structural break confirmation must use the instrument's clean-break rule.
+// Do not use frameworkLevelTolerance/getApprovedPriceTolerance here: those
+// broader tolerances are intended for chart/OCR reconciliation and can become
+// large enough to reject a genuine completed-period close through prior S/R.
+function frameworkConversionTolerance({
+  symbol = "",
+}) {
+  return Math.max(
+    getCleanBreakTolerance(symbol),
+    Number.EPSILON * 100
+  );
+}
+
 function periodLevelBreakEvidence({
   levels = [],
   sourceIndex,
@@ -15217,7 +15230,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.6";
+const CSA_SELECTOR_VERSION = "4.5.7";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -17163,10 +17176,15 @@ function buildAuthoritativeFrameworkCandidates({
     const convertedType = direction === "bearish" ? "converted resistance" : "converted support";
     const frameworkPrice = asPositiveNumber(direction === "bearish" ? previous.low : previous.high);
     const breakClose = asPositiveNumber(breaker.close);
+    const adjacentConversionTolerance = frameworkConversionTolerance({ symbol });
     const closeBeyond = frameworkPrice !== null && breakClose !== null &&
-      (direction === "bearish" ? breakClose < frameworkPrice - tolerance : breakClose > frameworkPrice + tolerance);
+      (direction === "bearish"
+        ? breakClose < frameworkPrice - adjacentConversionTolerance
+        : breakClose > frameworkPrice + adjacentConversionTolerance);
     const correctSide = frameworkPrice !== null &&
-      (direction === "bearish" ? frameworkPrice > Number(currentPrice) : frameworkPrice < Number(currentPrice));
+      (direction === "bearish"
+        ? frameworkPrice > Number(currentPrice) + adjacentConversionTolerance
+        : frameworkPrice < Number(currentPrice) - adjacentConversionTolerance);
     const alreadyPresent = candidates.some((candidate) =>
       Number(candidate?.sourceIndex) === sourceIndex &&
       String(candidate?.type || "").toLowerCase() === convertedType
@@ -17176,7 +17194,7 @@ function buildAuthoritativeFrameworkCandidates({
       const breakPeriod = breaker.periodLabel || breaker.day || breaker.key || `Period ${breakPeriodIndex + 1}`;
       const reconciled = reconcileFrameworkLevelWithVisibleChart({ frameworkPrice, frameworkType: convertedType, frameworkPeriod: period, frameworkSide: direction === "bearish" ? "low" : "high", visualReview, symbol, atr });
       candidates.push({ price: reconciled.price, frameworkPrice, type: convertedType, originalType, source: "final_adjacent_conversion_invariant", priceSource: reconciled.source, chartReconciled: reconciled.reconciled === true, period, breakPeriod, breakPeriodIndex, sourceIndex, conversionBreakConfirmed: true, conversionConfirmed: false, authorityRank: 0, priorPeriodSrConversion: true, hierarchyRegressionLock: true, authoritativeFrameworkLevel: true, stepwiseEntryStage: "immediate_prior_broken_sr" });
-      console.log("CSA FINAL ADJACENT-CONVERSION INVARIANT INSERTED:", { sourcePeriod: period, breakPeriod, originalType, convertedType, frameworkPrice, breakClose });
+      console.log("CSA FINAL ADJACENT-CONVERSION INVARIANT INSERTED:", { sourcePeriod: period, breakPeriod, originalType, convertedType, frameworkPrice, breakClose, conversionTolerance: adjacentConversionTolerance, conversionToleranceSource: "instrument_clean_break" });
     }
   }
 
@@ -18294,7 +18312,11 @@ function rankRawEntryAreas({
       recordedBreakClose !== null
         ? recordedBreakClose
         : asPositiveNumber(currentPrice);
-    const conversionTolerance = frameworkLevelTolerance({ symbol, atr });
+    // This is a structural close-through test, not a display/OCR price-match
+    // test. For AUDUSD the clean-break tolerance is 0.00020. The former use of
+    // frameworkLevelTolerance produced 0.00120 and wrongly rejected Tuesday's
+    // 0.69740 close through Monday support at 0.69858.
+    const conversionTolerance = frameworkConversionTolerance({ symbol });
     const closeBeyond =
       frameworkPrice !== null &&
       breakClose !== null &&
@@ -18323,6 +18345,7 @@ function rankRawEntryAreas({
       resolvedBreakClose: breakClose,
       currentPrice: Number(currentPrice),
       conversionTolerance,
+      conversionToleranceSource: "instrument_clean_break",
       closeBeyond,
       priceIsOnCorrectSide,
       alreadyPresent,
