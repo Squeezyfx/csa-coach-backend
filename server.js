@@ -10357,8 +10357,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.7.0";
-const CSA_BUILD_ID = "CSA-v4.10.7-structural-break-tolerance-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.8.0";
+const CSA_BUILD_ID = "CSA-v4.10.8-entry-stage-separation-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15230,7 +15230,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.7";
+const CSA_SELECTOR_VERSION = "4.5.8";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -18474,10 +18474,15 @@ function rankRawEntryAreas({
         symbol,
       });
 
-    const duplicateTolerance = Math.max(
-      getApprovedPriceTolerance(symbol) * 2,
-      Number(atr || 0) * 0.05
-    );
+    // Reinforcement is a structural-overlap decision. The broader approved
+    // price tolerance is for chart/OCR reconciliation and must not be used to
+    // join distinct entry stages. In the AUDUSD benchmark, using that wider
+    // tolerance wrongly merged Monday converted resistance around 0.69845
+    // with Tuesday supply at 0.69899-0.69947. That corrupted Entry 1's zone
+    // geometry and also removed the displacement evidence from Entry 2.
+    const reinforcementOverlapTolerance = frameworkConversionTolerance({
+      symbol,
+    });
 
     /*
      * V4.7.6 â€” FRAMEWORK S/R REMAINS THE ENTRY IDENTITY.
@@ -18535,8 +18540,8 @@ function rankRawEntryAreas({
           Number.isFinite(existingPrice) &&
           Number.isFinite(normalizedIntradayLow) &&
           Number.isFinite(normalizedIntradayHigh) &&
-          existingPrice >= normalizedIntradayLow - duplicateTolerance &&
-          existingPrice <= normalizedIntradayHigh + duplicateTolerance;
+          existingPrice >= normalizedIntradayLow - reinforcementOverlapTolerance &&
+          existingPrice <= normalizedIntradayHigh + reinforcementOverlapTolerance;
 
         const convertedSrReinforcement =
           compatibleConvertedTypes.has(existingType) && insideOrNearZone;
@@ -18639,6 +18644,8 @@ function rankRawEntryAreas({
           confirmedPipelineCandidate?.frameworkPrice || null,
         structuralZoneLow: normalizedIntradayLow,
         structuralZoneHigh: normalizedIntradayHigh,
+        reinforcementOverlapTolerance,
+        reinforcementOverlapToleranceSource: "instrument_clean_break",
         rule: isSamePeriodSdRefinement
           ? "intraday_base_refines_existing_same_period_supply_demand_without_inventing_new_framework_area"
           : "intraday_base_reinforces_overlapping_framework_sr_instead_of_becoming_separate_entry",
