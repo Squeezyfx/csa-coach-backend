@@ -10357,8 +10357,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.8.0";
-const CSA_BUILD_ID = "CSA-v4.10.8-entry-stage-separation-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.9.0";
+const CSA_BUILD_ID = "CSA-v4.10.9-final-hierarchy-preservation-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14257,6 +14257,38 @@ function dedupeValidatedAreas(areas = [], atr = 0) {
     }
 
     const existing = result[duplicateIndex];
+
+    // Distinct authoritative steps are not duplicates merely because their
+    // tolerance zones touch or overlap. The immediately-prior broken S/R is
+    // checked first; the current-period S/D area is the next stage if Entry 1
+    // fails. Collapsing these by zone overlap destroys the CSA hierarchy.
+    const existingStage = String(existing?.stepwiseEntryStage || "");
+    const candidateStage = String(candidate?.stepwiseEntryStage || "");
+    const stagePair = new Set([existingStage, candidateStage]);
+    const distinctStepwiseHierarchyStages =
+      stagePair.has("immediate_prior_broken_sr") &&
+      stagePair.has("current_period_supply_demand");
+    const distinctFrameworkIdentity =
+      String(existing?.frameworkPeriod || "") !==
+        String(candidate?.frameworkPeriod || "") ||
+      Number(existing?.frameworkPrice) !== Number(candidate?.frameworkPrice);
+
+    if (distinctStepwiseHierarchyStages && distinctFrameworkIdentity) {
+      result.push(candidate);
+      console.log("CSA FINAL DEDUPE DISTINCT HIERARCHY STAGES PRESERVED:", {
+        existingStage,
+        existingAreaType: existing?.areaType || null,
+        existingFrameworkPeriod: existing?.frameworkPeriod || null,
+        existingFrameworkPrice: existing?.frameworkPrice ?? null,
+        candidateStage,
+        candidateAreaType: candidate?.areaType || null,
+        candidateFrameworkPeriod: candidate?.frameworkPeriod || null,
+        candidateFrameworkPrice: candidate?.frameworkPrice ?? null,
+        rule: "prior_broken_sr_and_current_period_sd_are_separate_entry_stages",
+      });
+      return;
+    }
+
     const candidateReconciled =
       candidate?.chartReconciled === true;
     const existingReconciled =
@@ -14848,6 +14880,33 @@ function collectVisibleChartPriceEvidence({
     const zone = normalizeZone(area, symbol);
     const center = areaCenter(zone);
 
+    // For a visually validated converted S/R zone, the first-touch boundary
+    // is the chart-facing entry price: the lower edge for bearish converted
+    // resistance and the upper edge for bullish converted support. Preserve
+    // the native framework price separately as the structural source level.
+    const normalizedFrameworkType = String(frameworkType || "").toLowerCase();
+    const convertedEntryBoundary =
+      normalizedFrameworkType === "converted resistance"
+        ? asPositiveNumber(zone?.zoneLow)
+        : normalizedFrameworkType === "converted support"
+        ? asPositiveNumber(zone?.zoneHigh)
+        : null;
+
+    if (convertedEntryBoundary !== null) {
+      addEvidence({
+        price: convertedEntryBoundary,
+        type: normalizedType,
+        source: "visual_converted_area_entry_boundary",
+        description: area?.zoneText || area?.sourceReason || "",
+        periodHint:
+          area?.frameworkPeriodHint ||
+          area?.periodHint ||
+          area?.sourcePeriod ||
+          "",
+        confidence: 20,
+      });
+    }
+
     addEvidence({
       price: center,
       type: normalizedType,
@@ -15165,12 +15224,21 @@ function reconcileFrameworkLevelWithVisibleChart({
       exactPeriodPrice:
         String(candidate.source || "") ===
         "per_target_framework_price_map_exact",
+      convertedEntryBoundary:
+        String(candidate.source || "") ===
+        "visual_converted_area_entry_boundary",
     }))
     .sort((a, b) => {
       // Exact printed same-period platform labels outrank approximations and
       // generic line reads. Distance decides only inside the same evidence tier.
       if (a.exactPeriodPrice !== b.exactPeriodPrice) {
         return a.exactPeriodPrice ? -1 : 1;
+      }
+      // When the dedicated reader has only an estimate, prefer the validated
+      // visual converted-zone entry boundary. Exact same-period printed labels
+      // still remain the highest authority above this branch.
+      if (a.convertedEntryBoundary !== b.convertedEntryBoundary) {
+        return a.convertedEntryBoundary ? -1 : 1;
       }
       if (a.distance !== b.distance) {
         return a.distance - b.distance;
@@ -15230,7 +15298,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.8";
+const CSA_SELECTOR_VERSION = "4.5.9";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19152,15 +19220,21 @@ function rankRawEntryAreas({
       rawZone?.conversionConfirmed === true;
 
     // v4.9.5 DISPLAY AUTHORITY:
-    // The deterministic framework price owns the user-facing level label.
-    // A validated same-period chart reconciliation may still shape the internal
-    // structural zone / Fib validation, but it must not replace the native
-    // higher-timeframe framework high/low shown to the user.
+    // The deterministic framework price normally owns the user-facing label.
+    // Two validated area refinements are exceptions: a same-period S/D base,
+    // and the first-touch boundary of a visually confirmed converted S/R zone.
+    // The native higher-timeframe price remains stored as frameworkCenter.
     const samePeriodSdRefined =
       rawZone?.members?.[0]?.supplyDemandRefinedBySamePeriodBase === true;
 
+    const convertedVisualBoundaryReconciled =
+      priorBreakAndCloseConversion &&
+      rawZone?.members?.[0]?.chartReconciled === true &&
+      String(rawZone?.members?.[0]?.priceSource || "") ===
+        "visual_converted_area_entry_boundary";
+
     const displayCenter =
-      samePeriodSdRefined
+      samePeriodSdRefined || convertedVisualBoundaryReconciled
         ? authoritativeCenter
         : (asPositiveNumber(frameworkCenter) || authoritativeCenter);
     const center = authoritativeCenter;
