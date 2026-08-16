@@ -1702,8 +1702,46 @@ function csaTimingLog(stage, startedAt, extra = {}) {
   });
 }
 
+function normalizeUserFacingTypography(value = "") {
+  return String(value ?? "")
+    // Repair common UTF-8 punctuation that was previously decoded as
+    // Windows-1252/Latin-1. Unicode escapes keep this source transport-safe.
+    .replace(/\u00e2\u20ac\u201c/g, "\u2013")
+    .replace(/\u00e2\u20ac\u201d/g, "\u2014")
+    .replace(/\u00e2\u20ac\u2122/g, "\u2019")
+    .replace(/\u00e2\u20ac\u0153/g, "\u201c")
+    .replace(/\u00c2\u00b1/g, "\u00b1")
+    .replace(/\u00c2\u00b2/g, "\u00b2");
+}
+
+function normalizeUserFacingTypographyDeep(value) {
+  if (typeof value === "string") {
+    return normalizeUserFacingTypography(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(normalizeUserFacingTypographyDeep);
+  }
+
+  if (value && typeof value === "object") {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return value;
+    }
+
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        normalizeUserFacingTypographyDeep(item),
+      ])
+    );
+  }
+
+  return value;
+}
+
 function safeUserText(value = "") {
-  return String(value || "")
+  return normalizeUserFacingTypography(value)
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -5049,7 +5087,7 @@ function isBadVisualReview(parsed) {
 function extractVisibleZoneRange(text = "") {
   const value = String(text || "").replace(/,/g, "");
   const rangeMatch = value.match(
-    /(\d{1,6}(?:\.\d{1,8})?)\s*(?:-|â€“|â€”|to)\s*(\d{1,6}(?:\.\d{1,8})?)/i
+    /(\d{1,6}(?:\.\d{1,8})?)\s*(?:-|\u2013|\u2014|â€“|â€”|to)\s*(\d{1,6}(?:\.\d{1,8})?)/i
   );
 
   if (!rangeMatch) return { low: null, high: null };
@@ -5194,7 +5232,7 @@ function normalizePreferredEntryAreaFromVisual(parsed = {}) {
   const zoneText = safeUserText(
     raw.zoneText ||
       (zoneLow !== null && zoneHigh !== null
-        ? `around ${formatPrice(zoneLow)}â€“${formatPrice(zoneHigh)}`
+        ? `around ${formatPrice(zoneLow)}\u2013${formatPrice(zoneHigh)}`
         : parsed.bestAreaToWatch || "")
   );
 
@@ -8738,7 +8776,7 @@ function enrichVisualReviewForFinalFeedback({
         zoneHigh: marketZone.high,
         zoneText:
           Math.abs(marketZone.high - marketZone.low) > 1e-10
-            ? `around ${formatPrice(marketZone.low)}â€“${formatPrice(marketZone.high)}`
+            ? `around ${formatPrice(marketZone.low)}\u2013${formatPrice(marketZone.high)}`
             : `around ${formatPrice(marketZone.low)}`,
         priceStatus:
           Number.isFinite(currentPrice) &&
@@ -10083,13 +10121,13 @@ function formatPreferredEntryZone(visualReview = null, directionalBias = "") {
   const zoneText = String(area.zoneText || "").trim();
 
   const zoneTextHasRange =
-    /\d+(?:\.\d+)?\s*(?:-|â€“|to)\s*\d+(?:\.\d+)?/i.test(zoneText);
+    /\d+(?:\.\d+)?\s*(?:-|\u2013|â€“|to)\s*\d+(?:\.\d+)?/i.test(zoneText);
 
   let priceText = zoneText;
   if (hasLow && hasHigh) {
     const zoneMin = Math.min(low, high);
     const zoneMax = Math.max(low, high);
-    priceText = `${formatPrice(zoneMin)}â€“${formatPrice(zoneMax)}`;
+    priceText = `${formatPrice(zoneMin)}\u2013${formatPrice(zoneMax)}`;
   } else if (zoneTextHasRange) {
     priceText = zoneText;
   } else if (hasLow) {
@@ -10139,12 +10177,12 @@ function formatPreferredEntryZone(visualReview = null, directionalBias = "") {
 function containsMalformedPriceRange(value = "") {
   const text = String(value || "").trim();
 
-  if (/\d+(?:\.\d+)?\s*(?:-|â€“|â€”|to)\s*$/i.test(text)) {
+  if (/\d+(?:\.\d+)?\s*(?:-|\u2013|\u2014|â€“|â€”|to)\s*$/i.test(text)) {
     return true;
   }
 
   const range = text.match(
-    /(\d+(?:\.\d+)?)\s*(?:-|â€“|â€”|to)\s*(\d+\.?\d*)\s*$/i
+    /(\d+(?:\.\d+)?)\s*(?:-|\u2013|\u2014|â€“|â€”|to)\s*(\d+\.?\d*)\s*$/i
   );
 
   if (!range) return false;
@@ -10357,8 +10395,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.9.0";
-const CSA_BUILD_ID = "CSA-v4.10.9-final-hierarchy-preservation-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.10.0";
+const CSA_BUILD_ID = "CSA-v4.10.10-utf8-range-format-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -10561,7 +10599,7 @@ function normalizeZone(preferredArea = {}, symbol = "") {
   if (zoneLow !== null && zoneHigh !== null) {
     zoneText =
       Math.abs(zoneHigh - zoneLow) > 1e-10
-        ? `${formatPrice(zoneLow, symbol)}â€“${formatPrice(zoneHigh, symbol)}`
+        ? `${formatPrice(zoneLow, symbol)}\u2013${formatPrice(zoneHigh, symbol)}`
         : `${formatPrice(zoneLow, symbol)}`;
   } else if (zoneLow !== null || zoneHigh !== null) {
     zoneText = formatPrice(zoneLow ?? zoneHigh, symbol);
@@ -15298,7 +15336,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.9";
+const CSA_SELECTOR_VERSION = "4.5.10";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -22469,7 +22507,7 @@ function formatRankedArea(area, fallbackType = "entry") {
   ) {
     const low = Math.min(zoneLow, zoneHigh);
     const high = Math.max(zoneLow, zoneHigh);
-    return `${base} around ${formatPrice(low)}â€“${formatPrice(high)}`;
+    return `${base} around ${formatPrice(low)}\u2013${formatPrice(high)}`;
   }
 
   if (exactLevel) return `${base} around ${exactLevel}`;
@@ -23773,7 +23811,7 @@ function buildStarterCoachSummary(options = {}) {
 
     zoneText =
       Math.abs(high - low) > 1e-10
-        ? `around ${formatPrice(low)}â€“${formatPrice(high)}`
+        ? `around ${formatPrice(low)}\u2013${formatPrice(high)}`
         : `around ${formatPrice(low)}`;
   }
 
@@ -25874,11 +25912,14 @@ ${(visualReview?.strategyMissingInformation || []).length
           chartCutoff.resolvedDate ||
           selectedDateText ||
           null,
-        analysis,
+        analysis:
+          normalizeUserFacingTypographyDeep(analysis),
         chartDetection,
-        visualReview,
+        visualReview:
+          normalizeUserFacingTypographyDeep(visualReview),
         marketReference,
-        dashboardFeedback,
+        dashboardFeedback:
+          normalizeUserFacingTypographyDeep(dashboardFeedback),
         dateDecision,
         analysisFramework:
           selectedStrategy.analysisFramework,
@@ -25888,7 +25929,7 @@ ${(visualReview?.strategyMissingInformation || []).length
           selectedStrategy.snapshot,
       });
 
-    finalClientResponse = {
+    finalClientResponse = normalizeUserFacingTypographyDeep({
       ...finalClientResponse,
       savedToJournal:
         journalSave.savedToJournal,
@@ -25900,7 +25941,7 @@ ${(visualReview?.strategyMissingInformation || []).length
         journalSave.chartImagePath,
       entitlement:
         updatedEntitlement,
-    };
+    });
 
     csaTimingLog(
       "total_analysis_to_commit",
