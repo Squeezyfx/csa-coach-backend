@@ -10395,8 +10395,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.12.0";
-const CSA_BUILD_ID = "CSA-v4.10.12-historical-direction-display-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.13.0";
+const CSA_BUILD_ID = "CSA-v4.10.13-strict-level-overlap-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15226,7 +15226,27 @@ function reconcileFrameworkLevelWithVisibleChart({
         !String(candidate.periodIdentity || candidate.periodHint || "").trim() &&
         Math.abs(Number(candidate.price) - basePrice) <= tolerance;
 
-      if (!periodMatches && !unhintedPriorConversionBridge) return false;
+      // V4.10.13: a printed/marked broker level within the strict
+      // reconciliation tolerance may refine an already-locked converted S/R
+      // level even when the vision layer attached the wrong side hint. The
+      // deterministic framework still owns period identity and area type;
+      // this bridge only replaces the nearby display price.
+      const exactMarkedPriorConversionBridge =
+        ["converted resistance", "converted support"].includes(
+          String(frameworkType || "").toLowerCase()
+        ) &&
+        [
+          "visible_exact_marked_price",
+          "visible_exact_platform_price",
+          "per_target_framework_price_map_exact",
+        ].includes(String(candidate.source || "")) &&
+        Math.abs(Number(candidate.price) - basePrice) <= tolerance;
+
+      if (
+        !periodMatches &&
+        !unhintedPriorConversionBridge &&
+        !exactMarkedPriorConversionBridge
+      ) return false;
 
       const candidateSide = String(
         candidate.sideHint || ""
@@ -15236,6 +15256,7 @@ function reconcileFrameworkLevelWithVisibleChart({
       ).toLowerCase();
 
       if (
+        !exactMarkedPriorConversionBridge &&
         candidateSide &&
         expectedSide &&
         candidateSide !== expectedSide
@@ -15336,7 +15357,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.12";
+const CSA_SELECTOR_VERSION = "4.5.13";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -18652,10 +18673,15 @@ function rankRawEntryAreas({
         const convertedSrReinforcement =
           compatibleConvertedTypes.has(existingType) && insideOrNearZone;
 
+        // V4.10.13: sharing the same period and S/D type is not enough to
+        // refine an authoritative framework area. The cutoff-day base must
+        // overlap that area's price. Without this gate, an intraday base near
+        // 0.6972 could incorrectly replace Wednesday supply near 0.6989.
         const samePeriodSdRefinement =
           existingType === expectedSamePeriodSdType &&
           currentFrameworkPeriodLabel &&
-          existingPeriod === currentFrameworkPeriodLabel;
+          existingPeriod === currentFrameworkPeriodLabel &&
+          insideOrNearZone;
 
         return {
           index,
@@ -21797,19 +21823,29 @@ function buildValidatedAnalysisFacts({
     )
     .filter((price) => price !== null);
 
-  const zoneMarkingTolerance = Math.max(
-    getCleanBreakTolerance(submittedInstrument) * 2,
-    Math.abs(Number(currentPrice || 0)) * 0.00002
+  const markedCenterTolerance = Math.max(
+    getCleanBreakTolerance(submittedInstrument) * 0.5,
+    Math.abs(Number(currentPrice || 0)) * 0.00001
   );
 
+  const preferredAreaCenter =
+    asPositiveNumber(preferredArea?.authoritativeCenter) ||
+    asPositiveNumber(preferredArea?.resolvedEntryPrice) ||
+    asPositiveNumber(preferredArea?.chartReconciledCenter) ||
+    asPositiveNumber(preferredArea?.frameworkCenter) ||
+    (zone.zoneLow !== null && zone.zoneHigh !== null
+      ? (zone.zoneLow + zone.zoneHigh) / 2
+      : zone.zoneLow ?? zone.zoneHigh);
+
+  // V4.10.13: credit a user's marked area only when an actual visible price
+  // matches the selected entry center. Merely falling somewhere inside a
+  // broad structural zone is not evidence that the trader marked that entry.
   const preferredAreaMarked =
     chartMarkingStatus === "marked" &&
-    zone.zoneLow !== null &&
-    zone.zoneHigh !== null &&
+    preferredAreaCenter !== null &&
     visibleUserMarkedPrices.some(
       (price) =>
-        price >= zone.zoneLow - zoneMarkingTolerance &&
-        price <= zone.zoneHigh + zoneMarkingTolerance
+        Math.abs(price - preferredAreaCenter) <= markedCenterTolerance
     );
 
   const normalizedSubmittedNotes = String(submittedNotes || "").trim();
