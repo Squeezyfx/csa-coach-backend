@@ -10395,8 +10395,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.10.0";
-const CSA_BUILD_ID = "CSA-v4.10.10-utf8-range-format-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.11.0";
+const CSA_BUILD_ID = "CSA-v4.10.11-reference-path-order-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15336,7 +15336,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.10";
+const CSA_SELECTOR_VERSION = "4.5.11";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19765,75 +19765,21 @@ function rankRawEntryAreas({
     })),
   });
 
-  // v4.7.7 â€” USER-FACING STRUCTURAL RELEVANCE FILTER
-  // Keep historical levels internally, but do not talk about an older/deeper
-  // converted S/R when a later-period demand/supply now sits between that old
-  // level and current price. This follows the CSA progression rule: the newer
-  // structural area supersedes the older deeper converted level for coaching
-  // relevance, even though the older level may remain in the internal map.
-  const userFacingReferenceAreas = structuralReferenceAreas.filter((candidate) => {
-    const candidateType = String(candidate?.areaType || "").toLowerCase();
-    const candidatePrice = Number(candidate?.authoritativeCenter);
-    const candidateIndex = Number(candidate?.sourceIndex ?? -1);
-
-    if (!Number.isFinite(candidatePrice)) return false;
-
-    if (direction === "bullish" && candidateType === "converted support") {
-      const supersededByLaterDemand = structuralReferenceAreas.some((other) => {
-        if (other === candidate) return false;
-        const otherType = String(other?.areaType || "").toLowerCase();
-        const otherPrice = Number(other?.authoritativeCenter);
-        const otherIndex = Number(other?.sourceIndex ?? -1);
-        return (
-          otherType === "demand" &&
-          Number.isFinite(otherPrice) &&
-          otherIndex > candidateIndex &&
-          otherPrice > candidatePrice &&
-          otherPrice < Number(currentPrice)
-        );
-      });
-
-      if (supersededByLaterDemand) {
-        console.log("CSA user-facing reference suppressed:", {
-          direction,
-          areaType: candidate.areaType,
-          levelText: candidate.levelText,
-          frameworkPeriod: candidate.frameworkPeriod,
-          reason: "older_deeper_converted_support_superseded_by_later_demand",
-        });
-        return false;
-      }
-    }
-
-    if (direction === "bearish" && candidateType === "converted resistance") {
-      const supersededByLaterSupply = structuralReferenceAreas.some((other) => {
-        if (other === candidate) return false;
-        const otherType = String(other?.areaType || "").toLowerCase();
-        const otherPrice = Number(other?.authoritativeCenter);
-        const otherIndex = Number(other?.sourceIndex ?? -1);
-        return (
-          otherType === "supply" &&
-          Number.isFinite(otherPrice) &&
-          otherIndex > candidateIndex &&
-          otherPrice < candidatePrice &&
-          otherPrice > Number(currentPrice)
-        );
-      });
-
-      if (supersededByLaterSupply) {
-        console.log("CSA user-facing reference suppressed:", {
-          direction,
-          areaType: candidate.areaType,
-          levelText: candidate.levelText,
-          frameworkPeriod: candidate.frameworkPeriod,
-          reason: "older_farther_converted_resistance_superseded_by_later_supply",
-        });
-        return false;
-      }
-    }
-
-    return true;
-  });
+  // v4.10.11 — USER-FACING REFERENCE PATH ORDER
+  // A later-period supply/demand area must not erase an independently valid
+  // converted S/R reference that price will encounter before a deeper area.
+  // Keep every finite structural reference here and let the price-path sort
+  // below decide which two references are most relevant for coaching.
+  //
+  // XAUUSD regression: after demand around 4224 failed the Fib gate, potential
+  // converted support around 4106 had to appear before the much deeper demand
+  // around 4066. The former period-recency suppression removed 4106 and then
+  // allowed 4066 into the beginner-facing narrative, reversing the real path.
+  const userFacingReferenceAreas = structuralReferenceAreas.filter(
+    (candidate) =>
+      Number.isFinite(Number(candidate?.authoritativeCenter)) &&
+      Number.isFinite(Number(candidate?.distanceFromPrice))
+  );
 
   const referenceAreas = userFacingReferenceAreas
     .sort((a, b) => {
@@ -19843,6 +19789,21 @@ function rankRawEntryAreas({
       return Number(b.structuralScore || 0) - Number(a.structuralScore || 0);
     })
     .slice(0, 3);
+
+  console.log("CSA user-facing reference path order:", {
+    buildId: CSA_BUILD_ID,
+    direction,
+    currentPrice: Number(currentPrice),
+    references: referenceAreas.map((candidate, index) => ({
+      order: index + 1,
+      areaType: candidate?.areaType || null,
+      levelText: candidate?.levelText || null,
+      frameworkPeriod: candidate?.frameworkPeriod || null,
+      distanceFromPrice: Number(candidate?.distanceFromPrice),
+      fibPassed: candidate?.fibPassed === true,
+    })),
+    rule: "failed_fib_references_follow_actual_price_path_before_period_recency_or_area_type",
+  });
 
   return {
     ...sequencedResult,
@@ -23200,11 +23161,11 @@ function buildControlledFeedback({
     weaknesses.push(
       facts.direction === "bearish"
         ? referenceAreasText
-          ? `The nearby ${referenceAreasText} remain structural references, but neither currently qualifies as a strong sell entry.`
+          ? `The ${referenceAreasText} remain structural references, but neither currently qualifies as a strong sell entry.`
           : "No sufficiently strong resistance or supply area has been validated for the planned sell yet."
         : facts.direction === "bullish"
         ? referenceAreasText
-          ? `The nearby ${referenceAreasText} remain structural references, but neither currently qualifies as a strong buy entry.`
+          ? `The ${referenceAreasText} remain structural references, but neither currently qualifies as a strong buy entry.`
           : "No sufficiently strong support or demand area has been validated for the planned buy yet."
         : "No sufficiently strong entry area has been validated yet."
     );
