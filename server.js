@@ -5755,53 +5755,35 @@ async function readFrameworkPricesBatchFromChart({
     };
   }
 
-  const compactTargets = targets.map((target, index) => ({
-    id: index + 1,
-    period: target.period,
-    side: target.side,
-    areaType: target.areaType,
-    executionOrder: target.executionOrder,
-    frameworkPrice: target.frameworkPrice,
-  }));
-
   const prompt = `
 You have ONE narrow chart-reading task.
 
-Read chart-visible prices for several ALREADY-SELECTED CSA framework levels.
+Independently read every USER-DRAWN HORIZONTAL LINE price label visible on the chart.
 Do NOT perform trading analysis.
 Do NOT rank entries.
 Do NOT calculate Fibonacci.
-Do NOT change a target's period, side, or role.
+Do NOT infer support, resistance, supply, demand, period, side, or entry role.
+Do NOT use any market-data or framework price as a hint.
 
 TIMEFRAME: ${timeframe}
-FRAMEWORK RULE: ${structureLabel}
 
-AUTHORITATIVE TARGETS:
-${JSON.stringify(compactTargets)}
-
-STRICT IDENTITY RULES:
-1. Treat each target independently.
-2. Match the exact TARGET PERIOD and TARGET SIDE only.
-3. Never use a line from another period to fill a target.
-4. Never reuse one visible line for two different targets unless both targets genuinely refer to the same authoritative level.
-5. MARKET-DATA REFERENCE PRICE is a strong location anchor, not permission to invent a chart label.
-6. Prefer an exact printed price-axis label when readable.
-7. If no exact printed price is readable but the matching high/low is visually clear, use approximatePrice.
-8. If the visually identified line is materially far from its own reference price, return null for that target rather than borrowing another line.
-9. Never invent digits.
-10. Return one result for EVERY target id, preserving the same id, period and side.
+STRICT READING RULES:
+1. Scan the full right-side price axis from top to bottom.
+2. Return every coloured or dashed horizontal line that crosses the chart and has a printed price tag or price-axis label.
+3. Copy the printed digits exactly into displayedPrice and platformLabel.
+4. Exclude the live/current-price label, bid/ask quote, OHLC header values, ordinary axis tick labels, candle prices, and dates.
+5. If a horizontal line is visible but its printed digits are not readable, set displayedPrice to null. Do not estimate or reconstruct digits.
+6. Never invent digits.
+7. Return the lines in visual top-to-bottom order.
 
 Return JSON only:
 {
-  "matches": [
+  "lines": [
     {
-      "id": 1,
-      "period": "exact target period",
-      "side": "high | low",
+      "colour": "blue | red | green | orange | other",
       "displayedPrice": null,
-      "approximatePrice": null,
       "platformLabel": null,
-      "evidence": null,
+      "evidence": "brief visual evidence identifying the horizontal line",
       "confidence": "high | medium | low"
     }
   ]
@@ -5811,26 +5793,26 @@ Return JSON only:
     const response = await runVisionModel({
       systemPrompt: prompt,
       userText:
-        "Read only the listed authoritative framework prices from this chart. Return JSON only.",
+        "Read only exact printed prices attached to user-drawn horizontal chart lines. Return JSON only.",
       imageBase64,
       mimeType,
       maxTokens: 1200,
-      openaiModel: "gpt-4.1-mini",
+      openaiModel: "gpt-4.1",
       claudeModel: CLAUDE_MODEL,
       temperature: 0,
       imageDetail: "high",
     });
 
     const parsed = extractJsonObject(response.text || "");
-    const rawMatches = Array.isArray(parsed?.matches)
-      ? parsed.matches
+    const rawLines = Array.isArray(parsed?.lines)
+      ? parsed.lines
       : [];
 
-    if (!rawMatches.length) {
+    if (!rawLines.length) {
       return {
         ok: false,
         matches: [],
-        reason: "Batch framework price response contained no matches.",
+        reason: "Independent horizontal-line reader returned no exact lines.",
         provider: response.provider,
         model: response.model,
       };
@@ -5854,72 +5836,56 @@ Return JSON only:
       Number(atr || 0) * 0.25
     );
 
-    const normalizedMatches = targets.map((target, index) => {
-      const raw =
-        rawMatches.find(
-          (item) => Number(item?.id) === index + 1
-        ) ||
-        rawMatches.find(
-          (item) =>
-            String(item?.period || "").trim() ===
-              String(target.period || "").trim() &&
-            String(item?.side || "").trim().toLowerCase() ===
-              String(target.side || "").trim().toLowerCase()
-        ) ||
-        {};
+    const independentlyReadLines = rawLines
+      .map((raw, index) => {
+        const displayedPrice =
+          nullablePositiveNumber(raw?.displayedPrice) ||
+          extractNumericPriceFromLabel(raw?.platformLabel);
 
-      const displayedPrice =
-        nullablePositiveNumber(raw?.displayedPrice) ||
-        extractNumericPriceFromLabel(raw?.platformLabel);
+        if (displayedPrice === null) return null;
 
-      const approximatePrice =
-        displayedPrice === null
-          ? nullablePositiveNumber(raw?.approximatePrice)
-          : null;
+        const confidence = ["high", "medium", "low"].includes(
+          String(raw?.confidence || "").toLowerCase()
+        )
+          ? String(raw.confidence).toLowerCase()
+          : "low";
 
-      const confidence = ["high", "medium", "low"].includes(
-        String(raw?.confidence || "").toLowerCase()
-      )
-        ? String(raw.confidence).toLowerCase()
-        : "low";
+        return {
+          index,
+          displayedPrice,
+          platformLabel:
+            String(raw?.platformLabel || "").trim() ||
+            String(displayedPrice),
+          colour: String(raw?.colour || "other").toLowerCase(),
+          evidence: safeUserText(raw?.evidence || ""),
+          confidence,
+        };
+      })
+      .filter(Boolean)
+      .filter((line, index, lines) =>
+        lines.findIndex(
+          (candidate) =>
+            Math.abs(
+              candidate.displayedPrice - line.displayedPrice
+            ) <= Number.EPSILON * 100
+        ) === index
+      );
 
-      const candidatePrice =
-        displayedPrice || approximatePrice;
+    const normalizedMatches = targets.map((target) => {
+      const nearest = independentlyReadLines
+        .map((line) => ({
+          ...line,
+          difference: Math.abs(
+            Number(line.displayedPrice) -
+            Number(target.frameworkPrice)
+          ),
+        }))
+        .sort((a, b) => a.difference - b.difference)[0] || null;
 
-      const selectedTolerance =
-        displayedPrice !== null
-          ? exactLabelTolerance
-          : standardTolerance;
-
-      const candidateDifference =
-        candidatePrice !== null
-          ? Math.abs(
-              Number(candidatePrice) -
-              Number(target.frameworkPrice)
-            )
-          : null;
-
+      const candidateDifference = nearest?.difference ?? null;
       const withinTolerance =
         candidateDifference !== null &&
-        candidateDifference <= selectedTolerance;
-
-      if (candidatePrice !== null && !withinTolerance) {
-        console.log(
-          "Batch framework price rejected as too far:",
-          {
-            period: target.period,
-            side: target.side,
-            areaType: target.areaType,
-            frameworkPrice: target.frameworkPrice,
-            candidatePrice,
-            difference: candidateDifference,
-            standardTolerance,
-            exactLabelTolerance,
-            selectedTolerance,
-            exactPrintedLabel: displayedPrice !== null,
-          }
-        );
-      }
+        candidateDifference <= exactLabelTolerance;
 
       return {
         period: target.period,
@@ -5927,40 +5893,42 @@ Return JSON only:
         frameworkPrice: target.frameworkPrice,
         areaType: target.areaType,
         executionOrder: target.executionOrder,
-        displayedPrice:
-          withinTolerance && displayedPrice !== null
-            ? displayedPrice
-            : null,
-        approximatePrice:
-          withinTolerance && displayedPrice === null
-            ? approximatePrice
-            : null,
-        platformLabel:
-          String(raw?.platformLabel || "").trim(),
-        evidence:
-          safeUserText(raw?.evidence || ""),
-        confidence,
+        displayedPrice: withinTolerance
+          ? nearest.displayedPrice
+          : null,
+        approximatePrice: null,
+        platformLabel: withinTolerance
+          ? nearest.platformLabel
+          : "",
+        evidence: withinTolerance
+          ? nearest.evidence
+          : "",
+        confidence: withinTolerance
+          ? nearest.confidence
+          : "low",
         withinTolerance,
         modelUsed: response.model,
         provider: response.provider,
         difference: candidateDifference,
         standardTolerance,
         exactLabelTolerance,
-        selectedTolerance,
+        selectedTolerance: exactLabelTolerance,
         batchRead: true,
+        independentLineRead: true,
       };
     });
 
     return {
       ok: true,
       matches: normalizedMatches,
+      independentlyReadLines,
       reason: "",
       provider: response.provider,
       model: response.model,
     };
   } catch (error) {
     console.warn(
-      "Batch framework price reader failed; using per-target fallback:",
+      "Independent horizontal-line reader failed; retaining framework prices:",
       error?.message || error
     );
 
@@ -5970,7 +5938,7 @@ Return JSON only:
       reason:
         safeUserText(
           error?.message ||
-            "Batch framework price reader failed."
+            "Independent horizontal-line reader failed."
         ),
     };
   }
@@ -6016,15 +5984,12 @@ async function extractVisibleFrameworkPriceMap({
     targets,
   });
 
-  let matches = [];
-
   /*
-   * V4.6.2 PERFORMANCE:
-   * Read all authoritative targets in ONE tightly constrained vision call.
-   * The backend still performs target-by-target tolerance validation.
-   *
-   * If the batch response fails or is incomplete, fall back automatically
-   * to the proven independent one-target readers from v4.6.1.
+   * V4.10.14 PRICE-LABEL AUTHORITY:
+   * Read chart labels without disclosing framework prices to the model, then
+   * map those independently read labels to deterministic targets server-side.
+   * Never fall back to anchor-fed target readers, because they can repeat the
+   * supplied framework number instead of reading the printed chart label.
    */
   const batchRead =
     await readFrameworkPricesBatchFromChart({
@@ -6041,58 +6006,31 @@ async function extractVisibleFrameworkPriceMap({
     Array.isArray(batchRead?.matches) &&
     batchRead.matches.length === targets.length;
 
-  if (batchComplete) {
-    matches = batchRead.matches;
-  } else {
-    const maxConcurrentFocusedReads = Math.min(
-      5,
-      Math.max(1, targets.length)
-    );
-
-    for (
-      let startIndex = 0;
-      startIndex < targets.length;
-      startIndex += maxConcurrentFocusedReads
-    ) {
-      const batch =
-        targets.slice(
-          startIndex,
-          startIndex + maxConcurrentFocusedReads
-        );
-
-      const batchMatches =
-        await Promise.all(
-          batch.map((target) =>
-            readSingleFrameworkPriceFromChart({
-              imageBase64,
-              mimeType,
-              target,
-              timeframe,
-              structureLabel,
-              marketReference,
-            })
-          )
-        );
-
-      matches.push(...batchMatches);
-    }
-  }
+  const matches = batchComplete
+    ? batchRead.matches
+    : [];
 
   console.log("Focused framework price extraction:", {
     timeframe,
-    mode:
-      batchComplete
-        ? "single_multi_target_request"
-        : "per_target_fallback",
+    mode: batchComplete
+      ? "independent_line_labels_then_server_mapping"
+      : "independent_line_reader_failed_framework_prices_retained",
     targetCount:
       targets.length,
     matches,
   });
 
   return {
-    ok: true,
+    ok: batchComplete,
     matches,
-    reason: "",
+    independentlyReadLines:
+      batchRead?.independentlyReadLines || [],
+    reason: batchComplete
+      ? ""
+      : safeUserText(
+          batchRead?.reason ||
+          "Independent line-label reader failed."
+        ),
   };
 }
 
@@ -7535,6 +7473,11 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
     matches: Array.isArray(priceMap?.matches)
       ? priceMap.matches
       : [],
+    independentlyReadLines: Array.isArray(
+      priceMap?.independentlyReadLines
+    )
+      ? priceMap.independentlyReadLines
+      : [],
     reason: safeUserText(priceMap?.reason || ""),
   };
 
@@ -7571,7 +7514,9 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
         frameworkPeriodHint: match?.period || null,
         frameworkSideHint: match?.side || null,
         extractionSource:
-          "per_target_framework_price_reader",
+          match?.independentLineRead === true
+            ? "independent_horizontal_line_reader_exact"
+            : "per_target_framework_price_reader",
         extractionConfidence:
           match?.confidence || "high",
       });
@@ -7589,7 +7534,9 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
         frameworkPeriodHint: match?.period || null,
         frameworkSideHint: match?.side || null,
         extractionSource:
-          "per_target_framework_price_reader_estimate",
+          match?.independentLineRead === true
+            ? "independent_horizontal_line_reader_estimate"
+            : "per_target_framework_price_reader_estimate",
         extractionConfidence:
           match?.confidence || "medium",
       });
@@ -7973,6 +7920,9 @@ Return exactly this JSON shape:
               extractNumericPriceFromLabel(item?.description),
             approximatePrice: nullablePositiveNumber(item?.approximatePrice),
             platformLabel: String(item?.platformLabel || "").trim(),
+            frameworkPeriodHint:
+              String(item?.frameworkPeriodHint || "").trim() || null,
+            extractionSource: "full_visual_review",
           }))
         : [],
       visibleHorizontalLines: Array.isArray(parsed.visibleHorizontalLines)
@@ -7985,6 +7935,9 @@ Return exactly this JSON shape:
               extractNumericPriceFromLabel(item?.description),
             approximatePrice: nullablePositiveNumber(item?.approximatePrice),
             platformLabel: String(item?.platformLabel || "").trim(),
+            frameworkPeriodHint:
+              String(item?.frameworkPeriodHint || "").trim() || null,
+            extractionSource: "full_visual_review",
           }))
         : [],
       csaSimilarities: normalizeArrayOfStrings(parsed.csaSimilarities, []).map(safeUserText).slice(0, 8),
@@ -10395,8 +10348,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.13.0";
-const CSA_BUILD_ID = "CSA-v4.10.13-strict-level-overlap-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.14.0";
+const CSA_BUILD_ID = "CSA-v4.10.14-independent-line-label-authority";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14865,7 +14818,9 @@ function collectVisibleChartPriceEvidence({
         price: exact,
         type: "label",
         source:
-          "per_target_framework_price_map_exact",
+          match?.independentLineRead === true
+            ? "independent_horizontal_line_map_exact"
+            : "per_target_framework_price_map_exact",
         description:
           match?.platformLabel ||
           match?.evidence ||
@@ -14882,7 +14837,9 @@ function collectVisibleChartPriceEvidence({
         price: approximate,
         type: "label",
         source:
-          "per_target_framework_price_map_estimate",
+          match?.independentLineRead === true
+            ? "independent_horizontal_line_map_estimate"
+            : "per_target_framework_price_map_estimate",
         description:
           match?.evidence ||
           `${match?.period || ""} ${match?.side || ""}`,
@@ -14970,7 +14927,11 @@ function collectVisibleChartPriceEvidence({
     addEvidence({
       price: exactPrice,
       type: String(item?.type || "").toLowerCase(),
-      source: "visible_exact_marked_price",
+      source:
+        item?.extractionSource ===
+        "independent_horizontal_line_reader_exact"
+          ? "independent_horizontal_line_exact"
+          : "visible_exact_marked_price",
       description:
         item?.platformLabel ||
         item?.description ||
@@ -14982,8 +14943,10 @@ function collectVisibleChartPriceEvidence({
         "",
       sideHint: item?.frameworkSideHint || "",
       confidence:
-        item?.extractionSource ===
-        "per_target_framework_price_reader"
+        [
+          "independent_horizontal_line_reader_exact",
+          "per_target_framework_price_reader",
+        ].includes(item?.extractionSource)
           ? 30
           : 10,
     });
@@ -15207,6 +15170,19 @@ function reconcileFrameworkLevelWithVisibleChart({
     .filter((candidate) => {
       if (!typeCompatible(candidate.type)) return false;
 
+      // V4.10.14: only the isolated price-label reader may replace a
+      // deterministic framework price. The full review sees framework context
+      // and therefore cannot independently prove a printed chart label.
+      const trustedPriceSource = [
+        "independent_horizontal_line_map_exact",
+        "independent_horizontal_line_exact",
+        "independent_horizontal_line_map_estimate",
+        "per_target_framework_price_map_exact",
+        "per_target_framework_price_map_estimate",
+      ].includes(String(candidate.source || ""));
+
+      if (!trustedPriceSource) return false;
+
       // A visible broker price may refine the market-data price only when it
       // belongs to the SAME authoritative period. Period identity remains
       // non-negotiable.
@@ -15224,6 +15200,11 @@ function reconcileFrameworkLevelWithVisibleChart({
           String(frameworkType || "").toLowerCase()
         ) &&
         !String(candidate.periodIdentity || candidate.periodHint || "").trim() &&
+        [
+          "independent_horizontal_line_exact",
+          "independent_horizontal_line_map_exact",
+          "per_target_framework_price_map_exact",
+        ].includes(String(candidate.source || "")) &&
         Math.abs(Number(candidate.price) - basePrice) <= tolerance;
 
       // V4.10.13: a printed/marked broker level within the strict
@@ -15236,9 +15217,9 @@ function reconcileFrameworkLevelWithVisibleChart({
           String(frameworkType || "").toLowerCase()
         ) &&
         [
-          "visible_exact_marked_price",
-          "visible_exact_platform_price",
           "per_target_framework_price_map_exact",
+          "independent_horizontal_line_exact",
+          "independent_horizontal_line_map_exact",
         ].includes(String(candidate.source || "")) &&
         Math.abs(Number(candidate.price) - basePrice) <= tolerance;
 
@@ -15264,9 +15245,10 @@ function reconcileFrameworkLevelWithVisibleChart({
         return false;
       }
 
-      const dedicatedExact =
-        String(candidate.source || "") ===
-        "per_target_framework_price_map_exact";
+      const dedicatedExact = [
+        "per_target_framework_price_map_exact",
+        "independent_horizontal_line_map_exact",
+      ].includes(String(candidate.source || ""));
 
       const allowedTolerance = dedicatedExact
         ? dedicatedExactTolerance
@@ -15280,9 +15262,10 @@ function reconcileFrameworkLevelWithVisibleChart({
     .map((candidate) => ({
       ...candidate,
       distance: Math.abs(Number(candidate.price) - basePrice),
-      exactPeriodPrice:
-        String(candidate.source || "") ===
+      exactPeriodPrice: [
         "per_target_framework_price_map_exact",
+        "independent_horizontal_line_map_exact",
+      ].includes(String(candidate.source || "")),
       convertedEntryBoundary:
         String(candidate.source || "") ===
         "visual_converted_area_entry_boundary",
@@ -15357,7 +15340,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.13";
+const CSA_SELECTOR_VERSION = "4.5.14";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -21815,11 +21798,15 @@ function buildValidatedAnalysisFacts({
     : [];
 
   const visibleUserMarkedPrices = visibleUserMarkedLevels
+    .filter(
+      (item) =>
+        item?.extractionSource ===
+          "independent_horizontal_line_reader_exact" &&
+        nullablePositiveNumber(item?.displayedPrice) !== null
+    )
     .map(
       (item) =>
-        nullablePositiveNumber(item?.displayedPrice) ||
-        nullablePositiveNumber(item?.approximatePrice) ||
-        extractNumericPriceFromLabel(item?.platformLabel)
+        nullablePositiveNumber(item?.displayedPrice)
     )
     .filter((price) => price !== null);
 
@@ -21837,9 +21824,10 @@ function buildValidatedAnalysisFacts({
       ? (zone.zoneLow + zone.zoneHigh) / 2
       : zone.zoneLow ?? zone.zoneHigh);
 
-  // V4.10.13: credit a user's marked area only when an actual visible price
-  // matches the selected entry center. Merely falling somewhere inside a
-  // broad structural zone is not evidence that the trader marked that entry.
+  // V4.10.14: credit a user's marked area only when an independently read
+  // exact horizontal-line label matches the selected entry center. Values
+  // inferred by the full review or calculated by the framework cannot prove
+  // what the trader marked.
   const preferredAreaMarked =
     chartMarkingStatus === "marked" &&
     preferredAreaCenter !== null &&
@@ -25172,7 +25160,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     console.log("CSA PERFORMANCE CONFIG:", {
       buildId: CSA_BUILD_ID,
       focusedPriceMode:
-        "single_multi_target_with_per_target_fallback",
+        "independent_line_labels_then_server_mapping",
       fullVisualMaxTokens: 2000,
       visualAndPriceMap:
         "parallel",
