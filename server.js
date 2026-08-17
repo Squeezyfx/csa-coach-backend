@@ -10348,8 +10348,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.14.0";
-const CSA_BUILD_ID = "CSA-v4.10.14-independent-line-label-authority";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.15.0";
+const CSA_BUILD_ID = "CSA-v4.10.15-complete-entry-and-reference-feedback";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15340,7 +15340,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.14";
+const CSA_SELECTOR_VERSION = "4.5.15";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -18594,6 +18594,19 @@ function rankRawEntryAreas({
       symbol,
     });
 
+    // V4.10.15: use a narrowly wider edge allowance only when a confirmed
+    // cutoff-period displacement base refines the authoritative supply/demand
+    // area from that exact same framework period. A base is candle-defined and
+    // may stop slightly inside the broader period area; requiring the stricter
+    // S/R overlap tolerance removed the legitimate AUDUSD supply zone at
+    // 0.69899-0.69947 when the framework anchor was near 0.69972.
+    //
+    // This allowance remains deliberately small (1.5 clean-break tolerances)
+    // and cannot rescue a remote base. Therefore the July-29 base near
+    // 0.69706-0.69723 still cannot replace supply near 0.69887.
+    const samePeriodSdEdgeTolerance =
+      reinforcementOverlapTolerance * 1.5;
+
     /*
      * V4.7.6 â€” FRAMEWORK S/R REMAINS THE ENTRY IDENTITY.
      *
@@ -18653,6 +18666,13 @@ function rankRawEntryAreas({
           existingPrice >= normalizedIntradayLow - reinforcementOverlapTolerance &&
           existingPrice <= normalizedIntradayHigh + reinforcementOverlapTolerance;
 
+        const insideOrNearSamePeriodSdZone =
+          Number.isFinite(existingPrice) &&
+          Number.isFinite(normalizedIntradayLow) &&
+          Number.isFinite(normalizedIntradayHigh) &&
+          existingPrice >= normalizedIntradayLow - samePeriodSdEdgeTolerance &&
+          existingPrice <= normalizedIntradayHigh + samePeriodSdEdgeTolerance;
+
         const convertedSrReinforcement =
           compatibleConvertedTypes.has(existingType) && insideOrNearZone;
 
@@ -18664,7 +18684,7 @@ function rankRawEntryAreas({
           existingType === expectedSamePeriodSdType &&
           currentFrameworkPeriodLabel &&
           existingPeriod === currentFrameworkPeriodLabel &&
-          insideOrNearZone;
+          insideOrNearSamePeriodSdZone;
 
         return {
           index,
@@ -18761,6 +18781,8 @@ function rankRawEntryAreas({
         structuralZoneHigh: normalizedIntradayHigh,
         reinforcementOverlapTolerance,
         reinforcementOverlapToleranceSource: "instrument_clean_break",
+        samePeriodSdEdgeTolerance,
+        samePeriodSdEdgeToleranceSource: "1.5_x_instrument_clean_break",
         rule: isSamePeriodSdRefinement
           ? "intraday_base_refines_existing_same_period_supply_demand_without_inventing_new_framework_area"
           : "intraday_base_reinforces_overlapping_framework_sr_instead_of_becoming_separate_entry",
@@ -23153,6 +23175,14 @@ function buildControlledFeedback({
   const hasSingleReferenceArea =
     referenceAreaTexts.length === 1;
 
+  // V4.10.15: a valid Entry 1 must not make the next important structural
+  // level disappear. Entry candidates and reference-only levels answer two
+  // different questions: where a qualified setup exists, and what structure
+  // price may encounter next. Keep the closest failed-Fib structural level in
+  // the beginner-facing action, but never relabel it as Entry 2.
+  const closestReferenceAreaText =
+    referenceAreaTexts[0] || "";
+
   const directionText = directionDisplay(facts);
   const action = area.direction === "sell" ? "sell" : area.direction === "buy" ? "buy" : "trade";
   const opposingLevel = facts.direction === "bearish" ? "support" : "resistance";
@@ -23430,6 +23460,15 @@ function buildControlledFeedback({
   } else {
     nextAction =
       "Wait for price to reach a clearly defined support or resistance area and show a valid trigger before considering a trade. Avoid entering in the middle of the range.";
+  }
+
+  if (
+    hasValidatedArea &&
+    closestReferenceAreaText
+  ) {
+    nextAction =
+      `${nextAction} Another important structural area is the ${closestReferenceAreaText}. ` +
+      `It remains a reference only and must not be treated as Entry 2 unless it later meets the full setup rules.`;
   }
 
   if (facts.historicalCutoff?.active) {
