@@ -10395,8 +10395,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.11.0";
-const CSA_BUILD_ID = "CSA-v4.10.11-reference-path-order-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.12.0";
+const CSA_BUILD_ID = "CSA-v4.10.12-historical-direction-display-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15336,7 +15336,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.11";
+const CSA_SELECTOR_VERSION = "4.5.12";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19257,22 +19257,22 @@ function rankRawEntryAreas({
       !isConvertedArea ||
       rawZone?.conversionConfirmed === true;
 
-    // v4.9.5 DISPLAY AUTHORITY:
-    // The deterministic framework price normally owns the user-facing label.
-    // Two validated area refinements are exceptions: a same-period S/D base,
-    // and the first-touch boundary of a visually confirmed converted S/R zone.
-    // The native higher-timeframe price remains stored as frameworkCenter.
+    // v4.10.12 DISPLAY AUTHORITY:
+    // Internal framework calculations may retain the native period extreme,
+    // but a validated chart reconciliation owns the beginner-facing price for
+    // converted S/R. This keeps the displayed level aligned with the price
+    // that was actually used by the Fib gate and avoids contradictions such
+    // as validating 0.69845 while narrating 0.69858.
     const samePeriodSdRefined =
       rawZone?.members?.[0]?.supplyDemandRefinedBySamePeriodBase === true;
 
-    const convertedVisualBoundaryReconciled =
-      priorBreakAndCloseConversion &&
+    const convertedAuthoritativeReconciled =
+      isConvertedArea &&
       rawZone?.members?.[0]?.chartReconciled === true &&
-      String(rawZone?.members?.[0]?.priceSource || "") ===
-        "visual_converted_area_entry_boundary";
+      asPositiveNumber(authoritativeCenter) !== null;
 
     const displayCenter =
-      samePeriodSdRefined || convertedVisualBoundaryReconciled
+      samePeriodSdRefined || convertedAuthoritativeReconciled
         ? authoritativeCenter
         : (asPositiveNumber(frameworkCenter) || authoritativeCenter);
     const center = authoritativeCenter;
@@ -21028,6 +21028,34 @@ function resolveHistoricalCurrentStructureHandoff({
     candlePhase?.direction === "bearish" &&
     candlePhase?.confirmedReversal === true;
 
+  /*
+   * V4.10.12 HISTORICAL HANDOFF CONTROL-LEVEL GATE
+   *
+   * A newer lower-timeframe structure event is not enough to reverse the
+   * selected-day directional bias by itself. It must also close beyond the
+   * controlling framework level that created the existing bearish/bullish
+   * phase. Otherwise the event is only an internal recovery or pullback.
+   *
+   * AUDUSD 2026-07-29 regression: the H1 event above 0.69511 occurred while
+   * the completed cutoff price remained below broken support/resistance near
+   * 0.69620. The correct state was therefore bearish structure with a bullish
+   * recovery, not a bullish takeover.
+   */
+  const periodControllingLevel =
+    asPositiveNumber(periodPhase?.brokenLevel);
+
+  const candleBullishFrameworkHandoff =
+    candleBullishConfirmation &&
+    periodPhase?.direction === "bearish" &&
+    periodControllingLevel !== null &&
+    currentClose > periodControllingLevel + structuralTolerance;
+
+  const candleBearishFrameworkHandoff =
+    candleBearishConfirmation &&
+    periodPhase?.direction === "bullish" &&
+    periodControllingLevel !== null &&
+    currentClose < periodControllingLevel - structuralTolerance;
+
   const bullishTakeover =
     periodPhase?.bullishRecoveryAfterBreakdown === true &&
     currentHigh > previousHigh + structuralTolerance &&
@@ -21046,7 +21074,7 @@ function resolveHistoricalCurrentStructureHandoff({
     currentRange > 0 &&
     currentHigh - currentClose >= currentRange * 0.55;
 
-  if (candleBullishConfirmation || bullishTakeover) {
+  if (candleBullishFrameworkHandoff || bullishTakeover) {
     return {
       ...periodPhase,
       direction: "bullish",
@@ -21059,16 +21087,24 @@ function resolveHistoricalCurrentStructureHandoff({
       confirmedReversal: true,
       latestClose: currentClose,
       brokenLevel:
-        candlePhase?.brokenLevel ??
+        candleBullishFrameworkHandoff
+          ? periodControllingLevel
+          :
         previousHigh,
       source: "historical_current_structure_handoff",
       diagnostics: {
         ...(periodPhase?.diagnostics || {}),
         handoffApplied: true,
         handoffDirection: "bullish",
-        handoffReason: candleBullishConfirmation
-          ? "newer_confirmed_bullish_timeframe_structure_event"
+        handoffReason: candleBullishFrameworkHandoff
+          ? "newer_bullish_timeframe_event_reclaimed_controlling_framework_level"
           : "cutoff_period_higher_high_strong_upper_close_after_bearish_recovery",
+        internalCandleEventConfirmed: candleBullishConfirmation,
+        internalCandleEventLevel:
+          asPositiveNumber(candlePhase?.brokenLevel),
+        controllingFrameworkLevel: periodControllingLevel,
+        controllingFrameworkLevelReclaimed:
+          candleBullishFrameworkHandoff,
         currentPeriod: current?.periodLabel || current?.day || current?.key || current?.date || null,
         previousPeriod: previous?.periodLabel || previous?.day || previous?.key || previous?.date || null,
         currentOpen,
@@ -21093,7 +21129,7 @@ function resolveHistoricalCurrentStructureHandoff({
     };
   }
 
-  if (candleBearishConfirmation || bearishTakeover) {
+  if (candleBearishFrameworkHandoff || bearishTakeover) {
     return {
       ...periodPhase,
       direction: "bearish",
@@ -21106,16 +21142,24 @@ function resolveHistoricalCurrentStructureHandoff({
       confirmedReversal: true,
       latestClose: currentClose,
       brokenLevel:
-        candlePhase?.brokenLevel ??
+        candleBearishFrameworkHandoff
+          ? periodControllingLevel
+          :
         previousLow,
       source: "historical_current_structure_handoff",
       diagnostics: {
         ...(periodPhase?.diagnostics || {}),
         handoffApplied: true,
         handoffDirection: "bearish",
-        handoffReason: candleBearishConfirmation
-          ? "newer_confirmed_bearish_timeframe_structure_event"
+        handoffReason: candleBearishFrameworkHandoff
+          ? "newer_bearish_timeframe_event_broke_controlling_framework_level"
           : "cutoff_period_lower_low_strong_lower_close_after_bullish_pullback",
+        internalCandleEventConfirmed: candleBearishConfirmation,
+        internalCandleEventLevel:
+          asPositiveNumber(candlePhase?.brokenLevel),
+        controllingFrameworkLevel: periodControllingLevel,
+        controllingFrameworkLevelBroken:
+          candleBearishFrameworkHandoff,
         currentPeriod: current?.periodLabel || current?.day || current?.key || current?.date || null,
         previousPeriod: previous?.periodLabel || previous?.day || previous?.key || previous?.date || null,
         currentOpen,
@@ -21158,6 +21202,12 @@ function resolveHistoricalCurrentStructureHandoff({
       previousClose,
       rangePosition,
       structuralTolerance,
+      internalBullishEventConfirmed: candleBullishConfirmation,
+      internalBearishEventConfirmed: candleBearishConfirmation,
+      controllingFrameworkLevel: periodControllingLevel,
+      internalEventBlockedByFrameworkLevel:
+        (candleBullishConfirmation && !candleBullishFrameworkHandoff) ||
+        (candleBearishConfirmation && !candleBearishFrameworkHandoff),
       secondaryCandlePhase: candlePhase
         ? {
             direction: candlePhase.direction || null,
@@ -23076,6 +23126,9 @@ function buildControlledFeedback({
       ? `${referenceAreaTexts[0]} and ${referenceAreaTexts[1]}`
       : "";
 
+  const hasSingleReferenceArea =
+    referenceAreaTexts.length === 1;
+
   const directionText = directionDisplay(facts);
   const action = area.direction === "sell" ? "sell" : area.direction === "buy" ? "buy" : "trade";
   const opposingLevel = facts.direction === "bearish" ? "support" : "resistance";
@@ -23161,11 +23214,15 @@ function buildControlledFeedback({
     weaknesses.push(
       facts.direction === "bearish"
         ? referenceAreasText
-          ? `The ${referenceAreasText} remain structural references, but neither currently qualifies as a strong sell entry.`
+          ? hasSingleReferenceArea
+            ? `The ${referenceAreasText} remains a structural reference, but it does not currently qualify as a strong sell entry.`
+            : `The ${referenceAreasText} remain structural references, but neither currently qualifies as a strong sell entry.`
           : "No sufficiently strong resistance or supply area has been validated for the planned sell yet."
         : facts.direction === "bullish"
         ? referenceAreasText
-          ? `The ${referenceAreasText} remain structural references, but neither currently qualifies as a strong buy entry.`
+          ? hasSingleReferenceArea
+            ? `The ${referenceAreasText} remains a structural reference, but it does not currently qualify as a strong buy entry.`
+            : `The ${referenceAreasText} remain structural references, but neither currently qualifies as a strong buy entry.`
           : "No sufficiently strong support or demand area has been validated for the planned buy yet."
         : "No sufficiently strong entry area has been validated yet."
     );
@@ -23197,11 +23254,15 @@ function buildControlledFeedback({
 
   if (facts.transitionState?.bullishRecoveryAfterBreakdown) {
     weaknesses.push(
-      "The bullish recovery has not yet broken and held above the main resistance, so the broader bearish structure is not fully reversed."
+      areaText
+        ? `The bullish recovery has not yet broken and held above the ${areaText}, so the broader bearish structure is not fully reversed.`
+        : "The bullish recovery has not yet broken and held above the main resistance, so the broader bearish structure is not fully reversed."
     );
   } else if (facts.transitionState?.bearishPullbackAfterBreakout) {
     weaknesses.push(
-      "The bearish pullback has not yet broken and held below the main support, so the broader bullish structure is not fully reversed."
+      areaText
+        ? `The bearish pullback has not yet broken and held below the ${areaText}, so the broader bullish structure is not fully reversed.`
+        : "The bearish pullback has not yet broken and held below the main support, so the broader bullish structure is not fully reversed."
     );
   }
 
@@ -23272,11 +23333,15 @@ function buildControlledFeedback({
     nextAction =
       facts.direction === "bearish"
         ? referenceAreasText
-          ? `No strong sell entry is confirmed yet. The ${referenceAreasText} are the main structural areas to watch, but they are reference areas only and should not be treated as Entry 1 or Entry 2 unless they later meet the full setup rules. Avoid forcing a sell; wait for a stronger resistance or supply setup and a fresh bearish rejection.`
+          ? hasSingleReferenceArea
+            ? `No strong sell entry is confirmed yet. The ${referenceAreasText} is the main structural area to watch, but it is a reference area only and should not be treated as Entry 1 unless it later meets the full setup rules. Avoid forcing a sell; wait for a stronger resistance or supply setup and a fresh bearish rejection.`
+            : `No strong sell entry is confirmed yet. The ${referenceAreasText} are the main structural areas to watch, but they are reference areas only and should not be treated as Entry 1 or Entry 2 unless they later meet the full setup rules. Avoid forcing a sell; wait for a stronger resistance or supply setup and a fresh bearish rejection.`
           : "No high-quality resistance or supply entry area is confirmed yet. Avoid forcing a sell location. Wait for price to retrace into a clearly validated resistance or supply zone, then require a fresh bearish rejection."
         : facts.direction === "bullish"
         ? referenceAreasText
-          ? `No strong buy entry is confirmed yet. The ${referenceAreasText} are the main structural areas to watch, but they are reference areas only and should not be treated as Entry 1 or Entry 2 unless they later meet the full setup rules. Avoid forcing a buy; wait for a stronger support or demand setup and a fresh bullish hold.`
+          ? hasSingleReferenceArea
+            ? `No strong buy entry is confirmed yet. The ${referenceAreasText} is the main structural area to watch, but it is a reference area only and should not be treated as Entry 1 unless it later meets the full setup rules. Avoid forcing a buy; wait for a stronger support or demand setup and a fresh bullish hold.`
+            : `No strong buy entry is confirmed yet. The ${referenceAreasText} are the main structural areas to watch, but they are reference areas only and should not be treated as Entry 1 or Entry 2 unless they later meet the full setup rules. Avoid forcing a buy; wait for a stronger support or demand setup and a fresh bullish hold.`
           : "No high-quality support or demand entry area is confirmed yet. Avoid forcing a buy location. Wait for price to return into a clearly validated support or demand zone, then require a fresh bullish hold."
         : "No high-quality entry area is confirmed yet. Wait for a clearly validated support or resistance zone and a fresh trigger.";
   } else if (
