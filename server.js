@@ -10348,9 +10348,100 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.16.0";
-const CSA_BUILD_ID = "CSA-v4.10.16-cutoff-safe-controlling-swing-and-reference-filter";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.17.0";
+const CSA_BUILD_ID = "CSA-v4.10.17-explicit-price-path-wording-and-xau-regression-locks";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
+
+// V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
+// These checks never create, reorder, or promote an entry. They only audit the
+// selector's completed result against the three reviewed XAUUSD H1 snapshots,
+// so a later code change cannot silently reintroduce a previously fixed level.
+const CSA_XAU_HISTORICAL_BENCHMARKS = Object.freeze({
+  "2026-08-04": Object.freeze({
+    expectedEntryCenters: Object.freeze([4047.20]),
+    forbiddenEntryCenters: Object.freeze([4019.20]),
+    expectedReferenceCenters: Object.freeze([]),
+  }),
+  "2026-08-05": Object.freeze({
+    expectedEntryCenters: Object.freeze([4106.15]),
+    forbiddenEntryCenters: Object.freeze([4088.47]),
+    expectedReferenceCenters: Object.freeze([4088.47]),
+  }),
+  "2026-08-06": Object.freeze({
+    expectedEntryCenters: Object.freeze([]),
+    forbiddenEntryCenters: Object.freeze([4224.23, 4106.15]),
+    expectedReferenceCenters: Object.freeze([4224.23, 4106.15]),
+  }),
+});
+
+function auditXauHistoricalBenchmark({
+  symbol = "",
+  timeframe = "",
+  cutoffDate = "",
+  selectedAreas = [],
+  referenceAreas = [],
+}) {
+  const normalizedSymbol = String(symbol || "").toUpperCase();
+  const normalizedTimeframe = String(timeframe || "").toUpperCase();
+  const normalizedDate = String(cutoffDate || "").slice(0, 10);
+  const contract = CSA_XAU_HISTORICAL_BENCHMARKS[normalizedDate];
+
+  if (!normalizedSymbol.includes("XAU") || normalizedTimeframe !== "H1" || !contract) {
+    return {
+      applicable: false,
+      passed: true,
+      benchmarkDate: normalizedDate || null,
+      failures: [],
+    };
+  }
+
+  const centerOf = (area) => {
+    const authoritativeCenter = Number(area?.authoritativeCenter);
+    if (Number.isFinite(authoritativeCenter)) return authoritativeCenter;
+
+    const low = Number(area?.zoneLow);
+    const high = Number(area?.zoneHigh);
+    if (Number.isFinite(low) && Number.isFinite(high)) return (low + high) / 2;
+
+    const resolved = Number(area?.resolvedEntryPrice);
+    return Number.isFinite(resolved) ? resolved : null;
+  };
+
+  const selectedCenters = (selectedAreas || []).map(centerOf).filter(Number.isFinite);
+  const referenceCenters = (referenceAreas || []).map(centerOf).filter(Number.isFinite);
+  // Gold zones are often represented by either their authoritative line or
+  // the midpoint of the full displacement-base candle. Six dollars keeps the
+  // same reviewed zone equivalent without confusing nearby structural levels.
+  const near = (actual, expected) => Math.abs(Number(actual) - Number(expected)) <= 6;
+  const failures = [];
+
+  for (const expected of contract.expectedEntryCenters) {
+    if (!selectedCenters.some((actual) => near(actual, expected))) {
+      failures.push(`missing_expected_entry_${expected}`);
+    }
+  }
+
+  for (const forbidden of contract.forbiddenEntryCenters) {
+    if (selectedCenters.some((actual) => near(actual, forbidden))) {
+      failures.push(`forbidden_entry_promoted_${forbidden}`);
+    }
+  }
+
+  for (const expected of contract.expectedReferenceCenters) {
+    if (!referenceCenters.some((actual) => near(actual, expected))) {
+      failures.push(`missing_expected_reference_${expected}`);
+    }
+  }
+
+  return {
+    applicable: true,
+    passed: failures.length === 0,
+    benchmarkDate: normalizedDate,
+    selectedCenters,
+    referenceCenters,
+    failures,
+  };
+}
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_CACHE_MAX_ITEMS = 100;
@@ -15400,7 +15491,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.16";
+const CSA_SELECTOR_VERSION = "4.5.17";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19886,6 +19977,34 @@ function rankRawEntryAreas({
     })
     .slice(0, 3);
 
+  // V4.10.17: audit the final selector output, after entry sequencing and
+  // reference-path ordering. The audit is diagnostic only and cannot alter
+  // candidate qualification, ordering, or beginner-facing feedback.
+  const latestCutoffDatetime = candles[candles.length - 1]?.datetime || "";
+  const historicalBenchmarkAudit = auditXauHistoricalBenchmark({
+    symbol,
+    timeframe,
+    cutoffDate: latestCutoffDatetime,
+    selectedAreas: sequencedResult?.areas || [],
+    referenceAreas,
+  });
+
+  regressionDiagnostics.historicalBenchmark = historicalBenchmarkAudit;
+
+  if (historicalBenchmarkAudit.applicable && !historicalBenchmarkAudit.passed) {
+    console.error("CSA HISTORICAL BENCHMARK REGRESSION:", {
+      buildId: CSA_BUILD_ID,
+      selectorVersion: CSA_SELECTOR_VERSION,
+      ...historicalBenchmarkAudit,
+    });
+  } else if (historicalBenchmarkAudit.applicable) {
+    console.log("CSA historical benchmark lock passed:", {
+      buildId: CSA_BUILD_ID,
+      selectorVersion: CSA_SELECTOR_VERSION,
+      ...historicalBenchmarkAudit,
+    });
+  }
+
   console.log("CSA user-facing reference path order:", {
     buildId: CSA_BUILD_ID,
     direction,
@@ -23386,12 +23505,24 @@ function buildControlledFeedback({
     weaknesses.push(
       areaText
         ? `The bullish recovery has not yet broken and held above the ${areaText}, so the broader bearish structure is not fully reversed.`
+        : referenceAreaTexts[0]
+        ? `The bullish recovery remains below ${referenceAreaTexts[0]}.${
+            referenceAreaTexts[1]
+              ? ` If that area is reclaimed, ${referenceAreaTexts[1]} becomes the next important structural reference.`
+              : " A confirmed break and hold above it would weaken the broader bearish structure."
+          }`
         : "The bullish recovery has not yet broken and held above the main resistance, so the broader bearish structure is not fully reversed."
     );
   } else if (facts.transitionState?.bearishPullbackAfterBreakout) {
     weaknesses.push(
       areaText
         ? `The bearish pullback has not yet broken and held below the ${areaText}, so the broader bullish structure is not fully reversed.`
+        : referenceAreaTexts[0]
+        ? `The bearish pullback remains above ${referenceAreaTexts[0]}.${
+            referenceAreaTexts[1]
+              ? ` If that area fails, ${referenceAreaTexts[1]} becomes the next important structural reference.`
+              : " A confirmed break and hold below it would weaken the broader bullish structure."
+          }`
         : "The bearish pullback has not yet broken and held below the main support, so the broader bullish structure is not fully reversed."
     );
   }
