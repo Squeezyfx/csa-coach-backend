@@ -10348,8 +10348,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.15.0";
-const CSA_BUILD_ID = "CSA-v4.10.15-complete-entry-and-reference-feedback";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.16.0";
+const CSA_BUILD_ID = "CSA-v4.10.16-cutoff-safe-controlling-swing-and-reference-filter";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -12960,6 +12960,9 @@ function buildLatestImpulseFibonacci({
     historicalFrameworkImpulseAuthority?.direction === direction;
 
   let historicalFrameworkImpulseApplied = false;
+  let historicalFrameworkImpulseSuppressedByControllingSwing = false;
+  let historicalFrameworkTerminalExtension = null;
+  let historicalFrameworkTerminalExtensionTolerance = null;
 
   if (historicalFrameworkImpulseEnabled) {
     const historicalOrigin = asPositiveNumber(
@@ -12975,26 +12978,71 @@ function buildLatestImpulseFibonacci({
       ((direction === "bearish" && historicalOrigin > historicalTerminal) ||
         (direction === "bullish" && historicalTerminal > historicalOrigin))
     ) {
-      if (direction === "bearish") {
-        selectedSwingHigh = historicalOrigin;
-        selectedSwingLow = historicalTerminal;
-        selectedSwingHighTime =
-          historicalFrameworkImpulseAuthority?.originTime || selectedSwingHighTime;
-        selectedSwingLowTime =
-          historicalFrameworkImpulseAuthority?.terminalTime || selectedSwingLowTime;
-      } else {
-        selectedSwingLow = historicalOrigin;
-        selectedSwingHigh = historicalTerminal;
-        selectedSwingLowTime =
-          historicalFrameworkImpulseAuthority?.originTime || selectedSwingLowTime;
-        selectedSwingHighTime =
-          historicalFrameworkImpulseAuthority?.terminalTime || selectedSwingHighTime;
-      }
+      /*
+       * V4.10.16 CUTOFF-SAFE CONTROLLING-SWING EXCEPTION
+       *
+       * Do not let the daily shortcut truncate a completed H1 controlling
+       * impulse. Preserve the cutoff-safe protected/major swing when both
+       * endpoints extend beyond the shortcut and the terminal extension is
+       * structural rather than broker/feed noise.
+       *
+       * XAUUSD 2026-08-04 regression: 3996.32338 -> 4119.46447 remains the
+       * controlling bullish impulse. Its 61.8 retracement is 4043.36328, so
+       * demand 4042.01423-4043.21423 receives the intended Fib confluence.
+       */
+      const cleanBreakTolerance = Math.max(
+        getCleanBreakTolerance(symbol),
+        Number.EPSILON * 100
+      );
 
-      priceSource = "historical_framework_local_impulse";
-      selectionReason =
-        `${selectionReason}_historical_framework_local_impulse_override`;
-      historicalFrameworkImpulseApplied = true;
+      historicalFrameworkTerminalExtension =
+        direction === "bullish"
+          ? Number(selectedSwingHigh) - historicalTerminal
+          : historicalTerminal - Number(selectedSwingLow);
+
+      historicalFrameworkTerminalExtensionTolerance = Math.max(
+        cleanBreakTolerance * 2,
+        Number(atr || 0) * 0.35
+      );
+
+      const controllingOriginExtendsBeyondFramework =
+        direction === "bullish"
+          ? Number(selectedSwingLow) < historicalOrigin - cleanBreakTolerance
+          : Number(selectedSwingHigh) > historicalOrigin + cleanBreakTolerance;
+
+      const retainCutoffSafeControllingSwing =
+        majorSelection &&
+        Number.isFinite(historicalFrameworkTerminalExtension) &&
+        historicalFrameworkTerminalExtension >
+          historicalFrameworkTerminalExtensionTolerance &&
+        controllingOriginExtendsBeyondFramework;
+
+      if (retainCutoffSafeControllingSwing) {
+        historicalFrameworkImpulseSuppressedByControllingSwing = true;
+        selectionReason =
+          `${selectionReason}_cutoff_safe_controlling_swing_retained`;
+      } else {
+        if (direction === "bearish") {
+          selectedSwingHigh = historicalOrigin;
+          selectedSwingLow = historicalTerminal;
+          selectedSwingHighTime =
+            historicalFrameworkImpulseAuthority?.originTime || selectedSwingHighTime;
+          selectedSwingLowTime =
+            historicalFrameworkImpulseAuthority?.terminalTime || selectedSwingLowTime;
+        } else {
+          selectedSwingLow = historicalOrigin;
+          selectedSwingHigh = historicalTerminal;
+          selectedSwingLowTime =
+            historicalFrameworkImpulseAuthority?.originTime || selectedSwingLowTime;
+          selectedSwingHighTime =
+            historicalFrameworkImpulseAuthority?.terminalTime || selectedSwingHighTime;
+        }
+
+        priceSource = "historical_framework_local_impulse";
+        selectionReason =
+          `${selectionReason}_historical_framework_local_impulse_override`;
+        historicalFrameworkImpulseApplied = true;
+      }
     }
   }
 
@@ -13011,6 +13059,12 @@ function buildLatestImpulseFibonacci({
       selectedSwingLow,
       selectedSwingHigh,
       applied: historicalFrameworkImpulseApplied,
+      suppressedByCutoffSafeControllingSwing:
+        historicalFrameworkImpulseSuppressedByControllingSwing,
+      controllingTerminalExtension:
+        historicalFrameworkTerminalExtension,
+      controllingTerminalExtensionTolerance:
+        historicalFrameworkTerminalExtensionTolerance,
       reason: historicalFrameworkImpulseAuthority?.reason || null,
       rule: historicalFrameworkImpulseAuthority?.rule || null,
       futureCandlesExcluded: true,
@@ -13323,6 +13377,12 @@ function buildLatestImpulseFibonacci({
     historicalFrameworkImpulseAuthority: historicalFrameworkImpulseEnabled
       ? {
           applied: historicalFrameworkImpulseApplied,
+          suppressedByCutoffSafeControllingSwing:
+            historicalFrameworkImpulseSuppressedByControllingSwing,
+          controllingTerminalExtension:
+            historicalFrameworkTerminalExtension,
+          controllingTerminalExtensionTolerance:
+            historicalFrameworkTerminalExtensionTolerance,
           originPrice: historicalFrameworkImpulseAuthority?.originPrice ?? null,
           terminalPrice: historicalFrameworkImpulseAuthority?.terminalPrice ?? null,
           originPeriod: historicalFrameworkImpulseAuthority?.originPeriod || null,
@@ -15340,7 +15400,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.15";
+const CSA_SELECTOR_VERSION = "4.5.16";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -18917,9 +18977,14 @@ function rankRawEntryAreas({
       asPositiveNumber(rawZone?.members?.[0]?.price) ||
       compacted.center;
 
+    // V4.10.16: when the independent chart-line reader successfully
+    // reconciles a marked level, use that exact visible price in feedback.
+    // Framework period/type identity remains authoritative; this changes only
+    // the displayed anchor (for example 0.70104 instead of 0.70105).
     const authoritativeCenter =
-      asPositiveNumber(rawZone?.resolvedEntryPrice) ||
-      frameworkCenter;
+      rawZone?.members?.[0]?.chartReconciled === true
+        ? chartReconciledCenter
+        : asPositiveNumber(rawZone?.resolvedEntryPrice) || frameworkCenter;
 
     const reactionTolerance = Math.max(
       priceTolerance,
@@ -23153,7 +23218,18 @@ function buildControlledFeedback({
     ? facts.structuralReferenceAreas
     : [];
 
-  const referenceAreaTexts = referenceAreas
+  // V4.10.16: once a real Entry 1 exists, weak failed-Fib fallback levels
+  // must not clutter the beginner-facing plan. Preserve meaningful structural
+  // references (score >= 35), including the AUDUSD 0.70104 and 0.69845
+  // benchmarks, while suppressing low-evidence anchors such as XAUUSD 4019.20
+  // (score 28). When no entry qualifies, retain the wider fallback path.
+  const coachingReferenceAreas = hasValidatedArea
+    ? referenceAreas.filter(
+        (reference) => Number(reference?.structuralScore || 0) >= 35
+      )
+    : referenceAreas;
+
+  const referenceAreaTexts = coachingReferenceAreas
     .slice(0, 2)
     .map((reference) =>
       formatRankedArea(
