@@ -10348,8 +10348,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.17.0";
-const CSA_BUILD_ID = "CSA-v4.10.17-explicit-price-path-wording-and-xau-regression-locks";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.18.0";
+const CSA_BUILD_ID = "CSA-v4.10.18-historical-transition-state-reconciliation";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -20148,6 +20148,36 @@ function normalizeTransitionState(visualReview = {}, chartDetection = {}) {
   };
 }
 
+// V4.10.18 — PHASE/FLAG RECONCILIATION
+// Historical phase names and their boolean transition flags describe the same
+// deterministic state. Treat the explicit phase as a safe fallback when an
+// upstream handoff preserves the phase name but drops its matching boolean.
+// This only repairs state representation; it does not change direction,
+// candidate qualification, Fibonacci gating, or entry ordering.
+function reconcileHistoricalTransitionState(historicalPhase = null) {
+  const phase = String(historicalPhase?.phase || historicalPhase?.state || "")
+    .trim()
+    .toLowerCase();
+
+  const bullishRecoveryAfterBreakdown =
+    historicalPhase?.bullishRecoveryAfterBreakdown === true ||
+    phase === "bullish_recovery_after_bearish_breakdown";
+
+  const bearishPullbackAfterBreakout =
+    historicalPhase?.bearishPullbackAfterBreakout === true ||
+    phase === "bearish_pullback_after_bullish_breakout";
+
+  return {
+    bullishRecoveryAfterBreakdown,
+    bearishPullbackAfterBreakout,
+    reconciledFromPhase:
+      (bullishRecoveryAfterBreakdown &&
+        historicalPhase?.bullishRecoveryAfterBreakdown !== true) ||
+      (bearishPullbackAfterBreakout &&
+        historicalPhase?.bearishPullbackAfterBreakout !== true),
+  };
+}
+
 
 function normalizeDateOnlyValue(value = "") {
   const text = String(value || "").trim();
@@ -21569,6 +21599,9 @@ function buildValidatedAnalysisFacts({
     historicalPhase &&
     ["bullish", "bearish", "range"].includes(historicalPhase.direction);
 
+  const reconciledHistoricalTransition =
+    reconcileHistoricalTransitionState(historicalPhase);
+
   const historicalPeriodDirectionLocked =
     shouldUseAuthoritativePeriodPhase(marketReference) &&
     deterministicMarketStateAvailable;
@@ -21586,13 +21619,34 @@ function buildValidatedAnalysisFacts({
   const transitionState = deterministicMarketStateAvailable
     ? {
         bullishRecoveryAfterBreakdown:
-          historicalPhase.bullishRecoveryAfterBreakdown === true,
+          reconciledHistoricalTransition.bullishRecoveryAfterBreakdown,
         bearishPullbackAfterBreakout:
-          historicalPhase.bearishPullbackAfterBreakout === true,
+          reconciledHistoricalTransition.bearishPullbackAfterBreakout,
         state: historicalPhase.state,
         source: historicalPhase.source,
+        reconciledFromPhase:
+          reconciledHistoricalTransition.reconciledFromPhase,
       }
     : visualTransitionState;
+
+  if (
+    deterministicMarketStateAvailable &&
+    reconciledHistoricalTransition.reconciledFromPhase
+  ) {
+    console.log("CSA historical transition state reconciled:", {
+      buildId: CSA_BUILD_ID,
+      phase: historicalPhase?.phase || null,
+      rawBullishRecoveryAfterBreakdown:
+        historicalPhase?.bullishRecoveryAfterBreakdown === true,
+      rawBearishPullbackAfterBreakout:
+        historicalPhase?.bearishPullbackAfterBreakout === true,
+      effectiveBullishRecoveryAfterBreakdown:
+        reconciledHistoricalTransition.bullishRecoveryAfterBreakdown,
+      effectiveBearishPullbackAfterBreakout:
+        reconciledHistoricalTransition.bearishPullbackAfterBreakout,
+      rule: "explicit_historical_phase_implies_matching_transition_flag",
+    });
+  }
 
   const breakoutDirectionOverride = deterministicMarketStateAvailable
     ? null
@@ -23384,6 +23438,15 @@ function buildControlledFeedback({
   const triggerSide = facts.direction === "bearish" ? "bearish" : facts.direction === "bullish" ? "bullish" : "valid";
   const userEvidence = facts?.userEvidence || {};
   const isPostTrade = normalizeAnalysisType(facts?.analysisType) === "post-trade";
+  const historicalPhaseName = String(
+    facts?.historicalPhase?.phase || facts?.historicalPhase?.state || ""
+  ).toLowerCase();
+  const bullishRecoveryContext =
+    facts.transitionState?.bullishRecoveryAfterBreakdown === true ||
+    historicalPhaseName === "bullish_recovery_after_bearish_breakdown";
+  const bearishPullbackContext =
+    facts.transitionState?.bearishPullbackAfterBreakout === true ||
+    historicalPhaseName === "bearish_pullback_after_bullish_breakout";
 
   const strengths = [];
 
@@ -23459,7 +23522,11 @@ function buildControlledFeedback({
     );
   }
 
-  if (!hasValidatedArea) {
+  if (
+    !hasValidatedArea &&
+    !bullishRecoveryContext &&
+    !bearishPullbackContext
+  ) {
     weaknesses.push(
       facts.direction === "bearish"
         ? referenceAreasText
@@ -23501,7 +23568,7 @@ function buildControlledFeedback({
     }
   }
 
-  if (facts.transitionState?.bullishRecoveryAfterBreakdown) {
+  if (bullishRecoveryContext) {
     weaknesses.push(
       areaText
         ? `The bullish recovery has not yet broken and held above the ${areaText}, so the broader bearish structure is not fully reversed.`
@@ -23513,7 +23580,7 @@ function buildControlledFeedback({
           }`
         : "The bullish recovery has not yet broken and held above the main resistance, so the broader bearish structure is not fully reversed."
     );
-  } else if (facts.transitionState?.bearishPullbackAfterBreakout) {
+  } else if (bearishPullbackContext) {
     weaknesses.push(
       areaText
         ? `The bearish pullback has not yet broken and held below the ${areaText}, so the broader bullish structure is not fully reversed.`
@@ -23592,7 +23659,23 @@ function buildControlledFeedback({
 
   if (!hasValidatedArea) {
     nextAction =
-      facts.direction === "bearish"
+      bearishPullbackContext &&
+      facts.direction === "bullish" &&
+      referenceAreaTexts[0]
+        ? `No strong buy entry is confirmed yet. First watch ${referenceAreaTexts[0]} for a fresh bullish hold.${
+            referenceAreaTexts[1]
+              ? ` If that area fails, ${referenceAreaTexts[1]} becomes the next important structural reference.`
+              : ""
+          } These remain reference areas only and must not be treated as Entry 1 or Entry 2 unless they later meet the full setup rules. Avoid forcing a buy during the pullback.`
+        : bullishRecoveryContext &&
+          facts.direction === "bearish" &&
+          referenceAreaTexts[0]
+        ? `No strong sell entry is confirmed yet. First watch ${referenceAreaTexts[0]} for a fresh bearish rejection.${
+            referenceAreaTexts[1]
+              ? ` If that area is reclaimed, ${referenceAreaTexts[1]} becomes the next important structural reference.`
+              : ""
+          } These remain reference areas only and must not be treated as Entry 1 or Entry 2 unless they later meet the full setup rules. Avoid forcing a sell during the recovery.`
+        : facts.direction === "bearish"
         ? referenceAreasText
           ? hasSingleReferenceArea
             ? `No strong sell entry is confirmed yet. The ${referenceAreasText} is the main structural area to watch, but it is a reference area only and should not be treated as Entry 1 unless it later meets the full setup rules. Avoid forcing a sell; wait for a stronger resistance or supply setup and a fresh bearish rejection.`
