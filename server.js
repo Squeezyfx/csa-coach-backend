@@ -10424,8 +10424,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.18.1";
-const CSA_BUILD_ID = "CSA-v4.10.20-structural-demand-boundary-reconciliation";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.19.0";
+const CSA_BUILD_ID = "CSA-v4.10.21-final-visible-reclaimed-break-reconciliation";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -15515,7 +15515,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.19";
+const CSA_SELECTOR_VERSION = "4.5.20";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -17867,6 +17867,66 @@ function resolveFinalVisibleDirectionEngine({
       "newer_opposite_visual_break_with_supporting_recent_slope";
   }
 
+  const frameworkDirectionFromBias = normalizedDirectionCode(
+    marketReference?.directionalBias?.biasCode ||
+      marketReference?.directionalBias?.bias ||
+      ""
+  );
+  const reclaimFrameworkDirection = ["bullish", "bearish"].includes(
+    frameworkDirectionFromBias
+  )
+    ? frameworkDirectionFromBias
+    : fallback;
+  const reclaimedInternalBreak = latestBreak
+    ? resolveFinalVisibleReclaimedInternalBreak({
+        marketReference,
+        periodPhase: {
+          direction: reclaimFrameworkDirection,
+          phase:
+            reclaimFrameworkDirection === "bullish"
+              ? "bullish_structure"
+              : reclaimFrameworkDirection === "bearish"
+              ? "bearish_structure"
+              : "range",
+          source: "final_visible_direction_framework_context",
+        },
+        candlePhase: {
+          direction: latestBreak.direction,
+          phase:
+            latestBreak.direction === "bullish"
+              ? "bullish_breakout"
+              : "bearish_breakdown",
+          latestClose: externalFinalClose,
+          brokenLevel: latestBreak.level,
+          source: "latest_confirmed_recent_pivot_break",
+          diagnostics: {
+            latestEvent: {
+              side: latestBreak.direction,
+              datetime: latestBreak.datetime,
+              level: latestBreak.level,
+              close: candles[latestBreak.breakIndex]?.close ?? null,
+              confirmationPath: latestBreak.confirmation || null,
+            },
+            finalClose: externalFinalClose,
+          },
+        },
+        symbol,
+        timeframe,
+      })
+    : null;
+
+  // When the uploaded-chart endpoint materially disagrees with external OHLC,
+  // the verified chart endpoint keeps priority. Otherwise, a fully validated
+  // reclaim of the latest internal break restores framework direction.
+  if (reclaimedInternalBreak && !endpointMateriallyDiverged) {
+    direction = reclaimedInternalBreak.direction;
+    source = "final_visible_framework_reclaimed_internal_break";
+    confidence = "high";
+    endpointOverrideApplied = true;
+    endpointOverrideReason =
+      "latest_internal_break_decisively_reclaimed_in_authoritative_framework_direction";
+  }
+
   return {
     direction,
     confidence,
@@ -17882,6 +17942,7 @@ function resolveFinalVisibleDirectionEngine({
       normalizedVisualDirection,
       barsSinceLatestBreak,
       visualSlopeAgreement,
+      reclaimedInternalBreakApplied: Boolean(reclaimedInternalBreak),
       overrideApplied: endpointOverrideApplied,
       overrideReason: endpointOverrideReason,
     },
@@ -17910,6 +17971,8 @@ function resolveFinalVisibleDirectionEngine({
       })),
       recentBreakEvents: recentBreakEvents.slice(-8),
       fallbackDirection: fallback,
+      reclaimedInternalBreak:
+        reclaimedInternalBreak?.diagnostics || null,
     },
   };
 }
@@ -21513,6 +21576,275 @@ function resolveHistoricalCurrentStructureHandoff({
   };
 }
 
+/*
+ * V4.10.21 FINAL-VISIBLE RECLAIMED INTERNAL BREAK
+ *
+ * A lower-timeframe break is not allowed to remain the current regime after
+ * the final visible close has decisively reclaimed that exact broken level,
+ * recovered a meaningful part of the post-break excursion, and the
+ * authoritative framework still points in the opposite direction.
+ *
+ * This is deliberately final-visible only. Selected-day/exact reviews retain
+ * their immutable cutoff-period lock. The rule is symmetric so a reclaimed
+ * internal bullish break inside a bearish framework is handled identically.
+ */
+function resolveFinalVisibleReclaimedInternalBreak({
+  marketReference = {},
+  periodPhase = null,
+  candlePhase = null,
+  symbol = "",
+  timeframe = "H1",
+}) {
+  const cutoffMode = normalizeCutoffMode(
+    marketReference?.chartCutoff?.mode || "final_visible"
+  );
+
+  if (cutoffMode !== "final_visible" || !periodPhase || !candlePhase) {
+    return null;
+  }
+
+  const frameworkDirectionFromBias = normalizedDirectionCode(
+    marketReference?.directionalBias?.biasCode ||
+      marketReference?.directionalBias?.bias ||
+      ""
+  );
+
+  const frameworkDirection = ["bullish", "bearish"].includes(
+    frameworkDirectionFromBias
+  )
+    ? frameworkDirectionFromBias
+    : ["bullish", "bearish"].includes(periodPhase?.direction)
+    ? periodPhase.direction
+    : null;
+
+  const internalDirection = ["bullish", "bearish"].includes(
+    candlePhase?.direction
+  )
+    ? candlePhase.direction
+    : null;
+
+  if (
+    !frameworkDirection ||
+    !internalDirection ||
+    frameworkDirection === internalDirection
+  ) {
+    return null;
+  }
+
+  const latestEvent = candlePhase?.diagnostics?.latestEvent || null;
+  const brokenLevel = asPositiveNumber(
+    latestEvent?.level ?? candlePhase?.brokenLevel
+  );
+  const latestClose = asPositiveNumber(
+    candlePhase?.latestClose ?? candlePhase?.diagnostics?.finalClose
+  );
+
+  if (
+    !latestEvent ||
+    latestEvent?.side !== internalDirection ||
+    brokenLevel === null ||
+    latestClose === null
+  ) {
+    return null;
+  }
+
+  const candles = Array.isArray(marketReference?.timeframeCandles)
+    ? marketReference.timeframeCandles
+        .filter(
+          (candle) =>
+            candle?.datetime &&
+            [candle?.open, candle?.high, candle?.low, candle?.close].every(
+              (value) => Number.isFinite(Number(value))
+            )
+        )
+        .sort((a, b) =>
+          String(a.datetime).localeCompare(String(b.datetime))
+        )
+    : [];
+
+  const eventIndex = candles.findIndex(
+    (candle) => String(candle?.datetime || "") === String(latestEvent?.datetime || "")
+  );
+
+  if (eventIndex < 0 || candles.length - 1 - eventIndex < 3) {
+    return null;
+  }
+
+  const atr = averageTrueRange(
+    candles,
+    getStructureEngineConfig(timeframe).atrPeriod
+  );
+  const reclaimTolerance = Math.max(
+    getCleanBreakTolerance(symbol),
+    Number(atr || 0) * 0.12
+  );
+  const postBreakCandles = candles.slice(eventIndex);
+  const postBreakLow = minFinite(postBreakCandles.map((candle) => candle?.low));
+  const postBreakHigh = maxFinite(postBreakCandles.map((candle) => candle?.high));
+  const reclaimDistance =
+    frameworkDirection === "bullish"
+      ? latestClose - brokenLevel
+      : brokenLevel - latestClose;
+  const recoveryDistance =
+    frameworkDirection === "bullish"
+      ? latestClose - Number(postBreakLow)
+      : Number(postBreakHigh) - latestClose;
+  const minimumRecovery = Math.max(
+    Number(atr || 0) * 0.85,
+    reclaimTolerance * 3
+  );
+  const levelReclaimed = reclaimDistance > reclaimTolerance;
+  const excursionRecovered =
+    Number.isFinite(recoveryDistance) && recoveryDistance >= minimumRecovery;
+
+  if (!levelReclaimed || !excursionRecovered) {
+    return null;
+  }
+
+  return {
+    ...periodPhase,
+    direction: frameworkDirection,
+    phase:
+      frameworkDirection === "bullish"
+        ? "bullish_structure_after_reclaimed_internal_breakdown"
+        : "bearish_structure_after_reclaimed_internal_breakout",
+    state:
+      frameworkDirection === "bullish"
+        ? "bullish_structure_after_reclaimed_internal_breakdown"
+        : "bearish_structure_after_reclaimed_internal_breakout",
+    bullishBreakout: frameworkDirection === "bullish",
+    bearishBreakdown: frameworkDirection === "bearish",
+    bullishRecoveryAfterBreakdown: false,
+    bearishPullbackAfterBreakout: false,
+    confirmedReversal: true,
+    latestClose,
+    brokenLevel,
+    source: "final_visible_framework_reclaimed_internal_break",
+    diagnostics: {
+      ...(periodPhase?.diagnostics || {}),
+      engine: "final_visible_framework_reclaimed_internal_break",
+      frameworkDirection,
+      rejectedInternalDirection: internalDirection,
+      reclaimedEvent: {
+        side: latestEvent?.side || null,
+        datetime: latestEvent?.datetime || null,
+        level: brokenLevel,
+        close: latestEvent?.close ?? null,
+        confirmationPath: latestEvent?.confirmationPath || null,
+      },
+      finalCandle: candles[candles.length - 1]?.datetime || null,
+      finalClose: latestClose,
+      barsAfterEvent: candles.length - 1 - eventIndex,
+      postBreakLow,
+      postBreakHigh,
+      reclaimDistance,
+      reclaimTolerance,
+      recoveryDistance,
+      minimumRecovery,
+      levelReclaimed,
+      excursionRecovered,
+      secondaryCandlePhase: {
+        direction: candlePhase?.direction || null,
+        phase: candlePhase?.phase || null,
+        source: candlePhase?.source || null,
+        latestEvent,
+      },
+    },
+  };
+}
+
+function runFinalVisibleReclaimedBreakSelfCheck() {
+  const makeCandles = ({ bearishBreak = true } = {}) => {
+    const rows = bearishBreak
+      ? [
+          ["2026-07-28 15:00:00", 0.81830, 0.81845, 0.81700, 0.81712],
+          ["2026-07-28 16:00:00", 0.81712, 0.81760, 0.81677, 0.81740],
+          ["2026-07-28 17:00:00", 0.81740, 0.81830, 0.81720, 0.81810],
+          ["2026-07-28 18:00:00", 0.81810, 0.81910, 0.81800, 0.81890],
+          ["2026-07-28 19:00:00", 0.81890, 0.81970, 0.81870, 0.81953],
+        ]
+      : [
+          ["2026-07-28 15:00:00", 0.81870, 0.82000, 0.81860, 0.81990],
+          ["2026-07-28 16:00:00", 0.81990, 0.82040, 0.81960, 0.82020],
+          ["2026-07-28 17:00:00", 0.82020, 0.82030, 0.81920, 0.81940],
+          ["2026-07-28 18:00:00", 0.81940, 0.81950, 0.81830, 0.81850],
+          ["2026-07-28 19:00:00", 0.81850, 0.81870, 0.81770, 0.81790],
+        ];
+
+    return rows.map(([datetime, open, high, low, close]) => ({
+      datetime,
+      open,
+      high,
+      low,
+      close,
+    }));
+  };
+
+  const bullishCandles = makeCandles({ bearishBreak: true });
+  const bearishCandles = makeCandles({ bearishBreak: false });
+  const bullish = resolveFinalVisibleReclaimedInternalBreak({
+    marketReference: {
+      chartCutoff: { mode: "final_visible" },
+      directionalBias: { biasCode: "bullish" },
+      timeframeCandles: bullishCandles,
+    },
+    periodPhase: { direction: "bullish", source: "self_check" },
+    candlePhase: {
+      direction: "bearish",
+      phase: "bearish_breakdown",
+      latestClose: 0.81953,
+      brokenLevel: 0.81838,
+      diagnostics: {
+        finalClose: 0.81953,
+        latestEvent: {
+          side: "bearish",
+          datetime: "2026-07-28 15:00:00",
+          level: 0.81838,
+          close: 0.81712,
+          confirmationPath: "strong_displacement",
+        },
+      },
+    },
+    symbol: "USDCHF",
+    timeframe: "H1",
+  });
+  const bearish = resolveFinalVisibleReclaimedInternalBreak({
+    marketReference: {
+      chartCutoff: { mode: "final_visible" },
+      directionalBias: { biasCode: "bearish" },
+      timeframeCandles: bearishCandles,
+    },
+    periodPhase: { direction: "bearish", source: "self_check" },
+    candlePhase: {
+      direction: "bullish",
+      phase: "bullish_breakout",
+      latestClose: 0.81790,
+      brokenLevel: 0.81950,
+      diagnostics: {
+        finalClose: 0.81790,
+        latestEvent: {
+          side: "bullish",
+          datetime: "2026-07-28 15:00:00",
+          level: 0.81950,
+          close: 0.81990,
+          confirmationPath: "strong_displacement",
+        },
+      },
+    },
+    symbol: "USDCHF",
+    timeframe: "H1",
+  });
+
+  return {
+    bullishReclaim:
+      bullish?.direction === "bullish" &&
+      bullish?.source === "final_visible_framework_reclaimed_internal_break",
+    bearishReclaim:
+      bearish?.direction === "bearish" &&
+      bearish?.source === "final_visible_framework_reclaimed_internal_break",
+  };
+}
+
 function deriveAuthoritativeCsaHistoricalPhase({
   marketReference = {},
   symbol = "",
@@ -21531,6 +21863,19 @@ function deriveAuthoritativeCsaHistoricalPhase({
 
   const usePeriodPhase =
     shouldUseAuthoritativePeriodPhase(marketReference);
+
+  const finalVisibleReclaimedPhase =
+    resolveFinalVisibleReclaimedInternalBreak({
+      marketReference,
+      periodPhase,
+      candlePhase,
+      symbol,
+      timeframe,
+    });
+
+  if (finalVisibleReclaimedPhase) {
+    return finalVisibleReclaimedPhase;
+  }
 
   if (
     usePeriodPhase &&
@@ -26752,5 +27097,6 @@ app.listen(PORT, "0.0.0.0", () => {
     chartDetectionPricePriority: true,
     fibEndpointAuthority: true,
     historicalCutoffIsolation: true,
+    ...runFinalVisibleReclaimedBreakSelfCheck(),
   });
 });

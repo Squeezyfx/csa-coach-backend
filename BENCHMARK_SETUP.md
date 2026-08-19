@@ -2,7 +2,9 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is the supplied CSA `v4.10.18` modified build. The batch-testing additions do not alter its customer analysis route.
+The included analysis backend is CSA build `v4.10.21-final-visible-reclaimed-break-reconciliation`. The batch-testing additions do not alter its customer analysis route.
+
+This build reconciles a stale lower-timeframe break when the final visible close decisively reclaims the broken level, recovers a meaningful part of the excursion, and the authoritative framework remains pointed in the opposite direction. The rule is symmetrical and is disabled for selected-day and exact historical cutoffs.
 
 ## Isolation model
 
