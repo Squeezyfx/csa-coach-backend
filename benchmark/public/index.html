@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CSA AI Coach — Batch Benchmark Tester</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">PRIVATE ADMIN TOOL</p>
+        <h1>Batch Benchmark Tester</h1>
+        <p class="subtitle">Run several charts independently and catch regressions before production.</p>
+      </div>
+      <div class="key-box">
+        <label for="adminKey">Admin key</label>
+        <input id="adminKey" type="password" autocomplete="off" placeholder="Benchmark admin key">
+      </div>
+    </header>
+
+    <section class="panel upload-panel">
+      <div>
+        <h2>1. Select benchmark charts</h2>
+        <p>Each chart remains a separate AI request. Maximum 30 charts per batch.</p>
+      </div>
+      <label class="file-button">
+        Choose charts
+        <input id="chartFiles" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+      </label>
+    </section>
+
+    <section class="panel" id="casePanel" hidden>
+      <div class="panel-heading">
+        <div>
+          <h2>2. Define the expected results</h2>
+          <p>Use comma-separated prices for required levels and forbidden entries.</p>
+        </div>
+        <button id="clearButton" class="button secondary" type="button">Clear</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Chart</th><th>Inputs</th><th>Expected outcome</th><th>Level checks</th>
+            </tr>
+          </thead>
+          <tbody id="caseRows"></tbody>
+        </table>
+      </div>
+      <div class="actions">
+        <button id="runButton" class="button primary" type="button">Run all benchmarks</button>
+        <span id="runStatus" role="status"></span>
+      </div>
+    </section>
+
+    <section class="panel" id="resultsPanel" hidden>
+      <div class="panel-heading">
+        <div>
+          <h2>3. Regression report</h2>
+          <p id="summaryText"></p>
+        </div>
+        <button id="exportButton" class="button secondary" type="button">Export JSON</button>
+      </div>
+      <div class="summary-grid" id="summaryCards"></div>
+      <div id="resultCards" class="result-list"></div>
+    </section>
+  </main>
+  <template id="caseTemplate">
+    <tr>
+      <td><strong data-file-name></strong><input data-field="label" placeholder="Benchmark label"></td>
+      <td class="field-stack">
+        <input data-field="instrument" placeholder="Instrument, e.g. AUDUSD">
+        <select data-field="timeframe"><option>H1</option><option>M30</option><option>M15</option><option>H4</option><option>D1</option><option>W1</option><option>MN</option></select>
+        <select data-field="analysisType"><option value="post-trade">Post-trade</option><option value="pre-trade">Pre-trade</option></select>
+        <select data-field="cutoffMode"><option value="final_visible">Final visible candle</option><option value="selected_day">End of selected day</option></select>
+        <input data-field="chartDate" type="date">
+      </td>
+      <td class="field-stack">
+        <select data-field="expectedDirection"><option value="">Direction not checked</option><option value="bullish">Bullish</option><option value="bearish">Bearish</option><option value="range">Range-bound</option></select>
+        <input data-field="expectedEntry1" inputmode="decimal" placeholder="Expected Entry 1">
+        <input data-field="expectedEntry2" inputmode="decimal" placeholder="Expected Entry 2">
+        <label class="check"><input data-field="entry2Required" type="checkbox"> Entry 2 required</label>
+      </td>
+      <td class="field-stack">
+        <input data-field="requiredLevels" placeholder="Required levels: 0.70104, 0.69845">
+        <input data-field="forbiddenEntries" placeholder="Must not be entries: 0.69486">
+        <input data-field="tolerance" inputmode="decimal" placeholder="Optional tolerance">
+        <textarea data-field="notes" rows="2" placeholder="Optional trade notes"></textarea>
+      </td>
+    </tr>
+  </template>
+  <script src="/app.js" defer></script>
+</body>
+</html>

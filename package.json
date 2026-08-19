@@ -1,12 +1,17 @@
 {
   "name": "csa-coach-backend",
-  "version": "2.1.0",
-  "description": "CSA Coach test backend with selectable Claude/OpenAI vision engine, deterministic market analysis, Supabase journal storage and Stripe subscriptions",
+  "version": "2.2.1",
+  "description": "CSA Coach backend with isolated multi-chart benchmark regression runner",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js"
+    "start:benchmark": "node benchmark-server.js",
+    "check": "node --check server.js && node --check benchmark-server.js && node --check benchmark/validator.js && node --check benchmark/public/app.js",
+    "test:benchmarks": "node --test benchmark/validator.test.js"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.61.0",

@@ -1,0 +1,45 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { validateBenchmarkResult } from "./validator.js";
+
+const baseResult = {
+  analysis: "DIRECTIONAL BIAS:\nBullish\n\nNEXT ACTION:\nEntry 1 is support around 0.70104. Another important structural area is support around 0.69845.",
+  analysisFacts: {
+    direction: "bullish",
+    selectedEntryAreas: [
+      { executionOrder: 1, areaType: "support", authoritativeCenter: 0.70104, zoneLow: 0.7009, zoneHigh: 0.7012 },
+    ],
+    structuralReferenceAreas: [
+      { areaType: "support", authoritativeCenter: 0.69845, zoneLow: 0.6983, zoneHigh: 0.6986 },
+      { areaType: "demand", authoritativeCenter: 0.69486, zoneLow: 0.6947, zoneHigh: 0.6950 },
+    ],
+  },
+  finalFeedback: { strengths: ["Clear chart."], weaknesses: ["Wait for confirmation."], entry1: { authoritativeCenter: 0.70104 }, entry2: null },
+};
+
+test("passes required structural levels without promoting a forbidden entry", () => {
+  const result = validateBenchmarkResult(baseResult, {
+    expectedDirection: "bullish",
+    expectedEntry1: 0.70104,
+    requiredLevels: "0.69845, 0.69486",
+    forbiddenEntries: "0.69486",
+    tolerance: 0.00025,
+  });
+  assert.equal(result.passed, true);
+});
+
+test("fails when Entry 2 is required and absent", () => {
+  const result = validateBenchmarkResult(baseResult, {
+    expectedDirection: "bullish",
+    entry2Required: true,
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.criticalFailures.some((check) => check.id === "entry_2"));
+});
+
+test("fails if a forbidden structural reference becomes a selected entry", () => {
+  const changed = structuredClone(baseResult);
+  changed.analysisFacts.selectedEntryAreas.push({ executionOrder: 2, authoritativeCenter: 0.69486, zoneLow: 0.6947, zoneHigh: 0.6950 });
+  const result = validateBenchmarkResult(changed, { forbiddenEntries: "0.69486", tolerance: 0.00025 });
+  assert.equal(result.passed, false);
+});
