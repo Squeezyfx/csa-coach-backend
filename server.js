@@ -7537,6 +7537,25 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
 
   const exactLevels = [];
   const approximateLevels = [];
+  const independentLevels = (Array.isArray(priceMap?.independentlyReadLines)
+    ? priceMap.independentlyReadLines
+    : [])
+    .map((line) => {
+      const displayedPrice = nullablePositiveNumber(line?.displayedPrice);
+      if (displayedPrice === null) return null;
+      return {
+        type: "label",
+        description: safeUserText(line?.evidence || "independently read horizontal line"),
+        displayedPrice,
+        approximatePrice: null,
+        platformLabel: String(line?.platformLabel || displayedPrice).trim(),
+        frameworkPeriodHint: null,
+        frameworkSideHint: null,
+        extractionSource: "independent_horizontal_line_reader_exact",
+        extractionConfidence: line?.confidence || "high",
+      };
+    })
+    .filter(Boolean);
 
   priceMap.matches.forEach((match) => {
     const exact = nullablePositiveNumber(match?.displayedPrice);
@@ -7597,12 +7616,22 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
   return {
     ...visualReview,
     visibleMarkedLevels: [
+      ...independentLevels,
       ...exactLevels,
       ...approximateLevels,
       ...(Array.isArray(visualReview?.visibleMarkedLevels)
         ? visualReview.visibleMarkedLevels
         : []),
-    ].slice(0, 40),
+    ]
+      .filter((item, index, items) => {
+        const price = nullablePositiveNumber(item?.displayedPrice);
+        if (price === null) return true;
+        return items.findIndex((candidate) => {
+          const candidatePrice = nullablePositiveNumber(candidate?.displayedPrice);
+          return candidatePrice !== null && Math.abs(candidatePrice - price) <= Number.EPSILON * 100;
+        }) === index;
+      })
+      .slice(0, 40),
     frameworkPriceMapDiagnostics: diagnostics,
   };
 }
@@ -10395,8 +10424,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.18.0";
-const CSA_BUILD_ID = "CSA-v4.10.18-historical-transition-state-reconciliation";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.18.1";
+const CSA_BUILD_ID = "CSA-v4.10.19-authoritative-chart-level-reconciliation";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -14421,6 +14450,28 @@ function dedupeValidatedAreas(areas = [], atr = 0) {
       ? Number(existing.reconciliationDifference)
       : Number.POSITIVE_INFINITY;
 
+    const trustedChartPrice = (area) =>
+      area?.chartReconciled === true ||
+      Number(area?.reconciliationConfidence || 0) >= 25 ||
+      /independent_horizontal_line|per_target_framework_price/i.test(
+        String(area?.priceSource || "")
+      );
+
+    const candidateTrustedChartPrice = trustedChartPrice(candidate);
+    const existingTrustedChartPrice = trustedChartPrice(existing);
+
+    // An exact independently read chart label outranks an overlapping
+    // candle-derived/framework candidate. This prevents a nearby intraday
+    // extreme from erasing the actual marked CSA level.
+    if (candidateTrustedChartPrice && !existingTrustedChartPrice) {
+      result[duplicateIndex] = candidate;
+      return;
+    }
+
+    if (existingTrustedChartPrice && !candidateTrustedChartPrice) {
+      return;
+    }
+
     // For overlapping strong levels, prefer the candidate whose same-period
     // chart reading agrees most closely with its framework price.
     if (candidateReconciled && !existingReconciled) {
@@ -15464,7 +15515,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.17";
+const CSA_SELECTOR_VERSION = "4.5.18";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -15489,6 +15540,25 @@ function resolveCsaEntryPrice({
 
   if (difference <= microDifferenceTolerance) {
     return framework;
+  }
+
+  // Some five-digit FX platforms display a two-point approximation of an
+  // authoritative whole-pip level (for example 0.69618 for 0.69620). Snap
+  // only when the rounded whole-pip value is extremely close to the printed
+  // label and also agrees better with the deterministic framework anchor.
+  // This does not affect legitimate half-pip labels such as 0.69845.
+  const compactSymbol = comparableInstrument(symbol);
+  const standardNonJpyFx = /^[A-Z]{6}$/.test(compactSymbol) && !compactSymbol.includes("JPY");
+  if (standardNonJpyFx) {
+    const pipRounded = Number(chart.toFixed(4));
+    const distanceToPip = Math.abs(chart - pipRounded);
+    const snapAllowance = 0.000020000001;
+    if (
+      distanceToPip <= snapAllowance &&
+      Math.abs(pipRounded - framework) < difference
+    ) {
+      return pipRounded;
+    }
   }
 
   // A meaningful same-period visual reconciliation may refine the entry price.
@@ -19045,10 +19115,14 @@ function rankRawEntryAreas({
     // reconciles a marked level, use that exact visible price in feedback.
     // Framework period/type identity remains authoritative; this changes only
     // the displayed anchor (for example 0.70104 instead of 0.70105).
+    // resolvedEntryPrice is the single downstream authority: it already
+    // applies the validated chart reconciliation and any conservative FX
+    // whole-pip canonicalization. Do not bypass it by reading the raw visual
+    // approximation again here.
     const authoritativeCenter =
-      rawZone?.members?.[0]?.chartReconciled === true
-        ? chartReconciledCenter
-        : asPositiveNumber(rawZone?.resolvedEntryPrice) || frameworkCenter;
+      asPositiveNumber(rawZone?.resolvedEntryPrice) ||
+      chartReconciledCenter ||
+      frameworkCenter;
 
     const reactionTolerance = Math.max(
       priceTolerance,
@@ -21507,6 +21581,152 @@ function deriveAuthoritativeCsaHistoricalPhase({
   return candlePhase || periodPhase || null;
 }
 
+function supplementReferencesWithExactChartLevels({
+  references = [],
+  selectedAreas = [],
+  visualReview = {},
+  marketReference = {},
+  direction = "range",
+  currentPrice = null,
+  symbol = "",
+}) {
+  const result = references.map((reference) => ({ ...reference }));
+  const atr = averageTrueRange(
+    Array.isArray(marketReference?.timeframeCandles)
+      ? marketReference.timeframeCandles
+      : [],
+    14
+  );
+  const reconciliationTolerance = getFrameworkChartReconciliationTolerance({
+    symbol,
+    atr,
+  });
+  const centerTolerance = Math.max(
+    getCleanBreakTolerance(symbol) * 0.35,
+    Number.EPSILON * 100
+  );
+
+  const exactPrices = (Array.isArray(visualReview?.visibleMarkedLevels)
+    ? visualReview.visibleMarkedLevels
+    : [])
+    .filter((item) =>
+      [
+        "independent_horizontal_line_reader_exact",
+        "per_target_framework_price_reader",
+      ].includes(String(item?.extractionSource || ""))
+    )
+    .map((item) => nullablePositiveNumber(item?.displayedPrice))
+    .filter((price) => price !== null)
+    .filter((price, index, prices) =>
+      prices.findIndex((candidate) => Math.abs(candidate - price) <= Number.EPSILON * 100) === index
+    );
+
+  for (const price of exactPrices) {
+    const alreadySelected = selectedAreas.some((area) => {
+      const center = asPositiveNumber(area?.authoritativeCenter);
+      return center !== null && Math.abs(center - price) <= centerTolerance;
+    });
+    if (alreadySelected) continue;
+
+    const overlappingReferenceIndex = result.findIndex((reference) => {
+      const low = Number(reference?.zoneLow);
+      const high = Number(reference?.zoneHigh);
+      return Number.isFinite(low) && Number.isFinite(high) &&
+        price >= Math.min(low, high) - centerTolerance &&
+        price <= Math.max(low, high) + centerTolerance;
+    });
+
+    if (overlappingReferenceIndex >= 0) {
+      const existing = result[overlappingReferenceIndex];
+      result[overlappingReferenceIndex] = {
+        ...existing,
+        authoritativeCenter: price,
+        levelText: formatPrice(price, symbol),
+        zoneText: `around ${formatPrice(price, symbol)}`,
+        chartReconciled: true,
+        priceSource: "independent_horizontal_line_reader_exact",
+        distanceFromPrice: Number.isFinite(Number(currentPrice))
+          ? Math.abs(price - Number(currentPrice))
+          : existing?.distanceFromPrice,
+      };
+      continue;
+    }
+
+    const matchingFrameworkArea = (Array.isArray(marketReference?.csaAreas)
+      ? marketReference.csaAreas
+      : [])
+      .map((area) => ({
+        area,
+        price: asPositiveNumber(area?.price),
+      }))
+      .filter((item) => item.price !== null)
+      .map((item) => ({
+        ...item,
+        distance: Math.abs(item.price - price),
+      }))
+      .filter((item) => item.distance <= reconciliationTolerance)
+      .sort((a, b) => a.distance - b.distance)[0] || null;
+
+    if (!matchingFrameworkArea || !Number.isFinite(Number(currentPrice))) continue;
+
+    const originalType = String(matchingFrameworkArea.area?.type || "").toLowerCase();
+    let areaType = originalType;
+    if (
+      direction === "bullish" &&
+      price < Number(currentPrice) &&
+      originalType === "resistance"
+    ) {
+      areaType = "converted support";
+    } else if (
+      direction === "bearish" &&
+      price > Number(currentPrice) &&
+      originalType === "support"
+    ) {
+      areaType = "converted resistance";
+    }
+
+    const sideCompatible = direction === "bullish"
+      ? ["support", "demand", "converted support"].includes(areaType) && price < Number(currentPrice)
+      : ["resistance", "supply", "converted resistance"].includes(areaType) && price > Number(currentPrice);
+    if (!sideCompatible) continue;
+
+    const halfWidth = Math.max(getApprovedPriceTolerance(symbol), Number(atr || 0) * 0.025);
+    result.push({
+      direction: direction === "bullish" ? "buy" : "sell",
+      areaType,
+      zoneLow: price - halfWidth,
+      zoneHigh: price + halfWidth,
+      authoritativeCenter: price,
+      levelText: formatPrice(price, symbol),
+      zoneText: `around ${formatPrice(price, symbol)}`,
+      frameworkPeriod: matchingFrameworkArea.area?.day || matchingFrameworkArea.area?.period || matchingFrameworkArea.area?.date || null,
+      structuralScore: 50,
+      distanceFromPrice: Math.abs(price - Number(currentPrice)),
+      fibPassed: false,
+      conversionConfirmed: false,
+      referenceOnly: true,
+      chartReconciled: true,
+      priceSource: "independent_horizontal_line_reader_exact",
+    });
+  }
+
+  return result
+    .filter((reference, index, items) => {
+      const center = asPositiveNumber(reference?.authoritativeCenter);
+      if (center === null) return false;
+      return items.findIndex((candidate) => {
+        const candidateCenter = asPositiveNumber(candidate?.authoritativeCenter);
+        return candidateCenter !== null && Math.abs(candidateCenter - center) <= centerTolerance;
+      }) === index;
+    })
+    .sort((a, b) => {
+      const ad = Number.isFinite(Number(a?.distanceFromPrice)) ? Number(a.distanceFromPrice) : Number.POSITIVE_INFINITY;
+      const bd = Number.isFinite(Number(b?.distanceFromPrice)) ? Number(b.distanceFromPrice) : Number.POSITIVE_INFINITY;
+      return ad - bd;
+    })
+    .slice(0, 3);
+}
+
 function buildValidatedAnalysisFacts({
   visualReview = {},
   marketReference = {},
@@ -21850,10 +22070,17 @@ function buildValidatedAnalysisFacts({
     ? rankedAreaResult.areas
     : [];
 
-  const structuralReferenceAreas =
-    Array.isArray(rankedAreaResult?.referenceAreas)
+  const structuralReferenceAreas = supplementReferencesWithExactChartLevels({
+    references: Array.isArray(rankedAreaResult?.referenceAreas)
       ? rankedAreaResult.referenceAreas
-      : [];
+      : [],
+    selectedAreas: rankedRawAreas,
+    visualReview,
+    marketReference,
+    direction: lockedMarketState.direction,
+    currentPrice,
+    symbol: submittedInstrument,
+  });
 
   const entryAreaValidation =
     rankedAreaResult?.validation || {

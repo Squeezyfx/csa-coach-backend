@@ -48,6 +48,10 @@ Important fields:
 - **Must not be entries**: structural levels that may be mentioned but must not become Entry 1 or Entry 2.
 - **Tolerance**: optional price tolerance. Leave blank for instrument-scale defaults.
 
+Exact prices retain the decimal precision you type. For example, `0.69620`
+remains a five-decimal requirement and will not accept `0.69618` unless you
+explicitly provide a wider tolerance.
+
 ## Release rule
 
 Do not merge a candidate change into production if:

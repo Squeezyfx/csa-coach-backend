@@ -1,6 +1,6 @@
 {
   "name": "csa-coach-backend",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "description": "CSA Coach backend with isolated multi-chart benchmark regression runner",
   "main": "server.js",
   "type": "module",

@@ -31,6 +31,26 @@ function parseList(value) {
     .filter((item) => item !== null);
 }
 
+function parsePriceExpectations(value) {
+  const tokens = Array.isArray(value)
+    ? value.map((item) => String(item))
+    : String(value || "").split(/[\s,;|]+/);
+
+  return tokens
+    .map((raw) => {
+      const text = String(raw || "").trim();
+      const value = finiteNumber(text);
+      if (value === null) return null;
+      const decimalText = text.includes(".") ? text.split(".")[1] : "";
+      return {
+        value,
+        text,
+        digits: Math.max(0, Math.min(decimalText.length, 8)),
+      };
+    })
+    .filter(Boolean);
+}
+
 function priceDigits(price) {
   const text = String(price);
   const decimals = text.includes(".") ? text.split(".")[1].length : 0;
@@ -46,8 +66,10 @@ function defaultTolerance(price) {
   return 0.00008;
 }
 
-function exactLevelTolerance(price) {
-  const digits = priceDigits(price);
+function exactLevelTolerance(price, expectedDigits = null) {
+  const digits = Number.isInteger(expectedDigits)
+    ? expectedDigits
+    : priceDigits(price);
   return Math.max(Number.EPSILON * 100, 0.5 * 10 ** -digits);
 }
 
@@ -128,10 +150,12 @@ function areaContains(area, expected, tolerance) {
   return expected >= Math.min(low, high) - tolerance && expected <= Math.max(low, high) + tolerance;
 }
 
-function textMentionsPrice(text, price, tolerance) {
+function textMentionsPrice(text, price, tolerance, expectedDigits = null) {
   const source = String(text || "");
   if (!source) return false;
-  const digits = priceDigits(price);
+  const digits = Number.isInteger(expectedDigits)
+    ? expectedDigits
+    : priceDigits(price);
   const candidates = source.match(/\d+(?:\.\d+)?/g) || [];
   return candidates.some((candidate) => {
     const value = Number(candidate);
@@ -233,11 +257,12 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     );
   }
 
-  for (const requiredPrice of parseList(expectation.requiredLevels)) {
-    const tolerance = finiteNumber(expectation.levelTolerance) ?? exactLevelTolerance(requiredPrice);
+  for (const required of parsePriceExpectations(expectation.requiredLevels)) {
+    const requiredPrice = required.value;
+    const tolerance = finiteNumber(expectation.levelTolerance) ?? exactLevelTolerance(requiredPrice, required.digits);
     const present =
       references.some((area) => Math.abs(Number(area.center) - requiredPrice) <= tolerance) ||
-      textMentionsPrice(feedbackText, requiredPrice, tolerance);
+      textMentionsPrice(feedbackText, requiredPrice, tolerance, required.digits);
     addCheck(
       checks,
       `required_level_${requiredPrice}`,
@@ -247,9 +272,10 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     );
   }
 
-  for (const requiredPrice of parseList(expectation.requiredFeedbackLevels)) {
-    const tolerance = finiteNumber(expectation.levelTolerance) ?? exactLevelTolerance(requiredPrice);
-    const present = textMentionsPrice(feedbackText, requiredPrice, tolerance);
+  for (const required of parsePriceExpectations(expectation.requiredFeedbackLevels)) {
+    const requiredPrice = required.value;
+    const tolerance = finiteNumber(expectation.levelTolerance) ?? exactLevelTolerance(requiredPrice, required.digits);
+    const present = textMentionsPrice(feedbackText, requiredPrice, tolerance, required.digits);
     addCheck(
       checks,
       `required_feedback_level_${requiredPrice}`,
@@ -315,6 +341,7 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
 export const benchmarkValidatorInternals = {
   normalizeDirection,
   parseList,
+  parsePriceExpectations,
   selectedEntries,
   factsSelectedEntries,
   canonicalSelectedEntries,

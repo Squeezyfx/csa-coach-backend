@@ -89,3 +89,17 @@ test("can require an exact level in customer-facing feedback", () => {
   const missing = validateBenchmarkResult(changed, { requiredFeedbackLevels: "0.69845" });
   assert.equal(missing.passed, false);
 });
+
+test("preserves trailing-zero precision for five-decimal FX expectations", () => {
+  const changed = structuredClone(baseResult);
+  changed.analysis = "Bullish. Entry 1 is support around 0.69618.";
+  changed.analysisFacts.selectedEntryAreas = [
+    { executionOrder: 1, authoritativeCenter: 0.69618, zoneLow: 0.6961, zoneHigh: 0.6963 },
+  ];
+  changed.analysisFacts.structuralReferenceAreas = [];
+  changed.finalFeedback.entry1 = { authoritativeCenter: 0.69618 };
+
+  const result = validateBenchmarkResult(changed, { requiredLevels: "0.69620" });
+  assert.equal(result.passed, false);
+  assert.ok(result.criticalFailures.some((check) => check.id === "required_level_0.6962"));
+});
