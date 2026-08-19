@@ -45,6 +45,7 @@ function collectCases() {
     label: field(row, "label").value,
     instrument: field(row, "instrument").value,
     timeframe: field(row, "timeframe").value,
+    plan: field(row, "plan").value,
     analysisType: field(row, "analysisType").value,
     cutoffMode: field(row, "cutoffMode").value,
     chartDate: field(row, "chartDate").value,

@@ -1,12 +1,12 @@
 # CSA AI Coach Batch Benchmark Tester
 
-This package adds a private regression-testing interface without changing `server.js` or the GoHighLevel customer dashboard.
+This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
 The included analysis backend is the supplied CSA `v4.10.18` modified build. The batch-testing additions do not alter its customer analysis route.
 
 ## Isolation model
 
-The benchmark runner must point only to a separate staging deployment of the CSA backend. The staging backend should use a staging Supabase project or, at minimum, a dedicated test user and non-customer data. Never set `BENCHMARK_TARGET_URL` to the production customer backend.
+The benchmark runner must point only to a separate staging deployment of the CSA backend. Never set `BENCHMARK_TARGET_URL` to the production customer backend. The staging backend's internal dry-run path skips customer authentication, allowances, journal creation, chart storage and database writes.
 
 Recommended services:
 
@@ -14,7 +14,7 @@ Recommended services:
 2. **CSA Staging Analysis** — `benchmark-testing` branch, `npm start`, staging/test environment variables.
 3. **CSA Benchmark Runner** — `benchmark-testing` branch, `npm run start:benchmark`, benchmark environment variables.
 
-The runner submits each chart to the staging analysis service as an independent request. It does not contact GoHighLevel, Stripe, production customer accounts, or production journals.
+The runner submits each chart to the staging analysis service as an independent request using a constant-time-checked internal key. It does not contact GoHighLevel, Stripe, production customer accounts, Supabase Auth, customer journals or usage tables.
 
 ## Render configuration
 
@@ -25,9 +25,11 @@ Create a new private web service for the benchmark runner:
 - Branch: `benchmark-testing`
 - Health check path: `/health`
 
-Copy the variables from `benchmark.env.example` into the runner service. Use a long random `BENCHMARK_ADMIN_KEY`.
+Copy the runner variables from `benchmark.env.example` into the runner service. Use long, different random values for `BENCHMARK_ADMIN_KEY` and `BENCHMARK_TARGET_INTERNAL_KEY`.
 
-The staging analysis service runs the unchanged `server.js` with `npm start`. Give its test user an Elite or large beta analysis allowance because the current `/analyze-chart` route records usage in whichever Supabase project that staging service uses.
+The staging analysis service runs `server.js` with `npm start`. Add `BENCHMARK_DRY_RUN_ENABLED=true` and `BENCHMARK_INTERNAL_KEY=<same value as runner BENCHMARK_TARGET_INTERNAL_KEY>` only to the staging analysis service. Never add these variables to production.
+
+The dry-run response includes `benchmarkDryRun: true` and `savedToJournal: false`. If the internal key is absent, short, incorrect, or dry-run mode is disabled, the normal customer authentication path remains mandatory.
 
 ## First run
 
@@ -35,6 +37,7 @@ The staging analysis service runs the unchanged `server.js` with `npm start`. Gi
 2. Enter `BENCHMARK_ADMIN_KEY`.
 3. Select several chart screenshots.
 4. For each chart, enter its instrument, timeframe, cutoff mode, and expected facts.
+   Select Starter, Pro or Elite output for each case; Starter is the default.
 5. Click **Run all benchmarks**.
 6. Review critical failures and export the JSON report.
 
@@ -59,4 +62,4 @@ Only the exact commit that passed the complete benchmark set should be promoted 
 
 ## Current Phase 1 limitation
 
-This first version exports reports as JSON rather than saving benchmark cases in Supabase. That keeps the initial implementation isolated and reversible. Persistent benchmark tables and version-to-version history can be added after the runner has been proven against the first chart set.
+This first version exports reports as JSON rather than saving benchmark cases in Supabase. No benchmark case, chart, journal or usage record is written to Supabase. Persistent benchmark history can be added later in a separate staging datastore.

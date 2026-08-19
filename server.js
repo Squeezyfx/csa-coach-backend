@@ -27,6 +27,13 @@ const AI_PROVIDER = String(process.env.AI_PROVIDER || "openai")
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-5";
+const BENCHMARK_DRY_RUN_ENABLED =
+  String(process.env.BENCHMARK_DRY_RUN_ENABLED || "")
+    .trim()
+    .toLowerCase() === "true";
+const BENCHMARK_INTERNAL_KEY = String(
+  process.env.BENCHMARK_INTERNAL_KEY || ""
+);
 
 const openai = OPENAI_API_KEY
   ? new OpenAI({ apiKey: OPENAI_API_KEY })
@@ -410,6 +417,46 @@ function getBearerToken(req) {
   const authorization = String(req.headers.authorization || "").trim();
   if (!authorization.toLowerCase().startsWith("bearer ")) return "";
   return authorization.slice(7).trim();
+}
+
+function isAuthorizedBenchmarkDryRun(req) {
+  if (!BENCHMARK_DRY_RUN_ENABLED || BENCHMARK_INTERNAL_KEY.length < 24) {
+    return false;
+  }
+
+  const supplied = String(
+    req.get("x-benchmark-internal-key") || ""
+  );
+  if (supplied.length !== BENCHMARK_INTERNAL_KEY.length) return false;
+
+  return crypto.timingSafeEqual(
+    Buffer.from(supplied),
+    Buffer.from(BENCHMARK_INTERNAL_KEY)
+  );
+}
+
+function createBenchmarkDryRunEntitlement(requestedPlan = "starter") {
+  const effectivePlan = normalizePlanCode(requestedPlan);
+  const planConfig = PLAN_CONFIG[effectivePlan];
+  return {
+    basePlan: effectivePlan,
+    effectivePlan,
+    planLabel: `Internal ${planConfig.label} Benchmark Dry Run`,
+    subscriptionStatus: "internal",
+    isBetaTester: false,
+    betaAccessExpiresAt: null,
+    analysesUsed: 0,
+    analysesLimit: 1000000,
+    analysesRemaining: 1000000,
+    usageMonth: getCurrentUsageMonth(),
+    journalLimit: planConfig.journalLimit,
+    strategyLimit: planConfig.strategyLimit,
+    features: planConfig.features,
+    cancelAtPeriodEnd: false,
+    currentPeriodStart: null,
+    currentPeriodEnd: null,
+    trialUsed: false,
+  };
 }
 
 async function getRequestUser(req) {
@@ -25385,8 +25432,19 @@ app.get("/sample-analysis", (req, res) => {
 
 app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
   try {
-    const requestAuth = await getRequestUser(req);
-    const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
+    const benchmarkDryRun = isAuthorizedBenchmarkDryRun(req);
+    const requestAuth = benchmarkDryRun
+      ? {
+          accessToken: "",
+          user: {
+            id: "00000000-0000-0000-0000-000000000000",
+            email: "benchmark-dry-run@internal.invalid",
+          },
+        }
+      : await getRequestUser(req);
+    const entitlement = benchmarkDryRun
+      ? createBenchmarkDryRunEntitlement(req.body?.benchmarkPlan)
+      : await getUserPlanEntitlement(requestAuth.user.id);
 
     if (!isAiProviderConfigured()) return res.status(500).json({ success: false, error: getAiConfigurationError() });
     if (!req.file) return res.status(400).json({ success: false, error: "No chart image uploaded." });
@@ -25415,12 +25473,18 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const normalizedSymbol = normalizeSymbol(submittedInstrument);
     const mode = normalizeAnalysisType(analysisType);
     const selectedTimeframeProfile = getSupportedCsaTimeframeProfile(timeframe);
-    const selectedStrategy = await resolveSelectedStrategy({
-      userId: requestAuth.user.id,
-      entitlement,
-      analysisFramework,
-      strategyId,
-    });
+    const selectedStrategy = benchmarkDryRun
+      ? {
+          analysisFramework: "csa",
+          strategy: null,
+          snapshot: null,
+        }
+      : await resolveSelectedStrategy({
+          userId: requestAuth.user.id,
+          entitlement,
+          analysisFramework,
+          strategyId,
+        });
     const imageBase64 = req.file.buffer.toString("base64");
     const mimeType = req.file.mimetype || "image/png";
     const selectedDateText = chartDate || tradeDate || "";
@@ -25481,7 +25545,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       return res.json(cachedCompletedAnalysis);
     }
 
-    assertAnalysisAllowed(entitlement);
+    if (!benchmarkDryRun) {
+      assertAnalysisAllowed(entitlement);
+    }
 
     const totalAnalysisStartedAt =
       csaNowMs();
@@ -26210,6 +26276,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       cutoffSource: chartCutoff.source,
       cutoffReason: chartCutoff.reason,
       forceFreshAnalysis: forceFresh,
+      benchmarkDryRun,
       cutoffDiagnostics: {
         engineVersion: CSA_FEEDBACK_ENGINE_VERSION,
         cutoffMode: chartCutoff.mode,
@@ -26277,8 +26344,15 @@ ${(visualReview?.strategyMissingInformation || []).length
 
     // Commit journal + usage only after analysis and response construction
     // have both completed successfully.
-    const journalSave =
-      await saveCompletedReview({
+    const journalSave = benchmarkDryRun
+      ? {
+          savedToJournal: false,
+          saveReason:
+            "Internal benchmark dry run: customer allowance, journal, storage and database writes were skipped.",
+          reviewId: null,
+          chartImagePath: null,
+        }
+      : await saveCompletedReview({
         user:
           requestAuth.user,
         file:
@@ -26366,7 +26440,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       }
     );
 
-    if (!forceFresh) {
+    if (!forceFresh && !benchmarkDryRun) {
       cacheCompletedAnalysis(
         analysisFingerprint,
         finalClientResponse
