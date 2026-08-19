@@ -63,6 +63,7 @@ function cleanCase(value = {}, index = 0) {
       expectedEntry2: value.expectedEntry2 ?? "",
       entry2Required: value.entry2Required === true,
       requiredLevels: value.requiredLevels ?? "",
+      requiredFeedbackLevels: value.requiredFeedbackLevels ?? "",
       forbiddenEntries: value.forbiddenEntries ?? "",
       tolerance: value.tolerance ?? "",
     },

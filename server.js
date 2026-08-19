@@ -1484,7 +1484,7 @@ AREA RANKING RULES:
 - Fibonacci retracement is a silent mandatory quality filter only after an authoritative structural area already exists. Only 38.2%, 50%, and 61.8% are used.
 - The deterministic CSA selector controls entry areas. Build candidates only from the timeframe's authoritative source periods, resolve each level's current lifecycle role chronologically, reject failed/choppy/weak levels, then keep only structural areas in close proximity to 38.2%, 50%, or 61.8% of the relevant completed impulse before sequencing Entry 1 and Entry 2.
 - A clean break with continuation may create a potential converted S/R area that can be watched for a future retest. It becomes confirmed converted only after price returns from the opposite side and respects it. Either way, it must still pass the 38.2% / 50% / 61.8% proximity filter before it can become Entry 1 or Entry 2.
-- Fibonacci must never create an area by itself. An independently valid S/R or supply/demand area becomes a strong entry candidate when it is close to 38.2%, falls within the 50%-61.8% retracement band, or sits only slightly beyond 61.8% within the deterministic extension allowance.
+- Fibonacci must never create an area by itself. An independently valid S/R or supply/demand area becomes a strong entry candidate only when it is close to 38.2% or falls within the 50%-61.8% retracement band. Anything beyond 61.8% is reference-only and must not become Entry 1 or Entry 2.
 - Preserve the true area type: converted resistance/support, resistance/support, or supply/demand.
 - Use the timeframe-framework high or low to identify the correct structural period first.
 - If the uploaded chart clearly shows the matching broker level within a reasonable ATR-scaled tolerance, reconcile the final displayed price to that visible chart level.
@@ -5419,7 +5419,7 @@ FIBONACCI
 - Only the 38.2%, 50%, and 61.8% retracement levels are used for this entry filter.
 - A structural area is a strong entry area only when that support/resistance or supply/demand area is in close proximity to at least one of those retracement levels.
 - A structurally valid area that is not close to 38.2%, 50%, or 61.8% may remain an important chart reference, but it must not become Entry 1, Entry 2, or the preferred entry area.
-- Fibonacci must never create a setup by itself. The actual entry remains the support/resistance or supply/demand area, not the Fibonacci number. Treat 50%-61.8% as a valid retracement band; close proximity to 38.2% is valid; and a structural area only slightly beyond 61.8% may remain valid within the deterministic extension allowance.
+- Fibonacci must never create a setup by itself. The actual entry remains the support/resistance or supply/demand area, not the Fibonacci number. Treat 50%-61.8% as a valid retracement band and close proximity to 38.2% as valid. Anything beyond 61.8% is reference-only.
 - The retracement must be calculated from the genuine completed impulse that produced the current directional breakout/breakdown, using the current structure-sequence origin and the final visible directional extreme; do not shrink the impulse to a late local swing merely because it is more recent.
 - In Final Visible Candle mode, when the uploaded broker/platform chart and external OHLC feed use materially different price scales, use deterministic OHLC only to identify the relevant structure/impulse sequence and use the uploaded chart's own price scale for the impulse swing prices. Exact printed chart OHLC/labels outrank estimates. Never choose swing anchors to force Fibonacci confluence.
 - A marked horizontal support/resistance/supply/demand price may calibrate the chart scale but must never automatically become the Fib swing origin. The swing origin is the actual candle wick/extreme; if a proposed origin collides with a marked reference line, independently verify the wick or reject the chart-native anchor.
@@ -13958,11 +13958,9 @@ function evaluateRequiredFibonacciConfluence({
   // B) 50%-61.8%: this is an acceptance BAND, not two exact-price targets.
   //    Any independently valid structural area that falls inside / overlaps
   //    the band qualifies.
-  // C) Slightly beyond 61.8%: still valid within a controlled extension.
-  //    The extension scales with ATR so Gold, FX, indices, crypto, etc. are
-  //    judged by market scale rather than a hard-coded point amount.
-  // D) Exact/close proximity to 50% or 61.8% also remains valid naturally.
-  // E) Materially beyond the controlled 61.8 extension fails.
+  // C) Anything beyond 61.8% fails the entry gate. It may remain a structural
+  //    reference, but it cannot become Entry 1 or Entry 2.
+  // D) Exact/close proximity to 50% or 61.8% remains valid naturally.
   //
   // This implements the CSA rule that "close proximity" does not mean exact
   // equality to a Fib price and that the 50%-61.8% region is valid as a zone.
@@ -14006,65 +14004,11 @@ function evaluateRequiredFibonacciConfluence({
   const deepBandHigh =
     level50 && level618 ? Math.max(level50.price, level618.price) : null;
 
-  const impulseRange = Math.max(
-    0,
-    Number(
-      fibonacci?.impulseRange ??
-        (Number.isFinite(Number(fibonacci?.swingHigh)) &&
-        Number.isFinite(Number(fibonacci?.swingLow))
-          ? Number(fibonacci.swingHigh) - Number(fibonacci.swingLow)
-          : 0)
-    ) || 0
-  );
-
-  // "A bit beyond 61.8" is deliberately controlled rather than unlimited.
-  // Half an ATR is wide enough to respect a real structural zone on volatile
-  // instruments such as XAUUSD while still preventing deep retracements from
-  // being labelled Fib-confluent simply because a level exists there.
-  // A small impulse-relative floor keeps the rule stable when ATR is unusually
-  // compressed. The maximum of the two is still bounded to 7% of the impulse.
-  const rawDeepExtension = Math.max(
-    normalizedAtr * 0.50,
-    impulseRange * 0.04,
-    minimumInstrumentBuffer
-  );
-  const deepExtensionAllowance =
-    impulseRange > 0
-      ? Math.min(rawDeepExtension, impulseRange * 0.07)
-      : rawDeepExtension;
-
   const zoneOverlapsDeepBand =
     Number.isFinite(deepBandLow) &&
     Number.isFinite(deepBandHigh) &&
     high >= deepBandLow &&
     low <= deepBandHigh;
-
-  // The direction tells us which side of 61.8 is the "deeper" retracement.
-  // bearish impulse: deeper retracement is ABOVE the 61.8 price.
-  // bullish impulse: deeper retracement is BELOW the 61.8 price.
-  const direction = String(fibonacci?.direction || "").toLowerCase();
-  let distanceBeyond618 = Number.POSITIVE_INFINITY;
-  let zoneWithinDeepExtension = false;
-
-  if (level618 && deepExtensionAllowance >= 0) {
-    if (direction === "bearish") {
-      if (low > level618.price) {
-        distanceBeyond618 = low - level618.price;
-      } else if (high >= level618.price) {
-        distanceBeyond618 = 0;
-      }
-    } else if (direction === "bullish") {
-      if (high < level618.price) {
-        distanceBeyond618 = level618.price - high;
-      } else if (low <= level618.price) {
-        distanceBeyond618 = 0;
-      }
-    }
-
-    zoneWithinDeepExtension =
-      Number.isFinite(distanceBeyond618) &&
-      distanceBeyond618 <= deepExtensionAllowance;
-  }
 
   const evaluatedLevels = fibLevels
     .map((level) => {
@@ -14134,20 +14078,6 @@ function evaluateRequiredFibonacciConfluence({
       bandLow: deepBandLow,
       bandHigh: deepBandHigh,
     });
-  } else if (zoneWithinDeepExtension && level618) {
-    bandMatches.push({
-      ratio: 0.618,
-      label: "61.8% extension",
-      price: level618.price,
-      distanceToZone: distanceBeyond618,
-      distanceAsAtrFraction:
-        normalizedAtr > 0 ? distanceBeyond618 / normalizedAtr : null,
-      distanceAsAtrPercent:
-        normalizedAtr > 0 ? (distanceBeyond618 / normalizedAtr) * 100 : null,
-      matchType: "slightly_beyond_618_within_extension",
-      passed: true,
-      extensionAllowance: deepExtensionAllowance,
-    });
   }
 
   const matches = [...bandMatches, ...exactLevelMatches];
@@ -14162,19 +14092,15 @@ function evaluateRequiredFibonacciConfluence({
     deepBandLow,
     deepBandHigh,
     zoneOverlapsDeepBand,
-    distanceBeyond618: Number.isFinite(distanceBeyond618)
-      ? distanceBeyond618
-      : null,
-    deepExtensionAllowance,
-    zoneWithinDeepExtension,
-    impulseRange,
+    distanceBeyond618: null,
+    deepExtensionAllowance: 0,
+    zoneWithinDeepExtension: false,
+    impulseRange: Number(fibonacci?.impulseRange || 0) || null,
     structuralQualityScore: Number(structuralQualityScore || 0),
     strongStructure,
     reason:
       zoneOverlapsDeepBand
         ? "structural_area_inside_50_618_acceptance_band"
-        : zoneWithinDeepExtension
-        ? "structural_area_slightly_beyond_618_within_allowed_extension"
         : exactLevelMatches.length > 0
         ? "structural_area_has_required_retracement_proximity"
         : "no_382_proximity_or_50_618_band_confluence",
@@ -14792,15 +14718,15 @@ function validateAndSequenceEntryAreas({
     return true;
   });
 
-  const sequenced = filtered.slice(0, 3).map((area, index) => ({
+  // CSA exposes at most two actionable areas. Deeper valid structure remains
+  // context only and must never leak into analysisFacts as a hidden third entry.
+  const sequenced = filtered.slice(0, 2).map((area, index) => ({
     ...area,
     executionOrder: index + 1,
     role:
       index === 0
         ? "primary"
-        : index === 1
-        ? "secondary"
-        : "alternative",
+        : "secondary",
   }));
 
   for (let index = 1; index < sequenced.length; index += 1) {

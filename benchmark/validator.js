@@ -46,6 +46,11 @@ function defaultTolerance(price) {
   return 0.00008;
 }
 
+function exactLevelTolerance(price) {
+  const digits = priceDigits(price);
+  return Math.max(Number.EPSILON * 100, 0.5 * 10 ** -digits);
+}
+
 function entryFrom(value, index = 0) {
   if (!value || typeof value !== "object") return null;
   const zoneLow = finiteNumber(value.zoneLow);
@@ -67,16 +72,45 @@ function entryFrom(value, index = 0) {
   };
 }
 
-function selectedEntries(result = {}) {
-  const factsEntries = Array.isArray(result?.analysisFacts?.selectedEntryAreas)
+function factsSelectedEntries(result = {}) {
+  return Array.isArray(result?.analysisFacts?.selectedEntryAreas)
     ? result.analysisFacts.selectedEntryAreas.map(entryFrom).filter(Boolean)
     : [];
+}
 
-  if (factsEntries.length) return factsEntries.sort((a, b) => a.order - b.order);
+function canonicalSelectedEntries(result = {}) {
+  const lockedEntries = Array.isArray(result?.finalFeedback?.narrativeLock?.selectedEntries)
+    ? result.finalFeedback.narrativeLock.selectedEntries.map(entryFrom).filter(Boolean)
+    : [];
 
-  return [result?.finalFeedback?.entry1, result?.finalFeedback?.entry2]
+  if (lockedEntries.length) return lockedEntries.sort((a, b) => a.order - b.order);
+
+  const feedbackEntries = [result?.finalFeedback?.entry1, result?.finalFeedback?.entry2]
     .map(entryFrom)
     .filter(Boolean);
+
+  if (feedbackEntries.length) return feedbackEntries.sort((a, b) => a.order - b.order);
+
+  return factsSelectedEntries(result).sort((a, b) => a.order - b.order);
+}
+
+function selectedEntries(result = {}) {
+  return canonicalSelectedEntries(result);
+}
+
+function allPromotedEntries(result = {}) {
+  return [...factsSelectedEntries(result), ...canonicalSelectedEntries(result)];
+}
+
+function entrySetsAgree(factsEntries = [], canonicalEntries = []) {
+  if (factsEntries.length !== canonicalEntries.length) return false;
+
+  return canonicalEntries.every((canonical, index) => {
+    const facts = factsEntries[index];
+    if (!facts) return false;
+    const tolerance = defaultTolerance(canonical.center ?? facts.center ?? 1);
+    return Math.abs(Number(canonical.center) - Number(facts.center)) <= tolerance;
+  });
 }
 
 function referenceEntries(result = {}) {
@@ -136,6 +170,8 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   );
   const expectedDirection = normalizeDirection(expectation.expectedDirection || "");
   const entries = selectedEntries(result);
+  const factsEntries = factsSelectedEntries(result).sort((a, b) => a.order - b.order);
+  const promotedEntries = allPromotedEntries(result);
   const references = referenceEntries(result);
   const feedbackText = String(result?.analysis || result?.summary || result?.finalFeedback?.analysis || "");
 
@@ -148,6 +184,22 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       `Expected ${expectedDirection}; received ${direction}.`
     );
   }
+
+  addCheck(
+    checks,
+    "maximum_two_entries",
+    "Maximum two selected entries",
+    factsEntries.length <= 2 && entries.length <= 2,
+    `Structured facts returned ${factsEntries.length}; customer-facing output returned ${entries.length}.`
+  );
+
+  addCheck(
+    checks,
+    "canonical_entry_consistency",
+    "Internal and customer-facing entries agree",
+    entrySetsAgree(factsEntries, entries),
+    `Structured facts contain ${factsEntries.length} entr${factsEntries.length === 1 ? "y" : "ies"}; canonical feedback contains ${entries.length}.`
+  );
 
   const expectedEntry1 = finiteNumber(expectation.expectedEntry1);
   if (expectedEntry1 !== null) {
@@ -182,22 +234,34 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   }
 
   for (const requiredPrice of parseList(expectation.requiredLevels)) {
-    const tolerance = toleranceOverride ?? defaultTolerance(requiredPrice);
+    const tolerance = finiteNumber(expectation.levelTolerance) ?? exactLevelTolerance(requiredPrice);
     const present =
-      references.some((area) => areaContains(area, requiredPrice, tolerance)) ||
+      references.some((area) => Math.abs(Number(area.center) - requiredPrice) <= tolerance) ||
       textMentionsPrice(feedbackText, requiredPrice, tolerance);
     addCheck(
       checks,
       `required_level_${requiredPrice}`,
       `Required level ${requiredPrice}`,
       present,
-      present ? "The level is present in the structured facts or feedback." : "The required level is missing."
+      present ? "The exact level is present in the structured facts or feedback." : "The exact required level is missing; broad zone containment does not count."
+    );
+  }
+
+  for (const requiredPrice of parseList(expectation.requiredFeedbackLevels)) {
+    const tolerance = finiteNumber(expectation.levelTolerance) ?? exactLevelTolerance(requiredPrice);
+    const present = textMentionsPrice(feedbackText, requiredPrice, tolerance);
+    addCheck(
+      checks,
+      `required_feedback_level_${requiredPrice}`,
+      `Feedback must mention ${requiredPrice}`,
+      present,
+      present ? "The exact level is present in customer-facing feedback." : "The required level is absent from customer-facing feedback."
     );
   }
 
   for (const forbiddenPrice of parseList(expectation.forbiddenEntries)) {
     const tolerance = toleranceOverride ?? defaultTolerance(forbiddenPrice);
-    const promoted = entries.some((area) => areaContains(area, forbiddenPrice, tolerance));
+    const promoted = promotedEntries.some((area) => areaContains(area, forbiddenPrice, tolerance));
     addCheck(
       checks,
       `forbidden_entry_${forbiddenPrice}`,
@@ -252,7 +316,10 @@ export const benchmarkValidatorInternals = {
   normalizeDirection,
   parseList,
   selectedEntries,
+  factsSelectedEntries,
+  canonicalSelectedEntries,
   referenceEntries,
   areaContains,
   defaultTolerance,
+  exactLevelTolerance,
 };

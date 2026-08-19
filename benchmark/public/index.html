@@ -35,7 +35,7 @@
       <div class="panel-heading">
         <div>
           <h2>2. Define the expected results</h2>
-          <p>Use comma-separated prices for required levels and forbidden entries.</p>
+          <p>Use comma-separated prices for exact required levels, feedback mentions and forbidden entries.</p>
         </div>
         <button id="clearButton" class="button secondary" type="button">Clear</button>
       </div>
@@ -86,6 +86,7 @@
       </td>
       <td class="field-stack">
         <input data-field="requiredLevels" placeholder="Required levels: 0.70104, 0.69845">
+        <input data-field="requiredFeedbackLevels" placeholder="Feedback must mention: 0.69845">
         <input data-field="forbiddenEntries" placeholder="Must not be entries: 0.69486">
         <input data-field="tolerance" inputmode="decimal" placeholder="Optional tolerance">
         <textarea data-field="notes" rows="2" placeholder="Optional trade notes"></textarea>

@@ -54,6 +54,7 @@ function collectCases() {
     expectedEntry2: field(row, "expectedEntry2").value,
     entry2Required: field(row, "entry2Required").checked,
     requiredLevels: field(row, "requiredLevels").value,
+    requiredFeedbackLevels: field(row, "requiredFeedbackLevels").value,
     forbiddenEntries: field(row, "forbiddenEntries").value,
     tolerance: field(row, "tolerance").value,
     notes: field(row, "notes").value,

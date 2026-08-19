@@ -43,7 +43,8 @@ The dry-run response includes `benchmarkDryRun: true` and `savedToJournal: false
 
 Important fields:
 
-- **Required levels**: important levels that must appear in structured facts or customer feedback.
+- **Required levels**: exact authoritative levels that must appear in structured facts or customer feedback. Merely falling inside a broad zone does not count.
+- **Feedback must mention**: exact levels that must be stated in the customer-facing feedback.
 - **Must not be entries**: structural levels that may be mentioned but must not become Entry 1 or Entry 2.
 - **Tolerance**: optional price tolerance. Leave blank for instrument-scale defaults.
 
