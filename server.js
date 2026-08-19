@@ -10425,7 +10425,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.18.1";
-const CSA_BUILD_ID = "CSA-v4.10.19-authoritative-chart-level-reconciliation";
+const CSA_BUILD_ID = "CSA-v4.10.20-structural-demand-boundary-reconciliation";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -15515,7 +15515,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.18";
+const CSA_SELECTOR_VERSION = "4.5.19";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -21621,6 +21621,102 @@ function supplementReferencesWithExactChartLevels({
       prices.findIndex((candidate) => Math.abs(candidate - price) <= Number.EPSILON * 100) === index
     );
 
+  /*
+   * V4.10.20 STRUCTURAL S/D BOUNDARY RECONCILIATION
+   *
+   * A supply/demand reference is an area, so its authoritative daily extreme
+   * is not always the most useful chart-facing boundary. When the uploaded
+   * chart has no printed horizontal label for that area, use a repeated,
+   * independently occurring OHLC boundary inside the existing deterministic
+   * zone. This does not create a new area and can never promote the reference
+   * to Entry 1/Entry 2.
+   *
+   * Requiring the same exact price on multiple candles, including the
+   * direction-compatible wick and the opposite wick role, keeps this
+   * conservative. It captures a genuine reaction/flip boundary while ignoring
+   * isolated candle values and broad zone containment.
+   */
+  const reconcileRepeatedStructuralBoundary = (reference) => {
+    const areaType = String(reference?.areaType || "").toLowerCase();
+    if (!["supply", "demand"].includes(areaType)) return reference;
+    if (reference?.chartReconciled === true) return reference;
+
+    const low = Number(reference?.zoneLow);
+    const high = Number(reference?.zoneHigh);
+    if (!Number.isFinite(low) || !Number.isFinite(high)) return reference;
+
+    const zoneLow = Math.min(low, high);
+    const zoneHigh = Math.max(low, high);
+    const candles = Array.isArray(marketReference?.timeframeCandles)
+      ? marketReference.timeframeCandles
+      : [];
+    if (candles.length < 2) return reference;
+
+    const groups = new Map();
+    candles.forEach((candle) => {
+      ["open", "high", "low", "close"].forEach((role) => {
+        const price = asPositiveNumber(candle?.[role]);
+        if (price === null || price < zoneLow || price > zoneHigh) return;
+
+        const levelText = formatPrice(price, symbol);
+        const group = groups.get(levelText) || {
+          price: Number(levelText),
+          levelText,
+          occurrences: 0,
+          roles: new Set(),
+          candles: new Set(),
+        };
+        group.occurrences += 1;
+        group.roles.add(role);
+        group.candles.add(String(candle?.datetime || ""));
+        groups.set(levelText, group);
+      });
+    });
+
+    const requiredWick = areaType === "demand" ? "low" : "high";
+    const oppositeWick = areaType === "demand" ? "high" : "low";
+    const originalCenter = asPositiveNumber(reference?.authoritativeCenter);
+    const candidates = [...groups.values()]
+      .filter((group) =>
+        group.candles.size >= 2 &&
+        group.roles.has(requiredWick) &&
+        group.roles.has(oppositeWick)
+      )
+      .map((group) => ({
+        ...group,
+        score:
+          group.candles.size * 20 +
+          group.roles.size * 8 +
+          group.occurrences * 3 -
+          (originalCenter === null
+            ? 0
+            : Math.abs(group.price - originalCenter) /
+              Math.max(getCleanBreakTolerance(symbol), Number.EPSILON)),
+      }))
+      .sort((a, b) => b.score - a.score);
+
+    const best = candidates[0] || null;
+    if (!best || !Number.isFinite(best.price)) return reference;
+
+    return {
+      ...reference,
+      frameworkCenter: originalCenter,
+      authoritativeCenter: best.price,
+      levelText: best.levelText,
+      zoneText: `around ${best.levelText}`,
+      structuralBoundaryReconciled: true,
+      priceSource: "repeated_multi_candle_supply_demand_boundary",
+      structuralBoundaryEvidence: {
+        distinctCandles: best.candles.size,
+        occurrences: best.occurrences,
+        roles: [...best.roles],
+      },
+      distanceFromPrice: Number.isFinite(Number(currentPrice))
+        ? Math.abs(best.price - Number(currentPrice))
+        : reference?.distanceFromPrice,
+    };
+  };
+
   for (const price of exactPrices) {
     const alreadySelected = selectedAreas.some((area) => {
       const center = asPositiveNumber(area?.authoritativeCenter);
@@ -21711,6 +21807,7 @@ function supplementReferencesWithExactChartLevels({
   }
 
   return result
+    .map(reconcileRepeatedStructuralBoundary)
     .filter((reference, index, items) => {
       const center = asPositiveNumber(reference?.authoritativeCenter);
       if (center === null) return false;
