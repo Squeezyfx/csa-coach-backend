@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   classifyCsaStructuralStage,
   orderStructuralCandidatesForFib,
+  selectProtectiveSupplyDemandAnchor,
   sequenceFibQualifiedAreas,
 } from "../csa-entry-policy.js";
 
@@ -62,4 +63,20 @@ test("after Fib qualification bearish entries follow nearest-to-deeper price pat
     "bearish"
   );
   assert.deepEqual(sequenced.map((item) => item.id), ["near-resistance", "deep-supply"]);
+});
+
+test("overlapping demand keeps the lower protective launch-base boundary", () => {
+  const selected = selectProtectiveSupplyDemandAnchor(
+    { id: "shallow", areaType: "demand", authoritativeCenter: 1.40395 },
+    { id: "deep", areaType: "demand", authoritativeCenter: 1.40341 }
+  );
+  assert.equal(selected.id, "deep");
+});
+
+test("overlapping supply keeps the upper protective launch-base boundary", () => {
+  const selected = selectProtectiveSupplyDemandAnchor(
+    { id: "shallow", areaType: "supply", authoritativeCenter: 0.80948 },
+    { id: "deep", areaType: "supply", authoritativeCenter: 0.81 }
+  );
+  assert.equal(selected.id, "deep");
 });

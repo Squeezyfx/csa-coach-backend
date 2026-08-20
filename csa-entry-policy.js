@@ -55,3 +55,33 @@ export function sequenceFibQualifiedAreas(candidates = [], direction = "range") 
     return direction === "bearish" ? aCenter - bCenter : bCenter - aCenter;
   });
 }
+
+export function selectProtectiveSupplyDemandAnchor(existing = {}, candidate = {}) {
+  const areaType = String(existing?.areaType || existing?.type || "")
+    .toLowerCase()
+    .trim();
+  const candidateType = String(candidate?.areaType || candidate?.type || "")
+    .toLowerCase()
+    .trim();
+  const existingAnchor = Number(
+    existing?.authoritativeCenter ?? existing?.resolvedEntryPrice
+  );
+  const candidateAnchor = Number(
+    candidate?.authoritativeCenter ?? candidate?.resolvedEntryPrice
+  );
+
+  if (
+    areaType !== candidateType ||
+    !["demand", "supply"].includes(areaType) ||
+    !Number.isFinite(existingAnchor) ||
+    !Number.isFinite(candidateAnchor)
+  ) {
+    return existing;
+  }
+
+  if (areaType === "demand") {
+    return candidateAnchor < existingAnchor ? candidate : existing;
+  }
+
+  return candidateAnchor > existingAnchor ? candidate : existing;
+}

@@ -7,6 +7,7 @@ import Stripe from "stripe";
 import {
   classifyCsaStructuralStage,
   orderStructuralCandidatesForFib,
+  selectProtectiveSupplyDemandAnchor,
   sequenceFibQualifiedAreas,
 } from "./csa-entry-policy.js";
 import crypto from "crypto";
@@ -10431,8 +10432,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.22.0";
-const CSA_BUILD_ID = "CSA-v4.11.1-final-visible-independent-sd";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.23.0";
+const CSA_BUILD_ID = "CSA-v4.11.2-sd-protective-launch-boundary";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -14587,6 +14588,78 @@ function dedupeValidatedAreas(areas = [], atr = 0) {
       Number(existing.structuralScore || 0) +
       Number(existing.fibonacciScore || 0) * 4;
 
+    /*
+     * V4.11.2 OVERLAPPING S/D LAUNCH-BASE ANCHOR
+     *
+     * Several candles can describe one demand/supply area. After structural
+     * validation and the hidden Fib gate, overlapping candidates of the same
+     * S/D type must collapse to the protective launch-base boundary rather
+     * than whichever candle happened to be evaluated first. For a bullish
+     * demand cluster that is the lower boundary; for a bearish supply cluster
+     * it is the upper boundary. Exact independently read chart labels retain
+     * priority above this unmarked-zone rule.
+     */
+    const existingAreaType = String(existing?.areaType || "").toLowerCase();
+    const candidateAreaType = String(candidate?.areaType || "").toLowerCase();
+    const sameSupplyDemandCluster =
+      existingStandardStage === "supply_demand" &&
+      candidateStandardStage === "supply_demand" &&
+      existingAreaType === candidateAreaType &&
+      ["demand", "supply"].includes(existingAreaType) &&
+      !existingTrustedChartPrice &&
+      !candidateTrustedChartPrice &&
+      Math.abs(candidatePriority - existingPriority) <= 4;
+
+    if (sameSupplyDemandCluster) {
+      const existingAnchor = Number(existing?.authoritativeCenter);
+      const candidateAnchor = Number(candidate?.authoritativeCenter);
+      const selected = selectProtectiveSupplyDemandAnchor(existing, candidate);
+
+      result[duplicateIndex] = {
+        ...selected,
+        zoneLow: Math.min(
+          Number(existing?.zoneLow),
+          Number(candidate?.zoneLow)
+        ),
+        zoneHigh: Math.max(
+          Number(existing?.zoneHigh),
+          Number(candidate?.zoneHigh)
+        ),
+        structuralScore: Math.max(
+          Number(existing?.structuralScore || 0),
+          Number(candidate?.structuralScore || 0)
+        ),
+        qualityScore: Math.max(
+          Number(existing?.qualityScore || 0),
+          Number(candidate?.qualityScore || 0)
+        ),
+        reactionCount: Math.max(
+          Number(existing?.reactionCount || 0),
+          Number(candidate?.reactionCount || 0)
+        ),
+        strongDepartureCount: Math.max(
+          Number(existing?.strongDepartureCount || 0),
+          Number(candidate?.strongDepartureCount || 0)
+        ),
+        overlappingSupplyDemandClusterMerged: true,
+        clusterAnchorRule:
+          existingAreaType === "demand"
+            ? "bullish_demand_lower_launch_boundary"
+            : "bearish_supply_upper_launch_boundary",
+      };
+
+      console.log("CSA FINAL DEDUPE OVERLAPPING S/D CLUSTER MERGED:", {
+        areaType: existingAreaType,
+        existingAnchor,
+        candidateAnchor,
+        selectedAnchor: result[duplicateIndex]?.authoritativeCenter ?? null,
+        zoneLow: result[duplicateIndex]?.zoneLow ?? null,
+        zoneHigh: result[duplicateIndex]?.zoneHigh ?? null,
+        rule: result[duplicateIndex]?.clusterAnchorRule || null,
+      });
+      return;
+    }
+
     if (candidatePriority > existingPriority) {
       result[duplicateIndex] = candidate;
     }
@@ -15593,7 +15666,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.6.1";
+const CSA_SELECTOR_VERSION = "4.6.2";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
