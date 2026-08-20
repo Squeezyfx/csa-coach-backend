@@ -2,7 +2,7 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.11.0-ordered-sr-sd-fib-pipeline`. The batch-testing additions do not alter its customer analysis route.
+The included analysis backend is CSA build `v4.11.1-final-visible-independent-sd`. The batch-testing additions do not alter its customer analysis route.
 
 This build uses one fixed internal sequence: (1) validate support/resistance and lifecycle conversions, (2) independently validate supply/demand displacement bases, (3) apply hidden 38.2%/50%/61.8% Fibonacci confluence, and (4) order the surviving Entry 1 and Entry 2 by the price path. Fibonacci never creates an area. A strong structural area just past the exact 61.8 line may qualify only within the conservative proximity allowance; clearly deep structure remains reference-only. The rules are symmetrical and selected-day/exact historical cutoffs remain isolated.
 

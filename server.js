@@ -10431,8 +10431,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.21.0";
-const CSA_BUILD_ID = "CSA-v4.11.0-ordered-sr-sd-fib-pipeline";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.22.0";
+const CSA_BUILD_ID = "CSA-v4.11.1-final-visible-independent-sd";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -14478,10 +14478,26 @@ function dedupeValidatedAreas(areas = [], atr = 0) {
       String(existing?.frameworkPeriod || "") !==
         String(candidate?.frameworkPeriod || "") ||
       Number(existing?.frameworkPrice) !== Number(candidate?.frameworkPrice);
+    const existingCenter = Number(
+      existing?.authoritativeCenter ??
+        existing?.frameworkPrice ??
+        (Number(existing?.zoneLow) + Number(existing?.zoneHigh)) / 2
+    );
+    const candidateCenter = Number(
+      candidate?.authoritativeCenter ??
+        candidate?.frameworkPrice ??
+        (Number(candidate?.zoneLow) + Number(candidate?.zoneHigh)) / 2
+    );
+    const independentlySeparated =
+      Number.isFinite(existingCenter) &&
+      Number.isFinite(candidateCenter) &&
+      Math.abs(existingCenter - candidateCenter) >
+        Math.max(Number(atr || 0) * 0.08, Number.EPSILON * 100);
 
     if (
       (distinctStepwiseHierarchyStages || distinctSrAndSdStages) &&
-      distinctFrameworkIdentity
+      distinctFrameworkIdentity &&
+      independentlySeparated
     ) {
       result.push(candidate);
       console.log("CSA FINAL DEDUPE DISTINCT HIERARCHY STAGES PRESERVED:", {
@@ -14495,6 +14511,7 @@ function dedupeValidatedAreas(areas = [], atr = 0) {
         candidateFrameworkPrice: candidate?.frameworkPrice ?? null,
         existingStandardStage,
         candidateStandardStage,
+        independentlySeparated,
         rule: "support_resistance_and_supply_demand_are_separate_structural_stages",
       });
       return;
@@ -15576,7 +15593,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.6.0";
+const CSA_SELECTOR_VERSION = "4.6.1";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -16133,6 +16150,184 @@ function shouldBypassNearerPlainArea({
       )
     );
   });
+}
+
+
+function buildFinalVisibleIndependentSupplyDemandCandidates({
+  marketReference = {},
+  candles = [],
+  direction = "range",
+  currentPrice = null,
+  symbol = "",
+  timeframe = "H1",
+  atr = 0,
+}) {
+  const cutoffMode = normalizeCutoffMode(
+    marketReference?.chartCutoff?.mode || "final_visible"
+  );
+  const tf = comparableTimeframe(timeframe) || "H1";
+  const intradayTimeframes = new Set(["M1", "M5", "M15", "M30", "H1"]);
+
+  if (
+    cutoffMode !== "final_visible" ||
+    !intradayTimeframes.has(tf) ||
+    !["bullish", "bearish"].includes(direction) ||
+    !Number.isFinite(Number(currentPrice))
+  ) {
+    return [];
+  }
+
+  const usable = (Array.isArray(candles) ? candles : [])
+    .filter(
+      (candle) =>
+        candle?.datetime &&
+        [candle?.open, candle?.high, candle?.low, candle?.close].every((value) =>
+          Number.isFinite(Number(value))
+        )
+    )
+    .sort((a, b) => String(a.datetime).localeCompare(String(b.datetime)))
+    .slice(-160);
+
+  if (usable.length < 12) return [];
+
+  const cleanBreakTolerance = Math.max(
+    getCleanBreakTolerance(symbol),
+    Number(atr || 0) * 0.04,
+    Number.EPSILON * 100
+  );
+  const minimumDeparture = Math.max(
+    Number(atr || 0) * 0.5,
+    cleanBreakTolerance * 3
+  );
+  const levels = Array.isArray(marketReference?.dailyLevels)
+    ? marketReference.dailyLevels
+    : [];
+  const sourceIndex = Math.max(0, levels.length - 1);
+  const sourcePeriod = levels[sourceIndex] || {};
+  const periodLabel =
+    sourcePeriod?.periodLabel ||
+    sourcePeriod?.day ||
+    sourcePeriod?.key ||
+    String(usable[usable.length - 1]?.datetime || "").slice(0, 10) ||
+    "final visible period";
+  const candidates = [];
+
+  for (let index = 2; index < usable.length - 3; index += 1) {
+    const candle = usable[index];
+    const previous = usable[index - 1];
+    const next = usable[index + 1];
+    const open = Number(candle.open);
+    const close = Number(candle.close);
+    const high = Number(candle.high);
+    const low = Number(candle.low);
+    const localPivot =
+      direction === "bullish"
+        ? low <= Number(previous.low) + cleanBreakTolerance &&
+          low <= Number(next.low) + cleanBreakTolerance
+        : high >= Number(previous.high) - cleanBreakTolerance &&
+          high >= Number(next.high) - cleanBreakTolerance;
+    if (!localPivot) continue;
+
+    const forward = usable.slice(index + 1, Math.min(usable.length, index + 13));
+    if (forward.length < 3) continue;
+    const departure =
+      direction === "bullish"
+        ? Math.max(...forward.map((item) => Number(item.high))) - low
+        : high - Math.min(...forward.map((item) => Number(item.low)));
+    if (!Number.isFinite(departure) || departure < minimumDeparture) continue;
+
+    const zoneLow = direction === "bullish" ? low : Math.max(open, close);
+    const zoneHigh = direction === "bullish" ? Math.min(open, close) : high;
+    if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh) || zoneHigh <= zoneLow) {
+      continue;
+    }
+
+    const correctPriceSide =
+      direction === "bullish"
+        ? zoneHigh < Number(currentPrice) - cleanBreakTolerance
+        : zoneLow > Number(currentPrice) + cleanBreakTolerance;
+    if (!correctPriceSide) continue;
+
+    const later = usable.slice(index + 1);
+    const decisivelyInvalidated = later.some((item) =>
+      direction === "bullish"
+        ? Number(item.close) < zoneLow - cleanBreakTolerance
+        : Number(item.close) > zoneHigh + cleanBreakTolerance
+    );
+    if (decisivelyInvalidated) continue;
+
+    const price = direction === "bullish" ? zoneLow : zoneHigh;
+    candidates.push({
+      price,
+      frameworkPrice: price,
+      type: direction === "bullish" ? "demand" : "supply",
+      originalType: direction === "bullish" ? "demand" : "supply",
+      source: "authoritative_final_visible_displacement_base",
+      priceSource: "independent_final_visible_supply_demand_structure",
+      chartReconciled: false,
+      period: periodLabel,
+      date: String(candle.datetime || "").slice(0, 10) || null,
+      sourceIndex,
+      conversionBreakConfirmed: false,
+      conversionConfirmed: false,
+      lifecycleFlipCount: 0,
+      lifecycleEvents: [],
+      authorityRank: 1,
+      authoritativeFrameworkLevel: true,
+      authoritativeStructuralException: true,
+      independentSupplyDemandCandidate: true,
+      intradayTakeoverBase: true,
+      samePeriodDisplacementBaseValidated: true,
+      stepwiseEntryStage: "current_period_supply_demand",
+      baseDatetime: candle.datetime || null,
+      intradayStructuralZoneLow: zoneLow,
+      intradayStructuralZoneHigh: zoneHigh,
+      departure,
+      barsToBreak: forward.length,
+    });
+  }
+
+  const separation = Math.max(Number(atr || 0) * 0.08, cleanBreakTolerance);
+  const distinct = [];
+  [...candidates]
+    .sort((a, b) => {
+      const departureDifference = Number(b.departure || 0) - Number(a.departure || 0);
+      if (Math.abs(departureDifference) > Number.EPSILON) return departureDifference;
+      return String(b.baseDatetime || "").localeCompare(String(a.baseDatetime || ""));
+    })
+    .forEach((candidate) => {
+      if (
+        distinct.some(
+          (existing) =>
+            Math.abs(Number(existing.frameworkPrice) - Number(candidate.frameworkPrice)) <=
+            separation
+        )
+      ) {
+        return;
+      }
+      distinct.push(candidate);
+    });
+
+  const selected = distinct.slice(0, 8);
+  console.log("CSA FINAL-VISIBLE INDEPENDENT S/D SCAN:", {
+    buildId: CSA_BUILD_ID,
+    direction,
+    timeframe: tf,
+    candidateCount: candidates.length,
+    selectedCount: selected.length,
+    minimumDeparture,
+    candidates: selected.map((candidate) => ({
+      type: candidate.type,
+      price: candidate.price,
+      zoneLow: candidate.intradayStructuralZoneLow,
+      zoneHigh: candidate.intradayStructuralZoneHigh,
+      baseDatetime: candidate.baseDatetime,
+      departure: candidate.departure,
+    })),
+    rule: "support_resistance_first_then_independent_supply_demand_then_hidden_fib",
+  });
+
+  return selected;
 }
 
 
@@ -18887,6 +19082,29 @@ function rankRawEntryAreas({
       historicalFrameworkFibImpulseAuthority,
   });
 
+  const finalVisibleSupplyDemandCandidates =
+    buildFinalVisibleIndependentSupplyDemandCandidates({
+      marketReference,
+      candles,
+      direction,
+      currentPrice,
+      symbol,
+      timeframe,
+      atr,
+    });
+
+  if (finalVisibleSupplyDemandCandidates.length) {
+    frameworkCandidates = [
+      ...frameworkCandidates,
+      ...attachPivotConfirmationToFrameworkCandidates({
+        frameworkCandidates: finalVisibleSupplyDemandCandidates,
+        pivots: confirmedPivots,
+        atr,
+        symbol,
+      }),
+    ];
+  }
+
 
   // V4.7.2: force the cutoff-day intraday base scan inside the main
   // deterministic entry pipeline, after the controlling break/Fib impulse is
@@ -19201,7 +19419,10 @@ function rankRawEntryAreas({
       });
 
     const isIntradayStructuralZone =
-      candidate?.historicalTakeoverIntradayCandidate === true &&
+      (
+        candidate?.historicalTakeoverIntradayCandidate === true ||
+        candidate?.independentSupplyDemandCandidate === true
+      ) &&
       Number.isFinite(Number(candidate?.intradayStructuralZoneLow)) &&
       Number.isFinite(Number(candidate?.intradayStructuralZoneHigh));
 
@@ -19255,7 +19476,10 @@ function rankRawEntryAreas({
   const evaluated = rawZones.map((rawZone) => {
     const hasHistoricalIntradayZone =
       rawZone?.members?.some?.((member) =>
-        member?.historicalTakeoverIntradayCandidate === true &&
+        (
+          member?.historicalTakeoverIntradayCandidate === true ||
+          member?.independentSupplyDemandCandidate === true
+        ) &&
         member?.intradayTakeoverBase === true
       ) === true &&
       Number.isFinite(Number(rawZone?.zoneLow)) &&

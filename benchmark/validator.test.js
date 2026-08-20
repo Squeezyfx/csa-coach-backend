@@ -134,6 +134,21 @@ test("accepts normalized buy-area and sell-area structural families", () => {
   assert.equal(sell.passed, true);
 });
 
+test("base S/R expectations accept converted subtypes but converted expectations stay exact", () => {
+  const convertedSupport = structuredClone(baseResult);
+  convertedSupport.analysisFacts.selectedEntryAreas[0].areaType = "converted support";
+  convertedSupport.finalFeedback.entry1.areaType = "converted support";
+
+  assert.equal(
+    validateBenchmarkResult(convertedSupport, { expectedEntry1Type: "support" }).passed,
+    true
+  );
+  assert.equal(
+    validateBenchmarkResult(baseResult, { expectedEntry1Type: "converted support" }).passed,
+    false
+  );
+});
+
 test("can require that no valid entry is returned", () => {
   const empty = structuredClone(baseResult);
   empty.analysisFacts.selectedEntryAreas = [];
@@ -185,4 +200,34 @@ test("uses explicit tolerance for approximate entries on unmarked charts", () =>
     tolerance: 0.0004,
   });
   assert.equal(result.passed, true);
+});
+
+test("uses configured approximation tolerance for required and feedback levels", () => {
+  const approximate = structuredClone(baseResult);
+  approximate.analysisFacts.selectedEntryAreas[0] = {
+    executionOrder: 1,
+    authoritativeCenter: 1.40525,
+    zoneLow: 1.4052,
+    zoneHigh: 1.4053,
+    areaType: "support",
+  };
+  approximate.analysisFacts.structuralReferenceAreas = [];
+  approximate.finalFeedback.entry1 = {
+    ...approximate.analysisFacts.selectedEntryAreas[0],
+  };
+  approximate.analysis = "Entry 1 is support around 1.40525.";
+
+  const result = validateBenchmarkResult(approximate, {
+    expectedEntry1: "1.40520",
+    requiredLevels: "1.40520",
+    requiredFeedbackLevels: "1.40520",
+    tolerance: "0.00008",
+  });
+
+  assert.equal(result.passed, true);
+  assert.equal(result.checks.find((check) => check.id === "required_level_1.4052")?.passed, true);
+  assert.equal(
+    result.checks.find((check) => check.id === "required_feedback_level_1.4052")?.passed,
+    true
+  );
 });

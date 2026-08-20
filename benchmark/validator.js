@@ -70,6 +70,12 @@ function areaTypeMatches(actualValue, expectedValue) {
   if (expected === "sell area") {
     return ["resistance", "supply", "converted resistance"].includes(actual);
   }
+  if (expected === "support") {
+    return ["support", "converted support"].includes(actual);
+  }
+  if (expected === "resistance") {
+    return ["resistance", "converted resistance"].includes(actual);
+  }
   return actual === expected;
 }
 
@@ -346,7 +352,10 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
 
   for (const required of parsePriceExpectations(expectation.requiredLevels)) {
     const requiredPrice = required.value;
-    const tolerance = finiteNumber(expectation.levelTolerance) ?? exactLevelTolerance(requiredPrice, required.digits);
+    const tolerance =
+      finiteNumber(expectation.levelTolerance) ??
+      toleranceOverride ??
+      exactLevelTolerance(requiredPrice, required.digits);
     const present =
       references.some((area) => Math.abs(Number(area.center) - requiredPrice) <= tolerance) ||
       textMentionsPrice(feedbackText, requiredPrice, tolerance, required.digits);
@@ -361,7 +370,10 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
 
   for (const required of parsePriceExpectations(expectation.requiredFeedbackLevels)) {
     const requiredPrice = required.value;
-    const tolerance = finiteNumber(expectation.levelTolerance) ?? exactLevelTolerance(requiredPrice, required.digits);
+    const tolerance =
+      finiteNumber(expectation.levelTolerance) ??
+      toleranceOverride ??
+      exactLevelTolerance(requiredPrice, required.digits);
     const present = textMentionsPrice(feedbackText, requiredPrice, tolerance, required.digits);
     addCheck(
       checks,
