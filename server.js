@@ -10424,8 +10424,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.19.0";
-const CSA_BUILD_ID = "CSA-v4.10.21-final-visible-reclaimed-break-reconciliation";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.20.0";
+const CSA_BUILD_ID = "CSA-v4.10.22-final-visible-framework-impulse-and-demand-reclaim";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -10839,6 +10839,7 @@ function deriveHistoricalFrameworkLocalFibImpulse({
   marketReference = {},
   direction = "range",
   timeframe = "H1",
+  symbol = "",
 }) {
   const cutoffMode = normalizeCutoffMode(
     marketReference?.chartCutoff?.mode || "final_visible"
@@ -10855,14 +10856,12 @@ function deriveHistoricalFrameworkLocalFibImpulse({
       )
     : [];
 
-  if (!historicalMode || !intradayFramework || levels.length < 2) {
+  if (!intradayFramework || levels.length < 2) {
     return {
       enabled: false,
       cutoffMode,
       timeframe: tf,
-      reason: !historicalMode
-        ? "not_historical_cutoff"
-        : !intradayFramework
+      reason: !intradayFramework
         ? "not_intraday_daily_framework"
         : "fewer_than_two_framework_periods",
     };
@@ -10870,6 +10869,47 @@ function deriveHistoricalFrameworkLocalFibImpulse({
 
   const terminalPeriod = levels[levels.length - 1];
   const originPeriod = levels[levels.length - 2];
+  const frameworkTolerance = Math.max(
+    Number(marketReference?.cleanBreakTolerance || 0),
+    getCleanBreakTolerance(symbol),
+    Number.EPSILON * 100
+  );
+  const originHigh = asPositiveNumber(originPeriod?.high);
+  const originLow = asPositiveNumber(originPeriod?.low);
+  const terminalHigh = asPositiveNumber(terminalPeriod?.high);
+  const terminalLow = asPositiveNumber(terminalPeriod?.low);
+  const finalVisibleContinuation =
+    cutoffMode === "final_visible" &&
+    (
+      (
+        direction === "bullish" &&
+        originHigh !== null &&
+        originLow !== null &&
+        terminalHigh !== null &&
+        terminalLow !== null &&
+        terminalHigh > originHigh + frameworkTolerance &&
+        terminalLow > originLow + frameworkTolerance
+      ) ||
+      (
+        direction === "bearish" &&
+        originHigh !== null &&
+        originLow !== null &&
+        terminalHigh !== null &&
+        terminalLow !== null &&
+        terminalLow < originLow - frameworkTolerance &&
+        terminalHigh < originHigh - frameworkTolerance
+      )
+    );
+
+  if (!historicalMode && !finalVisibleContinuation) {
+    return {
+      enabled: false,
+      cutoffMode,
+      timeframe: tf,
+      direction,
+      reason: "final_visible_adjacent_framework_periods_do_not_confirm_directional_continuation",
+    };
+  }
 
   const originPrice =
     direction === "bearish"
@@ -10910,6 +10950,9 @@ function deriveHistoricalFrameworkLocalFibImpulse({
     cutoffMode,
     timeframe: tf,
     direction,
+    authorityMode: historicalMode
+      ? "historical_cutoff_adjacent_framework_impulse"
+      : "final_visible_adjacent_framework_continuation_impulse",
     originPrice,
     terminalPrice,
     originTime: originPeriod?.date
@@ -10922,7 +10965,9 @@ function deriveHistoricalFrameworkLocalFibImpulse({
     terminalPeriod: terminalPeriod?.periodLabel || terminalPeriod?.day || terminalPeriod?.key || null,
     originPeriodKey: originPeriod?.key || originPeriod?.date || null,
     terminalPeriodKey: terminalPeriod?.key || terminalPeriod?.date || null,
-    rule: "historical_intraday_fib_uses_immediately_preceding_framework_period_origin_to_cutoff_period_terminal",
+    rule: historicalMode
+      ? "historical_intraday_fib_uses_immediately_preceding_framework_period_origin_to_cutoff_period_terminal"
+      : "final_visible_intraday_continuation_uses_previous_framework_opposite_extreme_to_current_framework_directional_extreme",
     reason: direction === "bearish"
       ? "previous_framework_period_high_to_cutoff_period_low"
       : "previous_framework_period_low_to_cutoff_period_high",
@@ -15515,7 +15560,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.20";
+const CSA_SELECTOR_VERSION = "4.5.21";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -18798,6 +18843,7 @@ function rankRawEntryAreas({
       marketReference,
       direction,
       timeframe,
+      symbol,
     });
 
   const fibonacci =
@@ -19264,7 +19310,41 @@ function rankRawEntryAreas({
         )
       ) === true;
 
-    const effectiveReactionStats = samePeriodDisplacementBaseValidated
+    /*
+     * V4.10.22 RECLAIMED CURRENT-PERIOD S/D BOUNDARY
+     *
+     * When final-visible structure has already proved that an internal break
+     * was reclaimed, the excursion extreme is direct structural evidence for
+     * the current-period demand/supply boundary. It therefore counts as one
+     * strong departure without waiting for a second later retest. Fibonacci
+     * remains mandatory and decides whether the area can become an entry.
+     */
+    const reclaimedBoundary =
+      direction === "bullish"
+        ? asPositiveNumber(historicalPhase?.diagnostics?.postBreakLow)
+        : direction === "bearish"
+        ? asPositiveNumber(historicalPhase?.diagnostics?.postBreakHigh)
+        : null;
+    const reclaimedBoundaryTolerance = Math.max(
+      priceTolerance,
+      Number(atr || 0) * 0.08
+    );
+    const reclaimedInternalBreakBoundaryValidated =
+      historicalPhase?.source ===
+        "final_visible_framework_reclaimed_internal_break" &&
+      reclaimedBoundary !== null &&
+      (
+        (direction === "bullish" && rawZone?.authoritativeType === "demand") ||
+        (direction === "bearish" && rawZone?.authoritativeType === "supply")
+      ) &&
+      reclaimedBoundary >= zoneLow - reclaimedBoundaryTolerance &&
+      reclaimedBoundary <= zoneHigh + reclaimedBoundaryTolerance &&
+      historicalPhase?.diagnostics?.excursionRecovered === true &&
+      historicalPhase?.diagnostics?.levelReclaimed === true;
+
+    const effectiveReactionStats =
+      samePeriodDisplacementBaseValidated ||
+      reclaimedInternalBreakBoundaryValidated
       ? {
           ...reactionStats,
           strongDepartures: Math.max(1, Number(reactionStats?.strongDepartures || 0)),
@@ -19353,6 +19433,7 @@ function rankRawEntryAreas({
       reactionCount: Number(effectiveReactionStats?.reactions || 0),
       strongDepartureCount: Number(effectiveReactionStats?.strongDepartures || 0),
       samePeriodDisplacementBaseValidated,
+      reclaimedInternalBreakBoundaryValidated,
       pivotConfirmationCount: Number(rawZone?.pivotConfirmationCount || 0),
       conversionBreakConfirmed:
         rawZone?.conversionBreakConfirmed === true,
@@ -21834,6 +21915,30 @@ function runFinalVisibleReclaimedBreakSelfCheck() {
     symbol: "USDCHF",
     timeframe: "H1",
   });
+  const frameworkContinuationImpulse =
+    deriveHistoricalFrameworkLocalFibImpulse({
+      marketReference: {
+        chartCutoff: { mode: "final_visible" },
+        cleanBreakTolerance: 0.0002,
+        dailyLevels: [
+          {
+            key: "2026-07-27",
+            date: "2026-07-27",
+            high: 0.81943,
+            low: 0.81398,
+          },
+          {
+            key: "2026-07-28",
+            date: "2026-07-28",
+            high: 0.82056,
+            low: 0.81677,
+          },
+        ],
+      },
+      direction: "bullish",
+      timeframe: "H1",
+      symbol: "USDCHF",
+    });
 
   return {
     bullishReclaim:
@@ -21842,6 +21947,10 @@ function runFinalVisibleReclaimedBreakSelfCheck() {
     bearishReclaim:
       bearish?.direction === "bearish" &&
       bearish?.source === "final_visible_framework_reclaimed_internal_break",
+    frameworkContinuationImpulse:
+      frameworkContinuationImpulse?.enabled === true &&
+      frameworkContinuationImpulse?.originPrice === 0.81398 &&
+      frameworkContinuationImpulse?.terminalPrice === 0.82056,
   };
 }
 
@@ -22129,7 +22238,10 @@ function supplementReferencesWithExactChartLevels({
     const sideCompatible = direction === "bullish"
       ? ["support", "demand", "converted support"].includes(areaType) && price < Number(currentPrice)
       : ["resistance", "supply", "converted resistance"].includes(areaType) && price > Number(currentPrice);
-    if (!sideCompatible) continue;
+    const opposingStructuralReference = direction === "bullish"
+      ? ["resistance", "supply"].includes(areaType) && price > Number(currentPrice)
+      : ["support", "demand"].includes(areaType) && price < Number(currentPrice);
+    if (!sideCompatible && !opposingStructuralReference) continue;
 
     const halfWidth = Math.max(getApprovedPriceTolerance(symbol), Number(atr || 0) * 0.025);
     result.push({
@@ -22146,6 +22258,7 @@ function supplementReferencesWithExactChartLevels({
       fibPassed: false,
       conversionConfirmed: false,
       referenceOnly: true,
+      opposingStructuralReference,
       chartReconciled: true,
       priceSource: "independent_horizontal_line_reader_exact",
     });
