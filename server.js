@@ -7,9 +7,11 @@ import Stripe from "stripe";
 import {
   classifyCsaStructuralStage,
   getSupplyDemandClusterTolerance,
+  hasIndependentChartPriceEvidence,
   orderStructuralCandidatesForFib,
   selectProtectiveSupplyDemandAnchor,
   sequenceFibQualifiedAreas,
+  shouldMergeQualifiedSupplyDemandCluster,
 } from "./csa-entry-policy.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
@@ -10434,7 +10436,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.23.0";
-const CSA_BUILD_ID = "CSA-v4.11.3-sd-cluster-and-specific-feedback";
+const CSA_BUILD_ID = "CSA-v4.11.4-protective-cluster-and-internal-fib";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -14541,15 +14543,10 @@ function dedupeValidatedAreas(areas = [], atr = 0) {
       ? Number(existing.reconciliationDifference)
       : Number.POSITIVE_INFINITY;
 
-    const trustedChartPrice = (area) =>
-      area?.chartReconciled === true ||
-      Number(area?.reconciliationConfidence || 0) >= 25 ||
-      /independent_horizontal_line|per_target_framework_price/i.test(
-        String(area?.priceSource || "")
-      );
-
-    const candidateTrustedChartPrice = trustedChartPrice(candidate);
-    const existingTrustedChartPrice = trustedChartPrice(existing);
+    const candidateTrustedChartPrice =
+      hasIndependentChartPriceEvidence(candidate);
+    const existingTrustedChartPrice =
+      hasIndependentChartPriceEvidence(existing);
 
     // An exact independently read chart label outranks an overlapping
     // candle-derived/framework candidate. This prevents a nearby intraday
@@ -14609,13 +14606,10 @@ function dedupeValidatedAreas(areas = [], atr = 0) {
     const existingAreaType = String(existing?.areaType || "").toLowerCase();
     const candidateAreaType = String(candidate?.areaType || "").toLowerCase();
     const sameSupplyDemandCluster =
-      existingStandardStage === "supply_demand" &&
-      candidateStandardStage === "supply_demand" &&
-      existingAreaType === candidateAreaType &&
-      ["demand", "supply"].includes(existingAreaType) &&
-      !existingTrustedChartPrice &&
-      !candidateTrustedChartPrice &&
-      Math.abs(candidatePriority - existingPriority) <= 4;
+      shouldMergeQualifiedSupplyDemandCluster(existing, candidate, {
+        existingTrusted: existingTrustedChartPrice,
+        candidateTrusted: candidateTrustedChartPrice,
+      });
 
     if (sameSupplyDemandCluster) {
       const existingAnchor = Number(existing?.authoritativeCenter);
@@ -15673,7 +15667,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.6.3";
+const CSA_SELECTOR_VERSION = "4.6.4";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -24662,11 +24656,11 @@ function buildControlledFeedback({
     );
   } else if (hasValidatedArea) {
     strengths.push(
-      `The ${directionText.toLowerCase()} structure produced Entry 1 at the ${areaText} after the support/resistance and hidden Fibonacci checks.`
+      `The ${directionText.toLowerCase()} structure produced Entry 1 at the ${areaText} after the full structural and entry-quality checks.`
     );
   } else {
     strengths.push(
-      `The ${directionText.toLowerCase()} structure was resolved from the visible swing sequence, even though no entry area passed every structural and Fibonacci check.`
+      `The ${directionText.toLowerCase()} structure was resolved from the visible swing sequence, even though no entry area passed every structural and entry-quality check.`
     );
   }
 

@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import {
   classifyCsaStructuralStage,
   getSupplyDemandClusterTolerance,
+  hasIndependentChartPriceEvidence,
   orderStructuralCandidatesForFib,
   selectProtectiveSupplyDemandAnchor,
   sequenceFibQualifiedAreas,
+  shouldMergeQualifiedSupplyDemandCluster,
 } from "../csa-entry-policy.js";
 
 test("CSA structural checks always run S/R before S/D before other structure", () => {
@@ -125,4 +127,29 @@ test("support and demand keep the narrower normal dedupe allowance", () => {
   );
 
   assert.equal(tolerance, atr * 0.08);
+});
+
+test("qualified overlapping demand fragments merge despite different quality scores", () => {
+  assert.equal(
+    shouldMergeQualifiedSupplyDemandCluster(
+      { areaType: "demand", structuralScore: 55, fibonacciScore: 1 },
+      { areaType: "demand", structuralScore: 62, fibonacciScore: 1 },
+      { existingTrusted: false, candidateTrusted: false }
+    ),
+    true
+  );
+});
+
+test("ordinary chart reconciliation does not impersonate an independently marked price", () => {
+  assert.equal(
+    hasIndependentChartPriceEvidence({ chartReconciled: true }),
+    false
+  );
+  assert.equal(
+    hasIndependentChartPriceEvidence({
+      reconciliationConfidence: 25,
+      priceSource: "independent_horizontal_line",
+    }),
+    true
+  );
 });

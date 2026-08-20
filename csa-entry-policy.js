@@ -118,3 +118,34 @@ export function getSupplyDemandClusterTolerance(
     Number(candidate?.closeAllowance || 0)
   );
 }
+
+export function hasIndependentChartPriceEvidence(area = {}) {
+  return (
+    Number(area?.reconciliationConfidence || 0) >= 25 ||
+    /independent_horizontal_line|per_target_framework_price/i.test(
+      String(area?.priceSource || "")
+    )
+  );
+}
+
+export function shouldMergeQualifiedSupplyDemandCluster(
+  existing = {},
+  candidate = {},
+  options = {}
+) {
+  const existingType = String(existing?.areaType || existing?.type || "")
+    .toLowerCase()
+    .trim();
+  const candidateType = String(candidate?.areaType || candidate?.type || "")
+    .toLowerCase()
+    .trim();
+
+  return (
+    classifyCsaStructuralStage(existing).key === "supply_demand" &&
+    classifyCsaStructuralStage(candidate).key === "supply_demand" &&
+    existingType === candidateType &&
+    ["demand", "supply"].includes(existingType) &&
+    options.existingTrusted !== true &&
+    options.candidateTrusted !== true
+  );
+}
