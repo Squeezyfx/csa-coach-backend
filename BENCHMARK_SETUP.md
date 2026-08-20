@@ -2,9 +2,9 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.10.23-exact-entry-feedback-authority`. The batch-testing additions do not alter its customer analysis route.
+The included analysis backend is CSA build `v4.11.0-ordered-sr-sd-fib-pipeline`. The batch-testing additions do not alter its customer analysis route.
 
-This build reconciles a stale lower-timeframe break when the final visible close decisively reclaims the broken level, recovers a meaningful part of the excursion, and the authoritative framework remains pointed in the opposite direction. For a confirmed final-visible framework continuation, its Fibonacci impulse uses the previous framework period's opposite extreme and the current period's directional extreme. The reclaimed excursion boundary can validate current-period demand/supply structurally, but Fibonacci remains mandatory. The rules are symmetrical and selected-day/exact historical cutoffs remain isolated.
+This build uses one fixed internal sequence: (1) validate support/resistance and lifecycle conversions, (2) independently validate supply/demand displacement bases, (3) apply hidden 38.2%/50%/61.8% Fibonacci confluence, and (4) order the surviving Entry 1 and Entry 2 by the price path. Fibonacci never creates an area. A strong structural area just past the exact 61.8 line may qualify only within the conservative proximity allowance; clearly deep structure remains reference-only. The rules are symmetrical and selected-day/exact historical cutoffs remain isolated.
 
 ## Isolation model
 
@@ -45,10 +45,13 @@ The dry-run response includes `benchmarkDryRun: true` and `savedToJournal: false
 
 Important fields:
 
+- **Entry 1 / Entry 2 type**: the expected structural role, such as demand, supply, support, resistance or a confirmed converted level. Use **Any buy area** or **Any sell area** only when the exact structural subtype is intentionally not part of the test.
+- **No valid entry expected**: requires both the structured facts and customer-facing entry plan to return no selected entries. It cannot be combined with an expected Entry 1 or Entry 2.
 - **Required levels**: exact authoritative levels that must appear in structured facts or customer feedback. Merely falling inside a broad zone does not count.
 - **Feedback must mention**: exact levels that must be stated in the customer-facing feedback.
+- **Feedback must include all terms**: comma-separated structural wording that must appear in customer-facing feedback, such as `demand, support`. Every entered term is required.
 - **Must not be entries**: structural levels that may be mentioned but must not become Entry 1 or Entry 2.
-- **Tolerance**: optional price tolerance. Leave blank for instrument-scale defaults.
+- **Tolerance**: optional Entry 1, Entry 2 and forbidden-entry price tolerance. Use it for approximate levels on unmarked charts; leave it blank for exact marked levels and instrument-scale defaults.
 
 Exact prices retain the decimal precision you type. For example, `0.69620`
 remains a five-decimal requirement and will not accept `0.69618` unless you

@@ -103,3 +103,86 @@ test("preserves trailing-zero precision for five-decimal FX expectations", () =>
   assert.equal(result.passed, false);
   assert.ok(result.criticalFailures.some((check) => check.id === "required_level_0.6962"));
 });
+
+test("validates the exact structural role of Entry 1", () => {
+  const demandResult = structuredClone(baseResult);
+  demandResult.analysis = "Bullish. Entry 1 is demand around 0.70104.";
+  demandResult.analysisFacts.selectedEntryAreas[0].areaType = "demand";
+
+  const passed = validateBenchmarkResult(demandResult, {
+    expectedEntry1: 0.70104,
+    expectedEntry1Type: "demand",
+  });
+  assert.equal(passed.passed, true);
+
+  const failed = validateBenchmarkResult(demandResult, {
+    expectedEntry1: 0.70104,
+    expectedEntry1Type: "supply",
+  });
+  assert.equal(failed.passed, false);
+  assert.ok(failed.criticalFailures.some((check) => check.id === "entry_1_type"));
+});
+
+test("accepts normalized buy-area and sell-area structural families", () => {
+  const buy = validateBenchmarkResult(baseResult, { expectedEntry1Type: "buy area" });
+  assert.equal(buy.passed, true);
+
+  const sellResult = structuredClone(baseResult);
+  sellResult.analysisFacts.direction = "bearish";
+  sellResult.analysisFacts.selectedEntryAreas[0].areaType = "potential_converted_resistance";
+  const sell = validateBenchmarkResult(sellResult, { expectedEntry1Type: "sell area" });
+  assert.equal(sell.passed, true);
+});
+
+test("can require that no valid entry is returned", () => {
+  const empty = structuredClone(baseResult);
+  empty.analysisFacts.selectedEntryAreas = [];
+  empty.finalFeedback.entry1 = null;
+  empty.finalFeedback.entry2 = null;
+
+  const passed = validateBenchmarkResult(empty, { noEntryExpected: true });
+  assert.equal(passed.passed, true);
+
+  const failed = validateBenchmarkResult(baseResult, { noEntryExpected: true });
+  assert.equal(failed.passed, false);
+  assert.ok(failed.criticalFailures.some((check) => check.id === "no_entry_expected"));
+});
+
+test("requires every configured customer-facing feedback term", () => {
+  const demandResult = structuredClone(baseResult);
+  demandResult.analysis = "Bullish. Entry 1 is demand around 0.70104 near support.";
+
+  const passed = validateBenchmarkResult(demandResult, {
+    requiredFeedbackTerms: "demand, support",
+  });
+  assert.equal(passed.passed, true);
+
+  const failed = validateBenchmarkResult(demandResult, {
+    requiredFeedbackTerms: "demand, resistance",
+  });
+  assert.equal(failed.passed, false);
+  assert.ok(
+    failed.criticalFailures.some(
+      (check) => check.id === "required_feedback_term_resistance"
+    )
+  );
+});
+
+test("uses explicit tolerance for approximate entries on unmarked charts", () => {
+  const approximate = structuredClone(baseResult);
+  approximate.analysisFacts.selectedEntryAreas[0] = {
+    executionOrder: 1,
+    areaType: "supply",
+    authoritativeCenter: 0.81231,
+    zoneLow: 0.81210,
+    zoneHigh: 0.81252,
+  };
+  approximate.finalFeedback.entry1 = { authoritativeCenter: 0.81231 };
+
+  const result = validateBenchmarkResult(approximate, {
+    expectedEntry1: 0.81216,
+    expectedEntry1Type: "supply",
+    tolerance: 0.0004,
+  });
+  assert.equal(result.passed, true);
+});

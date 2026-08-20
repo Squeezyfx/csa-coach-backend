@@ -51,10 +51,14 @@ function collectCases() {
     chartDate: field(row, "chartDate").value,
     expectedDirection: field(row, "expectedDirection").value,
     expectedEntry1: field(row, "expectedEntry1").value,
+    expectedEntry1Type: field(row, "expectedEntry1Type").value,
     expectedEntry2: field(row, "expectedEntry2").value,
+    expectedEntry2Type: field(row, "expectedEntry2Type").value,
     entry2Required: field(row, "entry2Required").checked,
+    noEntryExpected: field(row, "noEntryExpected").checked,
     requiredLevels: field(row, "requiredLevels").value,
     requiredFeedbackLevels: field(row, "requiredFeedbackLevels").value,
+    requiredFeedbackTerms: field(row, "requiredFeedbackTerms").value,
     forbiddenEntries: field(row, "forbiddenEntries").value,
     tolerance: field(row, "tolerance").value,
     notes: field(row, "notes").value,
@@ -92,6 +96,9 @@ runButton.addEventListener("click", async () => {
   if (!adminKey.value) return alert("Enter the benchmark admin key.");
   const cases = collectCases();
   if (cases.some((item) => !item.instrument.trim())) return alert("Enter an instrument for every chart.");
+  if (cases.some((item) => item.noEntryExpected && (item.expectedEntry1 || item.expectedEntry2 || item.entry2Required))) {
+    return alert("A chart marked 'No valid entry expected' cannot also require Entry 1 or Entry 2.");
+  }
   sessionStorage.setItem("csaBenchmarkAdminKey", adminKey.value);
   const body = new FormData();
   files.forEach((file) => body.append("charts", file));

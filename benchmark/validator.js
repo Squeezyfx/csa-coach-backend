@@ -1,5 +1,6 @@
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
+const BENCHMARK_VALIDATOR_VERSION = "1.1.0";
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -29,6 +30,53 @@ function parseList(value) {
     .split(/[\s,;|]+/)
     .map(finiteNumber)
     .filter((item) => item !== null);
+}
+
+function parseTextList(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+  return String(value || "")
+    .split(/[,;|]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeAreaType(value = "") {
+  const text = String(value || "")
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) return "unknown";
+  if (text.includes("converted support")) return "converted support";
+  if (text.includes("converted resistance")) return "converted resistance";
+  if (text.includes("demand")) return "demand";
+  if (text.includes("supply")) return "supply";
+  if (text.includes("support")) return "support";
+  if (text.includes("resistance")) return "resistance";
+  if (text === "buy area" || text === "sell area") return text;
+  return text;
+}
+
+function areaTypeMatches(actualValue, expectedValue) {
+  const actual = normalizeAreaType(actualValue);
+  const expected = normalizeAreaType(expectedValue);
+  if (expected === "unknown") return true;
+  if (expected === "buy area") {
+    return ["support", "demand", "converted support"].includes(actual);
+  }
+  if (expected === "sell area") {
+    return ["resistance", "supply", "converted resistance"].includes(actual);
+  }
+  return actual === expected;
+}
+
+function feedbackMentionsTerm(text, term) {
+  const normalizedText = normalizeText(text);
+  const normalizedTerm = normalizeText(term);
+  return Boolean(normalizedTerm) && normalizedText.includes(normalizedTerm);
 }
 
 function parsePriceExpectations(value) {
@@ -199,6 +247,16 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   const references = referenceEntries(result);
   const feedbackText = String(result?.analysis || result?.summary || result?.finalFeedback?.analysis || "");
 
+  if (expectation.noEntryExpected === true) {
+    addCheck(
+      checks,
+      "no_entry_expected",
+      "No valid entry returned",
+      factsEntries.length === 0 && entries.length === 0,
+      `Expected no selected entries; structured facts returned ${factsEntries.length} and customer-facing output returned ${entries.length}.`
+    );
+  }
+
   if (expectedDirection !== "unknown") {
     addCheck(
       checks,
@@ -239,6 +297,20 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     );
   }
 
+  const expectedEntry1Type = normalizeAreaType(expectation.expectedEntry1Type || "");
+  if (expectedEntry1Type !== "unknown") {
+    const actualEntry1 = factsEntries[0] || entries[0] || null;
+    addCheck(
+      checks,
+      "entry_1_type",
+      "Entry 1 structural role",
+      Boolean(actualEntry1) && areaTypeMatches(actualEntry1.areaType, expectedEntry1Type),
+      actualEntry1
+        ? `Expected ${expectedEntry1Type}; received ${normalizeAreaType(actualEntry1.areaType)}.`
+        : `Expected ${expectedEntry1Type}; no Entry 1 was returned.`
+    );
+  }
+
   const expectedEntry2 = finiteNumber(expectation.expectedEntry2);
   const entry2Required = expectation.entry2Required === true || expectedEntry2 !== null;
   if (entry2Required) {
@@ -254,6 +326,21 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       entries[1]
         ? `Expected ${expectedEntry2 ?? "a second entry"}; received ${entries[1].levelText || entries[1].center}.`
         : "A valid Entry 2 was required but none was returned."
+    );
+  }
+
+
+  const expectedEntry2Type = normalizeAreaType(expectation.expectedEntry2Type || "");
+  if (expectedEntry2Type !== "unknown") {
+    const actualEntry2 = factsEntries[1] || entries[1] || null;
+    addCheck(
+      checks,
+      "entry_2_type",
+      "Entry 2 structural role",
+      Boolean(actualEntry2) && areaTypeMatches(actualEntry2.areaType, expectedEntry2Type),
+      actualEntry2
+        ? `Expected ${expectedEntry2Type}; received ${normalizeAreaType(actualEntry2.areaType)}.`
+        : `Expected ${expectedEntry2Type}; no Entry 2 was returned.`
     );
   }
 
@@ -282,6 +369,19 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       `Feedback must mention ${requiredPrice}`,
       present,
       present ? "The exact level is present in customer-facing feedback." : "The required level is absent from customer-facing feedback."
+    );
+  }
+
+  for (const requiredTerm of parseTextList(expectation.requiredFeedbackTerms)) {
+    const present = feedbackMentionsTerm(feedbackText, requiredTerm);
+    addCheck(
+      checks,
+      `required_feedback_term_${normalizeText(requiredTerm).replace(/\s+/g, "_")}`,
+      `Feedback must include “${requiredTerm}”`,
+      present,
+      present
+        ? "The required wording is present in customer-facing feedback."
+        : `Customer-facing feedback does not include “${requiredTerm}”.`
     );
   }
 
@@ -330,6 +430,7 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     failedChecks,
     criticalFailures,
     versions: {
+      benchmarkValidatorVersion: BENCHMARK_VALIDATOR_VERSION,
       buildId: result?.buildId || null,
       feedbackEngineVersion: result?.feedbackEngineVersion || null,
       selectorVersion: result?.selectorVersion || null,
@@ -342,6 +443,10 @@ export const benchmarkValidatorInternals = {
   normalizeDirection,
   parseList,
   parsePriceExpectations,
+  parseTextList,
+  normalizeAreaType,
+  areaTypeMatches,
+  feedbackMentionsTerm,
   selectedEntries,
   factsSelectedEntries,
   canonicalSelectedEntries,

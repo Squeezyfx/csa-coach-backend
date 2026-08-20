@@ -4,6 +4,11 @@ import multer from "multer";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import Stripe from "stripe";
+import {
+  classifyCsaStructuralStage,
+  orderStructuralCandidatesForFib,
+  sequenceFibQualifiedAreas,
+} from "./csa-entry-policy.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -1482,9 +1487,10 @@ AREA RANKING RULES:
 - Generic pivots and chart markings may only confirm or refine an authoritative framework level; they must never create or replace the primary area.
 - Validate genuine support/resistance or supply/demand structure before considering distance.
 - Fibonacci retracement is a silent mandatory quality filter only after an authoritative structural area already exists. Only 38.2%, 50%, and 61.8% are used.
-- The deterministic CSA selector controls entry areas. Build candidates only from the timeframe's authoritative source periods, resolve each level's current lifecycle role chronologically, reject failed/choppy/weak levels, then keep only structural areas in close proximity to 38.2%, 50%, or 61.8% of the relevant completed impulse before sequencing Entry 1 and Entry 2.
+- The deterministic CSA selector controls entry areas. Build S/R from the timeframe's authoritative source periods and S/D from independently confirmed displacement-origin bases, resolve lifecycle roles chronologically, reject failed/choppy/weak structure, then keep only areas close to 38.2%, 50%, or 61.8% of the relevant completed impulse before sequencing Entry 1 and Entry 2.
 - A clean break with continuation may create a potential converted S/R area that can be watched for a future retest. It becomes confirmed converted only after price returns from the opposite side and respects it. Either way, it must still pass the 38.2% / 50% / 61.8% proximity filter before it can become Entry 1 or Entry 2.
-- Fibonacci must never create an area by itself. An independently valid S/R or supply/demand area becomes a strong entry candidate only when it is close to 38.2% or falls within the 50%-61.8% retracement band. Anything beyond 61.8% is reference-only and must not become Entry 1 or Entry 2.
+- Use this fixed order every time: (1) resolve support/resistance and converted S/R, (2) independently resolve supply/demand, (3) apply hidden Fibonacci confluence at/near 38.2% or inside/near the 50%-61.8% band, and only then (4) sequence Entry 1 and Entry 2 by the path price will encounter them.
+- Fibonacci must never create an area by itself. An independently valid S/R or supply/demand area becomes a strong entry candidate only when it is close to 38.2% or falls within/close to the 50%-61.8% retracement band. A structurally strong area just beyond the exact 61.8 line may still qualify when it is within the conservative proximity allowance; a clearly deep area remains reference-only.
 - Preserve the true area type: converted resistance/support, resistance/support, or supply/demand.
 - Use the timeframe-framework high or low to identify the correct structural period first.
 - If the uploaded chart clearly shows the matching broker level within a reasonable ATR-scaled tolerance, reconcile the final displayed price to that visible chart level.
@@ -5418,8 +5424,9 @@ FIBONACCI
 - Use Fibonacci only as a silent internal entry-quality filter after a genuine support/resistance or supply/demand area has already been identified.
 - Only the 38.2%, 50%, and 61.8% retracement levels are used for this entry filter.
 - A structural area is a strong entry area only when that support/resistance or supply/demand area is in close proximity to at least one of those retracement levels.
-- A structurally valid area that is not close to 38.2%, 50%, or 61.8% may remain an important chart reference, but it must not become Entry 1, Entry 2, or the preferred entry area.
-- Fibonacci must never create a setup by itself. The actual entry remains the support/resistance or supply/demand area, not the Fibonacci number. Treat 50%-61.8% as a valid retracement band and close proximity to 38.2% as valid. Anything beyond 61.8% is reference-only.
+- Always use this internal order: first identify and validate support/resistance (including lifecycle conversion); second identify and validate supply/demand; third test those independently valid areas for hidden 38.2%, 50%, or 61.8% confluence; fourth sequence the survivors by price path as Entry 1 and Entry 2.
+- A structurally valid area that is not close to 38.2%, 50%, or 61.8% may remain an important chart reference, but it must not become Entry 1, Entry 2, or the preferred entry area. "Close" includes a conservative structurally strong area just past the exact 61.8 line; it does not include a clearly deep area.
+- Fibonacci must never create a setup by itself. The actual entry remains the support/resistance or supply/demand area, not the Fibonacci number. Treat 50%-61.8% as a valid retracement band and close proximity to 38.2% as valid. A structurally strong area only slightly past 61.8% may qualify within the conservative proximity allowance; anything clearly deeper is reference-only.
 - The retracement must be calculated from the genuine completed impulse that produced the current directional breakout/breakdown, using the current structure-sequence origin and the final visible directional extreme; do not shrink the impulse to a late local swing merely because it is more recent.
 - In Final Visible Candle mode, when the uploaded broker/platform chart and external OHLC feed use materially different price scales, use deterministic OHLC only to identify the relevant structure/impulse sequence and use the uploaded chart's own price scale for the impulse swing prices. Exact printed chart OHLC/labels outrank estimates. Never choose swing anchors to force Fibonacci confluence.
 - A marked horizontal support/resistance/supply/demand price may calibrate the chart scale but must never automatically become the Fib swing origin. The swing origin is the actual candle wick/extreme; if a proposed origin collides with a marked reference line, independently verify the wick or reject the chart-native anchor.
@@ -10424,8 +10431,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.20.1";
-const CSA_BUILD_ID = "CSA-v4.10.23-exact-entry-feedback-authority";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.21.0";
+const CSA_BUILD_ID = "CSA-v4.11.0-ordered-sr-sd-fib-pipeline";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -14032,8 +14039,9 @@ function evaluateRequiredFibonacciConfluence({
   // B) 50%-61.8%: this is an acceptance BAND, not two exact-price targets.
   //    Any independently valid structural area that falls inside / overlaps
   //    the band qualifies.
-  // C) Anything beyond 61.8% fails the entry gate. It may remain a structural
-  //    reference, but it cannot become Entry 1 or Entry 2.
+  // C) A clearly deep area beyond 61.8% fails the entry gate. A structurally
+  //    strong area just past the exact 61.8 line may still qualify through the
+  //    same conservative close/borderline proximity allowance used for 38.2.
   // D) Exact/close proximity to 50% or 61.8% remains valid naturally.
   //
   // This implements the CSA rule that "close proximity" does not mean exact
@@ -14454,15 +14462,27 @@ function dedupeValidatedAreas(areas = [], atr = 0) {
     const existingStage = String(existing?.stepwiseEntryStage || "");
     const candidateStage = String(candidate?.stepwiseEntryStage || "");
     const stagePair = new Set([existingStage, candidateStage]);
+    const existingStandardStage =
+      existing?.standardStructuralStage ||
+      classifyCsaStructuralStage(existing).key;
+    const candidateStandardStage =
+      candidate?.standardStructuralStage ||
+      classifyCsaStructuralStage(candidate).key;
     const distinctStepwiseHierarchyStages =
       stagePair.has("immediate_prior_broken_sr") &&
       stagePair.has("current_period_supply_demand");
+    const distinctSrAndSdStages =
+      new Set([existingStandardStage, candidateStandardStage]).has("support_resistance") &&
+      new Set([existingStandardStage, candidateStandardStage]).has("supply_demand");
     const distinctFrameworkIdentity =
       String(existing?.frameworkPeriod || "") !==
         String(candidate?.frameworkPeriod || "") ||
       Number(existing?.frameworkPrice) !== Number(candidate?.frameworkPrice);
 
-    if (distinctStepwiseHierarchyStages && distinctFrameworkIdentity) {
+    if (
+      (distinctStepwiseHierarchyStages || distinctSrAndSdStages) &&
+      distinctFrameworkIdentity
+    ) {
       result.push(candidate);
       console.log("CSA FINAL DEDUPE DISTINCT HIERARCHY STAGES PRESERVED:", {
         existingStage,
@@ -14473,7 +14493,9 @@ function dedupeValidatedAreas(areas = [], atr = 0) {
         candidateAreaType: candidate?.areaType || null,
         candidateFrameworkPeriod: candidate?.frameworkPeriod || null,
         candidateFrameworkPrice: candidate?.frameworkPrice ?? null,
-        rule: "prior_broken_sr_and_current_period_sd_are_separate_entry_stages",
+        existingStandardStage,
+        candidateStandardStage,
+        rule: "support_resistance_and_supply_demand_are_separate_structural_stages",
       });
       return;
     }
@@ -14778,13 +14800,7 @@ function validateAndSequenceEntryAreas({
 
   const deduped = dedupeValidatedAreas(valid, atr);
 
-  const pathOrdered = [...deduped].sort((a, b) => {
-    if (direction === "bearish") {
-      return Number(a.zoneLow) - Number(b.zoneLow);
-    }
-
-    return Number(b.zoneHigh) - Number(a.zoneHigh);
-  });
+  const pathOrdered = sequenceFibQualifiedAreas(deduped, direction);
 
   const rejectedDominated = [];
 
@@ -15560,7 +15576,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.5.21";
+const CSA_SELECTOR_VERSION = "4.6.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -15579,7 +15595,7 @@ function resolveCsaEntryPrice({
   // Keep the framework value when the difference is only a tiny broker/feed
   // variation. For normal non-JPY FX this is roughly 0.3 pip.
   const microDifferenceTolerance = Math.max(
-    getCleanBreakTolerance(symbol) * 0.15,
+    getCleanBreakTolerance(symbol) * 0.25,
     Number.EPSILON * 100
   );
 
@@ -16561,6 +16577,16 @@ function buildHistoricalTakeoverIntradayCandidateFromMainPipeline({
     nearestFibPrice: Number.isFinite(Number(selectedBase?.nearestFibPrice))
       ? Number(selectedBase.nearestFibPrice)
       : null,
+    departure: Number.isFinite(Number(selectedBase?.departure))
+      ? Number(selectedBase.departure)
+      : null,
+    barsToBreak: Number.isFinite(Number(selectedBase?.barsToBreak))
+      ? Number(selectedBase.barsToBreak)
+      : null,
+    pullbackDepth: Number.isFinite(Number(selectedBase?.pullbackDepth))
+      ? Number(selectedBase.pullbackDepth)
+      : null,
+    stepwiseEntryStage: "current_period_supply_demand",
   };
 
   console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE SCAN:", {
@@ -19091,22 +19117,73 @@ function rankRawEntryAreas({
           : "intraday_base_reinforces_overlapping_framework_sr_instead_of_becoming_separate_entry",
       });
     } else {
-      // V4.8.2 HIERARCHY LOCK:
-      // A lower-timeframe displacement base cannot become a standalone CSA
-      // supply/demand area. If it does not overlap/reinforce an authoritative
-      // framework support/resistance (including a converted one), keep it as
-      // internal context only and do not send it into Fib/Entry 1/Entry 2.
+      /*
+       * V4.11.0 — INDEPENDENT SUPPLY/DEMAND SURVIVAL
+       *
+       * S/R and S/D are separate structural checks. A confirmed displacement
+       * origin does not need to overlap an existing S/R line in order to be a
+       * legitimate demand/supply area. It must, however, be independently
+       * structural before Fibonacci is considered: meaningful departure, at
+       * least two completed bars to the controlling break, a real candle area,
+       * correct price side, and an authoritative cutoff-period identity.
+       *
+       * This candidate is appended; it never overwrites or converts S/R. The
+       * normal structural gate and hidden 38.2/50/61.8 gate still decide whether
+       * it can become Entry 1/Entry 2.
+       */
+      const independentDeparture = Number(confirmedPipelineCandidate?.departure);
+      const independentBarsToBreak = Number(confirmedPipelineCandidate?.barsToBreak);
+      const minimumIndependentDeparture = Math.max(
+        Number(atr || 0) * 0.35,
+        reinforcementOverlapTolerance * 3
+      );
+      const validIndependentZone =
+        Number.isFinite(normalizedIntradayLow) &&
+        Number.isFinite(normalizedIntradayHigh) &&
+        normalizedIntradayHigh > normalizedIntradayLow;
+      const independentSupplyDemandValidated =
+        validIndependentZone &&
+        Number.isFinite(independentDeparture) &&
+        independentDeparture >= minimumIndependentDeparture &&
+        Number.isFinite(independentBarsToBreak) &&
+        independentBarsToBreak >= 2;
+
+      if (independentSupplyDemandValidated) {
+        frameworkCandidates = [
+          ...frameworkCandidates,
+          {
+            ...confirmedPipelineCandidate,
+            source: "authoritative_current_period_displacement_base",
+            priceSource: "independent_cutoff_period_supply_demand_structure",
+            authoritativeFrameworkLevel: true,
+            authoritativeStructuralException: true,
+            samePeriodDisplacementBaseValidated: true,
+            stepwiseEntryStage: "current_period_supply_demand",
+          },
+        ];
+      }
+
       console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE MERGE:", {
         buildId: CSA_BUILD_ID,
-        result: "context_only_suppressed_not_framework_area",
+        result: independentSupplyDemandValidated
+          ? "independent_supply_demand_preserved_for_fib_gate"
+          : "context_only_failed_independent_supply_demand_structure",
         price: confirmedPipelineCandidate?.frameworkPrice || null,
         proposedAreaType: confirmedPipelineCandidate?.type || null,
         structuralZoneLow: normalizedIntradayLow,
         structuralZoneHigh: normalizedIntradayHigh,
-        rule: "standalone_intraday_base_cannot_override_authoritative_period_sr_sd_classification",
+        departure: Number.isFinite(independentDeparture) ? independentDeparture : null,
+        minimumIndependentDeparture,
+        barsToBreak: Number.isFinite(independentBarsToBreak) ? independentBarsToBreak : null,
+        rule: "validate_sr_first_then_independent_sd_then_hidden_fib_without_overwriting_sr",
       });
     }
   }
+
+  // Standard CSA analysis order is fixed before any Fib evaluation. This does
+  // not predetermine Entry 1: S/R is inspected first, S/D second, all surviving
+  // candidates pass the same hidden Fib gate, and final entries follow price.
+  frameworkCandidates = orderStructuralCandidatesForFib(frameworkCandidates);
 
   const rawZones = frameworkCandidates.map((candidate) => {
     const refinedSamePeriodSdPrice =
@@ -19765,6 +19842,12 @@ function rankRawEntryAreas({
         rawZone?.members?.[0]?.supplyDemandRefinedBySamePeriodBase === true,
       stepwiseEntryStage:
         rawZone?.members?.[0]?.stepwiseEntryStage || null,
+      standardStructuralStage:
+        rawZone?.members?.[0]?.standardStructuralStage ||
+        classifyCsaStructuralStage({
+          areaType,
+          stepwiseEntryStage: rawZone?.members?.[0]?.stepwiseEntryStage,
+        }).key,
       structuralZoneEvidence: rawZone?.members?.[0]?.reinforcedByHistoricalIntradayStructure === true
         ? {
             zoneLow: Number(rawZone?.zoneLow),
@@ -20035,14 +20118,14 @@ function rankRawEntryAreas({
     selectorVersion: CSA_SELECTOR_VERSION,
     direction,
     procedure: [
-      "1_immediate_prior_broken_sr",
-      "2_current_period_supply_demand",
-      "3_other_authoritative_structure",
-      "4_fibonacci_gate",
-      "5_price_path_entry_order"
+      "1_support_resistance_and_lifecycle",
+      "2_supply_demand_and_displacement_origin",
+      "3_hidden_fibonacci_382_50_618_confluence",
+      "4_price_path_entry_1_entry_2_order"
     ],
     candidates: evaluated.filter(Boolean).map((area) => ({
-      stage: area.stepwiseEntryStage || "other_authoritative_structure",
+      stage: area.standardStructuralStage || "other_structure",
+      stageDetail: area.stepwiseEntryStage || null,
       executionOrder: area.executionOrder || null,
       areaType: area.areaType || null,
       frameworkPeriod: area.frameworkPeriod || null,
@@ -20059,12 +20142,13 @@ function rankRawEntryAreas({
     })),
     selectedEntries: (sequencedResult?.areas || []).map((area) => ({
       executionOrder: area.executionOrder,
-      stage: area.stepwiseEntryStage || "other_authoritative_structure",
+      stage: area.standardStructuralStage || "other_structure",
+      stageDetail: area.stepwiseEntryStage || null,
       areaType: area.areaType,
       frameworkPeriod: area.frameworkPeriod,
       levelText: area.levelText,
     })),
-    rule: "check_immediate_broken_sr_first_then_current_period_sd_then_other_structure; fib_qualifies_but_never_creates_area; final_order_follows_price_path"
+    rule: "check_support_resistance_first_then_supply_demand; hidden_fib_382_50_618_qualifies_but_never_creates; final_entry_order_follows_price_path"
   });
 
   console.log("CSA regression snapshot:", regressionDiagnostics);
@@ -22217,7 +22301,39 @@ function supplementReferencesWithExactChartLevels({
       .filter((item) => item.distance <= reconciliationTolerance)
       .sort((a, b) => a.distance - b.distance)[0] || null;
 
-    if (!matchingFrameworkArea || !Number.isFinite(Number(currentPrice))) continue;
+    if (!Number.isFinite(Number(currentPrice))) continue;
+
+    // An independently read, exact horizontal-line label is valid chart
+    // structure even when external framework data cannot map it to a completed
+    // period. Preserve it as reference-only so exact visible S/R is not lost.
+    // It can never enter the candidate/Fib path from this reference function.
+    if (!matchingFrameworkArea) {
+      const chartReferenceType = price < Number(currentPrice)
+        ? "support"
+        : "resistance";
+      const halfWidth = Math.max(
+        getApprovedPriceTolerance(symbol),
+        Number(atr || 0) * 0.025
+      );
+      result.push({
+        direction: direction === "bullish" ? "buy" : direction === "bearish" ? "sell" : "none",
+        areaType: chartReferenceType,
+        zoneLow: price - halfWidth,
+        zoneHigh: price + halfWidth,
+        authoritativeCenter: price,
+        levelText: formatPrice(price, symbol),
+        zoneText: `around ${formatPrice(price, symbol)}`,
+        frameworkPeriod: null,
+        structuralScore: 25,
+        distanceFromPrice: Math.abs(price - Number(currentPrice)),
+        fibPassed: false,
+        conversionConfirmed: false,
+        referenceOnly: true,
+        chartReconciled: true,
+        priceSource: "independent_horizontal_line_reader_exact_reference_only",
+      });
+      continue;
+    }
 
     const originalType = String(matchingFrameworkArea.area?.type || "").toLowerCase();
     let areaType = originalType;
@@ -22279,7 +22395,7 @@ function supplementReferencesWithExactChartLevels({
       const bd = Number.isFinite(Number(b?.distanceFromPrice)) ? Number(b.distanceFromPrice) : Number.POSITIVE_INFINITY;
       return ad - bd;
     })
-    .slice(0, 3);
+    .slice(0, 6);
 }
 
 function buildValidatedAnalysisFacts({

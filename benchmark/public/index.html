@@ -35,7 +35,7 @@
       <div class="panel-heading">
         <div>
           <h2>2. Define the expected results</h2>
-          <p>Use comma-separated prices for exact required levels, feedback mentions and forbidden entries.</p>
+          <p>Define prices, structural roles and required feedback wording. Use tolerance for approximate levels on unmarked charts.</p>
         </div>
         <button id="clearButton" class="button secondary" type="button">Clear</button>
       </div>
@@ -81,14 +81,38 @@
       <td class="field-stack">
         <select data-field="expectedDirection"><option value="">Direction not checked</option><option value="bullish">Bullish</option><option value="bearish">Bearish</option><option value="range">Range-bound</option></select>
         <input data-field="expectedEntry1" inputmode="decimal" placeholder="Expected Entry 1">
+        <select data-field="expectedEntry1Type">
+          <option value="">Entry 1 type not checked</option>
+          <option value="support">Support</option>
+          <option value="demand">Demand</option>
+          <option value="converted support">Converted support</option>
+          <option value="resistance">Resistance</option>
+          <option value="supply">Supply</option>
+          <option value="converted resistance">Converted resistance</option>
+          <option value="buy area">Any buy area</option>
+          <option value="sell area">Any sell area</option>
+        </select>
         <input data-field="expectedEntry2" inputmode="decimal" placeholder="Expected Entry 2">
+        <select data-field="expectedEntry2Type">
+          <option value="">Entry 2 type not checked</option>
+          <option value="support">Support</option>
+          <option value="demand">Demand</option>
+          <option value="converted support">Converted support</option>
+          <option value="resistance">Resistance</option>
+          <option value="supply">Supply</option>
+          <option value="converted resistance">Converted resistance</option>
+          <option value="buy area">Any buy area</option>
+          <option value="sell area">Any sell area</option>
+        </select>
         <label class="check"><input data-field="entry2Required" type="checkbox"> Entry 2 required</label>
+        <label class="check"><input data-field="noEntryExpected" type="checkbox"> No valid entry expected</label>
       </td>
       <td class="field-stack">
         <input data-field="requiredLevels" placeholder="Required levels: 0.70104, 0.69845">
         <input data-field="requiredFeedbackLevels" placeholder="Feedback must mention: 0.69845">
+        <input data-field="requiredFeedbackTerms" placeholder="Feedback must include all terms: demand, support">
         <input data-field="forbiddenEntries" placeholder="Must not be entries: 0.69486">
-        <input data-field="tolerance" inputmode="decimal" placeholder="Optional tolerance">
+        <input data-field="tolerance" inputmode="decimal" placeholder="Entry tolerance for approximate/unmarked levels">
         <textarea data-field="notes" rows="2" placeholder="Optional trade notes"></textarea>
       </td>
     </tr>

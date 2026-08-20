@@ -1,14 +1,14 @@
 {
   "name": "csa-coach-backend",
-  "version": "2.3.6",
+  "version": "2.4.0",
   "description": "CSA Coach backend with isolated multi-chart benchmark regression runner",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "start:benchmark": "node benchmark-server.js",
-    "check": "node --check server.js && node --check benchmark-server.js && node --check benchmark/validator.js && node --check benchmark/public/app.js",
-    "test:benchmarks": "node --test benchmark/validator.test.js"
+    "check": "node --check server.js && node --check csa-entry-policy.js && node --check benchmark-server.js && node --check benchmark/validator.js && node --check benchmark/public/app.js",
+    "test:benchmarks": "node --test benchmark/validator.test.js benchmark/csa-entry-policy.test.js"
   },
   "engines": {
     "node": ">=20"
