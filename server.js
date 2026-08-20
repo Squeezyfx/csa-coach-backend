@@ -6,6 +6,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import Stripe from "stripe";
 import {
   classifyCsaStructuralStage,
+  getSupplyDemandClusterTolerance,
   orderStructuralCandidatesForFib,
   selectProtectiveSupplyDemandAnchor,
   sequenceFibQualifiedAreas,
@@ -10433,7 +10434,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.23.0";
-const CSA_BUILD_ID = "CSA-v4.11.2-sd-protective-launch-boundary";
+const CSA_BUILD_ID = "CSA-v4.11.3-sd-cluster-and-specific-feedback";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -14445,9 +14446,14 @@ function dedupeValidatedAreas(areas = [], atr = 0) {
   const tolerance = Math.max(Number(atr || 0) * 0.08, 0);
 
   areas.forEach((candidate) => {
-    const duplicateIndex = result.findIndex((existing) =>
-      zonesOverlap(existing, candidate, tolerance)
-    );
+    const duplicateIndex = result.findIndex((existing) => {
+      const pairTolerance = getSupplyDemandClusterTolerance(
+        existing,
+        candidate,
+        atr
+      );
+      return zonesOverlap(existing, candidate, pairTolerance);
+    });
 
     if (duplicateIndex < 0) {
       result.push(candidate);
@@ -14589,11 +14595,12 @@ function dedupeValidatedAreas(areas = [], atr = 0) {
       Number(existing.fibonacciScore || 0) * 4;
 
     /*
-     * V4.11.2 OVERLAPPING S/D LAUNCH-BASE ANCHOR
+     * V4.11.3 OVERLAPPING/NEAR-TOUCHING S/D LAUNCH-BASE ANCHOR
      *
      * Several candles can describe one demand/supply area. After structural
-     * validation and the hidden Fib gate, overlapping candidates of the same
-     * S/D type must collapse to the protective launch-base boundary rather
+     * validation and the hidden Fib gate, overlapping or near-touching
+     * candidates of the same S/D type must collapse to the protective
+     * launch-base boundary rather
      * than whichever candle happened to be evaluated first. For a bullish
      * demand cluster that is the lower boundary; for a bearish supply cluster
      * it is the upper boundary. Exact independently read chart labels retain
@@ -14648,7 +14655,7 @@ function dedupeValidatedAreas(areas = [], atr = 0) {
             : "bearish_supply_upper_launch_boundary",
       };
 
-      console.log("CSA FINAL DEDUPE OVERLAPPING S/D CLUSTER MERGED:", {
+      console.log("CSA FINAL DEDUPE S/D CLUSTER MERGED:", {
         areaType: existingAreaType,
         existingAnchor,
         candidateAnchor,
@@ -15666,7 +15673,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.6.2";
+const CSA_SELECTOR_VERSION = "4.6.3";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -24653,9 +24660,23 @@ function buildControlledFeedback({
     strengths.push(
       "The chart includes visible support or resistance markings, which makes the price structure easier to review."
     );
+  } else if (hasValidatedArea) {
+    strengths.push(
+      `The ${directionText.toLowerCase()} structure produced Entry 1 at the ${areaText} after the support/resistance and hidden Fibonacci checks.`
+    );
   } else {
     strengths.push(
-      "The uploaded chart is clear enough to assess market direction and important price areas."
+      `The ${directionText.toLowerCase()} structure was resolved from the visible swing sequence, even though no entry area passed every structural and Fibonacci check.`
+    );
+  }
+
+  if (selectedSecondaryArea && secondaryAreaText) {
+    strengths.push(
+      `The deeper ${secondaryAreaText} remains separate from Entry 1 and is only considered after the first area fails.`
+    );
+  } else if (hasValidatedArea) {
+    strengths.push(
+      `Only the ${areaText} qualified as an entry; weaker or duplicate areas were kept out of the trade plan.`
     );
   }
 
@@ -24689,7 +24710,9 @@ function buildControlledFeedback({
 
   if (isPostTrade && !facts.trade.visible) {
     weaknesses.push(
-      "No completed trade or entry is visible or described, so execution accuracy cannot be assessed."
+      hasValidatedArea
+        ? `No completed trade is visible at the ${areaText}, so execution accuracy at that specific area cannot be assessed.`
+        : "No completed trade or entry is visible, so execution accuracy cannot be assessed from this chart."
     );
   }
 
@@ -24727,9 +24750,9 @@ function buildControlledFeedback({
     if (!area.areaRetested) {
       weaknesses.push(
         area.areaType === "converted resistance"
-          ? "The broken support has not yet been confirmed as resistance through a retest from below."
+          ? `The ${areaText} has not yet been confirmed by a retest from below.`
           : area.areaType === "converted support"
-          ? "The broken resistance has not yet been confirmed as support through a retest from above."
+          ? `The ${areaText} has not yet been confirmed by a retest from above.`
           : `Price has not yet retested the planned ${area.areaType} area, so there is no confirmed entry yet.`
       );
     }
@@ -24737,9 +24760,9 @@ function buildControlledFeedback({
     if (!area.triggerPresent) {
       weaknesses.push(
         area.areaType === "converted resistance"
-          ? "No fresh bearish rejection is visible at the potential resistance area yet."
+          ? `No fresh bearish rejection is visible at the ${areaText} yet.`
           : area.areaType === "converted support"
-          ? "No fresh bullish hold is visible at the potential support area yet."
+          ? `No fresh bullish hold is visible at the ${areaText} yet.`
           : `No fresh ${triggerSide} trigger is visible at the planned ${area.areaType} area yet.`
       );
     }
@@ -24789,7 +24812,9 @@ function buildControlledFeedback({
 
   if (!facts.risk.assessable) {
     weaknesses.push(
-      "A stop loss and target are not both clearly shown, so the planned risk cannot yet be fully assessed."
+      hasValidatedArea
+        ? `A stop loss and target are not both shown for the planned ${action} from the ${areaText}, so its risk cannot yet be fully assessed.`
+        : "A stop loss and target are not both clearly shown, so the planned risk cannot yet be fully assessed."
     );
   }
 

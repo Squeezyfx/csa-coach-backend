@@ -171,11 +171,11 @@ function renderRun(run) {
   const automatic = run.mode === "automatic" || run.results.every((item) => item.mode === "automatic");
   document.querySelector("#resultsHeading").textContent = automatic ? "3. Automatic batch report" : "3. Regression report";
   document.querySelector("#summaryText").textContent = automatic
-    ? `Analysed ${run.summary.total} chart${run.summary.total === 1 ? "" : "s"} independently in ${(run.summary.durationMs / 1000).toFixed(1)} seconds. Passed means the output followed the automated CSA consistency checks; review the proposed levels before saving a chart as a strict benchmark.`
+    ? `Analysed ${run.summary.total} chart${run.summary.total === 1 ? "" : "s"} independently in ${(run.summary.durationMs / 1000).toFixed(1)} seconds. Consistent means the output followed the automated CSA checks; review the proposed levels before saving a chart as a strict benchmark.`
     : `Completed ${new Date(run.runAt).toLocaleString()} in ${(run.summary.durationMs / 1000).toFixed(1)} seconds.`;
   document.querySelector("#summaryCards").innerHTML = [
-    summaryCard("Total", run.summary.total), summaryCard("Passed", run.summary.passed),
-    summaryCard("Failed", run.summary.failed), summaryCard("Errors", run.summary.errors),
+    summaryCard("Total", run.summary.total), summaryCard(automatic ? "Consistent" : "Passed", run.summary.passed),
+    summaryCard(automatic ? "Needs review" : "Failed", run.summary.failed), summaryCard("Errors", run.summary.errors),
   ].join("");
   document.querySelector("#resultCards").innerHTML = run.results.map((item) => {
     const checks = item.validation?.checks || [];
@@ -191,7 +191,14 @@ function renderRun(run) {
       ? `<div class="auto-findings"><span><b>Chart:</b> ${escapeHtml(detectedInstrument)} ${escapeHtml(detectedTimeframe)}</span><span><b>Bias:</b> ${escapeHtml(direction)}</span><span><b>Entry 1:</b> ${escapeHtml(entries[0] ? `${entries[0].center} (${entries[0].areaType || "area"})` : "No valid entry")}</span><span><b>Entry 2:</b> ${escapeHtml(entries[1] ? `${entries[1].center} (${entries[1].areaType || "area"})` : "Not selected")}</span></div>`
       : "";
     const checkHtml = checks.map((check) => `<li class="${check.passed ? "pass" : "fail"}">${check.passed ? "✓" : "✕"} ${escapeHtml(check.label)}${check.passed ? "" : ` — ${escapeHtml(check.details)}`}</li>`).join("");
-    return `<article class="result ${item.status}"><div class="result-top"><div><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.fileName)} · ${(item.durationMs / 1000).toFixed(1)}s</p></div><span class="badge">${escapeHtml(item.status)}</span></div><p>${headline}</p>${findingsHtml}${checkHtml ? `<ul class="checks">${checkHtml}</ul>` : ""}<details><summary>Full analysis response</summary><pre>${escapeHtml(JSON.stringify(item.analysis, null, 2))}</pre></details></article>`;
+    const statusLabel = item.mode === "automatic"
+      ? item.status === "passed"
+        ? "consistent"
+        : item.status === "failed"
+        ? "needs review"
+        : item.status
+      : item.status;
+    return `<article class="result ${item.status}"><div class="result-top"><div><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.fileName)} · ${(item.durationMs / 1000).toFixed(1)}s</p></div><span class="badge">${escapeHtml(statusLabel)}</span></div><p>${headline}</p>${findingsHtml}${checkHtml ? `<ul class="checks">${checkHtml}</ul>` : ""}<details><summary>Full analysis response</summary><pre>${escapeHtml(JSON.stringify(item.analysis, null, 2))}</pre></details></article>`;
   }).join("");
   resultsPanel.scrollIntoView({ behavior: "smooth", block: "start" });
 }

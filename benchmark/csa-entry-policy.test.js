@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   classifyCsaStructuralStage,
+  getSupplyDemandClusterTolerance,
   orderStructuralCandidatesForFib,
   selectProtectiveSupplyDemandAnchor,
   sequenceFibQualifiedAreas,
@@ -79,4 +80,49 @@ test("overlapping supply keeps the upper protective launch-base boundary", () =>
     { id: "deep", areaType: "supply", authoritativeCenter: 0.81 }
   );
   assert.equal(selected.id, "deep");
+});
+
+test("near-touching demand fragments use the wider qualified S/D merge allowance", () => {
+  const atr = 0.00092;
+  const tolerance = getSupplyDemandClusterTolerance(
+    { areaType: "demand", zoneLow: 1.40395, zoneHigh: 1.4044 },
+    { areaType: "demand", zoneLow: 1.40349, zoneHigh: 1.40383 },
+    atr
+  );
+
+  assert.equal(tolerance, atr * 0.15);
+  assert.ok(1.40395 - 1.40383 <= tolerance);
+
+  const selected = selectProtectiveSupplyDemandAnchor(
+    { id: "shallow", areaType: "demand", authoritativeCenter: 1.40395 },
+    { id: "protective", areaType: "demand", authoritativeCenter: 1.40349 }
+  );
+  assert.equal(selected.id, "protective");
+});
+
+test("near-touching supply fragments keep the upper protective boundary", () => {
+  const atr = 0.001;
+  const tolerance = getSupplyDemandClusterTolerance(
+    { areaType: "supply", zoneLow: 1.4101, zoneHigh: 1.4105 },
+    { areaType: "supply", zoneLow: 1.41062, zoneHigh: 1.411 },
+    atr
+  );
+  assert.ok(1.41062 - 1.4105 <= tolerance);
+
+  const selected = selectProtectiveSupplyDemandAnchor(
+    { id: "shallow", areaType: "supply", authoritativeCenter: 1.4105 },
+    { id: "protective", areaType: "supply", authoritativeCenter: 1.411 }
+  );
+  assert.equal(selected.id, "protective");
+});
+
+test("support and demand keep the narrower normal dedupe allowance", () => {
+  const atr = 0.00092;
+  const tolerance = getSupplyDemandClusterTolerance(
+    { areaType: "support" },
+    { areaType: "demand" },
+    atr
+  );
+
+  assert.equal(tolerance, atr * 0.08);
 });

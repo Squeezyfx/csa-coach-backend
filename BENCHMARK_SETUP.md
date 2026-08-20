@@ -2,9 +2,9 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.11.2-sd-protective-launch-boundary`. The batch-testing additions do not alter its customer analysis route.
+The included analysis backend is CSA build `v4.11.3-sd-cluster-and-specific-feedback`. The batch-testing additions do not alter its customer analysis route.
 
-This build uses one fixed internal sequence: (1) validate support/resistance and lifecycle conversions, (2) independently validate supply/demand displacement bases, (3) apply hidden 38.2%/50%/61.8% Fibonacci confluence, and (4) order the surviving Entry 1 and Entry 2 by the price path. When several unmarked candles describe one overlapping S/D zone, bullish demand keeps the lower protective launch-base boundary and bearish supply keeps the upper protective launch-base boundary. Fibonacci never creates an area. A strong structural area just past the exact 61.8 line may qualify only within the conservative proximity allowance; clearly deep structure remains reference-only. The rules are symmetrical and selected-day/exact historical cutoffs remain isolated.
+This build uses one fixed internal sequence: (1) validate support/resistance and lifecycle conversions, (2) independently validate supply/demand displacement bases, (3) apply hidden 38.2%/50%/61.8% Fibonacci confluence, and (4) order the surviving Entry 1 and Entry 2 by the price path. When several unmarked candles describe one overlapping or near-touching S/D zone, bullish demand keeps the lower protective launch-base boundary and bearish supply keeps the upper protective launch-base boundary. Fibonacci never creates an area. A strong structural area just past the exact 61.8 line may qualify only within the conservative proximity allowance; clearly deep structure remains reference-only. Automatic feedback names the detected direction and selected structural areas so different charts do not receive identical generic strengths and weaknesses. The rules are symmetrical and selected-day/exact historical cutoffs remain isolated.
 
 ## Isolation model
 
@@ -49,7 +49,7 @@ Automatic mode checks every chart independently and enforces the same sequence:
 3. Hidden Fibonacci confluence at 38.2%, 50% or 61.8%.
 4. Entry 1 and Entry 2 sequencing.
 
-An automatic **Pass** means the response completed and satisfied the machine-checkable CSA consistency rules. It does not manufacture its own ground truth. New proposed prices should be reviewed before being accepted as permanent accuracy examples.
+An automatic **Consistent** result means the response completed and satisfied the machine-checkable CSA consistency rules. It does not manufacture its own ground truth. New proposed prices should be reviewed before being accepted as permanent accuracy examples.
 
 ## Strict regression mode (verified charts)
 

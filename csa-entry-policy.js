@@ -85,3 +85,36 @@ export function selectProtectiveSupplyDemandAnchor(existing = {}, candidate = {}
 
   return candidateAnchor > existingAnchor ? candidate : existing;
 }
+
+export function getSupplyDemandClusterTolerance(
+  existing = {},
+  candidate = {},
+  atr = 0
+) {
+  const existingType = String(existing?.areaType || existing?.type || "")
+    .toLowerCase()
+    .trim();
+  const candidateType = String(candidate?.areaType || candidate?.type || "")
+    .toLowerCase()
+    .trim();
+  const baseTolerance = Math.max(Number(atr || 0) * 0.08, 0);
+
+  if (
+    existingType !== candidateType ||
+    !["demand", "supply"].includes(existingType)
+  ) {
+    return baseTolerance;
+  }
+
+  // A single launch-base area is often detected as two adjacent candle
+  // fragments. Keep the allowance conservative, but wide enough to combine
+  // overlapping or near-touching Fib-qualified fragments before Entry 2 is
+  // selected. Candidate-specific Fib proximity allowances are included when
+  // the detector provides them.
+  return Math.max(
+    baseTolerance,
+    Number(atr || 0) * 0.15,
+    Number(existing?.closeAllowance || 0),
+    Number(candidate?.closeAllowance || 0)
+  );
+}
