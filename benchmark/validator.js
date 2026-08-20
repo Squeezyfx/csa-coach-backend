@@ -1,6 +1,6 @@
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
-const BENCHMARK_VALIDATOR_VERSION = "1.1.0";
+const BENCHMARK_VALIDATOR_VERSION = "1.2.0";
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -77,6 +77,75 @@ function areaTypeMatches(actualValue, expectedValue) {
     return ["resistance", "converted resistance"].includes(actual);
   }
   return actual === expected;
+}
+
+function isSupplyDemandType(value) {
+  return ["supply", "demand"].includes(normalizeAreaType(value));
+}
+
+function normalizeZoneBounds(lowValue, highValue) {
+  const low = finiteNumber(lowValue);
+  const high = finiteNumber(highValue);
+  if (low === null || high === null || low === high) return null;
+  return { low: Math.min(low, high), high: Math.max(low, high) };
+}
+
+function expectedEntryZone(expectation = {}, entryNumber = 1) {
+  const type = expectation[`expectedEntry${entryNumber}Type`];
+  if (!isSupplyDemandType(type)) return null;
+  return normalizeZoneBounds(
+    expectation[`expectedEntry${entryNumber}ZoneLow`],
+    expectation[`expectedEntry${entryNumber}ZoneHigh`]
+  );
+}
+
+function areaBounds(area) {
+  if (!area) return null;
+  const center = finiteNumber(area.center);
+  const low = finiteNumber(area.zoneLow) ?? center;
+  const high = finiteNumber(area.zoneHigh) ?? center;
+  if (low === null || high === null) return null;
+  return { low: Math.min(low, high), high: Math.max(low, high), center };
+}
+
+function priceInsideZone(price, zone, tolerance = 0) {
+  const value = finiteNumber(price);
+  if (value === null || !zone) return false;
+  return value >= zone.low - tolerance && value <= zone.high + tolerance;
+}
+
+function areaMatchesExpectedZone(area, expectedZone, tolerance = 0) {
+  const actual = areaBounds(area);
+  if (!actual || !expectedZone) return false;
+
+  // A selected entry anchor inside the expected S/D area is sufficient. This
+  // covers customer-facing output that exposes one actionable price while the
+  // structured facts retain the full candle-defined zone.
+  if (priceInsideZone(actual.center, expectedZone, tolerance)) return true;
+
+  const overlapLow = Math.max(actual.low, expectedZone.low);
+  const overlapHigh = Math.min(actual.high, expectedZone.high);
+  const overlap = Math.max(0, overlapHigh - overlapLow + tolerance * 2);
+  const actualWidth = Math.max(0, actual.high - actual.low);
+  const expectedWidth = Math.max(0, expectedZone.high - expectedZone.low);
+  const narrowerWidth = Math.min(actualWidth, expectedWidth);
+
+  // For two genuine areas, require meaningful overlap rather than accepting a
+  // broad zone that merely brushes the benchmark boundary. Point-like actual
+  // output is handled by the anchor-containment rule above.
+  return narrowerWidth > 0 && overlap / narrowerWidth >= 0.25;
+}
+
+function textMentionsZone(text, zone, tolerance = 0) {
+  if (!zone) return false;
+  const candidates = String(text || "").match(/\d+(?:\.\d+)?/g) || [];
+  return candidates.some((candidate) =>
+    priceInsideZone(Number(candidate), zone, tolerance)
+  );
+}
+
+function formatExpectedZone(zone) {
+  return zone ? `${zone.low}–${zone.high}` : "";
 }
 
 function feedbackMentionsTerm(text, term) {
@@ -204,6 +273,23 @@ function areaContains(area, expected, tolerance) {
   return expected >= Math.min(low, high) - tolerance && expected <= Math.max(low, high) + tolerance;
 }
 
+function entryMatchesExpectation(area, expectedPrice, expectedType, zone, tolerance) {
+  if (!area) return false;
+  if (zone && isSupplyDemandType(expectedType)) {
+    return areaMatchesExpectedZone(area, zone, tolerance);
+  }
+  if (expectedPrice === null) return Boolean(area);
+
+  // Support/resistance is a level, so its authoritative anchor must match.
+  // Demand/supply without configured boundaries retains legacy point behavior.
+  const normalizedType = normalizeAreaType(expectedType);
+  if (["support", "resistance", "converted support", "converted resistance"].includes(normalizedType)) {
+    const center = finiteNumber(area.center);
+    return center !== null && Math.abs(center - expectedPrice) <= tolerance;
+  }
+  return areaContains(area, expectedPrice, tolerance);
+}
+
 function textMentionsPrice(text, price, tolerance, expectedDigits = null) {
   const source = String(text || "");
   if (!source) return false;
@@ -290,20 +376,23 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   );
 
   const expectedEntry1 = finiteNumber(expectation.expectedEntry1);
-  if (expectedEntry1 !== null) {
+  const expectedEntry1Type = normalizeAreaType(expectation.expectedEntry1Type || "");
+  const entry1Zone = expectedEntryZone(expectation, 1);
+  if (expectedEntry1 !== null || entry1Zone) {
     const tolerance = toleranceOverride ?? defaultTolerance(expectedEntry1);
     addCheck(
       checks,
       "entry_1",
       "Entry 1",
-      areaContains(entries[0], expectedEntry1, tolerance),
+      entryMatchesExpectation(entries[0], expectedEntry1, expectedEntry1Type, entry1Zone, tolerance),
       entries[0]
-        ? `Expected ${expectedEntry1}; received ${entries[0].levelText || entries[0].center}.`
-        : `Expected ${expectedEntry1}; no Entry 1 was returned.`
+        ? entry1Zone
+          ? `Expected ${expectedEntry1Type} zone ${formatExpectedZone(entry1Zone)}; received ${entries[0].levelText || entries[0].center} (${entries[0].zoneLow}–${entries[0].zoneHigh}).`
+          : `Expected ${expectedEntry1}; received ${entries[0].levelText || entries[0].center}.`
+        : `Expected ${entry1Zone ? `${expectedEntry1Type} zone ${formatExpectedZone(entry1Zone)}` : expectedEntry1}; no Entry 1 was returned.`
     );
   }
 
-  const expectedEntry1Type = normalizeAreaType(expectation.expectedEntry1Type || "");
   if (expectedEntry1Type !== "unknown") {
     const actualEntry1 = factsEntries[0] || entries[0] || null;
     addCheck(
@@ -318,25 +407,31 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   }
 
   const expectedEntry2 = finiteNumber(expectation.expectedEntry2);
-  const entry2Required = expectation.entry2Required === true || expectedEntry2 !== null;
+  const expectedEntry2Type = normalizeAreaType(expectation.expectedEntry2Type || "");
+  const entry2Zone = expectedEntryZone(expectation, 2);
+  const entry2Required = expectation.entry2Required === true || expectedEntry2 !== null || Boolean(entry2Zone);
   if (entry2Required) {
     const tolerance = toleranceOverride ?? defaultTolerance(expectedEntry2 ?? entries[1]?.center ?? 1);
-    const passed = expectedEntry2 === null
-      ? Boolean(entries[1])
-      : areaContains(entries[1], expectedEntry2, tolerance);
+    const passed = entryMatchesExpectation(
+      entries[1],
+      expectedEntry2,
+      expectedEntry2Type,
+      entry2Zone,
+      tolerance
+    );
     addCheck(
       checks,
       "entry_2",
       "Entry 2",
       passed,
       entries[1]
-        ? `Expected ${expectedEntry2 ?? "a second entry"}; received ${entries[1].levelText || entries[1].center}.`
+        ? entry2Zone
+          ? `Expected ${expectedEntry2Type} zone ${formatExpectedZone(entry2Zone)}; received ${entries[1].levelText || entries[1].center} (${entries[1].zoneLow}–${entries[1].zoneHigh}).`
+          : `Expected ${expectedEntry2 ?? "a second entry"}; received ${entries[1].levelText || entries[1].center}.`
         : "A valid Entry 2 was required but none was returned."
     );
   }
 
-
-  const expectedEntry2Type = normalizeAreaType(expectation.expectedEntry2Type || "");
   if (expectedEntry2Type !== "unknown") {
     const actualEntry2 = factsEntries[1] || entries[1] || null;
     addCheck(
@@ -350,21 +445,40 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     );
   }
 
+  const configuredEntryZones = [
+    { entry: entries[0], zone: entry1Zone, type: expectedEntry1Type },
+    { entry: entries[1], zone: entry2Zone, type: expectedEntry2Type },
+  ].filter((item) => item.zone && isSupplyDemandType(item.type));
+
   for (const required of parsePriceExpectations(expectation.requiredLevels)) {
     const requiredPrice = required.value;
     const tolerance =
       finiteNumber(expectation.levelTolerance) ??
       toleranceOverride ??
       exactLevelTolerance(requiredPrice, required.digits);
-    const present =
-      references.some((area) => Math.abs(Number(area.center) - requiredPrice) <= tolerance) ||
-      textMentionsPrice(feedbackText, requiredPrice, tolerance, required.digits);
+    const matchingZoneExpectation = configuredEntryZones.find((item) =>
+      priceInsideZone(requiredPrice, item.zone, tolerance)
+    );
+    const present = matchingZoneExpectation
+      ? areaMatchesExpectedZone(
+          matchingZoneExpectation.entry,
+          matchingZoneExpectation.zone,
+          tolerance
+        ) || textMentionsZone(feedbackText, matchingZoneExpectation.zone, tolerance)
+      : references.some((area) => Math.abs(Number(area.center) - requiredPrice) <= tolerance) ||
+        textMentionsPrice(feedbackText, requiredPrice, tolerance, required.digits);
     addCheck(
       checks,
       `required_level_${requiredPrice}`,
       `Required level ${requiredPrice}`,
       present,
-      present ? "The exact level is present in the structured facts or feedback." : "The exact required level is missing; broad zone containment does not count."
+      present
+        ? matchingZoneExpectation
+          ? `The configured ${matchingZoneExpectation.type} zone is represented by the selected entry or feedback.`
+          : "The exact level is present in the structured facts or feedback."
+        : matchingZoneExpectation
+        ? `The required ${matchingZoneExpectation.type} zone ${formatExpectedZone(matchingZoneExpectation.zone)} is missing.`
+        : "The exact required level is missing; broad zone containment does not count."
     );
   }
 
@@ -374,13 +488,24 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       finiteNumber(expectation.levelTolerance) ??
       toleranceOverride ??
       exactLevelTolerance(requiredPrice, required.digits);
-    const present = textMentionsPrice(feedbackText, requiredPrice, tolerance, required.digits);
+    const matchingZoneExpectation = configuredEntryZones.find((item) =>
+      priceInsideZone(requiredPrice, item.zone, tolerance)
+    );
+    const present = matchingZoneExpectation
+      ? textMentionsZone(feedbackText, matchingZoneExpectation.zone, tolerance)
+      : textMentionsPrice(feedbackText, requiredPrice, tolerance, required.digits);
     addCheck(
       checks,
       `required_feedback_level_${requiredPrice}`,
       `Feedback must mention ${requiredPrice}`,
       present,
-      present ? "The exact level is present in customer-facing feedback." : "The required level is absent from customer-facing feedback."
+      present
+        ? matchingZoneExpectation
+          ? `Customer-facing feedback mentions a price inside the configured ${matchingZoneExpectation.type} zone.`
+          : "The exact level is present in customer-facing feedback."
+        : matchingZoneExpectation
+        ? `Customer-facing feedback does not mention the configured ${matchingZoneExpectation.type} zone ${formatExpectedZone(matchingZoneExpectation.zone)}.`
+        : "The required level is absent from customer-facing feedback."
     );
   }
 
@@ -464,6 +589,11 @@ export const benchmarkValidatorInternals = {
   canonicalSelectedEntries,
   referenceEntries,
   areaContains,
+  areaMatchesExpectedZone,
+  expectedEntryZone,
+  entryMatchesExpectation,
+  normalizeZoneBounds,
+  textMentionsZone,
   defaultTolerance,
   exactLevelTolerance,
 };

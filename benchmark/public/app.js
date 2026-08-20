@@ -16,6 +16,16 @@ adminKey.addEventListener("change", () => sessionStorage.setItem("csaBenchmarkAd
 
 function field(row, name) { return row.querySelector(`[data-field="${name}"]`); }
 
+function isZoneType(value) {
+  return ["demand", "supply"].includes(String(value || "").toLowerCase());
+}
+
+function syncZoneFields(row, entryNumber) {
+  const type = field(row, `expectedEntry${entryNumber}Type`).value;
+  const group = row.querySelector(`[data-zone-group="${entryNumber}"]`);
+  group.hidden = !isZoneType(type);
+}
+
 fileInput.addEventListener("change", () => {
   files = Array.from(fileInput.files || []);
   rows.innerHTML = "";
@@ -24,6 +34,12 @@ fileInput.addEventListener("change", () => {
     row.dataset.index = index;
     row.querySelector("[data-file-name]").textContent = file.name;
     field(row, "label").value = file.name.replace(/\.[^.]+$/, "");
+    [1, 2].forEach((entryNumber) => {
+      field(row, `expectedEntry${entryNumber}Type`).addEventListener("change", () =>
+        syncZoneFields(row, entryNumber)
+      );
+      syncZoneFields(row, entryNumber);
+    });
     rows.appendChild(row);
   });
   casePanel.hidden = files.length === 0;
@@ -52,8 +68,12 @@ function collectCases() {
     expectedDirection: field(row, "expectedDirection").value,
     expectedEntry1: field(row, "expectedEntry1").value,
     expectedEntry1Type: field(row, "expectedEntry1Type").value,
+    expectedEntry1ZoneLow: field(row, "expectedEntry1ZoneLow").value,
+    expectedEntry1ZoneHigh: field(row, "expectedEntry1ZoneHigh").value,
     expectedEntry2: field(row, "expectedEntry2").value,
     expectedEntry2Type: field(row, "expectedEntry2Type").value,
+    expectedEntry2ZoneLow: field(row, "expectedEntry2ZoneLow").value,
+    expectedEntry2ZoneHigh: field(row, "expectedEntry2ZoneHigh").value,
     entry2Required: field(row, "entry2Required").checked,
     noEntryExpected: field(row, "noEntryExpected").checked,
     requiredLevels: field(row, "requiredLevels").value,
@@ -96,6 +116,18 @@ runButton.addEventListener("click", async () => {
   if (!adminKey.value) return alert("Enter the benchmark admin key.");
   const cases = collectCases();
   if (cases.some((item) => !item.instrument.trim())) return alert("Enter an instrument for every chart.");
+  for (const item of cases) {
+    for (const entryNumber of [1, 2]) {
+      const low = item[`expectedEntry${entryNumber}ZoneLow`];
+      const high = item[`expectedEntry${entryNumber}ZoneHigh`];
+      if (Boolean(low) !== Boolean(high)) {
+        return alert(`Enter both zone boundaries for Entry ${entryNumber}, or leave both blank.`);
+      }
+      if (low && Number(low) >= Number(high)) {
+        return alert(`Entry ${entryNumber} zone lower boundary must be below its upper boundary.`);
+      }
+    }
+  }
   if (cases.some((item) => item.noEntryExpected && (item.expectedEntry1 || item.expectedEntry2 || item.entry2Required))) {
     return alert("A chart marked 'No valid entry expected' cannot also require Entry 1 or Entry 2.");
   }

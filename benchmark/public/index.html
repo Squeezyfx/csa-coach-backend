@@ -35,7 +35,7 @@
       <div class="panel-heading">
         <div>
           <h2>2. Define the expected results</h2>
-          <p>Define prices, structural roles and required feedback wording. Use tolerance for approximate levels on unmarked charts.</p>
+          <p>Use exact prices for support/resistance. For supply or demand, define the expected zone boundaries; Fibonacci confluence is checked against the full area.</p>
         </div>
         <button id="clearButton" class="button secondary" type="button">Clear</button>
       </div>
@@ -92,6 +92,10 @@
           <option value="buy area">Any buy area</option>
           <option value="sell area">Any sell area</option>
         </select>
+        <div class="zone-fields" data-zone-group="1" hidden>
+          <input data-field="expectedEntry1ZoneLow" inputmode="decimal" placeholder="Entry 1 zone lower boundary">
+          <input data-field="expectedEntry1ZoneHigh" inputmode="decimal" placeholder="Entry 1 zone upper boundary">
+        </div>
         <input data-field="expectedEntry2" inputmode="decimal" placeholder="Expected Entry 2">
         <select data-field="expectedEntry2Type">
           <option value="">Entry 2 type not checked</option>
@@ -104,6 +108,10 @@
           <option value="buy area">Any buy area</option>
           <option value="sell area">Any sell area</option>
         </select>
+        <div class="zone-fields" data-zone-group="2" hidden>
+          <input data-field="expectedEntry2ZoneLow" inputmode="decimal" placeholder="Entry 2 zone lower boundary">
+          <input data-field="expectedEntry2ZoneHigh" inputmode="decimal" placeholder="Entry 2 zone upper boundary">
+        </div>
         <label class="check"><input data-field="entry2Required" type="checkbox"> Entry 2 required</label>
         <label class="check"><input data-field="noEntryExpected" type="checkbox"> No valid entry expected</label>
       </td>

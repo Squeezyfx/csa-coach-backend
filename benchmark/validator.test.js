@@ -231,3 +231,121 @@ test("uses configured approximation tolerance for required and feedback levels",
     true
   );
 });
+
+test("accepts a demand entry anchor anywhere inside the configured demand zone", () => {
+  const demand = structuredClone(baseResult);
+  demand.analysis = "Bullish. Entry 1 is support around 1.40520. If it fails, watch the demand area around 1.40395.";
+  demand.analysisFacts.selectedEntryAreas = [
+    {
+      executionOrder: 1,
+      areaType: "support",
+      authoritativeCenter: 1.40520,
+      zoneLow: 1.40516,
+      zoneHigh: 1.40524,
+    },
+    {
+      executionOrder: 2,
+      areaType: "demand",
+      authoritativeCenter: 1.40395,
+      zoneLow: 1.40395,
+      zoneHigh: 1.40418,
+    },
+  ];
+  demand.analysisFacts.structuralReferenceAreas = [];
+  demand.finalFeedback.entry1 = demand.analysisFacts.selectedEntryAreas[0];
+  demand.finalFeedback.entry2 = demand.analysisFacts.selectedEntryAreas[1];
+
+  const result = validateBenchmarkResult(demand, {
+    expectedDirection: "bullish",
+    expectedEntry1: "1.40520",
+    expectedEntry1Type: "support",
+    expectedEntry2: "1.40341",
+    expectedEntry2Type: "demand",
+    expectedEntry2ZoneLow: "1.40341",
+    expectedEntry2ZoneHigh: "1.40395",
+    entry2Required: true,
+    requiredLevels: "1.40520,1.40341",
+    requiredFeedbackLevels: "1.40520,1.40341",
+    requiredFeedbackTerms: "support,demand",
+    tolerance: "0.00008",
+  });
+
+  assert.equal(result.passed, true);
+  assert.equal(result.checks.find((check) => check.id === "entry_2")?.passed, true);
+  assert.equal(result.checks.find((check) => check.id === "required_level_1.40341")?.passed, true);
+  assert.equal(
+    result.checks.find((check) => check.id === "required_feedback_level_1.40341")?.passed,
+    true
+  );
+});
+
+test("accepts meaningful overlap between expected and detected supply zones", () => {
+  const supply = structuredClone(baseResult);
+  supply.analysisFacts.direction = "bearish";
+  supply.analysis = "Bearish. Watch the supply area around 1.20540.";
+  supply.analysisFacts.selectedEntryAreas = [
+    {
+      executionOrder: 1,
+      areaType: "supply",
+      authoritativeCenter: 1.20540,
+      zoneLow: 1.20500,
+      zoneHigh: 1.20550,
+    },
+  ];
+  supply.analysisFacts.structuralReferenceAreas = [];
+  supply.finalFeedback.entry1 = supply.analysisFacts.selectedEntryAreas[0];
+
+  const result = validateBenchmarkResult(supply, {
+    expectedDirection: "bearish",
+    expectedEntry1Type: "supply",
+    expectedEntry1ZoneLow: "1.20480",
+    expectedEntry1ZoneHigh: "1.20520",
+    requiredFeedbackTerms: "supply",
+    tolerance: "0.00002",
+  });
+
+  assert.equal(result.passed, true);
+});
+
+test("rejects a supply or demand area with no meaningful expected-zone overlap", () => {
+  const demand = structuredClone(baseResult);
+  demand.analysisFacts.selectedEntryAreas[0] = {
+    executionOrder: 1,
+    areaType: "demand",
+    authoritativeCenter: 1.40450,
+    zoneLow: 1.40430,
+    zoneHigh: 1.40470,
+  };
+  demand.finalFeedback.entry1 = demand.analysisFacts.selectedEntryAreas[0];
+
+  const result = validateBenchmarkResult(demand, {
+    expectedEntry1Type: "demand",
+    expectedEntry1ZoneLow: "1.40341",
+    expectedEntry1ZoneHigh: "1.40395",
+    tolerance: "0.00002",
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.criticalFailures.some((check) => check.id === "entry_1"));
+});
+
+test("keeps support and resistance expectations anchored to exact levels", () => {
+  const support = structuredClone(baseResult);
+  support.analysisFacts.selectedEntryAreas[0] = {
+    executionOrder: 1,
+    areaType: "support",
+    authoritativeCenter: 1.40580,
+    zoneLow: 1.40510,
+    zoneHigh: 1.40600,
+  };
+  support.finalFeedback.entry1 = support.analysisFacts.selectedEntryAreas[0];
+
+  const result = validateBenchmarkResult(support, {
+    expectedEntry1: "1.40520",
+    expectedEntry1Type: "support",
+    tolerance: "0.00008",
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.criticalFailures.some((check) => check.id === "entry_1"));
+});

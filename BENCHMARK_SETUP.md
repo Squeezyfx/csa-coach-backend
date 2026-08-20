@@ -46,16 +46,24 @@ The dry-run response includes `benchmarkDryRun: true` and `savedToJournal: false
 Important fields:
 
 - **Entry 1 / Entry 2 type**: the expected structural role, such as demand, supply, support, resistance or a confirmed converted level. Use **Any buy area** or **Any sell area** only when the exact structural subtype is intentionally not part of the test.
+- **Supply/demand zone boundaries**: selecting **Demand** or **Supply** reveals lower- and upper-boundary fields. The entry passes when its actionable anchor is inside the expected area or its structured zone meaningfully overlaps the expected area. Support, resistance and converted S/R remain exact anchored levels.
 - **No valid entry expected**: requires both the structured facts and customer-facing entry plan to return no selected entries. It cannot be combined with an expected Entry 1 or Entry 2.
-- **Required levels**: exact authoritative levels that must appear in structured facts or customer feedback. Merely falling inside a broad zone does not count.
-- **Feedback must mention**: exact levels that must be stated in the customer-facing feedback.
+- **Required levels**: exact authoritative S/R levels must appear in structured facts or customer feedback. A required price that is also a configured supply/demand-zone boundary is validated against the matching selected zone rather than forced to one anchor.
+- **Feedback must mention**: exact S/R levels must be stated in customer-facing feedback. For a configured supply/demand zone, a customer-facing price inside that area satisfies its boundary expectation.
 - **Feedback must include all terms**: comma-separated structural wording that must appear in customer-facing feedback, such as `demand, support`. Every entered term is required.
 - **Must not be entries**: structural levels that may be mentioned but must not become Entry 1 or Entry 2.
-- **Tolerance**: optional Entry 1, Entry 2 and forbidden-entry price tolerance. Use it for approximate levels on unmarked charts; leave it blank for exact marked levels and instrument-scale defaults.
+- **Tolerance**: optional small boundary/reading tolerance. It is no longer a substitute for defining a supply/demand area; use the dedicated zone fields instead.
 
 Exact prices retain the decimal precision you type. For example, `0.69620`
 remains a five-decimal requirement and will not accept `0.69618` unless you
 explicitly provide a wider tolerance.
+
+Supply/demand zones are evaluated as areas because the base candle and broker
+feed can expose different actionable anchors inside the same structure. Zone
+matching never changes the fixed analysis order: S/R first, S/D second, hidden
+Fibonacci confluence third, then Entry 1/Entry 2 sequencing. A zone must still
+be structurally valid, on the correct side of price and close to the relevant
+38.2%, 50% or 61.8% retracement before it can be selected.
 
 ## Release rule
 
