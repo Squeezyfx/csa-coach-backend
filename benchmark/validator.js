@@ -1,6 +1,6 @@
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
-const BENCHMARK_VALIDATOR_VERSION = "1.2.0";
+const BENCHMARK_VALIDATOR_VERSION = "1.3.0";
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -338,6 +338,82 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   const promotedEntries = allPromotedEntries(result);
   const references = referenceEntries(result);
   const feedbackText = String(result?.analysis || result?.summary || result?.finalFeedback?.analysis || "");
+
+  if (expectation.automaticMode === true) {
+    const detectedInstrument = String(
+      result?.chartDetection?.detectedInstrument || result?.detectedPair || ""
+    ).trim();
+    const detectedTimeframe = String(
+      result?.chartDetection?.detectedTimeframe || result?.detectedTimeframe || ""
+    ).trim();
+    const selectorDiagnostics = result?.analysisFacts?.selectorDiagnostics;
+    const fibCandidates = Array.isArray(selectorDiagnostics?.fibCandidates)
+      ? selectorDiagnostics.fibCandidates
+      : [];
+    const recognizedTypes = new Set([
+      "support", "resistance", "converted support", "converted resistance",
+      "demand", "supply",
+    ]);
+    const everyEntryIsStructured = entries.every((entry) =>
+      recognizedTypes.has(normalizeAreaType(entry.areaType))
+    );
+    const everyEntryHasFibConfluence = entries.every((entry) => {
+      const entryPrice = finiteNumber(entry.center);
+      if (entryPrice === null) return false;
+      const tolerance = defaultTolerance(entryPrice);
+      return fibCandidates.some((candidate) => {
+        if (candidate?.passed !== true) return false;
+        const candidatePrice =
+          finiteNumber(candidate.resolvedEntryPrice) ??
+          finiteNumber(candidate.chartReconciledPrice) ??
+          finiteNumber(candidate.frameworkPrice);
+        return candidatePrice !== null &&
+          Math.abs(candidatePrice - entryPrice) <= tolerance;
+      });
+    });
+
+    addCheck(
+      checks,
+      "automatic_chart_context",
+      "Instrument and timeframe detected",
+      Boolean(detectedInstrument && detectedTimeframe),
+      `Detected ${detectedInstrument || "no instrument"} on ${detectedTimeframe || "no timeframe"}.`
+    );
+    addCheck(
+      checks,
+      "automatic_direction",
+      "Directional bias resolved",
+      direction !== "unknown",
+      `Resolved direction: ${direction}.`
+    );
+    addCheck(
+      checks,
+      "ordered_selector",
+      "S/R → S/D → Fibonacci sequence completed",
+      Boolean(selectorDiagnostics && Array.isArray(selectorDiagnostics.structuralCandidates) && Array.isArray(selectorDiagnostics.fibCandidates)),
+      selectorDiagnostics
+        ? `Selector ${selectorDiagnostics.selectorVersion || "unknown"} evaluated structure before Fibonacci filtering.`
+        : "Ordered selector diagnostics were not returned."
+    );
+    addCheck(
+      checks,
+      "automatic_structural_roles",
+      "Selected entries use valid structural roles",
+      everyEntryIsStructured,
+      everyEntryIsStructured
+        ? `${entries.length} selected entr${entries.length === 1 ? "y uses" : "ies use"} support/resistance or supply/demand structure.`
+        : "At least one selected entry has an unsupported structural role."
+    );
+    addCheck(
+      checks,
+      "automatic_fibonacci_confluence",
+      "Selected entries pass hidden Fibonacci confluence",
+      everyEntryHasFibConfluence,
+      everyEntryHasFibConfluence
+        ? `${entries.length} selected entr${entries.length === 1 ? "y is" : "ies are"} backed by a passed 38.2%, 50% or 61.8% candidate check.`
+        : "At least one selected entry was not matched to a passed hidden Fibonacci candidate."
+    );
+  }
 
   if (expectation.noEntryExpected === true) {
     addCheck(

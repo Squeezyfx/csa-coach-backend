@@ -4,12 +4,24 @@ const template = document.querySelector("#caseTemplate");
 const casePanel = document.querySelector("#casePanel");
 const resultsPanel = document.querySelector("#resultsPanel");
 const runButton = document.querySelector("#runButton");
+const saveButton = document.querySelector("#saveButton");
 const clearButton = document.querySelector("#clearButton");
 const exportButton = document.querySelector("#exportButton");
 const runStatus = document.querySelector("#runStatus");
 const adminKey = document.querySelector("#adminKey");
 let files = [];
 let lastRun = null;
+let benchmarkMode = "automatic";
+
+const fixtureFields = [
+  "label", "instrument", "timeframe", "plan", "analysisType", "cutoffMode",
+  "chartDate", "expectedDirection", "expectedEntry1", "expectedEntry1Type",
+  "expectedEntry1ZoneLow", "expectedEntry1ZoneHigh", "expectedEntry2",
+  "expectedEntry2Type", "expectedEntry2ZoneLow", "expectedEntry2ZoneHigh",
+  "entry2Required", "noEntryExpected", "requiredLevels",
+  "requiredFeedbackLevels", "requiredFeedbackTerms", "forbiddenEntries",
+  "tolerance", "notes",
+];
 
 adminKey.value = sessionStorage.getItem("csaBenchmarkAdminKey") || "";
 adminKey.addEventListener("change", () => sessionStorage.setItem("csaBenchmarkAdminKey", adminKey.value));
@@ -26,6 +38,49 @@ function syncZoneFields(row, entryNumber) {
   group.hidden = !isZoneType(type);
 }
 
+function fixtureKey(file) {
+  return `csaBenchmarkFixture:${file.name}:${file.size}`;
+}
+
+function restoreFixture(row, file) {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(fixtureKey(file)) || "null"); } catch {}
+  if (!saved) return;
+  fixtureFields.forEach((name) => {
+    const input = field(row, name);
+    if (!input || saved[name] === undefined) return;
+    if (input.type === "checkbox") input.checked = saved[name] === true;
+    else input.value = saved[name];
+  });
+}
+
+function setMode(mode) {
+  benchmarkMode = mode === "strict" ? "strict" : "automatic";
+  document.querySelectorAll('input[name="benchmarkMode"]').forEach((input) => {
+    input.checked = input.value === benchmarkMode;
+    input.closest(".mode-option").classList.toggle("selected", input.checked);
+  });
+  casePanel.classList.toggle("automatic-mode", benchmarkMode === "automatic");
+  document.querySelector("#caseHeading").textContent = benchmarkMode === "automatic"
+    ? "2. Review selected charts"
+    : "2. Define the verified expected results";
+  document.querySelector("#caseDescription").textContent = benchmarkMode === "automatic"
+    ? "No expected values are required. The engine reads the chart and checks support/resistance, supply/demand, hidden Fibonacci confluence and entry order."
+    : "Use strict mode for known charts. Saved values are restored automatically when the same chart file is selected again.";
+  document.querySelector("#resultsHeading").textContent = benchmarkMode === "automatic"
+    ? "3. Automatic batch report"
+    : "3. Regression report";
+  runButton.textContent = benchmarkMode === "automatic"
+    ? "Analyse all charts"
+    : "Run strict benchmarks";
+  saveButton.hidden = benchmarkMode !== "strict";
+  resultsPanel.hidden = true;
+}
+
+document.querySelectorAll('input[name="benchmarkMode"]').forEach((input) => {
+  input.addEventListener("change", () => setMode(input.value));
+});
+
 fileInput.addEventListener("change", () => {
   files = Array.from(fileInput.files || []);
   rows.innerHTML = "";
@@ -34,6 +89,7 @@ fileInput.addEventListener("change", () => {
     row.dataset.index = index;
     row.querySelector("[data-file-name]").textContent = file.name;
     field(row, "label").value = file.name.replace(/\.[^.]+$/, "");
+    restoreFixture(row, file);
     [1, 2].forEach((entryNumber) => {
       field(row, `expectedEntry${entryNumber}Type`).addEventListener("change", () =>
         syncZoneFields(row, entryNumber)
@@ -44,6 +100,21 @@ fileInput.addEventListener("change", () => {
   });
   casePanel.hidden = files.length === 0;
   resultsPanel.hidden = true;
+});
+
+saveButton.addEventListener("click", () => {
+  if (!files.length) return;
+  Array.from(rows.querySelectorAll("tr")).forEach((row, index) => {
+    const saved = {};
+    fixtureFields.forEach((name) => {
+      const input = field(row, name);
+      if (!input) return;
+      saved[name] = input.type === "checkbox" ? input.checked : input.value;
+    });
+    localStorage.setItem(fixtureKey(files[index]), JSON.stringify(saved));
+  });
+  runStatus.textContent = "Expected values saved in this browser.";
+  setTimeout(() => { if (runStatus.textContent.startsWith("Expected")) runStatus.textContent = ""; }, 2500);
 });
 
 clearButton.addEventListener("click", () => {
@@ -57,6 +128,8 @@ clearButton.addEventListener("click", () => {
 
 function collectCases() {
   return Array.from(rows.querySelectorAll("tr")).map((row, index) => ({
+    mode: benchmarkMode,
+    autoDetectContext: benchmarkMode === "automatic",
     fileIndex: index,
     label: field(row, "label").value,
     instrument: field(row, "instrument").value,
@@ -95,7 +168,11 @@ function escapeHtml(value) {
 
 function renderRun(run) {
   resultsPanel.hidden = false;
-  document.querySelector("#summaryText").textContent = `Completed ${new Date(run.runAt).toLocaleString()} in ${(run.summary.durationMs / 1000).toFixed(1)} seconds.`;
+  const automatic = run.mode === "automatic" || run.results.every((item) => item.mode === "automatic");
+  document.querySelector("#resultsHeading").textContent = automatic ? "3. Automatic batch report" : "3. Regression report";
+  document.querySelector("#summaryText").textContent = automatic
+    ? `Analysed ${run.summary.total} chart${run.summary.total === 1 ? "" : "s"} independently in ${(run.summary.durationMs / 1000).toFixed(1)} seconds. Passed means the output followed the automated CSA consistency checks; review the proposed levels before saving a chart as a strict benchmark.`
+    : `Completed ${new Date(run.runAt).toLocaleString()} in ${(run.summary.durationMs / 1000).toFixed(1)} seconds.`;
   document.querySelector("#summaryCards").innerHTML = [
     summaryCard("Total", run.summary.total), summaryCard("Passed", run.summary.passed),
     summaryCard("Failed", run.summary.failed), summaryCard("Errors", run.summary.errors),
@@ -106,8 +183,15 @@ function renderRun(run) {
     const headline = item.status === "error"
       ? escapeHtml(item.error)
       : `${item.validation.score}% · ${failures.length} failed check${failures.length === 1 ? "" : "s"}`;
+    const detectedInstrument = item.analysis?.chartDetection?.detectedInstrument || "Not detected";
+    const detectedTimeframe = item.analysis?.chartDetection?.detectedTimeframe || "Not detected";
+    const direction = item.validation?.direction || "unknown";
+    const entries = item.validation?.selectedEntries || [];
+    const findingsHtml = item.mode === "automatic" && item.status !== "error"
+      ? `<div class="auto-findings"><span><b>Chart:</b> ${escapeHtml(detectedInstrument)} ${escapeHtml(detectedTimeframe)}</span><span><b>Bias:</b> ${escapeHtml(direction)}</span><span><b>Entry 1:</b> ${escapeHtml(entries[0] ? `${entries[0].center} (${entries[0].areaType || "area"})` : "No valid entry")}</span><span><b>Entry 2:</b> ${escapeHtml(entries[1] ? `${entries[1].center} (${entries[1].areaType || "area"})` : "Not selected")}</span></div>`
+      : "";
     const checkHtml = checks.map((check) => `<li class="${check.passed ? "pass" : "fail"}">${check.passed ? "✓" : "✕"} ${escapeHtml(check.label)}${check.passed ? "" : ` — ${escapeHtml(check.details)}`}</li>`).join("");
-    return `<article class="result ${item.status}"><div class="result-top"><div><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.fileName)} · ${(item.durationMs / 1000).toFixed(1)}s</p></div><span class="badge">${escapeHtml(item.status)}</span></div><p>${headline}</p>${checkHtml ? `<ul class="checks">${checkHtml}</ul>` : ""}<details><summary>Full analysis response</summary><pre>${escapeHtml(JSON.stringify(item.analysis, null, 2))}</pre></details></article>`;
+    return `<article class="result ${item.status}"><div class="result-top"><div><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.fileName)} · ${(item.durationMs / 1000).toFixed(1)}s</p></div><span class="badge">${escapeHtml(item.status)}</span></div><p>${headline}</p>${findingsHtml}${checkHtml ? `<ul class="checks">${checkHtml}</ul>` : ""}<details><summary>Full analysis response</summary><pre>${escapeHtml(JSON.stringify(item.analysis, null, 2))}</pre></details></article>`;
   }).join("");
   resultsPanel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -115,8 +199,8 @@ function renderRun(run) {
 runButton.addEventListener("click", async () => {
   if (!adminKey.value) return alert("Enter the benchmark admin key.");
   const cases = collectCases();
-  if (cases.some((item) => !item.instrument.trim())) return alert("Enter an instrument for every chart.");
-  for (const item of cases) {
+  if (benchmarkMode === "strict" && cases.some((item) => !item.instrument.trim())) return alert("Enter an instrument for every chart in strict regression mode.");
+  for (const item of benchmarkMode === "strict" ? cases : []) {
     for (const entryNumber of [1, 2]) {
       const low = item[`expectedEntry${entryNumber}ZoneLow`];
       const high = item[`expectedEntry${entryNumber}ZoneHigh`];
@@ -128,7 +212,7 @@ runButton.addEventListener("click", async () => {
       }
     }
   }
-  if (cases.some((item) => item.noEntryExpected && (item.expectedEntry1 || item.expectedEntry2 || item.entry2Required))) {
+  if (benchmarkMode === "strict" && cases.some((item) => item.noEntryExpected && (item.expectedEntry1 || item.expectedEntry2 || item.entry2Required))) {
     return alert("A chart marked 'No valid entry expected' cannot also require Entry 1 or Entry 2.");
   }
   sessionStorage.setItem("csaBenchmarkAdminKey", adminKey.value);
@@ -150,6 +234,8 @@ runButton.addEventListener("click", async () => {
     runStatus.textContent = "";
   }
 });
+
+setMode("automatic");
 
 exportButton.addEventListener("click", () => {
   if (!lastRun) return;

@@ -349,3 +349,62 @@ test("keeps support and resistance expectations anchored to exact levels", () =>
   assert.equal(result.passed, false);
   assert.ok(result.criticalFailures.some((check) => check.id === "entry_1"));
 });
+
+test("automatic mode verifies chart context, ordered structure and hidden Fibonacci entry confluence", () => {
+  const automatic = structuredClone(baseResult);
+  automatic.chartDetection = {
+    detectedInstrument: "AUDUSD",
+    detectedTimeframe: "H1",
+  };
+  automatic.finalFeedback.entry1 = {
+    executionOrder: 1,
+    areaType: "support",
+    authoritativeCenter: 0.70104,
+    zoneLow: 0.7009,
+    zoneHigh: 0.7012,
+  };
+  automatic.analysisFacts.selectorDiagnostics = {
+    selectorVersion: "4.6.2",
+    structuralCandidates: [
+      { areaType: "support", frameworkPrice: 0.70104, structurallyValid: true },
+      { areaType: "demand", frameworkPrice: 0.69845, structurallyValid: true },
+    ],
+    fibCandidates: [
+      { areaType: "support", resolvedEntryPrice: 0.70104, passed: true },
+      { areaType: "demand", resolvedEntryPrice: 0.69845, passed: false },
+    ],
+  };
+
+  const result = validateBenchmarkResult(automatic, { automaticMode: true });
+  assert.equal(result.passed, true);
+  assert.equal(result.checks.find((check) => check.id === "ordered_selector")?.passed, true);
+  assert.equal(
+    result.checks.find((check) => check.id === "automatic_fibonacci_confluence")?.passed,
+    true
+  );
+});
+
+test("automatic mode rejects a selected entry that did not pass Fibonacci confluence", () => {
+  const automatic = structuredClone(baseResult);
+  automatic.chartDetection = {
+    detectedInstrument: "AUDUSD",
+    detectedTimeframe: "H1",
+  };
+  automatic.finalFeedback.entry1 = {
+    executionOrder: 1,
+    areaType: "support",
+    authoritativeCenter: 0.70104,
+  };
+  automatic.analysisFacts.selectorDiagnostics = {
+    selectorVersion: "4.6.2",
+    structuralCandidates: [{ areaType: "support", frameworkPrice: 0.70104 }],
+    fibCandidates: [{ areaType: "support", resolvedEntryPrice: 0.70104, passed: false }],
+  };
+
+  const result = validateBenchmarkResult(automatic, { automaticMode: true });
+  assert.equal(result.passed, false);
+  assert.equal(
+    result.criticalFailures.some((check) => check.id === "automatic_fibonacci_confluence"),
+    true
+  );
+});

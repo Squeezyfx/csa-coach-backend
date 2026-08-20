@@ -45,6 +45,7 @@ function benchmarkConfigurationProblems() {
 }
 
 function cleanCase(value = {}, index = 0) {
+  const mode = value.mode === "strict" ? "strict" : "automatic";
   return {
     fileIndex: Number.isInteger(Number(value.fileIndex)) ? Number(value.fileIndex) : index,
     label: String(value.label || `Benchmark ${index + 1}`).slice(0, 120),
@@ -57,6 +58,8 @@ function cleanCase(value = {}, index = 0) {
     chartDate: String(value.chartDate || "").trim(),
     cutoffMode: value.cutoffMode === "selected_day" ? "selected_day" : "final_visible",
     notes: String(value.notes || "").slice(0, 3000),
+    mode,
+    autoDetectContext: mode === "automatic" || value.autoDetectContext === true,
     expectation: {
       expectedDirection: String(value.expectedDirection || "").trim(),
       expectedEntry1: value.expectedEntry1 ?? "",
@@ -80,7 +83,9 @@ function cleanCase(value = {}, index = 0) {
 
 async function analyzeOne(testCase, file) {
   if (!file) throw new Error(`No uploaded file matched ${testCase.label}.`);
-  if (!testCase.instrument) throw new Error(`Instrument is missing for ${testCase.label}.`);
+  if (!testCase.autoDetectContext && !testCase.instrument) {
+    throw new Error(`Instrument is missing for ${testCase.label}.`);
+  }
 
   const form = new FormData();
   form.append("chart", new Blob([file.buffer], { type: file.mimetype || "image/png" }), file.originalname);
@@ -91,6 +96,7 @@ async function analyzeOne(testCase, file) {
   form.append("cutoffMode", testCase.cutoffMode);
   form.append("forceFreshAnalysis", "true");
   form.append("analysisFramework", "csa");
+  form.append("autoDetectContext", testCase.autoDetectContext ? "true" : "false");
   if (testCase.chartDate) form.append("chartDate", testCase.chartDate);
   if (testCase.notes) form.append("notes", testCase.notes);
 
@@ -173,7 +179,10 @@ app.post("/api/run", requireAdmin, upload.array("charts", 30), async (req, res) 
       const itemStartedAt = Date.now();
       try {
         const analysis = await analyzeOne(testCase, req.files[testCase.fileIndex]);
-        const validation = validateBenchmarkResult(analysis, testCase.expectation);
+        const validation = validateBenchmarkResult(analysis, {
+          ...testCase.expectation,
+          automaticMode: testCase.mode === "automatic",
+        });
         return {
           label: testCase.label,
           fileName: req.files[testCase.fileIndex]?.originalname || null,
@@ -181,6 +190,7 @@ app.post("/api/run", requireAdmin, upload.array("charts", 30), async (req, res) 
           durationMs: Date.now() - itemStartedAt,
           validation,
           analysis,
+          mode: testCase.mode,
         };
       } catch (error) {
         return {
@@ -191,6 +201,7 @@ app.post("/api/run", requireAdmin, upload.array("charts", 30), async (req, res) 
           error: error?.name === "AbortError" ? "Analysis timed out." : error.message,
           validation: null,
           analysis: null,
+          mode: testCase.mode,
         };
       }
     });
@@ -202,7 +213,10 @@ app.post("/api/run", requireAdmin, upload.array("charts", 30), async (req, res) 
       errors: results.filter((item) => item.status === "error").length,
       durationMs: Date.now() - startedAt,
     };
-    return res.json({ success: true, runAt: new Date().toISOString(), summary, results });
+    const mode = cases.every((item) => item.mode === "automatic")
+      ? "automatic"
+      : "strict";
+    return res.json({ success: true, mode, runAt: new Date().toISOString(), summary, results });
   } catch (error) {
     console.error("Benchmark batch error:", error);
     return res.status(500).json({ success: false, error: error.message || "Benchmark run failed." });

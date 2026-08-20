@@ -26580,7 +26580,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     if (!req.file) return res.status(400).json({ success: false, error: "No chart image uploaded." });
 
     const {
-      timeframe = "Not provided",
+      timeframe: requestedTimeframe = "Not provided",
       instrument = "",
       pair = "",
       selectedPair = "",
@@ -26597,12 +26597,17 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       forceFreshAnalysis = "",
       analysisFramework = "csa",
       strategyId = "",
+      autoDetectContext = "false",
     } = req.body;
-    const submittedInstrument = instrument || pair || selectedPair || "Not provided";
+    let timeframe = requestedTimeframe;
+    let submittedInstrument = instrument || pair || selectedPair || "Not provided";
     const submittedNotes = notes || userNotes || "";
-    const normalizedSymbol = normalizeSymbol(submittedInstrument);
+    let normalizedSymbol = normalizeSymbol(submittedInstrument);
     const mode = normalizeAnalysisType(analysisType);
-    const selectedTimeframeProfile = getSupportedCsaTimeframeProfile(timeframe);
+    let selectedTimeframeProfile = getSupportedCsaTimeframeProfile(timeframe);
+    const benchmarkAutoDetectContext =
+      benchmarkDryRun &&
+      String(autoDetectContext || "").trim().toLowerCase() === "true";
     const selectedStrategy = benchmarkDryRun
       ? {
           analysisFramework: "csa",
@@ -26719,6 +26724,51 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     if (!isUploadedChartDataUsable(chartDetection, selectedDateText)) {
       const analysis = buildInsufficientChartDataAnalysis({ submittedInstrument, timeframe, selectedDateText, chartDetection });
       return stoppedResponse({ res, errorType: "insufficient_chart_data", error: "Uploaded chart does not have enough visible price data for review.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
+    }
+
+    // The private batch tester may infer chart context directly from a clear
+    // chart header. This is deliberately restricted to authorized,
+    // database-free benchmark runs; customer analysis still requires the
+    // selected instrument and timeframe and keeps all existing mismatch
+    // protection.
+    if (benchmarkAutoDetectContext) {
+      const detectedInstrument = String(
+        chartDetection?.detectedInstrument || ""
+      ).trim();
+      const detectedTimeframe = comparableTimeframe(
+        chartDetection?.detectedTimeframe || ""
+      );
+
+      if (!isDetectedInstrumentUsable(detectedInstrument) || !detectedTimeframe) {
+        const analysis = buildUnverifiedChartContextAnalysis({
+          selectedInstrument: "Automatically detected",
+          detectedInstrument: chartDetection?.detectedInstrument,
+          selectedTimeframe: "Automatically detected",
+          detectedTimeframe: chartDetection?.detectedTimeframe,
+          error:
+            "Automatic benchmark mode could not clearly read the instrument and timeframe from the chart header.",
+        });
+        return stoppedResponse({
+          res,
+          errorType: "automatic_chart_context_unverified",
+          error:
+            "Automatic benchmark mode could not clearly read the instrument and timeframe from the chart header.",
+          analysis,
+          submittedInstrument: detectedInstrument || "Not detected",
+          timeframe: detectedTimeframe || "Not detected",
+          chartDetection,
+          normalizedSymbol: normalizeSymbol(detectedInstrument),
+          timezone,
+          selectedTimeframeProfile: detectedTimeframe
+            ? getSupportedCsaTimeframeProfile(detectedTimeframe)
+            : selectedTimeframeProfile,
+        });
+      }
+
+      submittedInstrument = detectedInstrument;
+      timeframe = detectedTimeframe;
+      normalizedSymbol = normalizeSymbol(submittedInstrument);
+      selectedTimeframeProfile = getSupportedCsaTimeframeProfile(timeframe);
     }
 
     const dateMismatch =

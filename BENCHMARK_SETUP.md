@@ -33,15 +33,27 @@ The staging analysis service runs `server.js` with `npm start`. Add `BENCHMARK_D
 
 The dry-run response includes `benchmarkDryRun: true` and `savedToJournal: false`. If the internal key is absent, short, incorrect, or dry-run mode is disabled, the normal customer authentication path remains mandatory.
 
-## First run
+## Automatic batch mode (recommended for new charts)
 
 1. Open the benchmark runner URL.
 2. Enter `BENCHMARK_ADMIN_KEY`.
-3. Select several chart screenshots.
-4. For each chart, enter its instrument, timeframe, cutoff mode, and expected facts.
-   Select Starter, Pro or Elite output for each case; Starter is the default.
-5. Click **Run all benchmarks**.
-6. Review critical failures and export the JSON report.
+3. Leave **Automatic batch** selected.
+4. Select up to 30 clear chart screenshots. The instrument and timeframe must be visible in each chart header.
+5. Click **Analyse all charts**. No direction, entry, level, zone or tolerance values are required.
+6. Review the proposed direction and Entry 1/Entry 2 for every chart, then export the JSON report.
+
+Automatic mode checks every chart independently and enforces the same sequence:
+
+1. Support/resistance and lifecycle conversions.
+2. Supply/demand displacement bases.
+3. Hidden Fibonacci confluence at 38.2%, 50% or 61.8%.
+4. Entry 1 and Entry 2 sequencing.
+
+An automatic **Pass** means the response completed and satisfied the machine-checkable CSA consistency rules. It does not manufacture its own ground truth. New proposed prices should be reviewed before being accepted as permanent accuracy examples.
+
+## Strict regression mode (verified charts)
+
+Use **Strict regression** after the correct result for a chart has been confirmed. Enter the expected values once and click **Save expected values**. When the same filename and file size are selected again in the same browser, the saved fields are restored automatically. Click **Run strict benchmarks** to compare a future engine build against those verified answers.
 
 Important fields:
 
@@ -78,6 +90,6 @@ Do not merge a candidate change into production if:
 
 Only the exact commit that passed the complete benchmark set should be promoted to production.
 
-## Current Phase 1 limitation
+## Current storage limitation
 
-This first version exports reports as JSON rather than saving benchmark cases in Supabase. No benchmark case, chart, journal or usage record is written to Supabase. Persistent benchmark history can be added later in a separate staging datastore.
+Reports are exported as JSON rather than saved in Supabase. Strict expected values are saved only in the administrator's browser. No benchmark case, chart, journal or usage record is written to Supabase. A shared persistent benchmark library can be added later in a separate staging datastore.
