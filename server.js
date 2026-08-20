@@ -10424,8 +10424,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.20.0";
-const CSA_BUILD_ID = "CSA-v4.10.22-final-visible-framework-impulse-and-demand-reclaim";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.20.1";
+const CSA_BUILD_ID = "CSA-v4.10.23-exact-entry-feedback-authority";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -23557,7 +23557,16 @@ function formatRankedArea(area, fallbackType = "entry") {
   ) {
     const low = Math.min(zoneLow, zoneHigh);
     const high = Math.max(zoneLow, zoneHigh);
-    return `${base} around ${formatPrice(low)}\u2013${formatPrice(high)}`;
+    const zoneRange = `${formatPrice(low)}\u2013${formatPrice(high)}`;
+
+    // A supply/demand zone still has one deterministic execution price. Keep
+    // the full structural range for context, but never let it replace the
+    // selector's authoritative Entry 1 / Entry 2 price in customer-facing
+    // coaching. This also keeps the narrative and structured entry payloads
+    // on the same source of truth.
+    return exactLevel
+      ? `${base} around ${exactLevel} (within the ${zoneRange} zone)`
+      : `${base} around ${zoneRange}`;
   }
 
   if (exactLevel) return `${base} around ${exactLevel}`;

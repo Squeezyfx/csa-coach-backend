@@ -2,7 +2,7 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.10.22-final-visible-framework-impulse-and-demand-reclaim`. The batch-testing additions do not alter its customer analysis route.
+The included analysis backend is CSA build `v4.10.23-exact-entry-feedback-authority`. The batch-testing additions do not alter its customer analysis route.
 
 This build reconciles a stale lower-timeframe break when the final visible close decisively reclaims the broken level, recovers a meaningful part of the excursion, and the authoritative framework remains pointed in the opposite direction. For a confirmed final-visible framework continuation, its Fibonacci impulse uses the previous framework period's opposite extreme and the current period's directional extreme. The reclaimed excursion boundary can validate current-period demand/supply structurally, but Fibonacci remains mandatory. The rules are symmetrical and selected-day/exact historical cutoffs remain isolated.
 
