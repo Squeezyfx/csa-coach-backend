@@ -1,6 +1,6 @@
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
-const BENCHMARK_VALIDATOR_VERSION = "1.3.0";
+const BENCHMARK_VALIDATOR_VERSION = "1.4.0";
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -315,6 +315,80 @@ function duplicateItems(items = []) {
     seen.add(normalized);
   }
   return duplicates;
+}
+
+function feedbackTemplateFingerprint(value = "") {
+  return normalizeText(value)
+    .replace(/\b\d+(?:\.\d+)?\b/g, " price ")
+    .replace(/\b(?:bullish|bearish|buy|sell|above|below)\b/g, " direction ")
+    .replace(/\b(?:support|resistance|demand|supply)\b/g, " area ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function feedbackItems(result = {}) {
+  const strengths = Array.isArray(result?.finalFeedback?.strengths)
+    ? result.finalFeedback.strengths
+    : Array.isArray(result?.dashboard?.strengths)
+    ? result.dashboard.strengths
+    : [];
+  const weaknesses = Array.isArray(result?.finalFeedback?.weaknesses)
+    ? result.finalFeedback.weaknesses
+    : Array.isArray(result?.dashboard?.weaknesses)
+    ? result.dashboard.weaknesses
+    : [];
+  return [...strengths, ...weaknesses]
+    .map(feedbackTemplateFingerprint)
+    .filter((item) => item.length >= 30);
+}
+
+function refreshValidation(validation = {}) {
+  const checks = Array.isArray(validation.checks) ? validation.checks : [];
+  const failedChecks = checks.filter((check) => !check.passed);
+  const criticalFailures = failedChecks.filter((check) => check.critical);
+  return {
+    ...validation,
+    passed: criticalFailures.length === 0,
+    score: checks.length
+      ? Math.round(((checks.length - failedChecks.length) / checks.length) * 100)
+      : 100,
+    checks,
+    failedChecks,
+    criticalFailures,
+  };
+}
+
+export function applyBatchFeedbackDiversityChecks(results = []) {
+  const eligible = results
+    .map((item, index) => ({ item, index, templates: feedbackItems(item?.analysis) }))
+    .filter(({ item, templates }) => item?.status !== "error" && templates.length > 0);
+
+  const collisions = new Map();
+  for (let left = 0; left < eligible.length; left += 1) {
+    for (let right = left + 1; right < eligible.length; right += 1) {
+      const shared = [...new Set(eligible[left].templates)].filter((template) =>
+        eligible[right].templates.includes(template)
+      );
+      if (shared.length < 2) continue;
+      collisions.set(eligible[left].index, Math.max(collisions.get(eligible[left].index) || 0, shared.length));
+      collisions.set(eligible[right].index, Math.max(collisions.get(eligible[right].index) || 0, shared.length));
+    }
+  }
+
+  return results.map((item, index) => {
+    const sharedCount = collisions.get(index) || 0;
+    if (!sharedCount || !item?.validation) return item;
+    const checks = Array.isArray(item.validation.checks) ? [...item.validation.checks] : [];
+    checks.push({
+      id: "batch_feedback_diversity",
+      label: "Chart-specific strengths and weaknesses",
+      passed: false,
+      details: `${sharedCount} feedback templates were reused across different charts.`,
+      critical: true,
+    });
+    const validation = refreshValidation({ ...item.validation, checks });
+    return { ...item, status: validation.passed ? "passed" : "failed", validation };
+  });
 }
 
 function addCheck(checks, id, label, passed, details, critical = true) {
@@ -672,4 +746,5 @@ export const benchmarkValidatorInternals = {
   textMentionsZone,
   defaultTolerance,
   exactLevelTolerance,
+  feedbackTemplateFingerprint,
 };

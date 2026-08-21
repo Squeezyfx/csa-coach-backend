@@ -7,6 +7,27 @@ const SR_TYPES = new Set([
 
 const SD_TYPES = new Set(["supply", "demand"]);
 
+const INSTRUMENT_ALIASES = new Map([
+  ["GOLD", "XAUUSD"], ["BTCUSDT", "BTCUSD"],
+  ["US30", "USA30"], ["DJ30", "USA30"], ["DOW30", "USA30"], ["DJI", "USA30"],
+  ["NAS100", "USTEC"], ["NASDAQ100", "USTEC"], ["US100", "USTEC"],
+  ["SPX500", "US500"], ["SP500", "US500"],
+]);
+
+export function canonicalInstrumentCode(input = "") {
+  const raw = String(input).toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!raw || ["NULL", "NOTPROVIDED", "NOTDETECTED"].includes(raw)) return "";
+  for (const [alias, canonical] of INSTRUMENT_ALIASES) {
+    if (raw === alias || raw.includes(alias)) return canonical;
+  }
+  const known = [
+    "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
+    "EURCHF", "EURGBP", "GBPJPY", "XAUUSD", "BTCUSD", "ETHUSD", "USA30",
+    "US500", "USTEC", "GER40", "UK100", "JP225",
+  ];
+  return known.find((symbol) => raw.includes(symbol)) || raw;
+}
+
 export function classifyCsaStructuralStage(candidate = {}) {
   const explicit = String(candidate?.stepwiseEntryStage || "").trim();
   const type = String(candidate?.type || candidate?.areaType || "")

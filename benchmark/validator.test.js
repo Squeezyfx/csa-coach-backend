@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateBenchmarkResult } from "./validator.js";
+import {
+  applyBatchFeedbackDiversityChecks,
+  validateBenchmarkResult,
+} from "./validator.js";
 
 const baseResult = {
   analysis: "DIRECTIONAL BIAS:\nBullish\n\nNEXT ACTION:\nEntry 1 is support around 0.70104. Another important structural area is support around 0.69845.",
@@ -230,6 +233,42 @@ test("uses configured approximation tolerance for required and feedback levels",
     result.checks.find((check) => check.id === "required_feedback_level_1.4052")?.passed,
     true
   );
+});
+
+test("batch mode rejects repeated generic strengths and weaknesses across charts", () => {
+  const firstAnalysis = structuredClone(baseResult);
+  const secondAnalysis = structuredClone(baseResult);
+  firstAnalysis.finalFeedback = {
+    strengths: ["The bullish structure produced Entry 1 around 1.40520 after the full checks."],
+    weaknesses: [
+      "No completed trade is visible around 1.40520, so execution accuracy cannot be assessed.",
+      "A stop loss and target are not both shown for the planned buy around 1.40520.",
+    ],
+  };
+  secondAnalysis.finalFeedback = {
+    strengths: ["The bearish structure produced Entry 1 around 0.80711 after the full checks."],
+    weaknesses: [
+      "No completed trade is visible around 0.80711, so execution accuracy cannot be assessed.",
+      "A stop loss and target are not both shown for the planned sell around 0.80711.",
+    ],
+  };
+
+  const makeItem = (analysis) => ({
+    status: "passed",
+    mode: "automatic",
+    analysis,
+    validation: validateBenchmarkResult(analysis, {}),
+  });
+  const checked = applyBatchFeedbackDiversityChecks([
+    makeItem(firstAnalysis),
+    makeItem(secondAnalysis),
+  ]);
+
+  assert.equal(checked[0].status, "failed");
+  assert.equal(checked[1].status, "failed");
+  assert.ok(checked[0].validation.criticalFailures.some(
+    (check) => check.id === "batch_feedback_diversity"
+  ));
 });
 
 test("accepts a demand entry anchor anywhere inside the configured demand zone", () => {

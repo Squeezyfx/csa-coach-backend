@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  canonicalInstrumentCode,
   classifyCsaStructuralStage,
   consolidateQualifiedSupplyDemandClusters,
   getSupplyDemandClusterTolerance,
@@ -10,6 +11,14 @@ import {
   sequenceFibQualifiedAreas,
   shouldMergeQualifiedSupplyDemandCluster,
 } from "../csa-entry-policy.js";
+
+test("normalizes common index aliases while preserving broker index tickers", () => {
+  assert.equal(canonicalInstrumentCode("USA30,H1"), "USA30");
+  assert.equal(canonicalInstrumentCode("US30"), "USA30");
+  assert.equal(canonicalInstrumentCode("DJ30.cash"), "USA30");
+  assert.equal(canonicalInstrumentCode("NAS100"), "USTEC");
+  assert.equal(canonicalInstrumentCode("XAUUSD,H1"), "XAUUSD");
+});
 
 test("CSA structural checks always run S/R before S/D before other structure", () => {
   const ordered = orderStructuralCandidatesForFib([

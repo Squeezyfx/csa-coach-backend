@@ -5,6 +5,7 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import Stripe from "stripe";
 import {
+  canonicalInstrumentCode,
   classifyCsaStructuralStage,
   consolidateQualifiedSupplyDemandClusters,
   getSupplyDemandClusterTolerance,
@@ -1531,7 +1532,7 @@ Return exactly this JSON shape:
   "isChartReadableAtCurrentSize": true,
   "selectedDateVisible": true,
   "insufficientDataReason": null,
-  "detectedInstrument": "exact visible instrument/ticker such as GBPUSD, XAUUSD, BTCUSD, ETHUSD, AAPL, NVDA, US30, NAS100, or null",
+  "detectedInstrument": "exact visible instrument/ticker such as GBPUSD, XAUUSD, BTCUSD, ETHUSD, AAPL, NVDA, USA30, US30, US500, USTEC, NAS100, GER40, UK100, JP225, or null",
   "detectedTimeframe": "H1 or M5 or H4 or D1 or W1 or MN or null",
   "latestVisibleDate": "YYYY-MM-DD or null",
   "latestVisibleTime": "HH:mm in 24-hour time or null",
@@ -1571,15 +1572,7 @@ function normalizeSymbol(input = "") {
 }
 
 function comparableInstrument(input = "") {
-  const raw = String(input).toUpperCase().replace(/[^A-Z0-9]/g, "");
-  if (!raw) return "";
-  if (raw.includes("GOLD")) return "XAUUSD";
-  if (raw.includes("BTCUSDT")) return "BTCUSD";
-  const known = [
-    "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
-    "EURCHF", "EURGBP", "GBPJPY", "XAUUSD", "BTCUSD"
-  ];
-  return known.find((symbol) => raw.includes(symbol)) || normalizeSymbol(raw).replace(/[^A-Z0-9]/g, "");
+  return canonicalInstrumentCode(input);
 }
 
 function comparableTimeframe(input = "") {
@@ -4843,6 +4836,30 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
   }
 }
 
+async function detectChartHeaderFromImage({ imageBase64, mimeType }) {
+  try {
+    const response = await runVisionModel({
+      systemPrompt: `Read only the top-left chart header. Return JSON only with detectedInstrument and detectedTimeframe. Preserve the visible broker ticker exactly (for example USA30, US30, XAUUSD, GBPUSD). Valid timeframe examples include M1, M5, M15, M30, H1, H4, D1, W1 and MN. Do not infer either value from price action.`,
+      userText: "Read the instrument/ticker and timeframe printed in the chart header. Return only JSON.",
+      imageBase64,
+      mimeType,
+      maxTokens: 160,
+      openaiModel: "gpt-4.1",
+      claudeModel: CLAUDE_MODEL,
+      temperature: 0,
+      imageDetail: "high",
+    });
+    const parsed = extractJsonObject(response.text || "") || {};
+    return {
+      detectedInstrument: String(parsed.detectedInstrument || "").trim() || null,
+      detectedTimeframe: comparableTimeframe(parsed.detectedTimeframe || "") || null,
+    };
+  } catch (error) {
+    console.warn("Focused chart-header detection failed:", error?.message || error);
+    return { detectedInstrument: null, detectedTimeframe: null };
+  }
+}
+
 function isUploadedChartDataUsable(
   chartDetection,
   selectedDateText = ""
@@ -5431,6 +5448,7 @@ FIBONACCI
 - A structural area is a strong entry area only when that support/resistance or supply/demand area is in close proximity to at least one of those retracement levels.
 - Always use this internal order: first identify and validate support/resistance (including lifecycle conversion); second identify and validate supply/demand; third test those independently valid areas for hidden 38.2%, 50%, or 61.8% confluence; fourth sequence the survivors by price path as Entry 1 and Entry 2.
 - A structurally valid area that is not close to 38.2%, 50%, or 61.8% may remain an important chart reference, but it must not become Entry 1, Entry 2, or the preferred entry area. "Close" includes a conservative structurally strong area just past the exact 61.8 line; it does not include a clearly deep area.
+- Use one common dominant completed impulse for every candidate in the same active directional leg. Never choose a candidate-specific origin or late swing merely to make an otherwise deep level pass the hidden confluence gate.
 - Fibonacci must never create a setup by itself. The actual entry remains the support/resistance or supply/demand area, not the Fibonacci number. Treat 50%-61.8% as a valid retracement band and close proximity to 38.2% as valid. A structurally strong area only slightly past 61.8% may qualify within the conservative proximity allowance; anything clearly deeper is reference-only.
 - The retracement must be calculated from the genuine completed impulse that produced the current directional breakout/breakdown, using the current structure-sequence origin and the final visible directional extreme; do not shrink the impulse to a late local swing merely because it is more recent.
 - In Final Visible Candle mode, when the uploaded broker/platform chart and external OHLC feed use materially different price scales, use deterministic OHLC only to identify the relevant structure/impulse sequence and use the uploaded chart's own price scale for the impulse swing prices. Exact printed chart OHLC/labels outrank estimates. Never choose swing anchors to force Fibonacci confluence.
@@ -5456,6 +5474,7 @@ ENTRY 1 AND ENTRY 2
 - More than one structural area can exist, but only areas that pass the mandatory 38.2% / 50% / 61.8% internal proximity filter may be treated as strong entry areas.
 - Entry 1 is the first strong Fib-confluent structural area price is likely to reach.
 - Entry 2 is the next strong Fib-confluent structural area if one exists.
+- Entry 2 is exceptional, not automatic. Keep it only when it is a separately validated structural area with independent evidence and hidden confluence on that same dominant impulse. Two adjacent framework levels with the same converted role do not justify two entries by themselves; keep the weaker/deeper one as reference-only.
 - A nearer structural level that fails the internal Fibonacci proximity filter remains a market reference only and must not be promoted to Entry 1 merely because price will reach it first.
 - Do not automatically call Entry 2 superior or tell the trader to skip Entry 1. Price may react from Entry 1 and never reach Entry 2.
 - Entry 2 should generally be considered if Entry 1 fails and a fresh trigger appears.
@@ -26727,7 +26746,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const chartValidationStartedAt =
       csaNowMs();
 
-    const chartDetection = await detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument, selectedTimeframe: timeframe, selectedDateText, analysisType: mode });
+    let chartDetection = await detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument, selectedTimeframe: timeframe, selectedDateText, analysisType: mode });
 
     csaTimingLog(
       "chart_validation",
@@ -26756,12 +26775,24 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // selected instrument and timeframe and keeps all existing mismatch
     // protection.
     if (benchmarkAutoDetectContext) {
-      const detectedInstrument = String(
+      let detectedInstrument = String(
         chartDetection?.detectedInstrument || ""
       ).trim();
-      const detectedTimeframe = comparableTimeframe(
+      let detectedTimeframe = comparableTimeframe(
         chartDetection?.detectedTimeframe || ""
       );
+
+      if (!isDetectedInstrumentUsable(detectedInstrument) || !detectedTimeframe) {
+        const focusedHeader = await detectChartHeaderFromImage({ imageBase64, mimeType });
+        detectedInstrument = detectedInstrument || String(focusedHeader.detectedInstrument || "").trim();
+        detectedTimeframe = detectedTimeframe || comparableTimeframe(focusedHeader.detectedTimeframe || "");
+        chartDetection = {
+          ...chartDetection,
+          detectedInstrument: detectedInstrument || null,
+          detectedTimeframe: detectedTimeframe || null,
+          chartHeaderRescueUsed: true,
+        };
+      }
 
       if (!isDetectedInstrumentUsable(detectedInstrument) || !detectedTimeframe) {
         const analysis = buildUnverifiedChartContextAnalysis({

@@ -2,7 +2,10 @@ import express from "express";
 import multer from "multer";
 import { fileURLToPath } from "url";
 import path from "path";
-import { validateBenchmarkResult } from "./benchmark/validator.js";
+import {
+  applyBatchFeedbackDiversityChecks,
+  validateBenchmarkResult,
+} from "./benchmark/validator.js";
 import {
   fetchTextWithTimeout,
   requestJsonWithRetry,
@@ -211,7 +214,7 @@ app.post("/api/run", requireAdmin, upload.array("charts", 30), async (req, res) 
     });
     console.log(`Benchmark target health confirmed after ${warmup.attempts} attempt(s).`);
 
-    const results = await mapWithConcurrency(cases, MAX_CONCURRENCY, async (testCase) => {
+    const rawResults = await mapWithConcurrency(cases, MAX_CONCURRENCY, async (testCase) => {
       const itemStartedAt = Date.now();
       try {
         const analysis = await analyzeOne(testCase, req.files[testCase.fileIndex]);
@@ -241,6 +244,8 @@ app.post("/api/run", requireAdmin, upload.array("charts", 30), async (req, res) 
         };
       }
     }, BETWEEN_CHART_DELAY_MS);
+
+    const results = applyBatchFeedbackDiversityChecks(rawResults);
 
     const summary = {
       total: results.length,

@@ -55,6 +55,10 @@ Automatic mode checks every chart independently and enforces the same sequence:
 3. Hidden Fibonacci confluence at 38.2%, 50% or 61.8%.
 4. Entry 1 and Entry 2 sequencing.
 
+All candidates in one active directional leg must now use the same dominant completed impulse for the hidden Fibonacci check. Entry 2 is kept only when it has separately validated structural evidence; an adjacent converted level does not become Entry 2 merely because it is deeper. If the main detector misses a readable header, automatic mode performs one focused header-only retry. Common index aliases such as `USA30`, `US30`, `DJ30`, `US500`, `NAS100` and `USTEC` are normalized for comparison without changing the visible broker ticker in the report.
+
+The runner also compares feedback templates across the completed batch. If two or more chart-specific strengths or weaknesses are reused after removing prices and directional wording, the affected charts are marked **Needs review**. This prevents generic boilerplate from receiving a green consistency result.
+
 An automatic **Consistent** result means the response completed and satisfied the machine-checkable CSA consistency rules. It does not manufacture its own ground truth. New proposed prices should be reviewed before being accepted as permanent accuracy examples.
 
 ## Strict regression mode (verified charts)
@@ -93,6 +97,7 @@ Do not merge a candidate change into production if:
 - Entry 1 or Entry 2 changes unexpectedly.
 - A forbidden structural reference is promoted as an entry.
 - Fibonacci appears in customer-facing feedback.
+- Multiple charts reuse the same generic strength/weakness templates.
 
 Only the exact commit that passed the complete benchmark set should be promoted to production.
 
