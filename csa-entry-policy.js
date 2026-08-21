@@ -33,6 +33,34 @@ export function isSupportedInstrumentCode(input = "") {
   return SUPPORTED_INSTRUMENTS.has(canonicalInstrumentCode(input));
 }
 
+export function getMarketDataSymbolCandidates(input = "") {
+  const canonical = canonicalInstrumentCode(input);
+  const candidatesByInstrument = {
+    USA30: ["DJI", "USA30"],
+    US500: ["SPX", "US500"],
+    USTEC: ["NDX", "USTEC"],
+    GER40: ["DAX", "GER40"],
+    UK100: ["FTSE", "UK100"],
+    JP225: ["N225", "JP225"],
+  };
+
+  return candidatesByInstrument[canonical] || [canonical || String(input || "")];
+}
+
+export function reconcileLatestVisibleDateWithAxisYear(dateText = "", axisYear = null) {
+  const match = String(dateText || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const year = Number(axisYear);
+  if (!match || !Number.isInteger(year) || year < 2000 || year > 2100) {
+    return match ? match[0] : null;
+  }
+
+  const reconciled = `${year}-${match[2]}-${match[3]}`;
+  const parsed = new Date(`${reconciled}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === reconciled
+    ? reconciled
+    : match[0];
+}
+
 export function parseChartHeaderText(input = "") {
   const raw = String(input || "").toUpperCase();
   const instrument = canonicalInstrumentCode(raw);
@@ -137,35 +165,36 @@ export function buildFinalVisibleTerminalImpulse({
   if (!["bullish", "bearish"].includes(direction)) return null;
 
   const breakIndex = Number(directionalEvent?.index);
-  const oppositeIndex = Number(oppositeEvent?.index);
-  const pivotIndex = Number(directionalEvent?.pivotIndex);
-  const originStart =
-    Number.isInteger(oppositeIndex) && oppositeIndex >= 0 && oppositeIndex < breakIndex
-      ? oppositeIndex
-      : Number.isInteger(pivotIndex) && pivotIndex >= 0 && pivotIndex < breakIndex
-      ? pivotIndex
-      : null;
+  if (!Number.isInteger(breakIndex) || breakIndex < 0 || breakIndex >= candles.length) {
+    return null;
+  }
 
-  if (!Number.isInteger(breakIndex) || originStart === null) return null;
-  if (breakIndex <= originStart || breakIndex >= candles.length) return null;
-
-  const originWindow = candles.slice(originStart, breakIndex + 1);
   const terminalWindow = candles.slice(breakIndex);
-  const originValues = originWindow
-    .map((candle) => Number(direction === "bullish" ? candle?.low : candle?.high))
-    .filter(Number.isFinite);
-  const terminalValues = terminalWindow
-    .map((candle) => Number(direction === "bullish" ? candle?.high : candle?.low))
-    .filter(Number.isFinite);
+  const terminalValues = terminalWindow.map((candle) =>
+    Number(direction === "bullish" ? candle?.high : candle?.low)
+  );
+  const finiteTerminal = terminalValues.filter(Number.isFinite);
+  if (!finiteTerminal.length) return null;
 
-  if (!originValues.length || !terminalValues.length) return null;
+  const terminalPrice = direction === "bullish"
+    ? Math.max(...finiteTerminal)
+    : Math.min(...finiteTerminal);
+  const terminalOffset = terminalValues.findIndex((value) => value === terminalPrice);
+  if (terminalOffset < 0) return null;
+
+  const terminalIndex = breakIndex + terminalOffset;
+  const launchWindow = candles.slice(breakIndex, terminalIndex + 1);
+  const launchValues = launchWindow.map((candle) =>
+    Number(direction === "bullish" ? candle?.low : candle?.high)
+  );
+  const finiteLaunch = launchValues.filter(Number.isFinite);
+  if (!finiteLaunch.length) return null;
 
   const originPrice = direction === "bullish"
-    ? Math.min(...originValues)
-    : Math.max(...originValues);
-  const terminalPrice = direction === "bullish"
-    ? Math.max(...terminalValues)
-    : Math.min(...terminalValues);
+    ? Math.min(...finiteLaunch)
+    : Math.max(...finiteLaunch);
+  const originOffset = launchValues.findIndex((value) => value === originPrice);
+  const originStart = breakIndex + Math.max(originOffset, 0);
   const valid = direction === "bullish"
     ? terminalPrice > originPrice
     : originPrice > terminalPrice;
@@ -179,8 +208,9 @@ export function buildFinalVisibleTerminalImpulse({
     terminalPrice,
     originStartIndex: originStart,
     breakIndex,
+    terminalIndex,
     source: "final_visible_latest_confirmed_break_impulse",
-    rule: "latest_opposite_structure_to_latest_confirmed_directional_break_terminal",
+    rule: "latest_confirmed_break_candle_to_terminal_extreme",
   };
 }
 

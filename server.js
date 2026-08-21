@@ -9,11 +9,13 @@ import {
   canonicalInstrumentCode,
   classifyCsaStructuralStage,
   consolidateQualifiedSupplyDemandClusters,
+  getMarketDataSymbolCandidates,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
   isSupportedInstrumentCode,
   orderStructuralCandidatesForFib,
   parseChartHeaderText,
+  reconcileLatestVisibleDateWithAxisYear,
   selectProtectiveSupplyDemandAnchor,
   selectIndependentEntryAreas,
   sequenceFibQualifiedAreas,
@@ -1470,6 +1472,8 @@ Important:
 - If the uploaded chart timeframe is not clearly readable, set detectedTimeframe=null. Do not guess.
 - Be practical. If a chart clearly has visible price movement, do not mark it insufficient just because the exact selected date is hard to read.
 - If the selected date is clearly far after the latest visible chart date, set selectedDateVisible=false and provide latestVisibleDate.
+- Inspect the bottom time axis separately and return its clearly printed four-digit year as visibleTimeAxisYear. Never take this year from account-expiry text such as "Account authorized until" or from unrelated platform chrome.
+- If latestVisibleDate and the bottom-axis year disagree, use the bottom-axis year for latestVisibleDate because the time axis defines the chart's visible history.
 - Inspect the far-right side of the time axis and the latest visible candle. When readable, return the latest visible candle time in 24-hour HH:mm format.
 - latestVisibleTime must describe where the uploaded screenshot stops, not the current time and not a later market time.
 - Read the final visible candle CLOSE price from the chart header or final printed price label when it is clearly visible. Return it as latestVisiblePrice. Prefer an exact printed/header close over a visual estimate.
@@ -1539,6 +1543,7 @@ Return exactly this JSON shape:
   "detectedInstrument": "exact visible instrument/ticker such as GBPUSD, XAUUSD, BTCUSD, ETHUSD, AAPL, NVDA, USA30, US30, US500, USTEC, NAS100, GER40, UK100, JP225, or null",
   "detectedTimeframe": "H1 or M5 or H4 or D1 or W1 or MN or null",
   "latestVisibleDate": "YYYY-MM-DD or null",
+  "visibleTimeAxisYear": 2026,
   "latestVisibleTime": "HH:mm in 24-hour time or null",
   "latestVisibleTimeConfidence": "high or medium or low",
   "latestVisiblePrice": 1.23456,
@@ -3018,12 +3023,20 @@ async function fetchTwelveDataStructureLevels({
   const frameworkInterval =
     profile.frameworkInterval || profile.interval;
 
+  const providerCandidates = [...new Set(
+    getMarketDataSymbolCandidates(symbol)
+      .map((candidate) => normalizeSymbol(candidate))
+      .filter(Boolean)
+  )];
+  let resolvedProviderSymbol = providerCandidates[0] || normalizeSymbol(symbol);
+
   const buildTwelveParams = ({
     interval,
     startDate,
+    providerSymbol,
   }) =>
     new URLSearchParams({
-      symbol,
+      symbol: providerSymbol,
       interval,
       start_date: `${startDate} 00:00:00`,
       end_date: endDateTime,
@@ -3037,28 +3050,38 @@ async function fetchTwelveDataStructureLevels({
     interval,
     startDate,
     purpose,
+    preferredProviderSymbol = "",
   }) => {
-    const params = buildTwelveParams({ interval, startDate });
-    const response = await fetch(
-      `${TWELVE_DATA_BASE_URL}?${params.toString()}`
-    );
-    const data = await response.json();
+    const orderedCandidates = [...new Set([
+      preferredProviderSymbol,
+      ...providerCandidates,
+    ].filter(Boolean))];
+    let lastError = null;
 
-    if (
-      !response.ok ||
-      data.status === "error" ||
-      !Array.isArray(data.values)
-    ) {
+    for (const providerSymbol of orderedCandidates) {
+      const params = buildTwelveParams({ interval, startDate, providerSymbol });
+      const response = await fetch(
+        `${TWELVE_DATA_BASE_URL}?${params.toString()}`
+      );
+      const data = await response.json();
+
+      if (response.ok && data.status !== "error" && Array.isArray(data.values)) {
+        resolvedProviderSymbol = providerSymbol;
+        return { values: data.values || [], providerSymbol };
+      }
+
       const message =
         data.message ||
         data.error ||
         `Twelve Data ${purpose} request failed with status ${response.status}.`;
-      const error = new Error(message);
-      error.twelveDataStatus = data.status || "unknown";
-      throw error;
+      lastError = new Error(message);
+      lastError.twelveDataStatus = data.status || "unknown";
+
+      const invalidSymbol = /symbol|figi|invalid|not found/i.test(String(message));
+      if (!invalidSymbol) throw lastError;
     }
 
-    return data.values || [];
+    throw lastError || new Error(`Twelve Data ${purpose} request failed.`);
   };
 
   console.log("Twelve Data historical cutoff:", {
@@ -3088,11 +3111,12 @@ async function fetchTwelveDataStructureLevels({
   let rawFrameworkCandles = [];
 
   try {
-    rawCandles = await fetchTwelveSeries({
+    const executionSeries = await fetchTwelveSeries({
       interval: profile.interval,
       startDate: impulseRange.startDate,
       purpose: "execution/impulse",
     });
+    rawCandles = executionSeries.values;
 
     if (frameworkInterval === profile.interval) {
       rawFrameworkCandles = rawCandles;
@@ -3110,11 +3134,13 @@ async function fetchTwelveDataStructureLevels({
       const frameworkFetchStartDate = formatDateOnly(
         addDays(new Date(`${structureRange.startDate}T00:00:00.000Z`), -frameworkBufferDays)
       );
-      rawFrameworkCandles = await fetchTwelveSeries({
+      const frameworkSeries = await fetchTwelveSeries({
         interval: frameworkInterval,
         startDate: frameworkFetchStartDate,
         purpose: "authoritative framework",
+        preferredProviderSymbol: executionSeries.providerSymbol,
       });
+      rawFrameworkCandles = frameworkSeries.values;
     }
   } catch (error) {
     return {
@@ -3794,6 +3820,7 @@ async function fetchTwelveDataStructureLevels({
       structureRange,
     impulseRange,
     symbol,
+    providerSymbol: resolvedProviderSymbol,
     timezone,
     interval: profile.interval,
     profile,
@@ -4567,6 +4594,11 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
       );
     }
 
+    parsed.latestVisibleDate = reconcileLatestVisibleDateWithAxisYear(
+      parsed?.latestVisibleDate,
+      parsed?.visibleTimeAxisYear
+    );
+
     let evidence =
       buildChartValidationEvidence(parsed);
 
@@ -4608,6 +4640,10 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
             parsed,
             rescueParsed
           );
+        parsed.latestVisibleDate = reconcileLatestVisibleDateWithAxisYear(
+          parsed?.latestVisibleDate,
+          parsed?.visibleTimeAxisYear
+        );
         evidence =
           buildChartValidationEvidence(
             parsed
@@ -4809,6 +4845,10 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
       detectedInstrument: isTradingChart ? parsed?.detectedInstrument || null : null,
       detectedTimeframe: isTradingChart ? parsed?.detectedTimeframe || null : null,
       latestVisibleDate: isTradingChart ? parsed?.latestVisibleDate || null : null,
+      visibleTimeAxisYear:
+        isTradingChart && Number.isInteger(Number(parsed?.visibleTimeAxisYear))
+          ? Number(parsed.visibleTimeAxisYear)
+          : null,
       latestVisibleTime:
         isTradingChart && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(parsed?.latestVisibleTime || ""))
           ? String(parsed.latestVisibleTime)
@@ -10468,8 +10508,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.24.0";
-const CSA_BUILD_ID = "CSA-v4.13.0-terminal-impulse-entry-independence";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.25.0";
+const CSA_BUILD_ID = "CSA-v4.14.0-provider-alias-axis-year-terminal-leg";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -15631,7 +15671,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.8.0";
+const CSA_SELECTOR_VERSION = "4.9.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,

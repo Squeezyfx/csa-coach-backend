@@ -6,11 +6,13 @@ import {
   canonicalInstrumentCode,
   classifyCsaStructuralStage,
   consolidateQualifiedSupplyDemandClusters,
+  getMarketDataSymbolCandidates,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
   isSupportedInstrumentCode,
   orderStructuralCandidatesForFib,
   parseChartHeaderText,
+  reconcileLatestVisibleDateWithAxisYear,
   selectIndependentEntryAreas,
   selectProtectiveSupplyDemandAnchor,
   sequenceFibQualifiedAreas,
@@ -30,6 +32,25 @@ test("normalizes common index aliases while preserving broker index tickers", ()
   assert.equal(canonicalInstrumentCode("DJ30.cash"), "USA30");
   assert.equal(canonicalInstrumentCode("NAS100"), "USTEC");
   assert.equal(canonicalInstrumentCode("XAUUSD,H1"), "XAUUSD");
+});
+
+test("maps broker index names to provider candidates without changing CSA identity", () => {
+  assert.deepEqual(getMarketDataSymbolCandidates("USA30"), ["DJI", "USA30"]);
+  assert.deepEqual(getMarketDataSymbolCandidates("US30.cash"), ["DJI", "USA30"]);
+  assert.deepEqual(getMarketDataSymbolCandidates("US500"), ["SPX", "US500"]);
+  assert.deepEqual(getMarketDataSymbolCandidates("EURUSD"), ["EURUSD"]);
+});
+
+test("bottom time-axis year corrects a model date copied from unrelated chart chrome", () => {
+  assert.equal(
+    reconcileLatestVisibleDateWithAxisYear("2025-08-20", 2026),
+    "2026-08-20"
+  );
+  assert.equal(
+    reconcileLatestVisibleDateWithAxisYear("2026-08-20", 2026),
+    "2026-08-20"
+  );
+  assert.equal(reconcileLatestVisibleDateWithAxisYear("not-a-date", 2026), null);
 });
 
 test("accepts supported five-character index symbols without accepting junk", () => {
@@ -159,8 +180,11 @@ test("latest confirmed bullish break supplies the final-visible Fib impulse", ()
     directionalEvent: { index: 2, pivotIndex: 1 },
   });
 
-  assert.equal(impulse.originPrice, 4324);
+  assert.equal(impulse.originPrice, 4390);
   assert.equal(impulse.terminalPrice, 4524);
+  assert.equal(impulse.originStartIndex, 2);
+  assert.equal(impulse.terminalIndex, 3);
+  assert.equal(impulse.rule, "latest_confirmed_break_candle_to_terminal_extreme");
   assert.equal(impulse.source, "final_visible_latest_confirmed_break_impulse");
 });
 
@@ -177,8 +201,9 @@ test("latest confirmed bearish break supplies the final-visible Fib impulse", ()
     directionalEvent: { index: 2, pivotIndex: 1 },
   });
 
-  assert.equal(impulse.originPrice, 1.39091);
+  assert.equal(impulse.originPrice, 1.385);
   assert.equal(impulse.terminalPrice, 1.37575);
+  assert.equal(impulse.originStartIndex, 2);
 });
 
 test("does not invent Entry 2 when a deeper candidate fails the shared Fib gate", () => {
