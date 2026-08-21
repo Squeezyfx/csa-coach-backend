@@ -31,6 +31,10 @@ Create a new private web service for the benchmark runner:
 
 Copy the runner variables from `benchmark.env.example` into the runner service. Use long, different random values for `BENCHMARK_ADMIN_KEY` and `BENCHMARK_TARGET_INTERNAL_KEY`.
 
+Keep `BENCHMARK_CONCURRENCY=1` on Free Render instances. Before every batch, the runner now calls the staging service's `/health` endpoint and waits for a valid JSON health response. Chart requests that receive HTTP 429, 502, 503 or 504 are retried with exponential backoff, while `Retry-After` is honored when the target supplies it. A short pause is also inserted between charts. These protections prevent a temporary Render wake-up or routing throttle from being recorded as a false CSA regression failure.
+
+Recommended reliability variables are included in `benchmark.env.example`. They are optional because the same safe defaults are built into the runner. If a response still fails after all attempts, the report includes its HTTP status, content type and a short response preview for diagnosis rather than the previous generic non-JSON error.
+
 The staging analysis service runs `server.js` with `npm start`. Add `BENCHMARK_DRY_RUN_ENABLED=true` and `BENCHMARK_INTERNAL_KEY=<same value as runner BENCHMARK_TARGET_INTERNAL_KEY>` only to the staging analysis service. Never add these variables to production.
 
 The dry-run response includes `benchmarkDryRun: true` and `savedToJournal: false`. If the internal key is absent, short, incorrect, or dry-run mode is disabled, the normal customer authentication path remains mandatory.

@@ -3,6 +3,12 @@ import multer from "multer";
 import { fileURLToPath } from "url";
 import path from "path";
 import { validateBenchmarkResult } from "./benchmark/validator.js";
+import {
+  fetchTextWithTimeout,
+  requestJsonWithRetry,
+  sleep,
+  waitForTargetHealth,
+} from "./benchmark/target-client.js";
 
 const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -17,8 +23,15 @@ const TARGET_URL = String(process.env.BENCHMARK_TARGET_URL || "").replace(/\/+$/
 const TARGET_INTERNAL_KEY = String(
   process.env.BENCHMARK_TARGET_INTERNAL_KEY || ""
 );
-const MAX_CONCURRENCY = Math.min(5, Math.max(1, Number(process.env.BENCHMARK_CONCURRENCY || 3)));
+const MAX_CONCURRENCY = Math.min(5, Math.max(1, Number(process.env.BENCHMARK_CONCURRENCY || 1)));
 const REQUEST_TIMEOUT_MS = Math.max(30000, Number(process.env.BENCHMARK_TIMEOUT_MS || 300000));
+const TARGET_MAX_ATTEMPTS = Math.min(6, Math.max(1, Number(process.env.BENCHMARK_TARGET_MAX_ATTEMPTS || 4)));
+const RETRY_BASE_MS = Math.max(1000, Number(process.env.BENCHMARK_RETRY_BASE_MS || 15000));
+const RETRY_MAX_MS = Math.max(RETRY_BASE_MS, Number(process.env.BENCHMARK_RETRY_MAX_MS || 120000));
+const WARMUP_ATTEMPTS = Math.min(10, Math.max(1, Number(process.env.BENCHMARK_WARMUP_ATTEMPTS || 5)));
+const WARMUP_TIMEOUT_MS = Math.max(10000, Number(process.env.BENCHMARK_WARMUP_TIMEOUT_MS || 90000));
+const WARMUP_DELAY_MS = Math.max(1000, Number(process.env.BENCHMARK_WARMUP_DELAY_MS || 5000));
+const BETWEEN_CHART_DELAY_MS = Math.max(0, Number(process.env.BENCHMARK_BETWEEN_CHART_MS || 3000));
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "2mb" }));
@@ -81,12 +94,7 @@ function cleanCase(value = {}, index = 0) {
   };
 }
 
-async function analyzeOne(testCase, file) {
-  if (!file) throw new Error(`No uploaded file matched ${testCase.label}.`);
-  if (!testCase.autoDetectContext && !testCase.instrument) {
-    throw new Error(`Instrument is missing for ${testCase.label}.`);
-  }
-
+function createAnalysisForm(testCase, file) {
   const form = new FormData();
   form.append("chart", new Blob([file.buffer], { type: file.mimetype || "image/png" }), file.originalname);
   form.append("instrument", testCase.instrument);
@@ -99,40 +107,56 @@ async function analyzeOne(testCase, file) {
   form.append("autoDetectContext", testCase.autoDetectContext ? "true" : "false");
   if (testCase.chartDate) form.append("chartDate", testCase.chartDate);
   if (testCase.notes) form.append("notes", testCase.notes);
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const response = await fetch(`${TARGET_URL}/analyze-chart`, {
-      method: "POST",
-      headers: {
-        "x-benchmark-internal-key": TARGET_INTERNAL_KEY,
-      },
-      body: form,
-      signal: controller.signal,
-    });
-    const text = await response.text();
-    let payload;
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      throw new Error(`Target returned non-JSON content (HTTP ${response.status}).`);
-    }
-    if (!response.ok || payload?.success !== true) {
-      throw new Error(payload?.details || payload?.error || `Analysis failed with HTTP ${response.status}.`);
-    }
-    if (payload?.benchmarkDryRun !== true || payload?.savedToJournal !== false) {
-      throw new Error(
-        "Target did not confirm a database-free benchmark dry run. The result was rejected for safety."
-      );
-    }
-    return payload;
-  } finally {
-    clearTimeout(timer);
-  }
+  return form;
 }
 
-async function mapWithConcurrency(items, concurrency, worker) {
+async function analyzeOne(testCase, file) {
+  if (!file) throw new Error(`No uploaded file matched ${testCase.label}.`);
+  if (!testCase.autoDetectContext && !testCase.instrument) {
+    throw new Error(`Instrument is missing for ${testCase.label}.`);
+  }
+
+  const { payload, attempts } = await requestJsonWithRetry({
+    maxAttempts: TARGET_MAX_ATTEMPTS,
+    baseDelayMs: RETRY_BASE_MS,
+    maxDelayMs: RETRY_MAX_MS,
+    makeRequest: () => fetchTextWithTimeout(
+      `${TARGET_URL}/analyze-chart`,
+      {
+        method: "POST",
+        headers: {
+          "x-benchmark-internal-key": TARGET_INTERNAL_KEY,
+        },
+        body: createAnalysisForm(testCase, file),
+      },
+      REQUEST_TIMEOUT_MS
+    ),
+    onRetry: ({ attempt, maxAttempts, status, waitMs, responsePreview }) => {
+      console.warn("Benchmark target retry:", {
+        chart: testCase.label,
+        status,
+        attempt,
+        maxAttempts,
+        waitMs,
+        responsePreview,
+      });
+    },
+  });
+  if (attempts > 1) {
+    console.log(`Benchmark target recovered for ${testCase.label} after ${attempts} attempts.`);
+  }
+  if (payload?.success !== true) {
+    throw new Error(payload?.details || payload?.error || "Target analysis was not successful.");
+  }
+  if (payload?.benchmarkDryRun !== true || payload?.savedToJournal !== false) {
+    throw new Error(
+      "Target did not confirm a database-free benchmark dry run. The result was rejected for safety."
+    );
+  }
+  return payload;
+}
+
+async function mapWithConcurrency(items, concurrency, worker, pauseMs = 0) {
   const results = new Array(items.length);
   let cursor = 0;
   async function consume() {
@@ -140,6 +164,7 @@ async function mapWithConcurrency(items, concurrency, worker) {
       const index = cursor++;
       if (index >= items.length) return;
       results[index] = await worker(items[index], index);
+      if (pauseMs > 0 && index < items.length - 1) await sleep(pauseMs);
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, consume));
@@ -153,6 +178,9 @@ app.get("/health", (_req, res) => {
     service: "csa-benchmark-runner",
     targetConfigured: Boolean(TARGET_URL),
     concurrency: MAX_CONCURRENCY,
+    targetMaxAttempts: TARGET_MAX_ATTEMPTS,
+    targetWarmupEnabled: true,
+    betweenChartDelayMs: BETWEEN_CHART_DELAY_MS,
     problems,
   });
 });
@@ -175,6 +203,14 @@ app.post("/api/run", requireAdmin, upload.array("charts", 30), async (req, res) 
     }
 
     const cases = rawCases.map(cleanCase);
+    const warmup = await waitForTargetHealth({
+      targetUrl: TARGET_URL,
+      attempts: WARMUP_ATTEMPTS,
+      timeoutMs: WARMUP_TIMEOUT_MS,
+      delayMs: WARMUP_DELAY_MS,
+    });
+    console.log(`Benchmark target health confirmed after ${warmup.attempts} attempt(s).`);
+
     const results = await mapWithConcurrency(cases, MAX_CONCURRENCY, async (testCase) => {
       const itemStartedAt = Date.now();
       try {
@@ -204,7 +240,7 @@ app.post("/api/run", requireAdmin, upload.array("charts", 30), async (req, res) 
           mode: testCase.mode,
         };
       }
-    });
+    }, BETWEEN_CHART_DELAY_MS);
 
     const summary = {
       total: results.length,
