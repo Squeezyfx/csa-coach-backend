@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   canonicalInstrumentCode,
   classifyCsaStructuralStage,
@@ -7,10 +8,19 @@ import {
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
   orderStructuralCandidatesForFib,
+  parseChartHeaderText,
+  selectIndependentEntryAreas,
   selectProtectiveSupplyDemandAnchor,
   sequenceFibQualifiedAreas,
   shouldMergeQualifiedSupplyDemandCluster,
 } from "../csa-entry-policy.js";
+
+test("selector has no candidate-local Fibonacci source", () => {
+  const serverSource = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  assert.equal(serverSource.includes("candidate_specific_prior_sr_break_period_impulse"), false);
+  assert.equal(serverSource.includes("buildPriorConversionRelevantFibonacci"), false);
+  assert.match(serverSource, /const relevantFibonacci = fibonacci;/);
+});
 
 test("normalizes common index aliases while preserving broker index tickers", () => {
   assert.equal(canonicalInstrumentCode("USA30,H1"), "USA30");
@@ -18,6 +28,17 @@ test("normalizes common index aliases while preserving broker index tickers", ()
   assert.equal(canonicalInstrumentCode("DJ30.cash"), "USA30");
   assert.equal(canonicalInstrumentCode("NAS100"), "USTEC");
   assert.equal(canonicalInstrumentCode("XAUUSD,H1"), "XAUUSD");
+});
+
+test("parses compact chart headers including USA30,H1", () => {
+  assert.deepEqual(parseChartHeaderText("USA30,H1 52841.20 52888.20"), {
+    instrument: "USA30",
+    timeframe: "H1",
+  });
+  assert.deepEqual(parseChartHeaderText("XAUUSD,H4"), {
+    instrument: "XAUUSD",
+    timeframe: "H4",
+  });
 });
 
 test("CSA structural checks always run S/R before S/D before other structure", () => {
@@ -76,6 +97,43 @@ test("after Fib qualification bearish entries follow nearest-to-deeper price pat
     "bearish"
   );
   assert.deepEqual(sequenced.map((item) => item.id), ["near-resistance", "deep-supply"]);
+});
+
+test("Entry 2 may come from the next CSA structural stage when it independently qualifies", () => {
+  const selected = selectIndependentEntryAreas(
+    [
+      { id: "entry-1", areaType: "converted support", authoritativeCenter: 1.4052, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 50, fibonacciScore: 1 },
+      { id: "failed-local", areaType: "converted support", authoritativeCenter: 1.4048, authoritativeFrameworkLevel: true, requiredFibConfluence: false, structuralScore: 50, fibonacciScore: 0 },
+      { id: "entry-2", areaType: "demand", authoritativeCenter: 1.40341, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 55, fibonacciScore: 1 },
+    ],
+    "bullish"
+  );
+
+  assert.deepEqual(selected.map((item) => item.id), ["entry-1", "entry-2"]);
+});
+
+test("Entry 2 may be a separate converted level only when it independently qualifies", () => {
+  const selected = selectIndependentEntryAreas(
+    [
+      { id: "entry-1", areaType: "converted resistance", authoritativeCenter: 53275.6, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 60, fibonacciScore: 1 },
+      { id: "entry-2", areaType: "converted resistance", authoritativeCenter: 53421.2, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 55, fibonacciScore: 1 },
+    ],
+    "bearish"
+  );
+
+  assert.deepEqual(selected.map((item) => item.id), ["entry-1", "entry-2"]);
+});
+
+test("does not invent Entry 2 when a deeper candidate fails the shared Fib gate", () => {
+  const selected = selectIndependentEntryAreas(
+    [
+      { id: "entry-1", areaType: "converted resistance", authoritativeCenter: 1.38022, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 60, fibonacciScore: 1 },
+      { id: "rejected", areaType: "converted resistance", authoritativeCenter: 1.38437, authoritativeFrameworkLevel: true, requiredFibConfluence: false, structuralScore: 55, fibonacciScore: 0 },
+    ],
+    "bearish"
+  );
+
+  assert.deepEqual(selected.map((item) => item.id), ["entry-1"]);
 });
 
 test("overlapping demand keeps the lower protective launch-base boundary", () => {

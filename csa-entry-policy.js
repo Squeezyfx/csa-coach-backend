@@ -28,6 +28,20 @@ export function canonicalInstrumentCode(input = "") {
   return known.find((symbol) => raw.includes(symbol)) || raw;
 }
 
+export function parseChartHeaderText(input = "") {
+  const raw = String(input || "").toUpperCase();
+  const instrument = canonicalInstrumentCode(raw);
+  const timeframeMatch = raw.match(
+    /(?:^|[^A-Z0-9])(MN1?|W1|D1|H(?:1|2|3|4|6|8|12)|M(?:1|2|3|4|5|10|15|20|30))(?:$|[^A-Z0-9])/i
+  );
+  const timeframe = timeframeMatch ? timeframeMatch[1].toUpperCase() : "";
+
+  return {
+    instrument,
+    timeframe: timeframe === "MN" ? "MN1" : timeframe,
+  };
+}
+
 export function classifyCsaStructuralStage(candidate = {}) {
   const explicit = String(candidate?.stepwiseEntryStage || "").trim();
   const type = String(candidate?.type || candidate?.areaType || "")
@@ -75,6 +89,22 @@ export function sequenceFibQualifiedAreas(candidates = [], direction = "range") 
     if (!Number.isFinite(aCenter) || !Number.isFinite(bCenter)) return 0;
     return direction === "bearish" ? aCenter - bCenter : bCenter - aCenter;
   });
+}
+
+export function selectIndependentEntryAreas(candidates = [], direction = "range") {
+  // Every returned entry must carry its own completed structural validation
+  // and its own pass against the batch-wide dominant Fibonacci impulse.
+  // Entry 2 may be another genuinely independent S/R conversion (for example
+  // two separate USA30 resistance levels), but it cannot inherit Entry 1's
+  // qualification or rely on a candidate-local Fibonacci calculation.
+  return sequenceFibQualifiedAreas(candidates, direction)
+    .filter((candidate) =>
+      candidate?.authoritativeFrameworkLevel === true &&
+      candidate?.requiredFibConfluence === true &&
+      Number(candidate?.structuralScore || 0) > 0 &&
+      Number(candidate?.fibonacciScore || 0) > 0
+    )
+    .slice(0, 2);
 }
 
 export function selectProtectiveSupplyDemandAnchor(existing = {}, candidate = {}) {

@@ -2,7 +2,7 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.11.6-pre-dedupe-sd-consolidation`. The batch-testing additions do not alter its customer analysis route.
+The included analysis backend is CSA build `v4.12.0-dominant-impulse-independent-entry2`. The batch-testing additions do not alter its customer analysis route.
 
 After every chart in an automatic batch is marked **Consistent**, use **Save all as strict benchmarks** to populate and retain the verified direction, entry prices, structural roles and supply/demand zone boundaries in the current browser. Review those populated values once, then run Strict Regression without retyping the fixtures.
 
@@ -55,7 +55,7 @@ Automatic mode checks every chart independently and enforces the same sequence:
 3. Hidden Fibonacci confluence at 38.2%, 50% or 61.8%.
 4. Entry 1 and Entry 2 sequencing.
 
-All candidates in one active directional leg must now use the same dominant completed impulse for the hidden Fibonacci check. Entry 2 is kept only when it has separately validated structural evidence; an adjacent converted level does not become Entry 2 merely because it is deeper. If the main detector misses a readable header, automatic mode performs one focused header-only retry. Common index aliases such as `USA30`, `US30`, `DJ30`, `US500`, `NAS100` and `USTEC` are normalized for comparison without changing the visible broker ticker in the report.
+All candidates in one active directional leg use the same dominant completed impulse for the hidden Fibonacci check. Candidate-specific/local break-period Fibonacci calculations are disabled. Entry 2 is kept only when it independently passes the complete structure and shared-Fibonacci gates; it may be a separate converted S/R level or a supply/demand area, but it cannot inherit Entry 1's qualification merely because it is deeper. If the main detector misses a readable header, automatic mode performs up to two focused header-only reads and parses compact labels such as `USA30,H1`. Common index aliases such as `USA30`, `US30`, `DJ30`, `US500`, `NAS100` and `USTEC` are normalized for comparison without changing the visible broker ticker in the report.
 
 The runner also compares feedback templates across the completed batch. If two or more chart-specific strengths or weaknesses are reused after removing prices and directional wording, the affected charts are marked **Needs review**. This prevents generic boilerplate from receiving a green consistency result.
 

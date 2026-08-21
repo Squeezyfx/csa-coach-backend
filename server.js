@@ -11,7 +11,9 @@ import {
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
   orderStructuralCandidatesForFib,
+  parseChartHeaderText,
   selectProtectiveSupplyDemandAnchor,
+  selectIndependentEntryAreas,
   sequenceFibQualifiedAreas,
   shouldMergeQualifiedSupplyDemandCluster,
 } from "./csa-entry-policy.js";
@@ -4836,11 +4838,13 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
   }
 }
 
-async function detectChartHeaderFromImage({ imageBase64, mimeType }) {
+async function detectChartHeaderFromImage({ imageBase64, mimeType, attempt = 1 }) {
   try {
     const response = await runVisionModel({
-      systemPrompt: `Read only the top-left chart header. Return JSON only with detectedInstrument and detectedTimeframe. Preserve the visible broker ticker exactly (for example USA30, US30, XAUUSD, GBPUSD). Valid timeframe examples include M1, M5, M15, M30, H1, H4, D1, W1 and MN. Do not infer either value from price action.`,
-      userText: "Read the instrument/ticker and timeframe printed in the chart header. Return only JSON.",
+      systemPrompt: `Read only the top-left chart header. Return JSON only with rawHeaderText, detectedInstrument and detectedTimeframe. Transcribe the raw header before separating it. Preserve the visible broker ticker exactly (for example USA30,H1; US30,H1; XAUUSD,H1; GBPUSD,H1). Valid timeframe examples include M1, M5, M15, M30, H1, H4, D1, W1 and MN1. A comma immediately after a ticker separates it from the timeframe. Do not infer either value from price action.`,
+      userText: attempt > 1
+        ? "Second focused read: zoom attention onto the first printed text at the extreme top-left. Transcribe that header and return only JSON."
+        : "Read the instrument/ticker and timeframe printed in the extreme top-left chart header. Return only JSON.",
       imageBase64,
       mimeType,
       maxTokens: 160,
@@ -4850,9 +4854,15 @@ async function detectChartHeaderFromImage({ imageBase64, mimeType }) {
       imageDetail: "high",
     });
     const parsed = extractJsonObject(response.text || "") || {};
+    const parsedHeader = parseChartHeaderText(
+      parsed.rawHeaderText || response.text || ""
+    );
     return {
-      detectedInstrument: String(parsed.detectedInstrument || "").trim() || null,
-      detectedTimeframe: comparableTimeframe(parsed.detectedTimeframe || "") || null,
+      detectedInstrument:
+        String(parsed.detectedInstrument || parsedHeader.instrument || "").trim() || null,
+      detectedTimeframe:
+        comparableTimeframe(parsed.detectedTimeframe || parsedHeader.timeframe || "") || null,
+      rawHeaderText: String(parsed.rawHeaderText || "").trim() || null,
     };
   } catch (error) {
     console.warn("Focused chart-header detection failed:", error?.message || error);
@@ -10455,8 +10465,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.23.0";
-const CSA_BUILD_ID = "CSA-v4.11.6-pre-dedupe-sd-consolidation";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.24.0";
+const CSA_BUILD_ID = "CSA-v4.12.0-dominant-impulse-independent-entry2";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -11002,102 +11012,6 @@ function deriveHistoricalFrameworkLocalFibImpulse({
     reason: direction === "bearish"
       ? "previous_framework_period_high_to_cutoff_period_low"
       : "previous_framework_period_low_to_cutoff_period_high",
-  };
-}
-
-/*
- * UNIVERSAL ENTRY-HIERARCHY FIBONACCI SOURCE
- *
- * An immediately prior broken S/R level is created by the NEXT authoritative
- * period's completed directional move. Its relevant impulse is therefore the
- * break period's own high-to-low move (bearish) or low-to-high move (bullish),
- * not automatically the broader outer-period impulse used to evaluate a
- * current-period supply/demand area.
- *
- * Example: Monday support is broken during Tuesday. Monday support is checked
- * against Tuesday's completed breakdown impulse; Tuesday supply remains
- * checked against the broader controlling impulse. Structure still exists
- * independently and Fibonacci remains a qualification filter only.
- */
-function buildPriorConversionRelevantFibonacci({
-  candidate = null,
-  levels = [],
-  direction = "range",
-}) {
-  if (
-    !candidate ||
-    candidate?.stepwiseEntryStage !== "immediate_prior_broken_sr" ||
-    !["bullish", "bearish"].includes(direction)
-  ) {
-    return null;
-  }
-
-  const sourceIndex = Number(candidate?.sourceIndex);
-  const breakPeriodIndex = Number.isInteger(Number(candidate?.breakPeriodIndex))
-    ? Number(candidate.breakPeriodIndex)
-    : sourceIndex + 1;
-
-  if (
-    !Number.isInteger(sourceIndex) ||
-    sourceIndex < 0 ||
-    !Number.isInteger(breakPeriodIndex) ||
-    breakPeriodIndex <= sourceIndex ||
-    breakPeriodIndex >= levels.length
-  ) {
-    return null;
-  }
-
-  const sourcePeriod = levels[sourceIndex] || {};
-  const breakPeriod = levels[breakPeriodIndex] || {};
-  const swingHigh = asPositiveNumber(breakPeriod?.high);
-  const swingLow = asPositiveNumber(breakPeriod?.low);
-
-  if (
-    swingHigh === null ||
-    swingLow === null ||
-    swingHigh <= swingLow
-  ) {
-    return null;
-  }
-
-  const range = swingHigh - swingLow;
-  const ratios = [0.382, 0.5, 0.618];
-  const sourcePeriodLabel =
-    sourcePeriod?.periodLabel ||
-    sourcePeriod?.day ||
-    sourcePeriod?.key ||
-    `Period ${sourceIndex + 1}`;
-  const breakPeriodLabel =
-    breakPeriod?.periodLabel ||
-    breakPeriod?.day ||
-    breakPeriod?.key ||
-    `Period ${breakPeriodIndex + 1}`;
-
-  return {
-    direction,
-    swingHigh,
-    swingLow,
-    swingHighTime:
-      breakPeriod?.date || breakPeriod?.key || null,
-    swingLowTime:
-      breakPeriod?.date || breakPeriod?.key || null,
-    impulseRange: range,
-    levels: ratios.map((ratio) => ({
-      ratio,
-      label: ratio === 0.5 ? "50%" : `${(ratio * 100).toFixed(1)}%`,
-      price:
-        direction === "bearish"
-          ? swingLow + range * ratio
-          : swingHigh - range * ratio,
-    })),
-    source: "candidate_specific_prior_sr_break_period_impulse",
-    priceSource: "authoritative_break_period_ohlc",
-    fibOriginModel: "prior_sr_break_period_impulse",
-    selectionReason: "immediate_prior_broken_sr_uses_break_period_completed_impulse",
-    sourcePeriod: sourcePeriodLabel,
-    breakPeriod: breakPeriodLabel,
-    sourceIndex,
-    breakPeriodIndex,
   };
 }
 
@@ -14947,7 +14861,8 @@ function validateAndSequenceEntryAreas({
 
   // CSA exposes at most two actionable areas. Deeper valid structure remains
   // context only and must never leak into analysisFacts as a hidden third entry.
-  const sequenced = filtered.slice(0, 2).map((area, index) => ({
+  const independentlyQualified = selectIndependentEntryAreas(filtered, direction);
+  const sequenced = independentlyQualified.map((area, index) => ({
     ...area,
     executionOrder: index + 1,
     role:
@@ -15691,7 +15606,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.6.6";
+const CSA_SELECTOR_VERSION = "4.7.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19861,13 +19776,11 @@ function rankRawEntryAreas({
       atr,
     });
 
-    const primaryCandidate = rawZone?.members?.[0] || null;
-    const candidateSpecificFibonacci = buildPriorConversionRelevantFibonacci({
-      candidate: primaryCandidate,
-      levels: authoritativeFrameworkLevels,
-      direction,
-    });
-    const relevantFibonacci = candidateSpecificFibonacci || fibonacci;
+    // Every structural candidate is checked against the same dominant,
+    // completed impulse. Candidate-local break-period Fib anchors made nearby
+    // levels look valid in isolation and created unstable Entry 1/Entry 2
+    // choices across otherwise identical runs.
+    const relevantFibonacci = fibonacci;
 
     const fibConfluence = evaluateRequiredFibonacciConfluence({
       fibonacci: relevantFibonacci,
@@ -19979,14 +19892,9 @@ function rankRawEntryAreas({
       fibOriginModel:
         relevantFibonacci?.fibOriginModel ||
         null,
-      candidateSpecificImpulse:
-        candidateSpecificFibonacci !== null,
-      fibSourcePeriod:
-        candidateSpecificFibonacci?.sourcePeriod ||
-        null,
-      fibBreakPeriod:
-        candidateSpecificFibonacci?.breakPeriod ||
-        null,
+      candidateSpecificImpulse: false,
+      fibSourcePeriod: null,
+      fibBreakPeriod: null,
     });
 
     // HARD CSA ENTRY GATE:
@@ -20100,14 +20008,9 @@ function rankRawEntryAreas({
       fibOriginModel:
         relevantFibonacci?.fibOriginModel ||
         null,
-      candidateSpecificFibImpulse:
-        candidateSpecificFibonacci !== null,
-      fibSourcePeriod:
-        candidateSpecificFibonacci?.sourcePeriod ||
-        null,
-      fibBreakPeriod:
-        candidateSpecificFibonacci?.breakPeriod ||
-        null,
+      candidateSpecificFibImpulse: false,
+      fibSourcePeriod: null,
+      fibBreakPeriod: null,
       lifecycleFlipCount: Number(
         rawZone?.lifecycleFlipCount || 0
       ),
@@ -24649,6 +24552,13 @@ function buildControlledFeedback({
   const bearishPullbackContext =
     facts.transitionState?.bearishPullbackAfterBreakout === true ||
     historicalPhaseName === "bearish_pullback_after_bullish_breakout";
+  const chartScope = [facts?.instrument, facts?.timeframe]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" ") || "this chart";
+  const structuralState = historicalPhaseName
+    ? historicalPhaseName.replace(/_/g, " ")
+    : `${facts.direction || "resolved"} market structure`;
 
   const strengths = [];
 
@@ -24680,7 +24590,7 @@ function buildControlledFeedback({
     );
   } else if (hasValidatedArea) {
     strengths.push(
-      `The ${facts.direction} structure produced Entry 1 at the ${areaText} after the full structural and entry-quality checks.`
+      `On ${chartScope}, the ${structuralState} produced Entry 1 at the ${areaText} after the full structural and entry-quality checks.`
     );
   } else {
     strengths.push(
@@ -24694,7 +24604,7 @@ function buildControlledFeedback({
     );
   } else if (hasValidatedArea) {
     strengths.push(
-      `Only the ${areaText} qualified as an entry; weaker or duplicate areas were kept out of the trade plan.`
+      `For ${chartScope}, only the ${areaText} qualified as an entry; weaker or duplicate structures were kept out of this trade plan.`
     );
   }
 
@@ -24729,8 +24639,8 @@ function buildControlledFeedback({
   if (isPostTrade && !facts.trade.visible) {
     weaknesses.push(
       hasValidatedArea
-        ? `No completed trade is visible at the ${areaText}, so execution accuracy at that specific area cannot be assessed.`
-        : "No completed trade or entry is visible, so execution accuracy cannot be assessed from this chart."
+        ? `On ${chartScope}, no completed trade is visible at the ${areaText}, so execution accuracy at that specific structure cannot be assessed.`
+        : `On ${chartScope}, no completed trade or entry is visible, so execution accuracy cannot be assessed.`
     );
   }
 
@@ -24831,8 +24741,8 @@ function buildControlledFeedback({
   if (!facts.risk.assessable) {
     weaknesses.push(
       hasValidatedArea
-        ? `A stop loss and target are not both shown for the planned ${action} from the ${areaText}, so its risk cannot yet be fully assessed.`
-        : "A stop loss and target are not both clearly shown, so the planned risk cannot yet be fully assessed."
+        ? `For the ${chartScope} plan, a stop loss and target are not both shown for the planned ${action} from the ${areaText}, so its risk cannot yet be fully assessed.`
+        : `For ${chartScope}, a stop loss and target are not both clearly shown, so the planned risk cannot yet be fully assessed.`
     );
   }
 
@@ -26783,14 +26693,29 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       );
 
       if (!isDetectedInstrumentUsable(detectedInstrument) || !detectedTimeframe) {
-        const focusedHeader = await detectChartHeaderFromImage({ imageBase64, mimeType });
-        detectedInstrument = detectedInstrument || String(focusedHeader.detectedInstrument || "").trim();
-        detectedTimeframe = detectedTimeframe || comparableTimeframe(focusedHeader.detectedTimeframe || "");
+        let focusedHeader = null;
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+          focusedHeader = await detectChartHeaderFromImage({
+            imageBase64,
+            mimeType,
+            attempt,
+          });
+          detectedInstrument = detectedInstrument || String(
+            focusedHeader.detectedInstrument || ""
+          ).trim();
+          detectedTimeframe = detectedTimeframe || comparableTimeframe(
+            focusedHeader.detectedTimeframe || ""
+          );
+          if (isDetectedInstrumentUsable(detectedInstrument) && detectedTimeframe) {
+            break;
+          }
+        }
         chartDetection = {
           ...chartDetection,
           detectedInstrument: detectedInstrument || null,
           detectedTimeframe: detectedTimeframe || null,
           chartHeaderRescueUsed: true,
+          chartHeaderRawText: focusedHeader?.rawHeaderText || null,
         };
       }
 
