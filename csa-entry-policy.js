@@ -14,18 +14,23 @@ const INSTRUMENT_ALIASES = new Map([
   ["SPX500", "US500"], ["SP500", "US500"],
 ]);
 
+const SUPPORTED_INSTRUMENTS = new Set([
+  "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
+  "EURCHF", "EURGBP", "GBPJPY", "XAUUSD", "BTCUSD", "ETHUSD", "USA30",
+  "US500", "USTEC", "GER40", "UK100", "JP225",
+]);
+
 export function canonicalInstrumentCode(input = "") {
   const raw = String(input).toUpperCase().replace(/[^A-Z0-9]/g, "");
   if (!raw || ["NULL", "NOTPROVIDED", "NOTDETECTED"].includes(raw)) return "";
   for (const [alias, canonical] of INSTRUMENT_ALIASES) {
     if (raw === alias || raw.includes(alias)) return canonical;
   }
-  const known = [
-    "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
-    "EURCHF", "EURGBP", "GBPJPY", "XAUUSD", "BTCUSD", "ETHUSD", "USA30",
-    "US500", "USTEC", "GER40", "UK100", "JP225",
-  ];
-  return known.find((symbol) => raw.includes(symbol)) || raw;
+  return [...SUPPORTED_INSTRUMENTS].find((symbol) => raw.includes(symbol)) || raw;
+}
+
+export function isSupportedInstrumentCode(input = "") {
+  return SUPPORTED_INSTRUMENTS.has(canonicalInstrumentCode(input));
 }
 
 export function parseChartHeaderText(input = "") {
@@ -97,14 +102,86 @@ export function selectIndependentEntryAreas(candidates = [], direction = "range"
   // Entry 2 may be another genuinely independent S/R conversion (for example
   // two separate USA30 resistance levels), but it cannot inherit Entry 1's
   // qualification or rely on a candidate-local Fibonacci calculation.
-  return sequenceFibQualifiedAreas(candidates, direction)
+  const qualified = sequenceFibQualifiedAreas(candidates, direction)
     .filter((candidate) =>
       candidate?.authoritativeFrameworkLevel === true &&
       candidate?.requiredFibConfluence === true &&
       Number(candidate?.structuralScore || 0) > 0 &&
       Number(candidate?.fibonacciScore || 0) > 0
-    )
-    .slice(0, 2);
+    );
+
+  if (qualified.length < 2) return qualified.slice(0, 1);
+
+  const primary = qualified[0];
+  const primaryStage = classifyCsaStructuralStage(primary).key;
+  const secondary = qualified.slice(1).find((candidate) => {
+    const candidateStage = classifyCsaStructuralStage(candidate).key;
+
+    if (candidateStage !== primaryStage) return true;
+    return (
+      candidate?.independentEntryEvidence === true ||
+      hasIndependentChartPriceEvidence(candidate)
+    );
+  });
+
+  return secondary ? [primary, secondary] : [primary];
+}
+
+export function buildFinalVisibleTerminalImpulse({
+  candles = [],
+  direction = "range",
+  directionalEvent = null,
+  oppositeEvent = null,
+} = {}) {
+  if (!Array.isArray(candles) || candles.length < 3) return null;
+  if (!["bullish", "bearish"].includes(direction)) return null;
+
+  const breakIndex = Number(directionalEvent?.index);
+  const oppositeIndex = Number(oppositeEvent?.index);
+  const pivotIndex = Number(directionalEvent?.pivotIndex);
+  const originStart =
+    Number.isInteger(oppositeIndex) && oppositeIndex >= 0 && oppositeIndex < breakIndex
+      ? oppositeIndex
+      : Number.isInteger(pivotIndex) && pivotIndex >= 0 && pivotIndex < breakIndex
+      ? pivotIndex
+      : null;
+
+  if (!Number.isInteger(breakIndex) || originStart === null) return null;
+  if (breakIndex <= originStart || breakIndex >= candles.length) return null;
+
+  const originWindow = candles.slice(originStart, breakIndex + 1);
+  const terminalWindow = candles.slice(breakIndex);
+  const originValues = originWindow
+    .map((candle) => Number(direction === "bullish" ? candle?.low : candle?.high))
+    .filter(Number.isFinite);
+  const terminalValues = terminalWindow
+    .map((candle) => Number(direction === "bullish" ? candle?.high : candle?.low))
+    .filter(Number.isFinite);
+
+  if (!originValues.length || !terminalValues.length) return null;
+
+  const originPrice = direction === "bullish"
+    ? Math.min(...originValues)
+    : Math.max(...originValues);
+  const terminalPrice = direction === "bullish"
+    ? Math.max(...terminalValues)
+    : Math.min(...terminalValues);
+  const valid = direction === "bullish"
+    ? terminalPrice > originPrice
+    : originPrice > terminalPrice;
+
+  if (!valid) return null;
+
+  return {
+    enabled: true,
+    direction,
+    originPrice,
+    terminalPrice,
+    originStartIndex: originStart,
+    breakIndex,
+    source: "final_visible_latest_confirmed_break_impulse",
+    rule: "latest_opposite_structure_to_latest_confirmed_directional_break_terminal",
+  };
 }
 
 export function selectProtectiveSupplyDemandAnchor(existing = {}, candidate = {}) {

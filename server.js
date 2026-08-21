@@ -5,11 +5,13 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import Stripe from "stripe";
 import {
+  buildFinalVisibleTerminalImpulse,
   canonicalInstrumentCode,
   classifyCsaStructuralStage,
   consolidateQualifiedSupplyDemandClusters,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
+  isSupportedInstrumentCode,
   orderStructuralCandidatesForFib,
   parseChartHeaderText,
   selectProtectiveSupplyDemandAnchor,
@@ -1623,8 +1625,7 @@ function hasStrongTimeframeMismatch({ selectedTimeframe, detectedTimeframe }) {
 }
 
 function isDetectedInstrumentUsable(detectedInstrument = "") {
-  const detected = comparableInstrument(detectedInstrument);
-  return Boolean(detected && detected.length >= 6);
+  return isSupportedInstrumentCode(detectedInstrument);
 }
 
 function isDetectedTimeframeUsable(detectedTimeframe = "") {
@@ -10468,7 +10469,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.24.0";
-const CSA_BUILD_ID = "CSA-v4.12.1-verified-context-rescue";
+const CSA_BUILD_ID = "CSA-v4.13.0-terminal-impulse-entry-independence";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -10921,36 +10922,13 @@ function deriveHistoricalFrameworkLocalFibImpulse({
   const originLow = asPositiveNumber(originPeriod?.low);
   const terminalHigh = asPositiveNumber(terminalPeriod?.high);
   const terminalLow = asPositiveNumber(terminalPeriod?.low);
-  const finalVisibleContinuation =
-    cutoffMode === "final_visible" &&
-    (
-      (
-        direction === "bullish" &&
-        originHigh !== null &&
-        originLow !== null &&
-        terminalHigh !== null &&
-        terminalLow !== null &&
-        terminalHigh > originHigh + frameworkTolerance &&
-        terminalLow > originLow + frameworkTolerance
-      ) ||
-      (
-        direction === "bearish" &&
-        originHigh !== null &&
-        originLow !== null &&
-        terminalHigh !== null &&
-        terminalLow !== null &&
-        terminalLow < originLow - frameworkTolerance &&
-        terminalHigh < originHigh - frameworkTolerance
-      )
-    );
-
-  if (!historicalMode && !finalVisibleContinuation) {
+  if (!historicalMode) {
     return {
       enabled: false,
       cutoffMode,
       timeframe: tf,
       direction,
-      reason: "final_visible_adjacent_framework_periods_do_not_confirm_directional_continuation",
+      reason: "final_visible_uses_latest_confirmed_break_impulse",
     };
   }
 
@@ -10993,9 +10971,7 @@ function deriveHistoricalFrameworkLocalFibImpulse({
     cutoffMode,
     timeframe: tf,
     direction,
-    authorityMode: historicalMode
-      ? "historical_cutoff_adjacent_framework_impulse"
-      : "final_visible_adjacent_framework_continuation_impulse",
+    authorityMode: "historical_cutoff_adjacent_framework_impulse",
     originPrice,
     terminalPrice,
     originTime: originPeriod?.date
@@ -11008,9 +10984,7 @@ function deriveHistoricalFrameworkLocalFibImpulse({
     terminalPeriod: terminalPeriod?.periodLabel || terminalPeriod?.day || terminalPeriod?.key || null,
     originPeriodKey: originPeriod?.key || originPeriod?.date || null,
     terminalPeriodKey: terminalPeriod?.key || terminalPeriod?.date || null,
-    rule: historicalMode
-      ? "historical_intraday_fib_uses_immediately_preceding_framework_period_origin_to_cutoff_period_terminal"
-      : "final_visible_intraday_continuation_uses_previous_framework_opposite_extreme_to_current_framework_directional_extreme",
+    rule: "historical_intraday_fib_uses_immediately_preceding_framework_period_origin_to_cutoff_period_terminal",
     reason: direction === "bearish"
       ? "previous_framework_period_high_to_cutoff_period_low"
       : "previous_framework_period_low_to_cutoff_period_high",
@@ -13045,6 +13019,49 @@ function buildLatestImpulseFibonacci({
   let chartNativeConfidence =
     null;
 
+  // Final-visible charts must use the impulse responsible for the latest
+  // confirmed directional break. The older adjacent-day shortcut can be much
+  // broader and may grant Fibonacci confluence to stale structural levels.
+  const finalVisibleTerminalImpulse =
+    historicalFrameworkImpulseAuthority?.cutoffMode === "final_visible"
+      ? buildFinalVisibleTerminalImpulse({
+          candles: ordered,
+          direction,
+          directionalEvent: latestDirectionalEvent,
+          oppositeEvent: latestOppositeEventBeforeCurrent,
+        })
+      : null;
+
+  let finalVisibleTerminalImpulseApplied = false;
+
+  if (finalVisibleTerminalImpulse?.enabled === true) {
+    if (direction === "bullish") {
+      selectedSwingLow = finalVisibleTerminalImpulse.originPrice;
+      selectedSwingHigh = finalVisibleTerminalImpulse.terminalPrice;
+      selectedSwingLowTime =
+        ordered[finalVisibleTerminalImpulse.originStartIndex]?.datetime ||
+        selectedSwingLowTime;
+      selectedSwingHighTime =
+        ordered.find(
+          (candle) => Number(candle?.high) === finalVisibleTerminalImpulse.terminalPrice
+        )?.datetime || selectedSwingHighTime;
+    } else {
+      selectedSwingHigh = finalVisibleTerminalImpulse.originPrice;
+      selectedSwingLow = finalVisibleTerminalImpulse.terminalPrice;
+      selectedSwingHighTime =
+        ordered[finalVisibleTerminalImpulse.originStartIndex]?.datetime ||
+        selectedSwingHighTime;
+      selectedSwingLowTime =
+        ordered.find(
+          (candle) => Number(candle?.low) === finalVisibleTerminalImpulse.terminalPrice
+        )?.datetime || selectedSwingLowTime;
+    }
+
+    priceSource = finalVisibleTerminalImpulse.source;
+    selectionReason = `${selectionReason}_latest_confirmed_break_impulse_override`;
+    finalVisibleTerminalImpulseApplied = true;
+  }
+
   const chartNativeDirection =
     String(
       chartNativeImpulse?.direction ||
@@ -13262,7 +13279,7 @@ function buildLatestImpulseFibonacci({
 
   if (
     finalVisibleEndpointEnabled &&
-    priceSource === "external_ohlc"
+    ["external_ohlc", "final_visible_latest_confirmed_break_impulse"].includes(priceSource)
   ) {
     if (
       direction === "bullish" &&
@@ -13548,6 +13565,12 @@ function buildLatestImpulseFibonacci({
           terminalPeriod: historicalFrameworkImpulseAuthority?.terminalPeriod || null,
           reason: historicalFrameworkImpulseAuthority?.reason || null,
           rule: historicalFrameworkImpulseAuthority?.rule || null,
+        }
+      : null,
+    finalVisibleTerminalImpulse: finalVisibleTerminalImpulse
+      ? {
+          ...finalVisibleTerminalImpulse,
+          applied: finalVisibleTerminalImpulseApplied,
         }
       : null,
     finalVisibleEndpointAuthority: finalVisibleEndpointEnabled
@@ -15608,7 +15631,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.7.0";
+const CSA_SELECTOR_VERSION = "4.8.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,

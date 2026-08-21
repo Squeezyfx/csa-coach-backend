@@ -2,11 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  buildFinalVisibleTerminalImpulse,
   canonicalInstrumentCode,
   classifyCsaStructuralStage,
   consolidateQualifiedSupplyDemandClusters,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
+  isSupportedInstrumentCode,
   orderStructuralCandidatesForFib,
   parseChartHeaderText,
   selectIndependentEntryAreas,
@@ -28,6 +30,14 @@ test("normalizes common index aliases while preserving broker index tickers", ()
   assert.equal(canonicalInstrumentCode("DJ30.cash"), "USA30");
   assert.equal(canonicalInstrumentCode("NAS100"), "USTEC");
   assert.equal(canonicalInstrumentCode("XAUUSD,H1"), "XAUUSD");
+});
+
+test("accepts supported five-character index symbols without accepting junk", () => {
+  assert.equal(isSupportedInstrumentCode("USA30"), true);
+  assert.equal(isSupportedInstrumentCode("US30.cash"), true);
+  assert.equal(isSupportedInstrumentCode("XAUUSD"), true);
+  assert.equal(isSupportedInstrumentCode("ABCDE"), false);
+  assert.equal(isSupportedInstrumentCode("not detected"), false);
 });
 
 test("parses compact chart headers including USA30,H1", () => {
@@ -116,12 +126,59 @@ test("Entry 2 may be a separate converted level only when it independently quali
   const selected = selectIndependentEntryAreas(
     [
       { id: "entry-1", areaType: "converted resistance", authoritativeCenter: 53275.6, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 60, fibonacciScore: 1 },
-      { id: "entry-2", areaType: "converted resistance", authoritativeCenter: 53421.2, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 55, fibonacciScore: 1 },
+      { id: "entry-2", areaType: "converted resistance", authoritativeCenter: 53421.2, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 55, fibonacciScore: 1, priceSource: "independent_horizontal_line_reader_exact" },
     ],
     "bearish"
   );
 
   assert.deepEqual(selected.map((item) => item.id), ["entry-1", "entry-2"]);
+});
+
+test("redundant same-stage Entry 2 is rejected without independent chart evidence", () => {
+  const selected = selectIndependentEntryAreas(
+    [
+      { id: "entry-1", areaType: "converted support", authoritativeCenter: 1.35703, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 60, fibonacciScore: 1 },
+      { id: "stale-reference", areaType: "converted support", authoritativeCenter: 1.35543, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 55, fibonacciScore: 1, priceSource: "per_target_framework_price" },
+    ],
+    "bullish"
+  );
+
+  assert.deepEqual(selected.map((item) => item.id), ["entry-1"]);
+});
+
+test("latest confirmed bullish break supplies the final-visible Fib impulse", () => {
+  const impulse = buildFinalVisibleTerminalImpulse({
+    candles: [
+      { low: 4324, high: 4370 },
+      { low: 4340, high: 4410 },
+      { low: 4390, high: 4450 },
+      { low: 4470, high: 4524 },
+    ],
+    direction: "bullish",
+    oppositeEvent: { index: 0 },
+    directionalEvent: { index: 2, pivotIndex: 1 },
+  });
+
+  assert.equal(impulse.originPrice, 4324);
+  assert.equal(impulse.terminalPrice, 4524);
+  assert.equal(impulse.source, "final_visible_latest_confirmed_break_impulse");
+});
+
+test("latest confirmed bearish break supplies the final-visible Fib impulse", () => {
+  const impulse = buildFinalVisibleTerminalImpulse({
+    candles: [
+      { low: 1.387, high: 1.39091 },
+      { low: 1.38437, high: 1.389 },
+      { low: 1.38022, high: 1.385 },
+      { low: 1.37575, high: 1.381 },
+    ],
+    direction: "bearish",
+    oppositeEvent: { index: 0 },
+    directionalEvent: { index: 2, pivotIndex: 1 },
+  });
+
+  assert.equal(impulse.originPrice, 1.39091);
+  assert.equal(impulse.terminalPrice, 1.37575);
 });
 
 test("does not invent Entry 2 when a deeper candidate fails the shared Fib gate", () => {
