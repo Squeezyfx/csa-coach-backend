@@ -79,7 +79,10 @@
           <h2 id="resultsHeading">3. Automatic batch report</h2>
           <p id="summaryText"></p>
         </div>
-        <button id="exportButton" class="button secondary" type="button">Export JSON</button>
+        <div class="result-actions">
+          <button id="promoteButton" class="button primary" type="button" hidden>Save all as strict benchmarks</button>
+          <button id="exportButton" class="button secondary" type="button">Export JSON</button>
+        </div>
       </div>
       <div class="summary-grid" id="summaryCards"></div>
       <div id="resultCards" class="result-list"></div>
@@ -143,6 +146,6 @@
       </td>
     </tr>
   </template>
-  <script src="/app.js" defer></script>
+  <script src="/app.js" type="module"></script>
 </body>
 </html>

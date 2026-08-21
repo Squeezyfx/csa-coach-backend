@@ -1,3 +1,5 @@
+import { strictFixtureFromAutomaticResult } from "./fixture-promotion.js";
+
 const fileInput = document.querySelector("#chartFiles");
 const rows = document.querySelector("#caseRows");
 const template = document.querySelector("#caseTemplate");
@@ -7,6 +9,7 @@ const runButton = document.querySelector("#runButton");
 const saveButton = document.querySelector("#saveButton");
 const clearButton = document.querySelector("#clearButton");
 const exportButton = document.querySelector("#exportButton");
+const promoteButton = document.querySelector("#promoteButton");
 const runStatus = document.querySelector("#runStatus");
 const adminKey = document.querySelector("#adminKey");
 let files = [];
@@ -54,6 +57,26 @@ function restoreFixture(row, file) {
   });
 }
 
+function fixtureFromRow(row) {
+  const saved = {};
+  fixtureFields.forEach((name) => {
+    const input = field(row, name);
+    if (!input) return;
+    saved[name] = input.type === "checkbox" ? input.checked : input.value;
+  });
+  return saved;
+}
+
+function applyFixtureToRow(row, saved) {
+  fixtureFields.forEach((name) => {
+    const input = field(row, name);
+    if (!input || saved[name] === undefined) return;
+    if (input.type === "checkbox") input.checked = saved[name] === true;
+    else input.value = saved[name];
+  });
+  [1, 2].forEach((entryNumber) => syncZoneFields(row, entryNumber));
+}
+
 function setMode(mode) {
   benchmarkMode = mode === "strict" ? "strict" : "automatic";
   document.querySelectorAll('input[name="benchmarkMode"]').forEach((input) => {
@@ -74,6 +97,7 @@ function setMode(mode) {
     ? "Analyse all charts"
     : "Run strict benchmarks";
   saveButton.hidden = benchmarkMode !== "strict";
+  promoteButton.hidden = true;
   resultsPanel.hidden = true;
 }
 
@@ -105,12 +129,7 @@ fileInput.addEventListener("change", () => {
 saveButton.addEventListener("click", () => {
   if (!files.length) return;
   Array.from(rows.querySelectorAll("tr")).forEach((row, index) => {
-    const saved = {};
-    fixtureFields.forEach((name) => {
-      const input = field(row, name);
-      if (!input) return;
-      saved[name] = input.type === "checkbox" ? input.checked : input.value;
-    });
+    const saved = fixtureFromRow(row);
     localStorage.setItem(fixtureKey(files[index]), JSON.stringify(saved));
   });
   runStatus.textContent = "Expected values saved in this browser.";
@@ -200,8 +219,32 @@ function renderRun(run) {
       : item.status;
     return `<article class="result ${item.status}"><div class="result-top"><div><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.fileName)} · ${(item.durationMs / 1000).toFixed(1)}s</p></div><span class="badge">${escapeHtml(statusLabel)}</span></div><p>${headline}</p>${findingsHtml}${checkHtml ? `<ul class="checks">${checkHtml}</ul>` : ""}<details><summary>Full analysis response</summary><pre>${escapeHtml(JSON.stringify(item.analysis, null, 2))}</pre></details></article>`;
   }).join("");
+  promoteButton.hidden = !(
+    automatic &&
+    run.results.length === files.length &&
+    run.results.every((item) => item.status === "passed")
+  );
   resultsPanel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
+
+promoteButton.addEventListener("click", () => {
+  if (!lastRun || lastRun.mode !== "automatic") return;
+  if (lastRun.results.length !== files.length || lastRun.results.some((item) => item.status !== "passed")) {
+    return alert("Every automatic result must be consistent before this batch can be saved as strict benchmarks.");
+  }
+  if (!confirm("Save these reviewed automatic results as strict regression benchmarks? You can edit any value before running the strict test.")) return;
+
+  const rowList = Array.from(rows.querySelectorAll("tr"));
+  lastRun.results.forEach((item, index) => {
+    const fixture = strictFixtureFromAutomaticResult(item, fixtureFromRow(rowList[index]));
+    applyFixtureToRow(rowList[index], fixture);
+    localStorage.setItem(fixtureKey(files[index]), JSON.stringify(fixture));
+  });
+
+  setMode("strict");
+  runStatus.textContent = `${files.length} strict benchmark${files.length === 1 ? "" : "s"} saved. Review the populated values, then run the strict regression.`;
+  casePanel.scrollIntoView({ behavior: "smooth", block: "start" });
+});
 
 runButton.addEventListener("click", async () => {
   if (!adminKey.value) return alert("Enter the benchmark admin key.");

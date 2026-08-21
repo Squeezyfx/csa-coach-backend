@@ -3,6 +3,7 @@
 body { margin:0; background:radial-gradient(circle at top,#12202b 0,#070a0d 42%); color:var(--text); font:15px/1.45 Inter,system-ui,sans-serif; }
 .shell { width:min(1500px,94vw); margin:0 auto; padding:42px 0 80px; }
 header,.panel-heading,.upload-panel,.actions { display:flex; align-items:center; justify-content:space-between; gap:24px; }
+.result-actions { display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-wrap:wrap; }
 h1 { font-size:clamp(28px,4vw,48px); margin:4px 0; } h2 { margin:0 0 5px; font-size:20px; }
 p { margin:0; color:var(--muted); }.eyebrow { color:var(--green); font-size:12px; letter-spacing:.18em; font-weight:800; }
 .key-box { min-width:250px; }.key-box label { display:block; color:var(--muted); margin-bottom:6px; }
@@ -31,4 +32,4 @@ th,td { border-bottom:1px solid var(--line); padding:12px 10px; vertical-align:t
 .result.passed { border-left-color:var(--green); }.result.failed,.result.error { border-left-color:var(--red); }.result-top { display:flex; justify-content:space-between; gap:18px; }
 .badge { font-size:12px; font-weight:800; text-transform:uppercase; padding:4px 9px; border-radius:99px; background:#26313b; }.passed .badge { color:var(--green); }.failed .badge,.error .badge { color:var(--red); }
 .checks { margin:12px 0 0; padding-left:20px; }.checks .fail { color:#ff9999; }.checks .pass { color:#9be7c3; } details { margin-top:12px; } pre { overflow:auto; max-height:500px; background:#05080a; padding:12px; border-radius:8px; white-space:pre-wrap; }
-@media (max-width:800px) { header,.panel-heading,.upload-panel,.mode-panel { align-items:flex-start; flex-direction:column; }.key-box { width:100%; }.mode-options { width:100%; grid-template-columns:1fr; }.summary-grid,.auto-findings { grid-template-columns:repeat(2,1fr); } }
+@media (max-width:800px) { header,.panel-heading,.upload-panel,.mode-panel { align-items:flex-start; flex-direction:column; }.key-box { width:100%; }.mode-options { width:100%; grid-template-columns:1fr; }.result-actions { width:100%; justify-content:flex-start; }.summary-grid,.auto-findings { grid-template-columns:repeat(2,1fr); } }
