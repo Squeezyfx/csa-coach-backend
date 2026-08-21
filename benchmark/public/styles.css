@@ -21,6 +21,7 @@ input:focus,select:focus,textarea:focus { outline:2px solid rgba(76,156,255,.35)
 table { width:100%; border-collapse:collapse; min-width:1050px; } th { text-align:left; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
 .automatic-mode table { min-width:0; }.automatic-mode th:not(:first-child),.automatic-mode td:not(:first-child) { display:none; }.automatic-mode td:first-child { width:100%; }
 .automatic-mode td:first-child::after { content:"Instrument, timeframe, direction, support/resistance, supply/demand and hidden Fibonacci confluence will be detected automatically."; display:block; color:var(--muted); font-size:13px; }
+.baseline-note { color:var(--muted); font-size:12px; margin:7px 0; }
 th,td { border-bottom:1px solid var(--line); padding:12px 10px; vertical-align:top; } td:first-child { width:20%; } td strong { display:block; margin-bottom:10px; word-break:break-word; }
 .field-stack { display:grid; gap:8px; }.check { display:flex; align-items:center; gap:8px; color:var(--muted); }.check input { width:auto; }
 .zone-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; padding:8px; border:1px solid #2e4658; border-radius:9px; background:rgba(76,156,255,.06); }

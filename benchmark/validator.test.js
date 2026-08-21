@@ -447,3 +447,34 @@ test("automatic mode rejects a selected entry that did not pass Fibonacci conflu
     true
   );
 });
+
+test("a verified one-entry baseline rejects an unnecessary Entry 2", () => {
+  const automatic = structuredClone(baseResult);
+  automatic.analysisFacts.selectedEntryAreas = [
+    {
+      executionOrder: 1,
+      areaType: "converted support",
+      authoritativeCenter: 1.35703,
+      zoneLow: 1.35703,
+      zoneHigh: 1.35703,
+    },
+    {
+      executionOrder: 2,
+      areaType: "converted support",
+      authoritativeCenter: 1.35543,
+      zoneLow: 1.35543,
+      zoneHigh: 1.35543,
+    },
+  ];
+  automatic.finalFeedback.narrativeLock = {
+    selectedEntries: automatic.analysisFacts.selectedEntryAreas,
+  };
+  automatic.finalFeedback.entry1 = automatic.analysisFacts.selectedEntryAreas[0];
+  automatic.finalFeedback.entry2 = automatic.analysisFacts.selectedEntryAreas[1];
+  const result = validateBenchmarkResult(automatic, { expectedEntryCount: 1 });
+  assert.equal(result.passed, false);
+  assert.equal(
+    result.criticalFailures.some((check) => check.id === "expected_entry_count"),
+    true
+  );
+});

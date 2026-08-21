@@ -12,6 +12,7 @@ import {
   sleep,
   waitForTargetHealth,
 } from "./benchmark/target-client.js";
+import { getVerifiedBaseline } from "./benchmark/verified-baselines.js";
 
 const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -87,6 +88,7 @@ function cleanCase(value = {}, index = 0) {
       expectedEntry2ZoneLow: value.expectedEntry2ZoneLow ?? "",
       expectedEntry2ZoneHigh: value.expectedEntry2ZoneHigh ?? "",
       entry2Required: value.entry2Required === true,
+      expectedEntryCount: value.expectedEntryCount ?? "",
       noEntryExpected: value.noEntryExpected === true,
       requiredLevels: value.requiredLevels ?? "",
       requiredFeedbackLevels: value.requiredFeedbackLevels ?? "",
@@ -108,6 +110,10 @@ function createAnalysisForm(testCase, file) {
   form.append("forceFreshAnalysis", "true");
   form.append("analysisFramework", "csa");
   form.append("autoDetectContext", testCase.autoDetectContext ? "true" : "false");
+  if (testCase.verifiedBaseline) {
+    form.append("benchmarkContextInstrument", testCase.verifiedBaseline.instrument);
+    form.append("benchmarkContextTimeframe", testCase.verifiedBaseline.timeframe);
+  }
   if (testCase.chartDate) form.append("chartDate", testCase.chartDate);
   if (testCase.notes) form.append("notes", testCase.notes);
   return form;
@@ -205,7 +211,25 @@ app.post("/api/run", requireAdmin, upload.array("charts", 30), async (req, res) 
       return res.status(400).json({ success: false, error: "Each uploaded chart must have one benchmark case." });
     }
 
-    const cases = rawCases.map(cleanCase);
+    const cases = rawCases.map((rawCase, index) => {
+      const testCase = cleanCase(rawCase, index);
+      if (testCase.mode !== "automatic") return testCase;
+
+      const fileName = req.files[testCase.fileIndex]?.originalname || "";
+      const verifiedBaseline = getVerifiedBaseline(testCase.label, fileName);
+      if (!verifiedBaseline) return testCase;
+
+      return {
+        ...testCase,
+        instrument: verifiedBaseline.instrument,
+        timeframe: verifiedBaseline.timeframe,
+        verifiedBaseline,
+        expectation: {
+          ...testCase.expectation,
+          ...verifiedBaseline,
+        },
+      };
+    });
     const warmup = await waitForTargetHealth({
       targetUrl: TARGET_URL,
       attempts: WARMUP_ATTEMPTS,
@@ -230,6 +254,7 @@ app.post("/api/run", requireAdmin, upload.array("charts", 30), async (req, res) 
           validation,
           analysis,
           mode: testCase.mode,
+          verifiedBaselineId: testCase.verifiedBaseline?.id || null,
         };
       } catch (error) {
         return {
@@ -241,6 +266,7 @@ app.post("/api/run", requireAdmin, upload.array("charts", 30), async (req, res) 
           validation: null,
           analysis: null,
           mode: testCase.mode,
+          verifiedBaselineId: testCase.verifiedBaseline?.id || null,
         };
       }
     }, BETWEEN_CHART_DELAY_MS);
@@ -253,6 +279,10 @@ app.post("/api/run", requireAdmin, upload.array("charts", 30), async (req, res) 
       failed: results.filter((item) => item.status === "failed").length,
       errors: results.filter((item) => item.status === "error").length,
       durationMs: Date.now() - startedAt,
+      verifiedBaselineTotal: results.filter((item) => item.verifiedBaselineId).length,
+      verifiedBaselinePassed: results.filter(
+        (item) => item.verifiedBaselineId && item.status === "passed"
+      ).length,
     };
     const mode = cases.every((item) => item.mode === "automatic")
       ? "automatic"

@@ -2,7 +2,7 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.12.0-dominant-impulse-independent-entry2`. The batch-testing additions do not alter its customer analysis route.
+The included analysis backend is CSA build `v4.12.1-verified-context-rescue`. Benchmark package v2.10 adds verified-baseline-aware automatic reporting and a private context fallback for known charts. The batch-testing additions do not alter the customer analysis route.
 
 After every chart in an automatic batch is marked **Consistent**, use **Save all as strict benchmarks** to populate and retain the verified direction, entry prices, structural roles and supply/demand zone boundaries in the current browser. Review those populated values once, then run Strict Regression without retyping the fixtures.
 
@@ -59,7 +59,7 @@ All candidates in one active directional leg use the same dominant completed imp
 
 The runner also compares feedback templates across the completed batch. If two or more chart-specific strengths or weaknesses are reused after removing prices and directional wording, the affected charts are marked **Needs review**. This prevents generic boilerplate from receiving a green consistency result.
 
-An automatic **Consistent** result means the response completed and satisfied the machine-checkable CSA consistency rules. It does not manufacture its own ground truth. New proposed prices should be reviewed before being accepted as permanent accuracy examples.
+For a known verified chart, **Baseline match** means both the automated rules and its saved expected direction, entries, entry count and forbidden values passed. **Baseline mismatch** means the engine completed but disagreed with the verified answer. For a new chart without a verified answer, **Rule-valid** means only that the response satisfied the machine-checkable CSA consistency rules; its proposed prices still require review.
 
 ## Strict regression mode (verified charts)
 

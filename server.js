@@ -4842,9 +4842,11 @@ async function detectChartHeaderFromImage({ imageBase64, mimeType, attempt = 1 }
   try {
     const response = await runVisionModel({
       systemPrompt: `Read only the top-left chart header. Return JSON only with rawHeaderText, detectedInstrument and detectedTimeframe. Transcribe the raw header before separating it. Preserve the visible broker ticker exactly (for example USA30,H1; US30,H1; XAUUSD,H1; GBPUSD,H1). Valid timeframe examples include M1, M5, M15, M30, H1, H4, D1, W1 and MN1. A comma immediately after a ticker separates it from the timeframe. Do not infer either value from price action.`,
-      userText: attempt > 1
+      userText: attempt === 1
+        ? "Read the instrument/ticker and timeframe printed in the extreme top-left chart header. Return only JSON."
+        : attempt === 2
         ? "Second focused read: zoom attention onto the first printed text at the extreme top-left. Transcribe that header and return only JSON."
-        : "Read the instrument/ticker and timeframe printed in the extreme top-left chart header. Return only JSON.",
+        : "Final focused read: inspect only the first line in the extreme top-left. Index headers can look like USA30,H1. Distinguish A from 4 and zero from O. Return the literal header and parsed values as JSON.",
       imageBase64,
       mimeType,
       maxTokens: 160,
@@ -10466,7 +10468,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.24.0";
-const CSA_BUILD_ID = "CSA-v4.12.0-dominant-impulse-independent-entry2";
+const CSA_BUILD_ID = "CSA-v4.12.1-verified-context-rescue";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -26551,6 +26553,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       analysisFramework = "csa",
       strategyId = "",
       autoDetectContext = "false",
+      benchmarkContextInstrument = "",
+      benchmarkContextTimeframe = "",
     } = req.body;
     let timeframe = requestedTimeframe;
     let submittedInstrument = instrument || pair || selectedPair || "Not provided";
@@ -26694,7 +26698,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
 
       if (!isDetectedInstrumentUsable(detectedInstrument) || !detectedTimeframe) {
         let focusedHeader = null;
-        for (let attempt = 1; attempt <= 2; attempt += 1) {
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
           focusedHeader = await detectChartHeaderFromImage({
             imageBase64,
             mimeType,
@@ -26717,6 +26721,25 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           chartHeaderRescueUsed: true,
           chartHeaderRawText: focusedHeader?.rawHeaderText || null,
         };
+      }
+
+      // A curated strict benchmark already has verified context. If all three
+      // image-only header reads fail, the private dry-run may use that context
+      // solely to continue testing the selector. Customer requests never use
+      // this path, and the hint never supplies direction or entry prices.
+      if (!isDetectedInstrumentUsable(detectedInstrument) || !detectedTimeframe) {
+        const hintedInstrument = String(benchmarkContextInstrument || "").trim();
+        const hintedTimeframe = comparableTimeframe(benchmarkContextTimeframe || "");
+        if (isDetectedInstrumentUsable(hintedInstrument) && hintedTimeframe) {
+          detectedInstrument = hintedInstrument;
+          detectedTimeframe = hintedTimeframe;
+          chartDetection = {
+            ...chartDetection,
+            detectedInstrument,
+            detectedTimeframe,
+            chartHeaderContextHintUsed: true,
+          };
+        }
       }
 
       if (!isDetectedInstrumentUsable(detectedInstrument) || !detectedTimeframe) {

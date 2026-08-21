@@ -190,10 +190,10 @@ function renderRun(run) {
   const automatic = run.mode === "automatic" || run.results.every((item) => item.mode === "automatic");
   document.querySelector("#resultsHeading").textContent = automatic ? "3. Automatic batch report" : "3. Regression report";
   document.querySelector("#summaryText").textContent = automatic
-    ? `Analysed ${run.summary.total} chart${run.summary.total === 1 ? "" : "s"} independently in ${(run.summary.durationMs / 1000).toFixed(1)} seconds. Consistent means the output followed the automated CSA checks; review the proposed levels before saving a chart as a strict benchmark.`
+    ? `Analysed ${run.summary.total} chart${run.summary.total === 1 ? "" : "s"} independently in ${(run.summary.durationMs / 1000).toFixed(1)} seconds. Verified charts are compared with their saved accuracy baselines; new charts are labelled rule-valid only and still require human review.`
     : `Completed ${new Date(run.runAt).toLocaleString()} in ${(run.summary.durationMs / 1000).toFixed(1)} seconds.`;
   document.querySelector("#summaryCards").innerHTML = [
-    summaryCard("Total", run.summary.total), summaryCard(automatic ? "Consistent" : "Passed", run.summary.passed),
+    summaryCard("Total", run.summary.total), summaryCard(automatic ? "Accepted" : "Passed", run.summary.passed),
     summaryCard(automatic ? "Needs review" : "Failed", run.summary.failed), summaryCard("Errors", run.summary.errors),
   ].join("");
   document.querySelector("#resultCards").innerHTML = run.results.map((item) => {
@@ -212,12 +212,15 @@ function renderRun(run) {
     const checkHtml = checks.map((check) => `<li class="${check.passed ? "pass" : "fail"}">${check.passed ? "✓" : "✕"} ${escapeHtml(check.label)}${check.passed ? "" : ` — ${escapeHtml(check.details)}`}</li>`).join("");
     const statusLabel = item.mode === "automatic"
       ? item.status === "passed"
-        ? "consistent"
+        ? item.verifiedBaselineId ? "baseline match" : "rule-valid"
         : item.status === "failed"
-        ? "needs review"
+        ? item.verifiedBaselineId ? "baseline mismatch" : "needs review"
         : item.status
       : item.status;
-    return `<article class="result ${item.status}"><div class="result-top"><div><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.fileName)} · ${(item.durationMs / 1000).toFixed(1)}s</p></div><span class="badge">${escapeHtml(statusLabel)}</span></div><p>${headline}</p>${findingsHtml}${checkHtml ? `<ul class="checks">${checkHtml}</ul>` : ""}<details><summary>Full analysis response</summary><pre>${escapeHtml(JSON.stringify(item.analysis, null, 2))}</pre></details></article>`;
+    const baselineHtml = item.verifiedBaselineId
+      ? `<p class="baseline-note">Compared with verified baseline ${escapeHtml(item.verifiedBaselineId)}.</p>`
+      : `<p class="baseline-note">Rule checks only; accuracy has not yet been verified.</p>`;
+    return `<article class="result ${item.status}"><div class="result-top"><div><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.fileName)} · ${(item.durationMs / 1000).toFixed(1)}s</p></div><span class="badge">${escapeHtml(statusLabel)}</span></div><p>${headline}</p>${baselineHtml}${findingsHtml}${checkHtml ? `<ul class="checks">${checkHtml}</ul>` : ""}<details><summary>Full analysis response</summary><pre>${escapeHtml(JSON.stringify(item.analysis, null, 2))}</pre></details></article>`;
   }).join("");
   promoteButton.hidden = !(
     automatic &&

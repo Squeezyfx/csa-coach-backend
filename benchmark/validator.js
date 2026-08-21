@@ -1,6 +1,6 @@
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
-const BENCHMARK_VALIDATOR_VERSION = "1.5.0";
+const BENCHMARK_VALIDATOR_VERSION = "1.6.0";
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -516,6 +516,17 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     factsEntries.length <= 2 && entries.length <= 2,
     `Structured facts returned ${factsEntries.length}; customer-facing output returned ${entries.length}.`
   );
+
+  const expectedEntryCount = finiteNumber(expectation.expectedEntryCount);
+  if (expectedEntryCount !== null) {
+    addCheck(
+      checks,
+      "expected_entry_count",
+      "Verified number of entries",
+      factsEntries.length === expectedEntryCount && entries.length === expectedEntryCount,
+      `Expected exactly ${expectedEntryCount}; structured facts returned ${factsEntries.length} and customer-facing output returned ${entries.length}.`
+    );
+  }
 
   addCheck(
     checks,
