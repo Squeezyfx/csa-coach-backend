@@ -122,7 +122,7 @@ export function getSupplyDemandClusterTolerance(
 export function hasIndependentChartPriceEvidence(area = {}) {
   return (
     Number(area?.reconciliationConfidence || 0) >= 25 ||
-    /independent_horizontal_line|per_target_framework_price/i.test(
+    /independent_horizontal_line/i.test(
       String(area?.priceSource || "")
     )
   );

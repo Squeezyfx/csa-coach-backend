@@ -152,4 +152,40 @@ test("ordinary chart reconciliation does not impersonate an independently marked
     }),
     true
   );
+  assert.equal(
+    hasIndependentChartPriceEvidence({
+      chartReconciled: true,
+      priceSource: "per_target_framework_price",
+    }),
+    false
+  );
+});
+
+test("unmarked framework demand can merge with its overlapping intraday fragment", () => {
+  const frameworkDemand = {
+    areaType: "demand",
+    authoritativeCenter: 0.8091,
+    zoneLow: 0.8091,
+    zoneHigh: 0.80977,
+    priceSource: "per_target_framework_price",
+  };
+  const intradayDemand = {
+    areaType: "demand",
+    authoritativeCenter: 0.80948,
+    zoneLow: 0.80948,
+    zoneHigh: 0.81025,
+  };
+
+  assert.equal(
+    shouldMergeQualifiedSupplyDemandCluster(frameworkDemand, intradayDemand, {
+      existingTrusted: hasIndependentChartPriceEvidence(frameworkDemand),
+      candidateTrusted: hasIndependentChartPriceEvidence(intradayDemand),
+    }),
+    true
+  );
+  assert.equal(
+    selectProtectiveSupplyDemandAnchor(frameworkDemand, intradayDemand)
+      .authoritativeCenter,
+    0.8091
+  );
 });

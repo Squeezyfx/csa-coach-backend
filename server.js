@@ -10436,7 +10436,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.23.0";
-const CSA_BUILD_ID = "CSA-v4.11.4-protective-cluster-and-internal-fib";
+const CSA_BUILD_ID = "CSA-v4.11.5-unmarked-sd-protective-boundary";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -15667,7 +15667,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.6.4";
+const CSA_SELECTOR_VERSION = "4.6.5";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -24656,7 +24656,7 @@ function buildControlledFeedback({
     );
   } else if (hasValidatedArea) {
     strengths.push(
-      `The ${directionText.toLowerCase()} structure produced Entry 1 at the ${areaText} after the full structural and entry-quality checks.`
+      `The ${facts.direction} structure produced Entry 1 at the ${areaText} after the full structural and entry-quality checks.`
     );
   } else {
     strengths.push(
