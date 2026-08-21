@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   classifyCsaStructuralStage,
+  consolidateQualifiedSupplyDemandClusters,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
   orderStructuralCandidatesForFib,
@@ -153,6 +154,10 @@ test("ordinary chart reconciliation does not impersonate an independently marked
     true
   );
   assert.equal(
+    hasIndependentChartPriceEvidence({ reconciliationConfidence: 100 }),
+    false
+  );
+  assert.equal(
     hasIndependentChartPriceEvidence({
       chartReconciled: true,
       priceSource: "per_target_framework_price",
@@ -188,4 +193,13 @@ test("unmarked framework demand can merge with its overlapping intraday fragment
       .authoritativeCenter,
     0.8091
   );
+
+  const consolidated = consolidateQualifiedSupplyDemandClusters(
+    [intradayDemand, frameworkDemand],
+    0.00083
+  );
+  assert.equal(consolidated.length, 1);
+  assert.equal(consolidated[0].authoritativeCenter, 0.8091);
+  assert.equal(consolidated[0].zoneLow, 0.8091);
+  assert.equal(consolidated[0].zoneHigh, 0.81025);
 });

@@ -120,11 +120,8 @@ export function getSupplyDemandClusterTolerance(
 }
 
 export function hasIndependentChartPriceEvidence(area = {}) {
-  return (
-    Number(area?.reconciliationConfidence || 0) >= 25 ||
-    /independent_horizontal_line/i.test(
-      String(area?.priceSource || "")
-    )
+  return /independent_horizontal_line/i.test(
+    String(area?.priceSource || "")
   );
 }
 
@@ -148,4 +145,72 @@ export function shouldMergeQualifiedSupplyDemandCluster(
     options.existingTrusted !== true &&
     options.candidateTrusted !== true
   );
+}
+
+export function consolidateQualifiedSupplyDemandClusters(
+  candidates = [],
+  atr = 0
+) {
+  const consolidated = [];
+
+  for (const candidate of candidates) {
+    const candidateLow = Number(candidate?.zoneLow);
+    const candidateHigh = Number(candidate?.zoneHigh);
+    const mergeIndex = consolidated.findIndex((existing) => {
+      if (
+        !shouldMergeQualifiedSupplyDemandCluster(existing, candidate, {
+          existingTrusted: hasIndependentChartPriceEvidence(existing),
+          candidateTrusted: hasIndependentChartPriceEvidence(candidate),
+        })
+      ) {
+        return false;
+      }
+
+      const tolerance = getSupplyDemandClusterTolerance(
+        existing,
+        candidate,
+        atr
+      );
+      return (
+        Number(existing?.zoneHigh) + tolerance >= candidateLow &&
+        candidateHigh + tolerance >= Number(existing?.zoneLow)
+      );
+    });
+
+    if (mergeIndex < 0) {
+      consolidated.push(candidate);
+      continue;
+    }
+
+    const existing = consolidated[mergeIndex];
+    const selected = selectProtectiveSupplyDemandAnchor(existing, candidate);
+    consolidated[mergeIndex] = {
+      ...selected,
+      zoneLow: Math.min(Number(existing.zoneLow), candidateLow),
+      zoneHigh: Math.max(Number(existing.zoneHigh), candidateHigh),
+      structuralScore: Math.max(
+        Number(existing?.structuralScore || 0),
+        Number(candidate?.structuralScore || 0)
+      ),
+      qualityScore: Math.max(
+        Number(existing?.qualityScore || 0),
+        Number(candidate?.qualityScore || 0)
+      ),
+      reactionCount: Math.max(
+        Number(existing?.reactionCount || 0),
+        Number(candidate?.reactionCount || 0)
+      ),
+      strongDepartureCount: Math.max(
+        Number(existing?.strongDepartureCount || 0),
+        Number(candidate?.strongDepartureCount || 0)
+      ),
+      overlappingSupplyDemandClusterMerged: true,
+      clusterAnchorRule:
+        String(selected?.areaType || "").toLowerCase() === "demand"
+          ? "bullish_demand_lower_launch_boundary"
+          : "bearish_supply_upper_launch_boundary",
+    };
+  }
+
+  return consolidated;
 }

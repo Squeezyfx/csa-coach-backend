@@ -6,6 +6,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import Stripe from "stripe";
 import {
   classifyCsaStructuralStage,
+  consolidateQualifiedSupplyDemandClusters,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
   orderStructuralCandidatesForFib,
@@ -10436,7 +10437,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.23.0";
-const CSA_BUILD_ID = "CSA-v4.11.5-unmarked-sd-protective-boundary";
+const CSA_BUILD_ID = "CSA-v4.11.6-pre-dedupe-sd-consolidation";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -14889,7 +14890,11 @@ function validateAndSequenceEntryAreas({
     return true;
   });
 
-  const deduped = dedupeValidatedAreas(valid, atr);
+  // Supply/demand is zone-based. Consolidate qualified fragments before the
+  // general S/R-aware dedupe can prefer a shallower candle-derived anchor.
+  const supplyDemandConsolidated =
+    consolidateQualifiedSupplyDemandClusters(valid, atr);
+  const deduped = dedupeValidatedAreas(supplyDemandConsolidated, atr);
 
   const pathOrdered = sequenceFibQualifiedAreas(deduped, direction);
 
@@ -15667,7 +15672,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.6.5";
+const CSA_SELECTOR_VERSION = "4.6.6";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
