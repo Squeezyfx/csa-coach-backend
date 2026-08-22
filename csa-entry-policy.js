@@ -192,12 +192,39 @@ export function hasIndependentStructuralEntryEvidence(area = {}) {
 
 export function shouldApplyFinalVisibleTerminalImpulse({
   terminalImpulse = null,
+  majorSelection = null,
+  terminalStructuralScore = null,
+  majorStructuralScore = null,
 } = {}) {
-  // For a final-visible chart, the latest confirmed directional break is the
-  // impulse that produced the setup currently being evaluated. An older major
-  // swing remains useful context, but it must not replace this terminal leg or
-  // its broad range can manufacture stale Fibonacci-qualified entries.
-  return terminalImpulse?.enabled === true;
+  if (terminalImpulse?.enabled !== true) return false;
+  if (!majorSelection) return true;
+
+  const terminalMatches = Number(terminalStructuralScore?.matchCount || 0);
+  const majorMatches = Number(majorStructuralScore?.matchCount || 0);
+
+  // The chart's authoritative S/R and S/D levels are identified before Fib.
+  // Use the terminal leg only when it validates more of those exact levels
+  // than the broader major impulse. This prevents an unconditional terminal
+  // override from erasing valid structure on charts whose last few candles
+  // are only a pullback or rebound inside the controlling move.
+  if (terminalMatches !== majorMatches) {
+    return terminalMatches > majorMatches;
+  }
+
+  if (terminalMatches > 0) {
+    const terminalDistance = Number(
+      terminalStructuralScore?.normalizedDistanceSum
+    );
+    const majorDistance = Number(majorStructuralScore?.normalizedDistanceSum);
+
+    if (Number.isFinite(terminalDistance) && Number.isFinite(majorDistance)) {
+      // Require a material improvement so tiny OCR/rounding differences do
+      // not make the selected impulse oscillate between otherwise equal runs.
+      return terminalDistance <= majorDistance * 0.8;
+    }
+  }
+
+  return false;
 }
 
 export function buildFinalVisibleTerminalImpulse({

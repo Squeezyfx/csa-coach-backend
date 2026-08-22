@@ -10509,8 +10509,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.27.0";
-const CSA_BUILD_ID = "CSA-v4.16.0-final-visible-fib-exact-level-authority";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.28.0";
+const CSA_BUILD_ID = "CSA-v4.17.0-structure-guided-impulse-selection";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -11032,6 +11032,104 @@ function deriveHistoricalFrameworkLocalFibImpulse({
   };
 }
 
+function scoreFibonacciFrameAgainstStructuralHints({
+  direction = "range",
+  swingLow = null,
+  swingHigh = null,
+  structuralLevelHints = [],
+  atr = 0,
+  symbol = "",
+} = {}) {
+  const low = Number(swingLow);
+  const high = Number(swingHigh);
+  const normalizedAtr = Math.max(0, Number(atr || 0));
+
+  if (
+    !["bullish", "bearish"].includes(direction) ||
+    !Number.isFinite(low) ||
+    !Number.isFinite(high) ||
+    high <= low
+  ) {
+    return {
+      matchCount: 0,
+      normalizedDistanceSum: Number.POSITIVE_INFINITY,
+      matches: [],
+    };
+  }
+
+  const range = high - low;
+  const fibLevels = [0.382, 0.5, 0.618].map((ratio) => ({
+    ratio,
+    price:
+      direction === "bearish"
+        ? low + range * ratio
+        : high - range * ratio,
+  }));
+  const allowance = Math.max(
+    normalizedAtr * 0.6,
+    getCleanBreakTolerance(symbol) * 0.5,
+    Number.EPSILON * 100
+  );
+
+  const matches = (Array.isArray(structuralLevelHints)
+    ? structuralLevelHints
+    : [])
+    .filter(
+      (hint) =>
+        hint?.authoritativeFrameworkLevel === true &&
+        hint?.chartReconciled === true
+    )
+    .map((hint) => {
+      const center = asPositiveNumber(
+        hint?.price ?? hint?.authoritativeCenter
+      );
+      if (center === null) return null;
+
+      const halfWidth = Math.max(
+        getApprovedPriceTolerance(symbol),
+        normalizedAtr * 0.025
+      );
+      const zoneLow = Number.isFinite(Number(hint?.zoneLow))
+        ? Number(hint.zoneLow)
+        : center - halfWidth;
+      const zoneHigh = Number.isFinite(Number(hint?.zoneHigh))
+        ? Number(hint.zoneHigh)
+        : center + halfWidth;
+      const nearest = fibLevels
+        .map((level) => ({
+          ...level,
+          distance: distanceFromPriceToZone(
+            level.price,
+            zoneLow,
+            zoneHigh
+          ),
+        }))
+        .sort((a, b) => a.distance - b.distance)[0];
+
+      if (!nearest || nearest.distance > allowance) return null;
+      return {
+        price: center,
+        areaType: hint?.type || hint?.areaType || null,
+        ratio: nearest.ratio,
+        fibPrice: nearest.price,
+        distance: nearest.distance,
+        normalizedDistance:
+          allowance > 0 ? nearest.distance / allowance : 0,
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    matchCount: matches.length,
+    normalizedDistanceSum: matches.reduce(
+      (sum, match) => sum + Number(match.normalizedDistance || 0),
+      0
+    ),
+    allowance,
+    matches,
+  };
+}
+
 function buildLatestImpulseFibonacci({
   candles = [],
   historicalPhase = null,
@@ -11041,6 +11139,7 @@ function buildLatestImpulseFibonacci({
   chartNativeImpulse = null,
   finalVisibleEndpointAuthority = null,
   historicalFrameworkImpulseAuthority = null,
+  structuralLevelHints = [],
   suppressImpulseLog = false,
 }) {
   if (!Array.isArray(candles) || candles.length < 10) {
@@ -12281,7 +12380,59 @@ function buildLatestImpulseFibonacci({
             candidate.hierarchyAdjustedScore
           ) >= 34
       )
+      .map((candidate) => {
+        // CSA order of operations is structure first, Fibonacci second.
+        // Score every otherwise-valid completed impulse against the exact
+        // chart/framework levels before choosing the controlling impulse.
+        // This prevents the highest generic hierarchy score from selecting a
+        // broad or stale leg that cannot validate the chart's actual S/R or
+        // S/D structure.
+        const candidateSwingLow =
+          direction === "bullish"
+            ? Number(candidate.protectedPrice)
+            : Number(finalExtremePrice);
+        const candidateSwingHigh =
+          direction === "bullish"
+            ? Number(finalExtremePrice)
+            : Number(candidate.protectedPrice);
+
+        return {
+          ...candidate,
+          structuralHintScore: scoreFibonacciFrameAgainstStructuralHints({
+            direction,
+            swingLow: candidateSwingLow,
+            swingHigh: candidateSwingHigh,
+            structuralLevelHints,
+            atr,
+            symbol,
+          }),
+        };
+      })
       .sort((a, b) => {
+        const aHintMatches = Number(a?.structuralHintScore?.matchCount || 0);
+        const bHintMatches = Number(b?.structuralHintScore?.matchCount || 0);
+
+        if (aHintMatches !== bHintMatches) {
+          return bHintMatches - aHintMatches;
+        }
+
+        if (aHintMatches > 0) {
+          const aHintDistance = Number(
+            a?.structuralHintScore?.normalizedDistanceSum
+          );
+          const bHintDistance = Number(
+            b?.structuralHintScore?.normalizedDistanceSum
+          );
+
+          if (
+            Number.isFinite(aHintDistance) &&
+            Number.isFinite(bHintDistance) &&
+            Math.abs(aHintDistance - bHintDistance) > 0.05
+          ) {
+            return aHintDistance - bHintDistance;
+          }
+        }
+
         const adjustedDifference =
           Number(
             b.hierarchyAdjustedScore
@@ -12797,11 +12948,58 @@ function buildLatestImpulseFibonacci({
     };
   };
 
-  const outerStructuralOrigin =
+  let outerStructuralOrigin =
     findOuterStructuralOrigin({
       selection:
         majorSelection,
     });
+
+  if (majorSelection && outerStructuralOrigin && structuralLevelHints.length) {
+    const localFrameScore = scoreFibonacciFrameAgainstStructuralHints({
+      direction,
+      swingLow:
+        direction === "bullish"
+          ? Number(majorSelection.protectedPrice)
+          : Number(finalExtremePrice),
+      swingHigh:
+        direction === "bullish"
+          ? Number(finalExtremePrice)
+          : Number(majorSelection.protectedPrice),
+      structuralLevelHints,
+      atr,
+      symbol,
+    });
+    const outerFrameScore = scoreFibonacciFrameAgainstStructuralHints({
+      direction,
+      swingLow:
+        direction === "bullish"
+          ? Number(outerStructuralOrigin.price)
+          : Number(finalExtremePrice),
+      swingHigh:
+        direction === "bullish"
+          ? Number(finalExtremePrice)
+          : Number(outerStructuralOrigin.price),
+      structuralLevelHints,
+      atr,
+      symbol,
+    });
+    const localMatches = Number(localFrameScore.matchCount || 0);
+    const outerMatches = Number(outerFrameScore.matchCount || 0);
+    const localDistance = Number(localFrameScore.normalizedDistanceSum || 0);
+    const outerDistance = Number(outerFrameScore.normalizedDistanceSum || 0);
+
+    // A broader outer origin is retained only when it explains at least as
+    // much exact structure as the protected local swing. On equal matches,
+    // require the outer frame to be no worse on normalized distance.
+    if (
+      localMatches > outerMatches ||
+      (localMatches > 0 &&
+        localMatches === outerMatches &&
+        localDistance < outerDistance)
+    ) {
+      outerStructuralOrigin = null;
+    }
+  }
 
   let controllingEvent =
     majorSelection?.breakEvent ||
@@ -13075,9 +13273,37 @@ function buildLatestImpulseFibonacci({
 
   let finalVisibleTerminalImpulseApplied = false;
 
+  const majorStructuralScore = scoreFibonacciFrameAgainstStructuralHints({
+    direction,
+    swingLow: selectedSwingLow,
+    swingHigh: selectedSwingHigh,
+    structuralLevelHints,
+    atr,
+    symbol,
+  });
+
+  const terminalStructuralScore = finalVisibleTerminalImpulse
+    ? scoreFibonacciFrameAgainstStructuralHints({
+        direction,
+        swingLow:
+          direction === "bullish"
+            ? finalVisibleTerminalImpulse.originPrice
+            : finalVisibleTerminalImpulse.terminalPrice,
+        swingHigh:
+          direction === "bullish"
+            ? finalVisibleTerminalImpulse.terminalPrice
+            : finalVisibleTerminalImpulse.originPrice,
+        structuralLevelHints,
+        atr,
+        symbol,
+      })
+    : null;
+
   if (shouldApplyFinalVisibleTerminalImpulse({
     terminalImpulse: finalVisibleTerminalImpulse,
     majorSelection,
+    terminalStructuralScore,
+    majorStructuralScore,
   })) {
     if (direction === "bullish") {
       selectedSwingLow = finalVisibleTerminalImpulse.originPrice;
@@ -13615,6 +13841,8 @@ function buildLatestImpulseFibonacci({
       ? {
           ...finalVisibleTerminalImpulse,
           applied: finalVisibleTerminalImpulseApplied,
+          structuralScore: terminalStructuralScore,
+          competingMajorStructuralScore: majorStructuralScore,
         }
       : null,
     finalVisibleEndpointAuthority: finalVisibleEndpointEnabled
@@ -14010,6 +14238,7 @@ function evaluateRequiredFibonacciConfluence({
   symbol = "",
   structuralQualityScore = 0,
   structuralEvidenceStrong = false,
+  exactChartFrameworkConfirmed = false,
 }) {
   const low = Number(zoneLow);
   const high = Number(zoneHigh);
@@ -14042,17 +14271,11 @@ function evaluateRequiredFibonacciConfluence({
   // It only validates an already-authoritative S/R or S/D area.
   //
   // CSA acceptance model:
-  // A) 38.2%: a structural area qualifies when it is at / close to 38.2.
-  // B) 50%-61.8%: this is an acceptance BAND, not two exact-price targets.
-  //    Any independently valid structural area that falls inside / overlaps
-  //    the band qualifies.
-  // C) A clearly deep area beyond 61.8% fails the entry gate. A structurally
-  //    strong area just past the exact 61.8 line may still qualify through the
-  //    same conservative close/borderline proximity allowance used for 38.2.
-  // D) Exact/close proximity to 50% or 61.8% remains valid naturally.
-  //
-  // This implements the CSA rule that "close proximity" does not mean exact
-  // equality to a Fib price and that the 50%-61.8% region is valid as a zone.
+  // A structural area must be at or close to the actual 38.2%, 50% or 61.8%
+  // retracement. The interval between 50% and 61.8% is not itself a pass.
+  // Exact chart prices that reconcile to authoritative framework structure
+  // receive a small broker/OCR allowance, but Fibonacci still cannot invent
+  // an entry or rescue an unrelated level.
   const minimumInstrumentBuffer = Math.max(
     getCleanBreakTolerance(symbol) * 0.5,
     Number.EPSILON * 100
@@ -14061,12 +14284,12 @@ function evaluateRequiredFibonacciConfluence({
   // Retain a conservative proximity test around the individual Fib levels,
   // especially 38.2%. Borderline proximity still requires strong structure.
   const closeAllowance = Math.max(
-    normalizedAtr * 0.15,
+    normalizedAtr * (exactChartFrameworkConfirmed ? 0.6 : 0.15),
     minimumInstrumentBuffer
   );
 
   const borderlineAllowance = Math.max(
-    normalizedAtr * 0.20,
+    normalizedAtr * (exactChartFrameworkConfirmed ? 0.6 : 0.20),
     closeAllowance
   );
 
@@ -15659,7 +15882,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.11.0";
+const CSA_SELECTOR_VERSION = "4.12.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -18823,6 +19046,128 @@ function resolveFinalVisibleCurrentStructureRegime({
 }
 
 
+function buildExactChartFrameworkCandidates({
+  visualReview = {},
+  marketReference = {},
+  direction = "range",
+  currentPrice = null,
+  symbol = "",
+  atr = 0,
+} = {}) {
+  if (
+    !["bullish", "bearish"].includes(direction) ||
+    !Number.isFinite(Number(currentPrice))
+  ) {
+    return [];
+  }
+
+  const exactPrices = (Array.isArray(visualReview?.visibleMarkedLevels)
+    ? visualReview.visibleMarkedLevels
+    : [])
+    .filter((item) =>
+      [
+        "independent_horizontal_line_reader_exact",
+        "per_target_framework_price_reader",
+      ].includes(String(item?.extractionSource || ""))
+    )
+    .map((item) => nullablePositiveNumber(item?.displayedPrice))
+    .filter((price) => price !== null);
+  const frameworkAreas = Array.isArray(marketReference?.csaAreas)
+    ? marketReference.csaAreas
+    : [];
+  const dailyLevels = Array.isArray(marketReference?.dailyLevels)
+    ? marketReference.dailyLevels
+    : [];
+  const tolerance = getFrameworkChartReconciliationTolerance({
+    symbol,
+    atr,
+  });
+
+  return exactPrices
+    .map((chartPrice) => {
+      const match = frameworkAreas
+        .map((area) => ({
+          area,
+          frameworkPrice: asPositiveNumber(area?.price),
+        }))
+        .filter((item) => item.frameworkPrice !== null)
+        .map((item) => ({
+          ...item,
+          distance: Math.abs(item.frameworkPrice - chartPrice),
+        }))
+        .filter((item) => item.distance <= tolerance)
+        .sort((a, b) => a.distance - b.distance)[0];
+
+      if (!match) return null;
+
+      const originalType = String(match.area?.type || "").toLowerCase();
+      const convertedType =
+        direction === "bullish" &&
+        originalType === "resistance" &&
+        chartPrice < Number(currentPrice)
+          ? "converted support"
+          : direction === "bearish" &&
+            originalType === "support" &&
+            chartPrice > Number(currentPrice)
+          ? "converted resistance"
+          : originalType;
+      const sideCompatible =
+        direction === "bullish"
+          ? ["support", "demand", "converted support"].includes(convertedType) &&
+            chartPrice < Number(currentPrice)
+          : ["resistance", "supply", "converted resistance"].includes(convertedType) &&
+            chartPrice > Number(currentPrice);
+
+      if (!sideCompatible) return null;
+
+      const period =
+        match.area?.day ||
+        match.area?.period ||
+        match.area?.date ||
+        null;
+      const sourceIndex = dailyLevels.findIndex((level) =>
+        [level?.periodLabel, level?.day, level?.key, level?.date]
+          .filter(Boolean)
+          .some((value) => String(value) === String(period))
+      );
+      const conversionBreakConfirmed =
+        convertedType === "converted support" ||
+        convertedType === "converted resistance";
+
+      return {
+        price: chartPrice,
+        frameworkPrice: match.frameworkPrice,
+        type: convertedType,
+        originalType,
+        source: "exact_chart_framework_level_pre_fib",
+        priceSource: "independent_horizontal_line_reader_exact",
+        chartReconciled: true,
+        chartExactFrameworkConfirmed: true,
+        reconciliationDifference: match.distance,
+        period,
+        sourceIndex,
+        conversionBreakConfirmed,
+        conversionConfirmed: false,
+        priorPeriodSrConversion: conversionBreakConfirmed,
+        authoritativeFrameworkLevel: true,
+        stepwiseEntryStage: conversionBreakConfirmed
+          ? "earlier_broken_sr"
+          : originalType === "support" || originalType === "resistance"
+          ? "support_resistance"
+          : "supply_demand",
+        authorityRank: 0,
+      };
+    })
+    .filter(Boolean)
+    .filter((candidate, index, candidates) =>
+      candidates.findIndex(
+        (item) =>
+          Math.abs(Number(item.price) - Number(candidate.price)) <=
+          Number.EPSILON * 100
+      ) === index
+    );
+}
+
 function rankRawEntryAreas({
   visualReview = {},
   marketReference = {},
@@ -18981,6 +19326,31 @@ function rankRawEntryAreas({
     atr,
     symbol,
   });
+
+  // Exact chart labels may refine an already-authoritative CSA framework
+  // level before the Fibonacci gate. They still cannot create structure: each
+  // label must map to an existing csaArea on the same price scale.
+  const exactChartFrameworkCandidates =
+    buildExactChartFrameworkCandidates({
+      visualReview,
+      marketReference,
+      direction,
+      currentPrice,
+      symbol,
+      atr,
+    });
+
+  if (exactChartFrameworkCandidates.length) {
+    frameworkCandidates = attachPivotConfirmationToFrameworkCandidates({
+      frameworkCandidates: [
+        ...frameworkCandidates,
+        ...exactChartFrameworkCandidates,
+      ],
+      pivots: confirmedPivots,
+      atr,
+      symbol,
+    });
+  }
 
   // MAIN SELECTOR ADJACENT-CONVERSION INSERTION.
   // This runs inside the active entry selector, after framework candidates
@@ -19146,6 +19516,7 @@ function rankRawEntryAreas({
       finalVisibleFibEndpointAuthority,
     historicalFrameworkImpulseAuthority:
       historicalFrameworkFibImpulseAuthority,
+    structuralLevelHints: exactChartFrameworkCandidates,
   });
 
   const finalVisibleSupplyDemandCandidates =
@@ -19780,9 +20151,18 @@ function rankRawEntryAreas({
         member?.stepwiseEntryStage === "immediate_prior_broken_sr"
       ) === true;
 
+    const exactChartFrameworkConfirmed =
+      rawZone?.members?.some?.(
+        (member) =>
+          member?.chartExactFrameworkConfirmed === true &&
+          member?.authoritativeFrameworkLevel === true
+      ) === true;
+
     const structurallyValid =
       isAuthoritativeFrameworkLevel &&
-      (quality.valid || priorBreakAndCloseConversion);
+      (quality.valid ||
+        priorBreakAndCloseConversion ||
+        exactChartFrameworkConfirmed);
 
     structuralGateDiagnostics.push({
       frameworkPrice:
@@ -19805,6 +20185,7 @@ function rankRawEntryAreas({
       conversionBreakConfirmed:
         rawZone?.conversionBreakConfirmed === true,
       priorBreakAndCloseConversion,
+      exactChartFrameworkConfirmed,
       historicalTakeoverIntradayCandidate:
         isHistoricalTakeoverIntradayLevel,
       structurallyValid,
@@ -19843,6 +20224,7 @@ function rankRawEntryAreas({
       symbol,
       structuralQualityScore: quality.score,
       structuralEvidenceStrong,
+      exactChartFrameworkConfirmed,
     });
 
     if (
@@ -19935,6 +20317,7 @@ function rankRawEntryAreas({
       strongStructure: fibConfluence.strongStructure,
       structuralStrengthMode,
       reEarnedStrongStructure,
+      exactChartFrameworkConfirmed,
       reactionCount: Number(reactionStats?.reactions || 0),
       strongDepartureCount: Number(reactionStats?.strongDepartures || 0),
       proximityAllowance: fibConfluence.proximityAllowance,
@@ -20047,6 +20430,7 @@ function rankRawEntryAreas({
       structuralScore,
       fibonacciScore,
       requiredFibConfluence: true,
+      exactChartFrameworkConfirmed,
       fibonacciConfluence: fibConfluence,
       qualityScore:
         structuralScore +
@@ -20097,6 +20481,8 @@ function rankRawEntryAreas({
         safeUserText(rawZone?.members?.[0]?.priceSource || "framework_data"),
       chartReconciled:
         rawZone?.members?.[0]?.chartReconciled === true,
+      chartExactFrameworkConfirmed:
+        exactChartFrameworkConfirmed,
       reconciliationEvidence:
         safeUserText(
           rawZone?.members?.[0]?.reconciliationEvidence || ""
@@ -20264,6 +20650,8 @@ function rankRawEntryAreas({
           Number(candidate.strongDepartureCount || 0),
         conversionBreakConfirmed:
           candidate.conversionBreakConfirmed === true,
+        exactChartFrameworkConfirmed:
+          candidate.exactChartFrameworkConfirmed === true,
       })),
     fibCandidates:
       fibGateDiagnostics.map((candidate) => ({
@@ -20299,6 +20687,8 @@ function rankRawEntryAreas({
           candidate.structuralQualityScore ?? null,
         strongStructure:
           candidate.strongStructure === true,
+        exactChartFrameworkConfirmed:
+          candidate.exactChartFrameworkConfirmed === true,
         proximityAllowance:
           candidate.proximityAllowance ?? null,
         fibonacciSource:

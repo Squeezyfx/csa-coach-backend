@@ -192,7 +192,7 @@ test("independent supply or demand requires its own structural evidence", () => 
   );
 });
 
-test("final-visible terminal impulse remains authoritative over an older major impulse", () => {
+test("final-visible terminal impulse must improve exact structural confluence", () => {
   const terminalImpulse = { enabled: true };
   assert.equal(
     shouldApplyFinalVisibleTerminalImpulse({ terminalImpulse, majorSelection: null }),
@@ -200,8 +200,34 @@ test("final-visible terminal impulse remains authoritative over an older major i
   );
   assert.equal(
     shouldApplyFinalVisibleTerminalImpulse({ terminalImpulse, majorSelection: { pivotPrice: 1.2 } }),
+    false
+  );
+  assert.equal(
+    shouldApplyFinalVisibleTerminalImpulse({
+      terminalImpulse,
+      majorSelection: { pivotPrice: 1.2 },
+      terminalStructuralScore: { matchCount: 2, normalizedDistanceSum: 0.4 },
+      majorStructuralScore: { matchCount: 1, normalizedDistanceSum: 0.1 },
+    }),
     true
   );
+  assert.equal(
+    shouldApplyFinalVisibleTerminalImpulse({
+      terminalImpulse,
+      majorSelection: { pivotPrice: 1.2 },
+      terminalStructuralScore: { matchCount: 1, normalizedDistanceSum: 0.9 },
+      majorStructuralScore: { matchCount: 1, normalizedDistanceSum: 0.5 },
+    }),
+    false
+  );
+});
+
+test("selector reconciles exact chart/framework levels before choosing Fibonacci", () => {
+  const serverSource = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  assert.match(serverSource, /function buildExactChartFrameworkCandidates/);
+  assert.match(serverSource, /structuralLevelHints: exactChartFrameworkCandidates/);
+  assert.match(serverSource, /structuralHintScore: scoreFibonacciFrameAgainstStructuralHints/);
+  assert.match(serverSource, /chartExactFrameworkConfirmed/);
 });
 
 test("Fibonacci qualification cannot use the whole 50%-61.8% interval as confluence", () => {
