@@ -149,12 +149,24 @@ test("Entry 2 may be a separate converted level only when it independently quali
   const selected = selectIndependentEntryAreas(
     [
       { id: "entry-1", areaType: "converted resistance", authoritativeCenter: 53275.6, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 60, fibonacciScore: 1, priceSource: "independent_horizontal_line_reader_exact" },
-      { id: "entry-2", areaType: "converted resistance", authoritativeCenter: 53421.2, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 55, fibonacciScore: 1, priceSource: "independent_horizontal_line_reader_exact" },
+      { id: "entry-2", areaType: "converted resistance", authoritativeCenter: 53421.2, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 55, fibonacciScore: 1, priceSource: "independent_horizontal_line_reader_exact", independentEntryEvidence: true },
     ],
     "bearish"
   );
 
   assert.deepEqual(selected.map((item) => item.id), ["entry-1", "entry-2"]);
+});
+
+test("a second exact same-stage level is rejected without independent evidence", () => {
+  const selected = selectIndependentEntryAreas(
+    [
+      { id: "entry-1", areaType: "converted support", authoritativeCenter: 4436.15, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 60, fibonacciScore: 1, chartExactFrameworkConfirmed: true },
+      { id: "duplicate", areaType: "converted support", authoritativeCenter: 4428.73, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 55, fibonacciScore: 1, chartExactFrameworkConfirmed: true },
+    ],
+    "bullish"
+  );
+
+  assert.deepEqual(selected.map((item) => item.id), ["entry-1"]);
 });
 
 test("exact marked level outranks a nearer inferred fragment after shared Fib qualification", () => {
@@ -183,6 +195,13 @@ test("an inferred same-stage fragment cannot become Entry 2 behind a marked leve
 
 test("independent supply or demand requires its own structural evidence", () => {
   assert.equal(hasIndependentStructuralEntryEvidence({ areaType: "demand" }), false);
+  assert.equal(
+    hasIndependentStructuralEntryEvidence({
+      areaType: "demand",
+      strongDepartureCount: 1,
+    }),
+    false
+  );
   assert.equal(
     hasIndependentStructuralEntryEvidence({
       areaType: "demand",
@@ -220,6 +239,24 @@ test("final-visible terminal impulse must improve exact structural confluence", 
     }),
     false
   );
+  assert.equal(
+    shouldApplyFinalVisibleTerminalImpulse({
+      terminalImpulse,
+      majorSelection: { pivotPrice: 1.2 },
+      direction: "bearish",
+      terminalStructuralScore: {
+        matchCount: 1,
+        normalizedDistanceSum: 0.6,
+        matches: [{ price: 1.38022 }],
+      },
+      majorStructuralScore: {
+        matchCount: 1,
+        normalizedDistanceSum: 0.2,
+        matches: [{ price: 1.38767 }],
+      },
+    }),
+    true
+  );
 });
 
 test("selector reconciles exact chart/framework levels before choosing Fibonacci", () => {
@@ -228,6 +265,8 @@ test("selector reconciles exact chart/framework levels before choosing Fibonacci
   assert.match(serverSource, /structuralLevelHints: exactChartFrameworkCandidates/);
   assert.match(serverSource, /structuralHintScore: scoreFibonacciFrameAgainstStructuralHints/);
   assert.match(serverSource, /chartExactFrameworkConfirmed/);
+  assert.match(serverSource, /function rankChartNativeFallbackAreas/);
+  assert.match(serverSource, /internalChartNativeFallback/);
 });
 
 test("Fibonacci qualification cannot use the whole 50%-61.8% interval as confluence", () => {
@@ -393,6 +432,13 @@ test("ordinary chart reconciliation does not impersonate an independently marked
       priceSource: "per_target_framework_price",
     }),
     false
+  );
+  assert.equal(
+    hasIndependentChartPriceEvidence({
+      chartExactFrameworkConfirmed: true,
+      priceSource: "per_target_framework_price",
+    }),
+    true
   );
 });
 

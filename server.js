@@ -7912,6 +7912,15 @@ SCORING RULES:
 - Missing trigger lowers readiness but does not make entry accuracy 0.
 - Missing stop/target lowers risk management but does not make it 0.
 
+INTERNAL CHART-NATIVE FALLBACK (never show this wording to the customer):
+- Complete this only when Twelve Data available for this review is "no".
+- Read the instrument, timeframe, final visible price, exact printed horizontal prices, and the latest completed directional impulse directly from the screenshot.
+- Apply the fixed order: (1) support/resistance and genuine conversions, (2) independent supply/demand displacement bases, (3) hidden 38.2/50/61.8 Fibonacci confluence, (4) Entry 1 then optional Entry 2 by price path.
+- Fibonacci may qualify structure but may never create a level. Do not mention Fibonacci in any customer-facing field.
+- An S/R candidate requires an exact printed chart price. A supply/demand candidate requires a visible base/zone and its own displacement evidence.
+- Return no more than two candidates. Candidate 2 must be a genuinely separate structural opportunity; a nearby fragment or duplicate of Candidate 1 is not independent.
+- Set usable=false rather than guessing any unreadable price, impulse, direction, or structural role.
+
 Return exactly this JSON shape:
 {
   "frameworkMatch": "strong | partial | weak | not enough evidence",
@@ -8010,7 +8019,28 @@ Return exactly this JSON shape:
   "strategyRulesFollowed": ["short rule followed"],
   "strategyRulesViolated": ["short rule violated"],
   "strategyMissingInformation": ["missing information"],
-  "strategyVerdict": "Valid strategy setup | Partially follows strategy | Does not follow strategy | Not enough evidence"
+  "strategyVerdict": "Valid strategy setup | Partially follows strategy | Does not follow strategy | Not enough evidence",
+  "internalChartNativeFallback": {
+    "usable": false,
+    "direction": "bullish | bearish | range",
+    "currentPrice": null,
+    "swingHigh": null,
+    "swingLow": null,
+    "candidates": [
+      {
+        "price": null,
+        "zoneLow": null,
+        "zoneHigh": null,
+        "areaType": "support | resistance | demand | supply | converted support | converted resistance",
+        "exactVisiblePrice": false,
+        "conversionBreakConfirmed": false,
+        "structuralEvidence": "specific visible line lifecycle or displacement-base evidence",
+        "independentEntryEvidence": false,
+        "fibRatio": null,
+        "fibPrice": null
+      }
+    ]
+  }
 }`;
 
   try {
@@ -8152,6 +8182,9 @@ Return exactly this JSON shape:
       ).trim(),
       entryEvidence: safeUserText(parsed.entryEvidence),
       riskEvidence: safeUserText(parsed.riskEvidence),
+      chartNativeEntryFallback: normalizeChartNativeEntryFallback(
+        parsed.internalChartNativeFallback || {}
+      ),
       visualQualityWarning,
       raw: response.text || "",
     };
@@ -10509,8 +10542,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.28.0";
-const CSA_BUILD_ID = "CSA-v4.17.0-structure-guided-impulse-selection";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.29.0";
+const CSA_BUILD_ID = "CSA-v4.18.0-chart-native-fallback-entry-dedupe";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -13304,6 +13337,7 @@ function buildLatestImpulseFibonacci({
     majorSelection,
     terminalStructuralScore,
     majorStructuralScore,
+    direction,
   })) {
     if (direction === "bullish") {
       selectedSwingLow = finalVisibleTerminalImpulse.originPrice;
@@ -15882,7 +15916,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.12.0";
+const CSA_SELECTOR_VERSION = "4.13.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19168,6 +19202,180 @@ function buildExactChartFrameworkCandidates({
     );
 }
 
+function normalizeChartNativeEntryFallback(value = {}) {
+  const direction = String(value?.direction || "").toLowerCase();
+  const candidates = (Array.isArray(value?.candidates) ? value.candidates : [])
+    .slice(0, 6)
+    .map((candidate) => ({
+      price: nullablePositiveNumber(candidate?.price),
+      zoneLow: nullablePositiveNumber(candidate?.zoneLow),
+      zoneHigh: nullablePositiveNumber(candidate?.zoneHigh),
+      areaType: String(candidate?.areaType || "").toLowerCase().trim(),
+      exactVisiblePrice: candidate?.exactVisiblePrice === true,
+      conversionBreakConfirmed: candidate?.conversionBreakConfirmed === true,
+      structuralEvidence: safeUserText(candidate?.structuralEvidence || ""),
+      independentEntryEvidence: candidate?.independentEntryEvidence === true,
+      fibRatio: Number(candidate?.fibRatio),
+      fibPrice: nullablePositiveNumber(candidate?.fibPrice),
+    }))
+    .filter((candidate) => candidate.price !== null);
+
+  return {
+    usable:
+      value?.usable === true &&
+      ["bullish", "bearish"].includes(direction) &&
+      candidates.length > 0,
+    direction,
+    currentPrice: nullablePositiveNumber(value?.currentPrice),
+    swingHigh: nullablePositiveNumber(value?.swingHigh),
+    swingLow: nullablePositiveNumber(value?.swingLow),
+    candidates,
+    source: "focused_uploaded_chart_structure_fallback",
+  };
+}
+
+function rankChartNativeFallbackAreas({
+  visualReview = {},
+  direction = "range",
+  currentPrice = null,
+  symbol = "",
+} = {}) {
+  const fallback = visualReview?.chartNativeEntryFallback || {};
+  const resolvedCurrentPrice =
+    asPositiveNumber(currentPrice) || asPositiveNumber(fallback?.currentPrice);
+
+  if (
+    fallback?.usable !== true ||
+    fallback?.direction !== direction ||
+    resolvedCurrentPrice === null
+  ) {
+    return null;
+  }
+
+  const allowedTypes = direction === "bullish"
+    ? new Set(["support", "demand", "converted support"])
+    : new Set(["resistance", "supply", "converted resistance"]);
+  const allowedFibRatios = [0.382, 0.5, 0.618];
+  const approvedTolerance = getApprovedPriceTolerance(symbol);
+
+  const candidates = (fallback.candidates || []).map((candidate) => {
+    const price = asPositiveNumber(candidate?.price);
+    const areaType = String(candidate?.areaType || "").toLowerCase().trim();
+    const ratio = Number(candidate?.fibRatio);
+    const fibRatio = allowedFibRatios.find(
+      (allowed) => Number.isFinite(ratio) && Math.abs(ratio - allowed) <= 0.002
+    );
+    const sideCompatible = price !== null && (
+      direction === "bullish"
+        ? price < resolvedCurrentPrice
+        : price > resolvedCurrentPrice
+    );
+    const isSupplyDemand = ["supply", "demand"].includes(areaType);
+    const structuralEvidenceValid = isSupplyDemand
+      ? candidate?.independentEntryEvidence === true &&
+        Boolean(candidate?.structuralEvidence)
+      : candidate?.exactVisiblePrice === true;
+
+    if (
+      !allowedTypes.has(areaType) ||
+      !sideCompatible ||
+      !fibRatio ||
+      !structuralEvidenceValid
+    ) {
+      return null;
+    }
+
+    const rawLow = asPositiveNumber(candidate?.zoneLow) || price;
+    const rawHigh = asPositiveNumber(candidate?.zoneHigh) || price;
+    const zoneLow = Math.min(rawLow, rawHigh);
+    const zoneHigh = Math.max(rawLow, rawHigh);
+    const converted = ["converted support", "converted resistance"].includes(areaType);
+
+    return {
+      direction: direction === "bullish" ? "buy" : "sell",
+      areaType,
+      zoneLow,
+      zoneHigh,
+      authoritativeCenter: price,
+      resolvedEntryPrice: price,
+      levelText: formatPrice(price, symbol),
+      zoneText: isSupplyDemand && zoneHigh - zoneLow > approvedTolerance
+        ? `${formatPrice(zoneLow, symbol)} to ${formatPrice(zoneHigh, symbol)}`
+        : `around ${formatPrice(price, symbol)}`,
+      state: converted ? "potential conversion" : "active",
+      priceStatus: "not reached",
+      source: "chart_native_market_data_fallback",
+      priceSource: candidate.exactVisiblePrice
+        ? "independent_horizontal_line_reader_exact"
+        : "uploaded_chart_supply_demand_zone",
+      authoritativeFrameworkLevel: true,
+      chartReconciled: true,
+      chartExactFrameworkConfirmed: candidate.exactVisiblePrice === true,
+      exactChartFrameworkConfirmed: candidate.exactVisiblePrice === true,
+      conversionBreakConfirmed:
+        converted && candidate.conversionBreakConfirmed === true,
+      conversionConfirmed: false,
+      priorPeriodSrConversion:
+        converted && candidate.conversionBreakConfirmed === true,
+      stepwiseEntryStage: isSupplyDemand
+        ? "current_period_supply_demand"
+        : converted
+        ? "immediate_prior_broken_sr"
+        : "support_resistance",
+      standardStructuralStage: isSupplyDemand
+        ? "supply_demand"
+        : "support_resistance",
+      independentEntryEvidence: candidate.independentEntryEvidence === true,
+      samePeriodDisplacementBaseValidated:
+        isSupplyDemand && candidate.independentEntryEvidence === true,
+      structuralScore: 60,
+      fibonacciScore: 1,
+      requiredFibConfluence: true,
+      fibonacciMatches: [{
+        label: fibRatio === 0.382 ? "38.2" : fibRatio === 0.5 ? "50.0" : "61.8",
+        ratio: fibRatio,
+        price: asPositiveNumber(candidate?.fibPrice),
+        matchType: "chart_native_hidden_fibonacci",
+      }],
+      fibonacciSource: "uploaded_chart_completed_impulse",
+      fibOriginModel: "chart_native_completed_directional_impulse",
+      selectorQualityReason: safeUserText(candidate?.structuralEvidence || ""),
+      validated: true,
+    };
+  }).filter(Boolean);
+
+  const selected = selectIndependentEntryAreas(candidates, direction)
+    .map((area, index) => ({
+      ...area,
+      executionOrder: index + 1,
+      role: index === 0 ? "primary" : "secondary",
+    }));
+
+  if (!selected.length) return null;
+
+  return {
+    areas: selected,
+    referenceAreas: [],
+    validation: {
+      passed: true,
+      errors: [],
+      selectorVersion: CSA_SELECTOR_VERSION,
+      fallbackSource: "uploaded_chart_only",
+    },
+    regressionDiagnostics: {
+      selectorVersion: CSA_SELECTOR_VERSION,
+      direction,
+      fallbackSource: "uploaded_chart_only",
+      fibonacci: {
+        source: "uploaded_chart_completed_impulse",
+        swingLow: fallback.swingLow ?? null,
+        swingHigh: fallback.swingHigh ?? null,
+      },
+      selectedEntries: selected,
+    },
+  };
+}
+
 function rankRawEntryAreas({
   visualReview = {},
   marketReference = {},
@@ -19259,6 +19467,27 @@ function rankRawEntryAreas({
       Number(currentPrice)
     )
   ) {
+    const chartNativeFallback = rankChartNativeFallbackAreas({
+      visualReview,
+      direction,
+      currentPrice,
+      symbol,
+    });
+
+    if (chartNativeFallback) {
+      console.log("CSA chart-native market-data fallback selected:", {
+        buildId: CSA_BUILD_ID,
+        selectorVersion: CSA_SELECTOR_VERSION,
+        direction,
+        entries: chartNativeFallback.areas.map((area) => ({
+          areaType: area.areaType,
+          levelText: area.levelText,
+          executionOrder: area.executionOrder,
+        })),
+      });
+      return chartNativeFallback;
+    }
+
     return {
       areas: [],
       validation: {

@@ -157,7 +157,14 @@ export function selectIndependentEntryAreas(candidates = [], direction = "range"
 
     const candidateStage = classifyCsaStructuralStage(candidate).key;
 
-    if (hasIndependentChartPriceEvidence(candidate)) return true;
+    // A second exact-looking price is not automatically a second entry. It
+    // must still prove that it represents a separate structural opportunity.
+    // This blocks adjacent OCR/framework fragments such as 4428.73 behind
+    // 4436.15, while preserving explicitly independent pairs such as the two
+    // separate USA30 converted-resistance levels.
+    if (hasIndependentChartPriceEvidence(candidate)) {
+      return candidate?.independentEntryEvidence === true;
+    }
 
     // A different structural stage may provide Entry 2, but only when the
     // detector retained its own displacement/base evidence. Merely having a
@@ -185,8 +192,7 @@ export function hasIndependentStructuralEntryEvidence(area = {}) {
   return (
     area?.structuralZoneReinforcedByIntradayStructure === true ||
     area?.supplyDemandRefinedBySamePeriodBase === true ||
-    area?.samePeriodDisplacementBaseValidated === true ||
-    Number(area?.strongDepartureCount || 0) > 0
+    area?.samePeriodDisplacementBaseValidated === true
   );
 }
 
@@ -195,6 +201,7 @@ export function shouldApplyFinalVisibleTerminalImpulse({
   majorSelection = null,
   terminalStructuralScore = null,
   majorStructuralScore = null,
+  direction = "range",
 } = {}) {
   if (terminalImpulse?.enabled !== true) return false;
   if (!majorSelection) return true;
@@ -212,6 +219,32 @@ export function shouldApplyFinalVisibleTerminalImpulse({
   }
 
   if (terminalMatches > 0) {
+    const terminalPrices = (terminalStructuralScore?.matches || [])
+      .map((match) => Number(match?.price))
+      .filter(Number.isFinite);
+    const majorPrices = (majorStructuralScore?.matches || [])
+      .map((match) => Number(match?.price))
+      .filter(Number.isFinite);
+
+    if (terminalPrices.length && majorPrices.length) {
+      const terminalNearest = direction === "bearish"
+        ? Math.min(...terminalPrices)
+        : Math.max(...terminalPrices);
+      const majorNearest = direction === "bearish"
+        ? Math.min(...majorPrices)
+        : Math.max(...majorPrices);
+
+      // When both frames validate the same number of chart-exact structural
+      // levels, prefer the completed terminal impulse if it validates the
+      // first level price will meet on the current directional path.
+      if (
+        (direction === "bearish" && terminalNearest < majorNearest) ||
+        (direction === "bullish" && terminalNearest > majorNearest)
+      ) {
+        return true;
+      }
+    }
+
     const terminalDistance = Number(
       terminalStructuralScore?.normalizedDistanceSum
     );
@@ -350,8 +383,10 @@ export function getSupplyDemandClusterTolerance(
 }
 
 export function hasIndependentChartPriceEvidence(area = {}) {
-  return /independent_horizontal_line/i.test(
-    String(area?.priceSource || "")
+  return (
+    area?.chartExactFrameworkConfirmed === true ||
+    area?.exactChartFrameworkConfirmed === true ||
+    /independent_horizontal_line/i.test(String(area?.priceSource || ""))
   );
 }
 
