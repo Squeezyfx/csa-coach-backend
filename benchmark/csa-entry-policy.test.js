@@ -192,7 +192,7 @@ test("independent supply or demand requires its own structural evidence", () => 
   );
 });
 
-test("terminal impulse is a fallback and cannot replace a dominant major impulse", () => {
+test("final-visible terminal impulse remains authoritative over an older major impulse", () => {
   const terminalImpulse = { enabled: true };
   assert.equal(
     shouldApplyFinalVisibleTerminalImpulse({ terminalImpulse, majorSelection: null }),
@@ -200,8 +200,14 @@ test("terminal impulse is a fallback and cannot replace a dominant major impulse
   );
   assert.equal(
     shouldApplyFinalVisibleTerminalImpulse({ terminalImpulse, majorSelection: { pivotPrice: 1.2 } }),
-    false
+    true
   );
+});
+
+test("Fibonacci qualification cannot use the whole 50%-61.8% interval as confluence", () => {
+  const serverSource = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  assert.equal(serverSource.includes('matchType: "inside_50_618_acceptance_band"'), false);
+  assert.match(serverSource, /const matches = exactLevelMatches;/);
 });
 
 test("redundant same-stage Entry 2 is rejected without independent chart evidence", () => {

@@ -10509,8 +10509,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.26.0";
-const CSA_BUILD_ID = "CSA-v4.15.0-dominant-impulse-marked-level-authority";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.27.0";
+const CSA_BUILD_ID = "CSA-v4.16.0-final-visible-fib-exact-level-authority";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -14152,24 +14152,10 @@ function evaluateRequiredFibonacciConfluence({
     (level) => level.passed === true
   );
 
-  const bandMatches = [];
-
-  if (zoneOverlapsDeepBand && level50 && level618) {
-    bandMatches.push({
-      ratio: null,
-      label: "50%-61.8% band",
-      price: null,
-      distanceToZone: 0,
-      distanceAsAtrFraction: 0,
-      distanceAsAtrPercent: 0,
-      matchType: "inside_50_618_acceptance_band",
-      passed: true,
-      bandLow: deepBandLow,
-      bandHigh: deepBandHigh,
-    });
-  }
-
-  const matches = [...bandMatches, ...exactLevelMatches];
+  // CSA Fibonacci is a confluence check against the actual 38.2%, 50% or
+  // 61.8% retracement. Merely sitting somewhere inside the wide 50%-61.8%
+  // interval is not confluence and previously admitted stale extra entries.
+  const matches = exactLevelMatches;
 
   return {
     passed: matches.length > 0,
@@ -14188,11 +14174,9 @@ function evaluateRequiredFibonacciConfluence({
     structuralQualityScore: Number(structuralQualityScore || 0),
     strongStructure,
     reason:
-      zoneOverlapsDeepBand
-        ? "structural_area_inside_50_618_acceptance_band"
-        : exactLevelMatches.length > 0
+      exactLevelMatches.length > 0
         ? "structural_area_has_required_retracement_proximity"
-        : "no_382_proximity_or_50_618_band_confluence",
+        : "no_382_50_or_618_level_proximity",
   };
 }
 
@@ -15675,7 +15659,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.10.0";
+const CSA_SELECTOR_VERSION = "4.11.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,

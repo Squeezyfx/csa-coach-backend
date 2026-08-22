@@ -192,12 +192,12 @@ export function hasIndependentStructuralEntryEvidence(area = {}) {
 
 export function shouldApplyFinalVisibleTerminalImpulse({
   terminalImpulse = null,
-  majorSelection = null,
 } = {}) {
-  // The latest terminal leg is a fallback. It must not replace an already
-  // resolved, completed dominant structural impulse; doing so changes the Fib
-  // frame from chart to chart and admits/rejects levels inconsistently.
-  return terminalImpulse?.enabled === true && !majorSelection;
+  // For a final-visible chart, the latest confirmed directional break is the
+  // impulse that produced the setup currently being evaluated. An older major
+  // swing remains useful context, but it must not replace this terminal leg or
+  // its broad range can manufacture stale Fibonacci-qualified entries.
+  return terminalImpulse?.enabled === true;
 }
 
 export function buildFinalVisibleTerminalImpulse({
