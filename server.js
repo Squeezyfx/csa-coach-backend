@@ -9,6 +9,7 @@ import {
   canonicalInstrumentCode,
   classifyCsaStructuralStage,
   consolidateQualifiedSupplyDemandClusters,
+  expandExactSupportResistanceBoundaries,
   getMarketDataSymbolCandidates,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
@@ -7137,6 +7138,17 @@ async function extractChartNativeImpulseAnchors({
     getStructureEngineConfig(timeframe).atrPeriod
   );
 
+  const structuralLevelHints = buildExactChartFrameworkCandidates({
+    visualReview,
+    marketReference,
+    direction,
+    currentPrice:
+      asPositiveNumber(chartDetection?.latestVisiblePrice) ||
+      currentReferencePrice(marketReference),
+    symbol,
+    atr,
+  });
+
   // Deterministic market-data structure remains responsible for deciding
   // WHICH impulse matters. The uploaded image is used only to move the two
   // swing prices onto the user's broker/platform scale.
@@ -7147,6 +7159,7 @@ async function extractChartNativeImpulseAnchors({
     timeframe,
     symbol,
     chartNativeImpulse: null,
+    structuralLevelHints,
     suppressImpulseLog: true,
   });
 
@@ -10542,8 +10555,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.30.0";
-const CSA_BUILD_ID = "CSA-v4.19.0-focused-fallback-secondary-independence";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.31.0";
+const CSA_BUILD_ID = "CSA-v4.20.0-exact-lines-structure-led-chart-impulse";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -12404,15 +12417,6 @@ function buildLatestImpulseFibonacci({
   // hierarchy-adjusted score rather than the v3.8 base significance alone.
   const majorBreakCandidates =
     hierarchyRankedPivots
-      .filter(
-        (candidate) =>
-          Number(
-            candidate.significanceScore
-          ) >= 18 &&
-          Number(
-            candidate.hierarchyAdjustedScore
-          ) >= 34
-      )
       .map((candidate) => {
         // CSA order of operations is structure first, Fibonacci second.
         // Score every otherwise-valid completed impulse against the exact
@@ -12441,6 +12445,13 @@ function buildLatestImpulseFibonacci({
           }),
         };
       })
+      .filter((candidate) =>
+        Number(candidate.significanceScore) >= 18 &&
+        (
+          Number(candidate.hierarchyAdjustedScore) >= 34 ||
+          Number(candidate?.structuralHintScore?.matchCount || 0) > 0
+        )
+      )
       .sort((a, b) => {
         const aHintMatches = Number(a?.structuralHintScore?.matchCount || 0);
         const bHintMatches = Number(b?.structuralHintScore?.matchCount || 0);
@@ -15916,7 +15927,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.14.0";
+const CSA_SELECTOR_VERSION = "4.15.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19291,6 +19302,7 @@ Apply this order exactly:
 Hard rules:
 - Fibonacci may qualify visible structure but may never create a price or area.
 - An S/R candidate must use an exact printed price from the screenshot.
+- Never combine two separately printed support/resistance prices into one zone. Return each printed S/R line as its own candidate with zoneLow=zoneHigh=price. Only a genuine visible supply/demand base may use different zone boundaries.
 - A supply/demand candidate needs a visible base/zone plus its own displacement.
 - Candidate 2 must not be a nearby fragment, duplicate, or unverified reference.
 - Do not mention Fibonacci in customer-facing wording; this result is internal.
@@ -19372,7 +19384,9 @@ function rankChartNativeFallbackAreas({
   const allowedFibRatios = [0.382, 0.5, 0.618];
   const approvedTolerance = getApprovedPriceTolerance(symbol);
 
-  const candidates = (fallback.candidates || []).map((candidate) => {
+  const candidates = expandExactSupportResistanceBoundaries(
+    fallback.candidates || []
+  ).map((candidate) => {
     const price = asPositiveNumber(candidate?.price);
     const areaType = String(candidate?.areaType || "").toLowerCase().trim();
     const ratio = Number(candidate?.fibRatio);

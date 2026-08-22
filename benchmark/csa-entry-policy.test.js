@@ -6,6 +6,7 @@ import {
   canonicalInstrumentCode,
   classifyCsaStructuralStage,
   consolidateQualifiedSupplyDemandClusters,
+  expandExactSupportResistanceBoundaries,
   getMarketDataSymbolCandidates,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
@@ -21,6 +22,40 @@ import {
   shouldMergeQualifiedSupplyDemandCluster,
   shouldApplyFinalVisibleTerminalImpulse,
 } from "../csa-entry-policy.js";
+
+test("keeps separately printed S/R boundaries as exact independent levels", () => {
+  const expanded = expandExactSupportResistanceBoundaries([
+    {
+      price: 53421.2,
+      zoneLow: 53275.6,
+      zoneHigh: 53421.2,
+      areaType: "converted resistance",
+      exactVisiblePrice: true,
+      independentEntryEvidence: true,
+      fibRatio: 0.618,
+    },
+  ]);
+
+  assert.deepEqual(
+    expanded.map((candidate) => [candidate.price, candidate.zoneLow, candidate.zoneHigh]),
+    [
+      [53275.6, 53275.6, 53275.6],
+      [53421.2, 53421.2, 53421.2],
+    ]
+  );
+});
+
+test("does not split a genuine supply/demand zone", () => {
+  const candidate = {
+    price: 1.40349,
+    zoneLow: 1.40349,
+    zoneHigh: 1.4044,
+    areaType: "demand",
+    exactVisiblePrice: true,
+  };
+
+  assert.deepEqual(expandExactSupportResistanceBoundaries([candidate]), [candidate]);
+});
 
 test("selector has no candidate-local Fibonacci source", () => {
   const serverSource = readFileSync(new URL("../server.js", import.meta.url), "utf8");

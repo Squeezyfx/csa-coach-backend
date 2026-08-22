@@ -124,6 +124,57 @@ export function sequenceFibQualifiedAreas(candidates = [], direction = "range") 
   });
 }
 
+export function expandExactSupportResistanceBoundaries(candidates = []) {
+  return candidates
+    .flatMap((candidate) => {
+      const areaType = String(candidate?.areaType || candidate?.type || "")
+        .toLowerCase()
+        .replace(/[_-]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      const low = Number(candidate?.zoneLow);
+      const high = Number(candidate?.zoneHigh);
+      const isExactSr =
+        candidate?.exactVisiblePrice === true &&
+        SR_TYPES.has(areaType) &&
+        Number.isFinite(low) &&
+        low > 0 &&
+        Number.isFinite(high) &&
+        high > 0 &&
+        Math.abs(high - low) > Number.EPSILON * 100;
+
+      if (!isExactSr) return [candidate];
+
+      // Separately printed S/R prices are point levels, not the boundaries of
+      // one broad zone. Preserve each line as independently selectable
+      // structure. Genuine supply/demand candidates remain bounded zones.
+      return [...new Set([low, high])].map((price) => ({
+        ...candidate,
+        price,
+        zoneLow: price,
+        zoneHigh: price,
+        areaType,
+        independentEntryEvidence: true,
+        structuralEvidence: [
+          String(candidate?.structuralEvidence || "").trim(),
+          "separate exact printed support/resistance line",
+        ]
+          .filter(Boolean)
+          .join("; "),
+      }));
+    })
+    .filter((candidate, index, expanded) => {
+      const price = Number(candidate?.price);
+      const areaType = String(candidate?.areaType || candidate?.type || "")
+        .toLowerCase()
+        .trim();
+      return expanded.findIndex((item) =>
+        Number(item?.price) === price &&
+        String(item?.areaType || item?.type || "").toLowerCase().trim() === areaType
+      ) === index;
+    });
+}
+
 export function selectIndependentEntryAreas(candidates = [], direction = "range") {
   // Every returned entry must carry its own completed structural validation
   // and its own pass against the batch-wide dominant Fibonacci impulse.

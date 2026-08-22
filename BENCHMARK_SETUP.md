@@ -2,7 +2,7 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.19.0-focused-fallback-secondary-independence`. Benchmark package v2.17 keeps broker-index aliases and time-axis reconciliation, gives exact chart-visible prices precedence after the shared structural/Fibonacci gates, runs a focused chart-native fallback only when external market data is unavailable, and prevents a broad major-swing Fibonacci from manufacturing an unverified secondary supply/demand entry. The batch-testing additions do not alter the customer analysis route.
+The included analysis backend is CSA build `v4.20.0-exact-lines-structure-led-chart-impulse`. Benchmark package v2.18 keeps separately printed support/resistance prices as separate point levels, uses exact chart/framework structure to select the relevant completed impulse before applying hidden Fibonacci confluence, retains broker-index aliases and time-axis reconciliation, and prevents a broad stale swing from displacing a nearer structurally relevant impulse. The batch-testing additions do not alter the customer analysis route.
 
 After every chart in an automatic batch is marked **Consistent**, use **Save all as strict benchmarks** to populate and retain the verified direction, entry prices, structural roles and supply/demand zone boundaries in the current browser. Review those populated values once, then run Strict Regression without retyping the fixtures.
 
