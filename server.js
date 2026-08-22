@@ -10555,8 +10555,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.31.0";
-const CSA_BUILD_ID = "CSA-v4.20.0-exact-lines-structure-led-chart-impulse";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.32.0";
+const CSA_BUILD_ID = "CSA-v4.21.0-fallback-audit-recent-structure-impulse";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -12456,11 +12456,22 @@ function buildLatestImpulseFibonacci({
         const aHintMatches = Number(a?.structuralHintScore?.matchCount || 0);
         const bHintMatches = Number(b?.structuralHintScore?.matchCount || 0);
 
-        if (aHintMatches !== bHintMatches) {
-          return bHintMatches - aHintMatches;
-        }
+        if (aHintMatches > 0 && bHintMatches > 0) {
+          // Exact chart structure is evaluated before Fibonacci. Once two
+          // completed impulses both agree with at least one exact structural
+          // level, prefer the more recent completed break. This prevents a
+          // stale, broad swing from winning merely because its wider Fib grid
+          // happens to overlap more old levels.
+          const recencyDifference =
+            Number(b.breakIndex) - Number(a.breakIndex);
 
-        if (aHintMatches > 0) {
+          if (
+            Number.isFinite(recencyDifference) &&
+            recencyDifference !== 0
+          ) {
+            return recencyDifference;
+          }
+
           const aHintDistance = Number(
             a?.structuralHintScore?.normalizedDistanceSum
           );
@@ -12475,6 +12486,10 @@ function buildLatestImpulseFibonacci({
           ) {
             return aHintDistance - bHintDistance;
           }
+        }
+
+        if (aHintMatches !== bHintMatches) {
+          return bHintMatches - aHintMatches;
         }
 
         const adjustedDifference =
@@ -15927,7 +15942,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.15.0";
+const CSA_SELECTOR_VERSION = "4.16.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,

@@ -422,6 +422,12 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const fibCandidates = Array.isArray(selectorDiagnostics?.fibCandidates)
       ? selectorDiagnostics.fibCandidates
       : [];
+    const fallbackSelectedEntries = Array.isArray(selectorDiagnostics?.selectedEntries)
+      ? selectorDiagnostics.selectedEntries
+      : [];
+    const fallbackSelectorCompleted =
+      selectorDiagnostics?.fallbackSource === "uploaded_chart_only" &&
+      fallbackSelectedEntries.length > 0;
     const recognizedTypes = new Set([
       "support", "resistance", "converted support", "converted resistance",
       "demand", "supply",
@@ -433,13 +439,38 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       const entryPrice = finiteNumber(entry.center);
       if (entryPrice === null) return false;
       const tolerance = defaultTolerance(entryPrice);
-      return fibCandidates.some((candidate) => {
+      const matchedEvaluatedCandidate = fibCandidates.some((candidate) => {
         if (candidate?.passed !== true) return false;
         const candidatePrice =
           finiteNumber(candidate.resolvedEntryPrice) ??
           finiteNumber(candidate.chartReconciledPrice) ??
           finiteNumber(candidate.frameworkPrice);
         return candidatePrice !== null &&
+          Math.abs(candidatePrice - entryPrice) <= tolerance;
+      });
+
+      if (matchedEvaluatedCandidate) return true;
+
+      // The chart-native fallback already performs the same ordered
+      // structure -> hidden-Fibonacci gate before it promotes an entry. Its
+      // compact diagnostics contain the selected entries themselves rather
+      // than the full structuralCandidates/fibCandidates audit arrays. Match
+      // those entries by price and require an explicit 38.2/50/61.8 record;
+      // never infer confluence from a selected price alone.
+      return fallbackSelectedEntries.some((candidate) => {
+        const candidatePrice =
+          finiteNumber(candidate.authoritativeCenter) ??
+          finiteNumber(candidate.resolvedEntryPrice);
+        const matches = Array.isArray(candidate?.fibonacciMatches)
+          ? candidate.fibonacciMatches
+          : [];
+        const hasApprovedFib = matches.some((match) => {
+          const ratio = finiteNumber(match?.ratio);
+          return ratio !== null && [0.382, 0.5, 0.618].some(
+            (approved) => Math.abs(ratio - approved) <= 0.002
+          );
+        });
+        return candidatePrice !== null && hasApprovedFib &&
           Math.abs(candidatePrice - entryPrice) <= tolerance;
       });
     });
@@ -462,7 +493,16 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       checks,
       "ordered_selector",
       "S/R → S/D → Fibonacci sequence completed",
-      Boolean(selectorDiagnostics && Array.isArray(selectorDiagnostics.structuralCandidates) && Array.isArray(selectorDiagnostics.fibCandidates)),
+      Boolean(
+        selectorDiagnostics &&
+        (
+          (
+            Array.isArray(selectorDiagnostics.structuralCandidates) &&
+            Array.isArray(selectorDiagnostics.fibCandidates)
+          ) ||
+          fallbackSelectorCompleted
+        )
+      ),
       selectorDiagnostics
         ? `Selector ${selectorDiagnostics.selectorVersion || "unknown"} evaluated structure before Fibonacci filtering.`
         : "Ordered selector diagnostics were not returned."

@@ -475,6 +475,48 @@ test("automatic mode rejects a selected entry that did not pass Fibonacci conflu
   );
 });
 
+test("automatic mode accepts explicit chart-native fallback Fibonacci diagnostics", () => {
+  const automatic = structuredClone(baseResult);
+  automatic.chartDetection = {
+    detectedInstrument: "USA30",
+    detectedTimeframe: "H1",
+  };
+  automatic.analysisFacts.selectedEntryAreas = [
+    {
+      executionOrder: 1,
+      areaType: "converted resistance",
+      authoritativeCenter: 53275.6,
+      zoneLow: 53275.6,
+      zoneHigh: 53275.6,
+    },
+  ];
+  automatic.finalFeedback.entry1 = {
+    executionOrder: 1,
+    areaType: "converted resistance",
+    authoritativeCenter: 53275.6,
+  };
+  automatic.analysisFacts.selectorDiagnostics = {
+    selectorVersion: "4.16.0",
+    fallbackSource: "uploaded_chart_only",
+    selectedEntries: [
+      {
+        authoritativeCenter: 53275.6,
+        fibonacciMatches: [
+          { label: "50.0", ratio: 0.5, price: 53305.6 },
+        ],
+      },
+    ],
+  };
+
+  const result = validateBenchmarkResult(automatic, { automaticMode: true });
+  assert.equal(result.passed, true);
+  assert.equal(result.checks.find((check) => check.id === "ordered_selector")?.passed, true);
+  assert.equal(
+    result.checks.find((check) => check.id === "automatic_fibonacci_confluence")?.passed,
+    true
+  );
+});
+
 test("a verified one-entry baseline rejects an unnecessary Entry 2", () => {
   const automatic = structuredClone(baseResult);
   automatic.analysisFacts.selectedEntryAreas = [
