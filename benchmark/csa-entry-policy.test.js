@@ -399,6 +399,20 @@ test("does not invent Entry 2 when a deeper candidate fails the shared Fib gate"
   assert.deepEqual(selected.map((item) => item.id), ["entry-1"]);
 });
 
+test("sequences up to three independently structured Fibonacci-qualified alternatives", () => {
+  const selected = selectIndependentEntryAreas(
+    [
+      { id: "entry-1", areaType: "supply", authoritativeCenter: 1.38066, authoritativeFrameworkLevel: true, independentEntryEvidence: true, strongDepartureCount: 1, requiredFibConfluence: true, structuralScore: 60, fibonacciScore: 1 },
+      { id: "entry-2", areaType: "converted resistance", authoritativeCenter: 1.38437, authoritativeFrameworkLevel: true, independentEntryEvidence: true, requiredFibConfluence: true, structuralScore: 58, fibonacciScore: 1 },
+      { id: "entry-3", areaType: "resistance", authoritativeCenter: 1.38767, authoritativeFrameworkLevel: true, independentEntryEvidence: true, requiredFibConfluence: true, structuralScore: 55, fibonacciScore: 1 },
+      { id: "entry-4", areaType: "resistance", authoritativeCenter: 1.39091, authoritativeFrameworkLevel: true, independentEntryEvidence: true, requiredFibConfluence: true, structuralScore: 52, fibonacciScore: 1 },
+    ],
+    "bearish"
+  );
+
+  assert.deepEqual(selected.map((item) => item.id), ["entry-1", "entry-2", "entry-3"]);
+});
+
 test("overlapping demand keeps the lower protective launch-base boundary", () => {
   const selected = selectProtectiveSupplyDemandAnchor(
     { id: "shallow", areaType: "demand", authoritativeCenter: 1.40395 },

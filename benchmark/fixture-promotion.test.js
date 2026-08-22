@@ -56,6 +56,20 @@ test("promotes a consistent no-entry result", () => {
   assert.equal(fixture.requiredLevels, "");
 });
 
+test("promotes an independently validated third entry alternative", () => {
+  const result = automaticResult([
+    { order: 1, center: 1.38066, levelText: "1.38066", areaType: "supply", zoneLow: 1.3805, zoneHigh: 1.3808 },
+    { order: 2, center: 1.38437, levelText: "1.38437", areaType: "converted resistance", zoneLow: 1.38437, zoneHigh: 1.38437 },
+    { order: 3, center: 1.38767, levelText: "1.38767", areaType: "resistance", zoneLow: 1.38767, zoneHigh: 1.38767 },
+  ]);
+  result.analysis.detectedPair = "USDCAD";
+  const fixture = strictFixtureFromAutomaticResult(result);
+
+  assert.equal(fixture.expectedEntry3, "1.38767");
+  assert.equal(fixture.expectedEntry3Type, "resistance");
+  assert.equal(fixture.entry3Required, true);
+});
+
 test("rejects an automatic result that needs review", () => {
   const result = automaticResult([]);
   result.status = "failed";

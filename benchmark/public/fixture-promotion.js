@@ -31,7 +31,7 @@ export function strictFixtureFromAutomaticResult(item = {}, base = {}) {
   const analysis = item.analysis;
   const detection = analysis.chartDetection || {};
   const summaryEntries = Array.isArray(item.validation.selectedEntries)
-    ? item.validation.selectedEntries.slice(0, 2)
+    ? item.validation.selectedEntries.slice(0, 3)
     : [];
   const structuredEntries = Array.isArray(analysis?.analysisFacts?.selectedEntryAreas)
     ? analysis.analysisFacts.selectedEntryAreas
@@ -50,8 +50,10 @@ export function strictFixtureFromAutomaticResult(item = {}, base = {}) {
   });
   const entry1 = entries[0] || null;
   const entry2 = entries[1] || null;
+  const entry3 = entries[2] || null;
   const entry1Zone = zoneBounds(entry1);
   const entry2Zone = zoneBounds(entry2);
+  const entry3Zone = zoneBounds(entry3);
   const requiredPrices = entries.map(entryPrice).filter(Boolean);
   const requiredTerms = [...new Set(entries.map((entry) => String(entry?.areaType || "").trim()).filter(Boolean))];
   const detectedPlan = String(analysis?.entitlement?.basePlan || base.plan || "starter").toLowerCase();
@@ -75,6 +77,11 @@ export function strictFixtureFromAutomaticResult(item = {}, base = {}) {
     expectedEntry2ZoneLow: entry2Zone.low,
     expectedEntry2ZoneHigh: entry2Zone.high,
     entry2Required: Boolean(entry2),
+    expectedEntry3: entryPrice(entry3),
+    expectedEntry3Type: String(entry3?.areaType || ""),
+    expectedEntry3ZoneLow: entry3Zone.low,
+    expectedEntry3ZoneHigh: entry3Zone.high,
+    entry3Required: Boolean(entry3),
     noEntryExpected: entries.length === 0,
     requiredLevels: requiredPrices.join(", "),
     requiredFeedbackLevels: requiredPrices.join(", "),

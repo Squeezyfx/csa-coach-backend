@@ -200,42 +200,47 @@ export function selectIndependentEntryAreas(candidates = [], direction = "range"
     ? sequenceFibQualifiedAreas(exactMarked, direction)[0]
     : qualified[0];
 
-  if (qualified.length < 2) return [primary];
+  const selected = [primary];
 
-  const primaryStage = classifyCsaStructuralStage(primary).key;
-  const secondary = qualified.find((candidate) => {
-    if (candidate === primary) return false;
+  // CSA may expose as many as three genuinely separate entry opportunities.
+  // Each later entry must independently prove both its structural role and
+  // its confluence; it never inherits either qualification from Entry 1.
+  for (const candidate of qualified) {
+    if (selected.length >= 3 || selected.includes(candidate)) continue;
 
     const candidateStage = classifyCsaStructuralStage(candidate).key;
+    const hasSeparateEvidence = hasIndependentChartPriceEvidence(candidate)
+      ? candidate?.independentEntryEvidence === true
+      : candidateStage === "supply_demand"
+      ? hasIndependentSecondarySupplyDemandEvidence(candidate)
+      : candidate?.independentEntryEvidence === true;
 
-    // A second exact-looking price is not automatically a second entry. It
-    // must still prove that it represents a separate structural opportunity.
-    // This blocks adjacent OCR/framework fragments such as 4428.73 behind
-    // 4436.15, while preserving explicitly independent pairs such as the two
-    // separate USA30 converted-resistance levels.
-    if (hasIndependentChartPriceEvidence(candidate)) {
-      return candidate?.independentEntryEvidence === true;
-    }
+    if (!hasSeparateEvidence) continue;
 
-    // A different structural stage may provide Entry 2, but only when the
-    // detector retained its own displacement/base evidence. Merely having a
-    // different label is not enough to manufacture a second entry. A current
-    // S/D area behind a primary S/R must also be qualified by its local
-    // historical-framework impulse (or carry explicit independent evidence).
-    // The broad major-swing Fib can validate a primary area, but must not
-    // manufacture an otherwise-unverified secondary S/D entry.
-    if (candidateStage !== primaryStage) {
-      return hasIndependentSecondarySupplyDemandEvidence(candidate);
-    }
+    // Do not allow a nearby OCR fragment or duplicate zone to consume another
+    // entry slot. A candidate must be a distinct structural opportunity.
+    const duplicate = selected.some((existing) => {
+      const existingCenter = Number(
+        existing?.authoritativeCenter ?? existing?.resolvedEntryPrice
+      );
+      const candidateCenter = Number(
+        candidate?.authoritativeCenter ?? candidate?.resolvedEntryPrice
+      );
+      if (!Number.isFinite(existingCenter) || !Number.isFinite(candidateCenter)) {
+        return false;
+      }
+      const allowance = Math.max(
+        Number(existing?.closeAllowance || 0),
+        Number(candidate?.closeAllowance || 0),
+        Math.abs(existingCenter) * 0.00001
+      );
+      return Math.abs(existingCenter - candidateCenter) <= allowance;
+    });
 
-    return (
-      candidate?.independentEntryEvidence === true
-    );
-  });
+    if (!duplicate) selected.push(candidate);
+  }
 
-  return secondary
-    ? sequenceFibQualifiedAreas([primary, secondary], direction)
-    : [primary];
+  return sequenceFibQualifiedAreas(selected, direction).slice(0, 3);
 }
 
 export function hasIndependentSecondarySupplyDemandEvidence(area = {}) {

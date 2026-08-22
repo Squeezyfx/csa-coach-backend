@@ -1503,9 +1503,9 @@ AREA RANKING RULES:
 - Generic pivots and chart markings may only confirm or refine an authoritative framework level; they must never create or replace the primary area.
 - Validate genuine support/resistance or supply/demand structure before considering distance.
 - Fibonacci retracement is a silent mandatory quality filter only after an authoritative structural area already exists. Only 38.2%, 50%, and 61.8% are used.
-- The deterministic CSA selector controls entry areas. Build S/R from the timeframe's authoritative source periods and S/D from independently confirmed displacement-origin bases, resolve lifecycle roles chronologically, reject failed/choppy/weak structure, then keep only areas close to 38.2%, 50%, or 61.8% of the relevant completed impulse before sequencing Entry 1 and Entry 2.
+- The deterministic CSA selector controls entry areas. Inventory the next previous S/R levels and the next previous S/D zones, resolve lifecycle roles chronologically, reject failed/choppy/weak structure, then keep only independently valid areas close to 38.2%, 50%, or 61.8% of the relevant completed impulse before sequencing up to Entry 1, Entry 2, and Entry 3.
 - A clean break with continuation may create a potential converted S/R area that can be watched for a future retest. It becomes confirmed converted only after price returns from the opposite side and respects it. Either way, it must still pass the 38.2% / 50% / 61.8% proximity filter before it can become Entry 1 or Entry 2.
-- Use this fixed order every time: (1) resolve support/resistance and converted S/R, (2) independently resolve supply/demand, (3) apply hidden Fibonacci confluence at/near 38.2% or inside/near the 50%-61.8% band, and only then (4) sequence Entry 1 and Entry 2 by the path price will encounter them.
+- Use this fixed order every time: (1) inventory and resolve the next previous support/resistance and converted S/R candidates, (2) independently inventory and resolve the next previous supply/demand candidates, (3) calculate hidden Fibonacci 38.2%, 50%, and 61.8% prices from the completed impulse and test every surviving candidate, and only then (4) sequence up to three survivors by the path price will encounter them. Entry 2 and Entry 3 are alternatives after a fresh trigger, never instructions to add to a losing position.
 - Fibonacci must never create an area by itself. An independently valid S/R or supply/demand area becomes a strong entry candidate only when it is close to 38.2% or falls within/close to the 50%-61.8% retracement band. A structurally strong area just beyond the exact 61.8 line may still qualify when it is within the conservative proximity allowance; a clearly deep area remains reference-only.
 - Preserve the true area type: converted resistance/support, resistance/support, or supply/demand.
 - Use the timeframe-framework high or low to identify the correct structural period first.
@@ -5501,7 +5501,7 @@ FIBONACCI
 - Use Fibonacci only as a silent internal entry-quality filter after a genuine support/resistance or supply/demand area has already been identified.
 - Only the 38.2%, 50%, and 61.8% retracement levels are used for this entry filter.
 - A structural area is a strong entry area only when that support/resistance or supply/demand area is in close proximity to at least one of those retracement levels.
-- Always use this internal order: first identify and validate support/resistance (including lifecycle conversion); second identify and validate supply/demand; third test those independently valid areas for hidden 38.2%, 50%, or 61.8% confluence; fourth sequence the survivors by price path as Entry 1 and Entry 2.
+- Always use this internal order: first inventory and validate the next previous support/resistance candidates (including lifecycle conversion); second inventory and validate the next previous supply/demand candidates; third calculate hidden 38.2%, 50%, and 61.8% retracement prices and test every independently valid candidate; fourth sequence up to three survivors by price path as Entry 1, Entry 2, and Entry 3. Never stop after finding the first one or two candidates, and never use later entries as add-to-loser instructions.
 - A structurally valid area that is not close to 38.2%, 50%, or 61.8% may remain an important chart reference, but it must not become Entry 1, Entry 2, or the preferred entry area. "Close" includes a conservative structurally strong area just past the exact 61.8 line; it does not include a clearly deep area.
 - Use one common dominant completed impulse for every candidate in the same active directional leg. Never choose a candidate-specific origin or late swing merely to make an otherwise deep level pass the hidden confluence gate.
 - Fibonacci must never create a setup by itself. The actual entry remains the support/resistance or supply/demand area, not the Fibonacci number. Treat 50%-61.8% as a valid retracement band and close proximity to 38.2% as valid. A structurally strong area only slightly past 61.8% may qualify within the conservative proximity allowance; anything clearly deeper is reference-only.
@@ -7808,7 +7808,7 @@ STRICT MARKED/UNMARKED RULE:
   6. Is stop loss/target visible enough to judge?
 - The internal range-position check may use the first key high/low as a deep-pullback guide, but user-facing wording should stay simple.
 - Do not mention Fibonacci, retracement percentages, 61.8, 50%, or technical confluence in user-facing feedback.
-- When there are two valid entry areas, label them Entry 1 and Entry 2 when useful. Do not automatically dismiss Entry 1 or claim Entry 2 is always better. Explain that Entry 1 may react first, while Entry 2 may remain valid if Entry 1 fails and a fresh trigger appears. Do not encourage adding to a losing Entry 1 position.
+- When there are two or three independently valid entry areas, label them Entry 1, Entry 2, and Entry 3 in price-path order. Do not automatically dismiss an earlier entry or claim a later one is always better. Explain that a later entry is an alternative only if the earlier area fails and a fresh trigger appears. Never encourage adding to a losing position.
 - Entry confirmation must match the trade direction: for a sell setup, wait for price to approach resistance and reject; for a buy setup, wait for price to approach support and hold.
 - Use staged converted-level wording. After a clear break and continuation, call the level potential resistance/support. Call it confirmed converted resistance/support only after price returns from the opposite side and respects it. A wick that closes back on the original side is normally a false break.
 - A failed support/resistance area should be explained under market structure or best area to watch, not as the main warning.
@@ -10555,8 +10555,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.32.0";
-const CSA_BUILD_ID = "CSA-v4.21.0-fallback-audit-recent-structure-impulse";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.33.0";
+const CSA_BUILD_ID = "CSA-v4.22.0-full-structure-three-entry-fib-audit";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -15195,8 +15195,9 @@ function validateAndSequenceEntryAreas({
     return true;
   });
 
-  // CSA exposes at most two actionable areas. Deeper valid structure remains
-  // context only and must never leak into analysisFacts as a hidden third entry.
+  // CSA exposes at most three independently qualified alternatives. Every
+  // candidate is audited before sequencing; a later entry is never an
+  // instruction to add to a losing earlier position.
   const independentlyQualified = selectIndependentEntryAreas(filtered, direction);
   const sequenced = independentlyQualified.map((area, index) => ({
     ...area,
@@ -15204,7 +15205,9 @@ function validateAndSequenceEntryAreas({
     role:
       index === 0
         ? "primary"
-        : "secondary",
+        : index === 1
+        ? "secondary"
+        : "tertiary",
   }));
 
   for (let index = 1; index < sequenced.length; index += 1) {
@@ -15942,7 +15945,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.16.0";
+const CSA_SELECTOR_VERSION = "4.17.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19257,7 +19260,7 @@ function buildExactChartFrameworkCandidates({
 function normalizeChartNativeEntryFallback(value = {}) {
   const direction = String(value?.direction || "").toLowerCase();
   const candidates = (Array.isArray(value?.candidates) ? value.candidates : [])
-    .slice(0, 6)
+    .slice(0, 24)
     .map((candidate) => ({
       price: nullablePositiveNumber(candidate?.price),
       zoneLow: nullablePositiveNumber(candidate?.zoneLow),
@@ -19312,14 +19315,16 @@ Apply this order exactly:
 1. Identify exact printed support/resistance prices and genuine converted levels.
 2. Identify an independent supply/demand base only when its own displacement is visibly clear.
 3. Draw one hidden completed directional impulse and test only 38.2%, 50%, or 61.8% retracement confluence.
-4. Return Entry 1 and only a genuinely separate optional Entry 2 in price-path order.
+4. Inventory every visible structural candidate before filtering. Test each candidate against the same completed impulse, then return as many as three genuinely separate entries in price-path order.
 
 Hard rules:
 - Fibonacci may qualify visible structure but may never create a price or area.
 - An S/R candidate must use an exact printed price from the screenshot.
 - Never combine two separately printed support/resistance prices into one zone. Return each printed S/R line as its own candidate with zoneLow=zoneHigh=price. Only a genuine visible supply/demand base may use different zone boundaries.
 - A supply/demand candidate needs a visible base/zone plus its own displacement.
-- Candidate 2 must not be a nearby fragment, duplicate, or unverified reference.
+- Do not stop after finding the first or second level. Inspect the next previous support/resistance and the next genuine supply/demand base too.
+- A later entry must not be a nearby fragment, duplicate, or unverified reference. Entry 2 and Entry 3 are alternatives only if the earlier area fails; they are never instructions to add to a losing trade.
+- The screenshot is authoritative when its visible extremes or printed levels conflict with external OHLC data.
 - Do not mention Fibonacci in customer-facing wording; this result is internal.
 - Set usable=false rather than guessing any unreadable direction, price, impulse, or role.
 - Return JSON only, with no markdown.
@@ -19398,6 +19403,11 @@ function rankChartNativeFallbackAreas({
     : new Set(["resistance", "supply", "converted resistance"]);
   const allowedFibRatios = [0.382, 0.5, 0.618];
   const approvedTolerance = getApprovedPriceTolerance(symbol);
+  const swingHigh = asPositiveNumber(fallback?.swingHigh);
+  const swingLow = asPositiveNumber(fallback?.swingLow);
+  const impulseRange = swingHigh !== null && swingLow !== null && swingHigh > swingLow
+    ? swingHigh - swingLow
+    : null;
 
   const candidates = expandExactSupportResistanceBoundaries(
     fallback.candidates || []
@@ -19408,6 +19418,16 @@ function rankChartNativeFallbackAreas({
     const fibRatio = allowedFibRatios.find(
       (allowed) => Number.isFinite(ratio) && Math.abs(ratio - allowed) <= 0.002
     );
+    const computedFibPrice = fibRatio && impulseRange !== null
+      ? direction === "bearish"
+        ? swingLow + impulseRange * fibRatio
+        : swingHigh - impulseRange * fibRatio
+      : null;
+    const fibTolerance = impulseRange !== null
+      ? Math.max(approvedTolerance, impulseRange * 0.06)
+      : approvedTolerance;
+    const arithmeticFibMatch = computedFibPrice !== null &&
+      Math.abs(price - computedFibPrice) <= fibTolerance;
     const sideCompatible = price !== null && (
       direction === "bullish"
         ? price < resolvedCurrentPrice
@@ -19423,6 +19443,7 @@ function rankChartNativeFallbackAreas({
       !allowedTypes.has(areaType) ||
       !sideCompatible ||
       !fibRatio ||
+      !arithmeticFibMatch ||
       !structuralEvidenceValid
     ) {
       return null;
@@ -19477,12 +19498,15 @@ function rankChartNativeFallbackAreas({
       fibonacciMatches: [{
         label: fibRatio === 0.382 ? "38.2" : fibRatio === 0.5 ? "50.0" : "61.8",
         ratio: fibRatio,
-        price: asPositiveNumber(candidate?.fibPrice),
-        matchType: "chart_native_hidden_fibonacci",
+        price: computedFibPrice,
+        matchType: "deterministic_chart_native_hidden_fibonacci",
       }],
       fibonacciSource: "uploaded_chart_completed_impulse",
       fibOriginModel: "chart_native_completed_directional_impulse",
       selectorQualityReason: safeUserText(candidate?.structuralEvidence || ""),
+      computedFibPrice,
+      fibonacciDistance: Math.abs(price - computedFibPrice),
+      fibonacciTolerance: fibTolerance,
       validated: true,
     };
   }).filter(Boolean);
@@ -19491,7 +19515,7 @@ function rankChartNativeFallbackAreas({
     .map((area, index) => ({
       ...area,
       executionOrder: index + 1,
-      role: index === 0 ? "primary" : "secondary",
+      role: index === 0 ? "primary" : index === 1 ? "secondary" : "tertiary",
     }));
 
   if (!selected.length) return null;
@@ -19514,6 +19538,8 @@ function rankChartNativeFallbackAreas({
         swingLow: fallback.swingLow ?? null,
         swingHigh: fallback.swingHigh ?? null,
       },
+      structuralCandidates: fallback.candidates || [],
+      fibonacciQualifiedCandidates: candidates,
       selectedEntries: selected,
     },
   };
@@ -19530,6 +19556,19 @@ function rankRawEntryAreas({
 }) {
   if (!["bullish", "bearish"].includes(direction)) {
     return { areas: [], validation: { passed: true, errors: [] } };
+  }
+
+  // The isolated benchmark service treats the uploaded screenshot as the
+  // price authority. External candles may extend beyond the historical image
+  // and must not redefine its visible impulse or structural levels.
+  if (BENCHMARK_DRY_RUN_ENABLED) {
+    const chartNativeFallback = rankChartNativeFallbackAreas({
+      visualReview,
+      direction,
+      currentPrice,
+      symbol,
+    });
+    if (chartNativeFallback) return chartNativeFallback;
   }
 
   const candles =
@@ -24399,7 +24438,7 @@ function getCanonicalSelectedEntryAreas(facts = {}) {
 
       return ao - bo;
     })
-    .slice(0, 2);
+    .slice(0, 3);
 }
 
 function extractNarrativePriceNumbers(
@@ -24481,7 +24520,7 @@ function isRawEntryRecommendationClaim(
   text = ""
 ) {
   return (
-    /\bentry\s*[12]?\b/i.test(
+    /\bentry\s*[123]?\b/i.test(
       text
     ) ||
     /\bsecondary\b/i.test(
@@ -25282,6 +25321,10 @@ function buildControlledFeedback({
     selectedEntryAreas[1] ||
     null;
 
+  const selectedTertiaryArea =
+    selectedEntryAreas[2] ||
+    null;
+
   const area =
     facts.preferredEntryArea;
 
@@ -25305,6 +25348,14 @@ function buildControlledFeedback({
           facts.direction === "bearish"
             ? "supply area"
             : "demand area"
+        )
+      : "";
+
+  const tertiaryAreaText =
+    selectedTertiaryArea
+      ? formatRankedArea(
+          selectedTertiaryArea,
+          facts.direction === "bearish" ? "supply area" : "demand area"
         )
       : "";
 
@@ -25578,7 +25629,7 @@ function buildControlledFeedback({
     );
 
   // Keep WHAT YOU DID WELL limited to trader-owned evidence. Deterministic
-  // Entry 1 / Entry 2 areas belong in Next Action and Chart Levels, not in
+  // Entry 1 / Entry 2 / Entry 3 areas belong in Next Action and Chart Levels, not in
   // strengths, unless a matching trader marking was already credited above.
   const canonicalStrengths = [
     ...lockedStrengths,
@@ -25707,6 +25758,10 @@ function buildControlledFeedback({
       `It remains a reference only and must not be treated as Entry 2 unless it later meets the full setup rules.`;
   }
 
+  if (hasValidatedArea && tertiaryAreaText) {
+    nextAction = `${nextAction} If Entry 2 also fails and price reaches the independently validated ${tertiaryAreaText}, treat it as Entry 3 only after a fresh ${triggerSide} trigger. Never add to a losing earlier entry.`;
+  }
+
   if (facts.historicalCutoff?.active) {
     nextAction =
       `${nextAction} This review excludes candles formed after ${facts.historicalCutoff.selectedDate}.`;
@@ -25761,6 +25816,9 @@ function buildControlledFeedback({
     secondaryAreaText
       ? `- Secondary area: ${secondaryAreaText}.`
       : "- No separate secondary area was confirmed.",
+    tertiaryAreaText
+      ? `- Tertiary area: ${tertiaryAreaText}.`
+      : "- No separate tertiary area was confirmed.",
     `- Area status: ${area.lifecycleStatus.replace(/_/g, " ")}.`,
     facts.convertedLevel.detected
       ? `- Converted level: ${facts.convertedLevel.state.replace(/_/g, " ")}.`
@@ -25837,6 +25895,15 @@ function buildControlledFeedback({
               ),
           }
         : null,
+    entry3:
+      selectedTertiaryArea
+        ? {
+            areaType: selectedTertiaryArea.areaType,
+            zoneText: selectedTertiaryArea.zoneText,
+            authoritativeCenter: asPositiveNumber(selectedTertiaryArea.authoritativeCenter),
+            levelText: safeUserText(selectedTertiaryArea.levelText || ""),
+          }
+        : null,
     narrativeLock: {
       version:
         "1.0.0-selected-entry-single-source",
@@ -25865,6 +25932,8 @@ function buildControlledFeedback({
         ),
       entry2Allowed:
         selectedEntryAreas.length > 1,
+      entry3Allowed:
+        selectedEntryAreas.length > 2,
       rule:
         "unselected_structural_levels_are_context_only",
     },
@@ -27902,7 +27971,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // relying on the full prose review to also fit the internal fallback into
     // its token budget. Supported instruments do not pay for this extra call.
     if (
-      marketReference?.ok !== true &&
+      (BENCHMARK_DRY_RUN_ENABLED || marketReference?.ok !== true) &&
       visualReview?.chartNativeEntryFallback?.usable !== true
     ) {
       const focusedFallbackStartedAt = csaNowMs();

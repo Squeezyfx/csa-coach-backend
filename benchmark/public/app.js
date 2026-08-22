@@ -21,7 +21,9 @@ const fixtureFields = [
   "chartDate", "expectedDirection", "expectedEntry1", "expectedEntry1Type",
   "expectedEntry1ZoneLow", "expectedEntry1ZoneHigh", "expectedEntry2",
   "expectedEntry2Type", "expectedEntry2ZoneLow", "expectedEntry2ZoneHigh",
-  "entry2Required", "noEntryExpected", "requiredLevels",
+  "entry2Required", "expectedEntry3", "expectedEntry3Type",
+  "expectedEntry3ZoneLow", "expectedEntry3ZoneHigh", "entry3Required",
+  "noEntryExpected", "requiredLevels",
   "requiredFeedbackLevels", "requiredFeedbackTerms", "forbiddenEntries",
   "tolerance", "notes",
 ];
@@ -74,7 +76,7 @@ function applyFixtureToRow(row, saved) {
     if (input.type === "checkbox") input.checked = saved[name] === true;
     else input.value = saved[name];
   });
-  [1, 2].forEach((entryNumber) => syncZoneFields(row, entryNumber));
+  [1, 2, 3].forEach((entryNumber) => syncZoneFields(row, entryNumber));
 }
 
 function setMode(mode) {
@@ -114,7 +116,7 @@ fileInput.addEventListener("change", () => {
     row.querySelector("[data-file-name]").textContent = file.name;
     field(row, "label").value = file.name.replace(/\.[^.]+$/, "");
     restoreFixture(row, file);
-    [1, 2].forEach((entryNumber) => {
+    [1, 2, 3].forEach((entryNumber) => {
       field(row, `expectedEntry${entryNumber}Type`).addEventListener("change", () =>
         syncZoneFields(row, entryNumber)
       );
@@ -167,6 +169,11 @@ function collectCases() {
     expectedEntry2ZoneLow: field(row, "expectedEntry2ZoneLow").value,
     expectedEntry2ZoneHigh: field(row, "expectedEntry2ZoneHigh").value,
     entry2Required: field(row, "entry2Required").checked,
+    expectedEntry3: field(row, "expectedEntry3").value,
+    expectedEntry3Type: field(row, "expectedEntry3Type").value,
+    expectedEntry3ZoneLow: field(row, "expectedEntry3ZoneLow").value,
+    expectedEntry3ZoneHigh: field(row, "expectedEntry3ZoneHigh").value,
+    entry3Required: field(row, "entry3Required").checked,
     noEntryExpected: field(row, "noEntryExpected").checked,
     requiredLevels: field(row, "requiredLevels").value,
     requiredFeedbackLevels: field(row, "requiredFeedbackLevels").value,
@@ -207,7 +214,7 @@ function renderRun(run) {
     const direction = item.validation?.direction || "unknown";
     const entries = item.validation?.selectedEntries || [];
     const findingsHtml = item.mode === "automatic" && item.status !== "error"
-      ? `<div class="auto-findings"><span><b>Chart:</b> ${escapeHtml(detectedInstrument)} ${escapeHtml(detectedTimeframe)}</span><span><b>Bias:</b> ${escapeHtml(direction)}</span><span><b>Entry 1:</b> ${escapeHtml(entries[0] ? `${entries[0].center} (${entries[0].areaType || "area"})` : "No valid entry")}</span><span><b>Entry 2:</b> ${escapeHtml(entries[1] ? `${entries[1].center} (${entries[1].areaType || "area"})` : "Not selected")}</span></div>`
+      ? `<div class="auto-findings"><span><b>Chart:</b> ${escapeHtml(detectedInstrument)} ${escapeHtml(detectedTimeframe)}</span><span><b>Bias:</b> ${escapeHtml(direction)}</span><span><b>Entry 1:</b> ${escapeHtml(entries[0] ? `${entries[0].center} (${entries[0].areaType || "area"})` : "No valid entry")}</span><span><b>Entry 2:</b> ${escapeHtml(entries[1] ? `${entries[1].center} (${entries[1].areaType || "area"})` : "Not selected")}</span><span><b>Entry 3:</b> ${escapeHtml(entries[2] ? `${entries[2].center} (${entries[2].areaType || "area"})` : "Not selected")}</span></div>`
       : "";
     const checkHtml = checks.map((check) => `<li class="${check.passed ? "pass" : "fail"}">${check.passed ? "✓" : "✕"} ${escapeHtml(check.label)}${check.passed ? "" : ` — ${escapeHtml(check.details)}`}</li>`).join("");
     const statusLabel = item.mode === "automatic"
@@ -254,7 +261,7 @@ runButton.addEventListener("click", async () => {
   const cases = collectCases();
   if (benchmarkMode === "strict" && cases.some((item) => !item.instrument.trim())) return alert("Enter an instrument for every chart in strict regression mode.");
   for (const item of benchmarkMode === "strict" ? cases : []) {
-    for (const entryNumber of [1, 2]) {
+    for (const entryNumber of [1, 2, 3]) {
       const low = item[`expectedEntry${entryNumber}ZoneLow`];
       const high = item[`expectedEntry${entryNumber}ZoneHigh`];
       if (Boolean(low) !== Boolean(high)) {
@@ -265,8 +272,8 @@ runButton.addEventListener("click", async () => {
       }
     }
   }
-  if (benchmarkMode === "strict" && cases.some((item) => item.noEntryExpected && (item.expectedEntry1 || item.expectedEntry2 || item.entry2Required))) {
-    return alert("A chart marked 'No valid entry expected' cannot also require Entry 1 or Entry 2.");
+  if (benchmarkMode === "strict" && cases.some((item) => item.noEntryExpected && (item.expectedEntry1 || item.expectedEntry2 || item.entry2Required || item.expectedEntry3 || item.entry3Required))) {
+    return alert("A chart marked 'No valid entry expected' cannot also require an entry.");
   }
   sessionStorage.setItem("csaBenchmarkAdminKey", adminKey.value);
   const body = new FormData();

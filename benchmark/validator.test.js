@@ -47,23 +47,25 @@ test("fails if a forbidden structural reference becomes a selected entry", () =>
   assert.equal(result.passed, false);
 });
 
-test("fails when structured facts contain a hidden third entry", () => {
+test("allows three canonical entries and rejects a hidden fourth entry", () => {
   const changed = structuredClone(baseResult);
   changed.analysisFacts.selectedEntryAreas.push(
     { executionOrder: 2, authoritativeCenter: 0.69620, zoneLow: 0.6961, zoneHigh: 0.6963 },
     { executionOrder: 3, authoritativeCenter: 0.69486, zoneLow: 0.6947, zoneHigh: 0.6950 },
   );
-  changed.finalFeedback.narrativeLock = {
-    selectedEntries: [
-      { executionOrder: 1, authoritativeCenter: 0.70104 },
-      { executionOrder: 2, authoritativeCenter: 0.69620 },
-    ],
-  };
+  changed.finalFeedback.narrativeLock = { selectedEntries: changed.analysisFacts.selectedEntryAreas };
+
+  const allowed = validateBenchmarkResult(changed, {});
+  assert.equal(allowed.passed, true);
+
+  changed.analysisFacts.selectedEntryAreas.push(
+    { executionOrder: 4, authoritativeCenter: 0.6935, zoneLow: 0.6934, zoneHigh: 0.6936 }
+  );
+  changed.finalFeedback.narrativeLock = { selectedEntries: changed.analysisFacts.selectedEntryAreas };
 
   const result = validateBenchmarkResult(changed, {});
   assert.equal(result.passed, false);
-  assert.ok(result.criticalFailures.some((check) => check.id === "maximum_two_entries"));
-  assert.ok(result.criticalFailures.some((check) => check.id === "canonical_entry_consistency"));
+  assert.ok(result.criticalFailures.some((check) => check.id === "maximum_three_entries"));
 });
 
 test("broad zone containment does not satisfy an exact required level", () => {
@@ -498,6 +500,10 @@ test("automatic mode accepts explicit chart-native fallback Fibonacci diagnostic
   automatic.analysisFacts.selectorDiagnostics = {
     selectorVersion: "4.16.0",
     fallbackSource: "uploaded_chart_only",
+    fibonacci: {
+      swingLow: 52800,
+      swingHigh: 53751.2,
+    },
     selectedEntries: [
       {
         authoritativeCenter: 53275.6,

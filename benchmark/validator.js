@@ -1,6 +1,6 @@
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
-const BENCHMARK_VALIDATOR_VERSION = "1.6.0";
+const BENCHMARK_VALIDATOR_VERSION = "1.7.0";
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -230,7 +230,11 @@ function canonicalSelectedEntries(result = {}) {
 
   if (lockedEntries.length) return lockedEntries.sort((a, b) => a.order - b.order);
 
-  const feedbackEntries = [result?.finalFeedback?.entry1, result?.finalFeedback?.entry2]
+  const feedbackEntries = [
+    result?.finalFeedback?.entry1,
+    result?.finalFeedback?.entry2,
+    result?.finalFeedback?.entry3,
+  ]
     .map(entryFrom)
     .filter(Boolean);
 
@@ -428,6 +432,11 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const fallbackSelectorCompleted =
       selectorDiagnostics?.fallbackSource === "uploaded_chart_only" &&
       fallbackSelectedEntries.length > 0;
+    const fallbackSwingHigh = finiteNumber(selectorDiagnostics?.fibonacci?.swingHigh);
+    const fallbackSwingLow = finiteNumber(selectorDiagnostics?.fibonacci?.swingLow);
+    const fallbackRange = fallbackSwingHigh !== null && fallbackSwingLow !== null && fallbackSwingHigh > fallbackSwingLow
+      ? fallbackSwingHigh - fallbackSwingLow
+      : null;
     const recognizedTypes = new Set([
       "support", "resistance", "converted support", "converted resistance",
       "demand", "supply",
@@ -466,9 +475,18 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
           : [];
         const hasApprovedFib = matches.some((match) => {
           const ratio = finiteNumber(match?.ratio);
-          return ratio !== null && [0.382, 0.5, 0.618].some(
-            (approved) => Math.abs(ratio - approved) <= 0.002
+          const approvedRatio = ratio !== null
+            ? [0.382, 0.5, 0.618].find((approved) => Math.abs(ratio - approved) <= 0.002)
+            : null;
+          if (!approvedRatio || fallbackRange === null || candidatePrice === null) return false;
+          const computedPrice = direction === "bearish"
+            ? fallbackSwingLow + fallbackRange * approvedRatio
+            : fallbackSwingHigh - fallbackRange * approvedRatio;
+          const arithmeticTolerance = Math.max(
+            defaultTolerance(candidatePrice),
+            finiteNumber(candidate?.fibonacciTolerance) ?? fallbackRange * 0.06
           );
+          return Math.abs(candidatePrice - computedPrice) <= arithmeticTolerance;
         });
         return candidatePrice !== null && hasApprovedFib &&
           Math.abs(candidatePrice - entryPrice) <= tolerance;
@@ -549,9 +567,9 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
 
   addCheck(
     checks,
-    "maximum_two_entries",
-    "Maximum two selected entries",
-    factsEntries.length <= 2 && entries.length <= 2,
+    "maximum_three_entries",
+    "Maximum three selected entries",
+    factsEntries.length <= 3 && entries.length <= 3,
     `Structured facts returned ${factsEntries.length}; customer-facing output returned ${entries.length}.`
   );
 
@@ -644,9 +662,40 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     );
   }
 
+  const expectedEntry3 = finiteNumber(expectation.expectedEntry3);
+  const expectedEntry3Type = normalizeAreaType(expectation.expectedEntry3Type || "");
+  const entry3Zone = expectedEntryZone(expectation, 3);
+  const entry3Required = expectation.entry3Required === true || expectedEntry3 !== null || Boolean(entry3Zone);
+  if (entry3Required) {
+    const tolerance = toleranceOverride ?? defaultTolerance(expectedEntry3 ?? entries[2]?.center ?? 1);
+    addCheck(
+      checks,
+      "entry_3",
+      "Entry 3",
+      entryMatchesExpectation(entries[2], expectedEntry3, expectedEntry3Type, entry3Zone, tolerance),
+      entries[2]
+        ? `Expected ${expectedEntry3 ?? formatExpectedZone(entry3Zone)}; received ${entries[2].levelText || entries[2].center}.`
+        : "A valid Entry 3 was required but none was returned."
+    );
+  }
+
+  if (expectedEntry3Type !== "unknown") {
+    const actualEntry3 = factsEntries[2] || entries[2] || null;
+    addCheck(
+      checks,
+      "entry_3_type",
+      "Entry 3 structural role",
+      Boolean(actualEntry3) && areaTypeMatches(actualEntry3.areaType, expectedEntry3Type),
+      actualEntry3
+        ? `Expected ${expectedEntry3Type}; received ${normalizeAreaType(actualEntry3.areaType)}.`
+        : `Expected ${expectedEntry3Type}; no Entry 3 was returned.`
+    );
+  }
+
   const configuredEntryZones = [
     { entry: entries[0], zone: entry1Zone, type: expectedEntry1Type },
     { entry: entries[1], zone: entry2Zone, type: expectedEntry2Type },
+    { entry: entries[2], zone: entry3Zone, type: expectedEntry3Type },
   ].filter((item) => item.zone && isSupplyDemandType(item.type));
 
   for (const required of parsePriceExpectations(expectation.requiredLevels)) {

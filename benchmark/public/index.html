@@ -134,6 +134,23 @@
           <input data-field="expectedEntry2ZoneHigh" inputmode="decimal" placeholder="Entry 2 zone upper boundary">
         </div>
         <label class="check"><input data-field="entry2Required" type="checkbox"> Entry 2 required</label>
+        <input data-field="expectedEntry3" inputmode="decimal" placeholder="Expected Entry 3">
+        <select data-field="expectedEntry3Type">
+          <option value="">Entry 3 type not checked</option>
+          <option value="support">Support</option>
+          <option value="demand">Demand</option>
+          <option value="converted support">Converted support</option>
+          <option value="resistance">Resistance</option>
+          <option value="supply">Supply</option>
+          <option value="converted resistance">Converted resistance</option>
+          <option value="buy area">Any buy area</option>
+          <option value="sell area">Any sell area</option>
+        </select>
+        <div class="zone-fields" data-zone-group="3" hidden>
+          <input data-field="expectedEntry3ZoneLow" inputmode="decimal" placeholder="Entry 3 zone lower boundary">
+          <input data-field="expectedEntry3ZoneHigh" inputmode="decimal" placeholder="Entry 3 zone upper boundary">
+        </div>
+        <label class="check"><input data-field="entry3Required" type="checkbox"> Entry 3 required</label>
         <label class="check"><input data-field="noEntryExpected" type="checkbox"> No valid entry expected</label>
       </td>
       <td class="field-stack">

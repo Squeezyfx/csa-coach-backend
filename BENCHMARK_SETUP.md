@@ -2,11 +2,11 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.20.0-exact-lines-structure-led-chart-impulse`. Benchmark package v2.18 keeps separately printed support/resistance prices as separate point levels, uses exact chart/framework structure to select the relevant completed impulse before applying hidden Fibonacci confluence, retains broker-index aliases and time-axis reconciliation, and prevents a broad stale swing from displacing a nearer structurally relevant impulse. The batch-testing additions do not alter the customer analysis route.
+The included analysis backend is CSA build `v4.22.0-full-structure-three-entry-fib-audit`. Benchmark package v2.20 inventories previous support/resistance and supply/demand candidates before applying deterministic hidden Fibonacci arithmetic. It supports up to three independently qualified alternative entries, retains broker-index aliases and time-axis reconciliation, and keeps the uploaded screenshot authoritative in benchmark dry-run mode. The batch-testing additions do not alter the customer analysis route.
 
 After every chart in an automatic batch is marked **Consistent**, use **Save all as strict benchmarks** to populate and retain the verified direction, entry prices, structural roles and supply/demand zone boundaries in the current browser. Review those populated values once, then run Strict Regression without retyping the fixtures.
 
-This build uses one fixed internal sequence: (1) validate support/resistance and lifecycle conversions, (2) independently validate supply/demand displacement bases, (3) apply hidden 38.2%/50%/61.8% Fibonacci confluence, and (4) order the surviving Entry 1 and Entry 2 by the price path. When several unmarked candles describe one overlapping or near-touching S/D zone, bullish demand keeps the lower protective launch-base boundary and bearish supply keeps the upper protective launch-base boundary. Fibonacci never creates an area. A strong structural area just past the exact 61.8 line may qualify only within the conservative proximity allowance; clearly deep structure remains reference-only. Automatic feedback names the detected direction and selected structural areas so different charts do not receive identical generic strengths and weaknesses. The rules are symmetrical and selected-day/exact historical cutoffs remain isolated.
+This build uses one fixed internal sequence: (1) inventory and validate the next previous support/resistance candidates and lifecycle conversions, (2) independently inventory and validate the next previous supply/demand displacement bases, (3) calculate hidden 38.2%/50%/61.8% prices from the completed impulse and test every surviving candidate, and (4) order up to three independently qualified entries by the price path. Entry 2 and Entry 3 are alternatives after a fresh trigger; they are never instructions to add to a losing position. When several unmarked candles describe one overlapping or near-touching S/D zone, bullish demand keeps the lower protective launch-base boundary and bearish supply keeps the upper protective launch-base boundary. Fibonacci never creates an area. A strong structural area just past an exact Fibonacci price may qualify only within the conservative arithmetic tolerance; clearly non-confluent structure remains reference-only. Automatic feedback names the detected direction and selected structural areas so different charts do not receive identical generic strengths and weaknesses. The rules are symmetrical and selected-day/exact historical cutoffs remain isolated.
 
 ## Isolation model
 
@@ -46,20 +46,20 @@ The dry-run response includes `benchmarkDryRun: true` and `savedToJournal: false
 3. Leave **Automatic batch** selected.
 4. Select up to 30 clear chart screenshots. The instrument and timeframe must be visible in each chart header.
 5. Click **Analyse all charts**. No direction, entry, level, zone or tolerance values are required.
-6. Review the proposed direction and Entry 1/Entry 2 for every chart, then export the JSON report.
+6. Review the proposed direction and up to three entries for every chart, then export the JSON report.
 
 Automatic mode checks every chart independently and enforces the same sequence:
 
 1. Support/resistance and lifecycle conversions.
 2. Supply/demand displacement bases.
 3. Hidden Fibonacci confluence at 38.2%, 50% or 61.8%.
-4. Entry 1 and Entry 2 sequencing.
+4. Entry 1, Entry 2 and optional Entry 3 sequencing.
 
 For a final-visible chart, the engine identifies authoritative chart structure first, then compares eligible completed directional impulses and deterministically chooses the one that best explains those exact structural prices at 38.2%, 50% or 61.8%. The terminal leg is used only when it explains more exact structure, so a small final pullback cannot displace a valid completed impulse. All entry candidates then share the selected frame; candidate-local Fibonacci calculations remain disabled. Fibonacci confirms structure but never invents an entry. A candidate must be close to an actual 38.2%, 50% or 61.8% retracement; merely falling somewhere inside the broad 50%-61.8% interval does not qualify. Entry 2 is kept only when it independently passes the complete structure and shared-Fibonacci gates; it may be a separate converted S/R level or a supply/demand area, but it cannot inherit Entry 1's qualification merely because it is deeper. If the main detector misses a readable header, automatic mode performs focused header-only reads and parses compact labels such as `USA30,H1`. Common index aliases such as `USA30`, `US30`, `DJ30`, `US500`, `NAS100` and `USTEC` are normalized for comparison without changing the visible broker ticker in the report.
 
 If cutoff-filtered market candles are unavailable, v2.17 may use the uploaded chart alone only when the screenshot reader can identify the instrument, timeframe, final price, direction, completed impulse, exact printed S/R price or independently evidenced S/D zone, and hidden Fibonacci confluence. The same S/R → S/D → Fibonacci → entry-order sequence still applies. An unreadable or incomplete chart returns no fallback entry rather than guessing. This fallback is internal to the staging analysis path and does not weaken the strict-regression expectations.
 
-Exact chart-visible prices now outrank nearby inferred candle fragments after both pass the structural and shared-Fibonacci gates. A second exact-looking price is not automatically Entry 2: it must carry its own independent structural evidence. This removes duplicate nearby entries while retaining a legitimate second converted level or independently displaced supply/demand area.
+Exact chart-visible prices now outrank nearby inferred candle fragments after both pass the structural and shared-Fibonacci gates. A later exact-looking price is not automatically another entry: Entry 2 and Entry 3 must each carry independent structural evidence and pass the same arithmetic Fibonacci test. This removes duplicate nearby entries while retaining legitimate converted levels or independently displaced supply/demand areas.
 
 The runner also compares completed feedback across the batch. If two or more identical strength or weakness statements are reused across different charts, the affected charts are marked **Needs review**. Instrument-specific prices, direction and structural roles remain part of the comparison so genuinely chart-specific feedback is not mistaken for boilerplate.
 
@@ -71,13 +71,13 @@ Use **Strict regression** after the correct result for a chart has been confirme
 
 Important fields:
 
-- **Entry 1 / Entry 2 type**: the expected structural role, such as demand, supply, support, resistance or a confirmed converted level. Use **Any buy area** or **Any sell area** only when the exact structural subtype is intentionally not part of the test.
+- **Entry 1 / Entry 2 / Entry 3 type**: the expected structural role, such as demand, supply, support, resistance or a confirmed converted level. Use **Any buy area** or **Any sell area** only when the exact structural subtype is intentionally not part of the test.
 - **Supply/demand zone boundaries**: selecting **Demand** or **Supply** reveals lower- and upper-boundary fields. The entry passes when its actionable anchor is inside the expected area or its structured zone meaningfully overlaps the expected area. Support, resistance and converted S/R remain exact anchored levels.
-- **No valid entry expected**: requires both the structured facts and customer-facing entry plan to return no selected entries. It cannot be combined with an expected Entry 1 or Entry 2.
+- **No valid entry expected**: requires both the structured facts and customer-facing entry plan to return no selected entries. It cannot be combined with any expected entry.
 - **Required levels**: exact authoritative S/R levels must appear in structured facts or customer feedback. A required price that is also a configured supply/demand-zone boundary is validated against the matching selected zone rather than forced to one anchor.
 - **Feedback must mention**: exact S/R levels must be stated in customer-facing feedback. For a configured supply/demand zone, a customer-facing price inside that area satisfies its boundary expectation.
 - **Feedback must include all terms**: comma-separated structural wording that must appear in customer-facing feedback, such as `demand, support`. Every entered term is required.
-- **Must not be entries**: structural levels that may be mentioned but must not become Entry 1 or Entry 2.
+- **Must not be entries**: structural levels that may be mentioned but must not become Entry 1, Entry 2 or Entry 3.
 - **Tolerance**: optional small boundary/reading tolerance. It is no longer a substitute for defining a supply/demand area; use the dedicated zone fields instead.
 
 Exact prices retain the decimal precision you type. For example, `0.69620`
@@ -87,7 +87,7 @@ explicitly provide a wider tolerance.
 Supply/demand zones are evaluated as areas because the base candle and broker
 feed can expose different actionable anchors inside the same structure. Zone
 matching never changes the fixed analysis order: S/R first, S/D second, hidden
-Fibonacci confluence third, then Entry 1/Entry 2 sequencing. A zone must still
+Fibonacci confluence third, then sequencing of up to three entries. A zone must still
 be structurally valid, on the correct side of price and close to the relevant
 38.2%, 50% or 61.8% retracement before it can be selected.
 
@@ -98,7 +98,7 @@ Do not merge a candidate change into production if:
 - Any previously passing critical benchmark fails.
 - Directional bias changes unexpectedly.
 - A required level disappears.
-- Entry 1 or Entry 2 changes unexpectedly.
+- Any verified entry changes unexpectedly.
 - A forbidden structural reference is promoted as an entry.
 - Fibonacci appears in customer-facing feedback.
 - Multiple charts reuse the same generic strength/weakness templates.
