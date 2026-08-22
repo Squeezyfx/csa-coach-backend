@@ -318,12 +318,10 @@ function duplicateItems(items = []) {
 }
 
 function feedbackTemplateFingerprint(value = "") {
-  return normalizeText(value)
-    .replace(/\b\d+(?:\.\d+)?\b/g, " price ")
-    .replace(/\b(?:bullish|bearish|buy|sell|above|below)\b/g, " direction ")
-    .replace(/\b(?:support|resistance|demand|supply)\b/g, " area ")
-    .replace(/\s+/g, " ")
-    .trim();
+  // Preserve instrument-specific prices, direction and structural roles.
+  // Removing those facts made genuinely chart-specific feedback appear to be
+  // a reused generic template. Exact rendered boilerplate is still caught.
+  return normalizeText(value).replace(/\s+/g, " ").trim();
 }
 
 function feedbackItems(result = {}) {
@@ -383,7 +381,7 @@ export function applyBatchFeedbackDiversityChecks(results = []) {
       id: "batch_feedback_diversity",
       label: "Chart-specific strengths and weaknesses",
       passed: false,
-      details: `${sharedCount} feedback templates were reused across different charts.`,
+      details: `${sharedCount} identical feedback statements were reused across different charts.`,
       critical: true,
     });
     const validation = refreshValidation({ ...item.validation, checks });

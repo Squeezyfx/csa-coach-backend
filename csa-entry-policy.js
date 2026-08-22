@@ -168,9 +168,13 @@ export function selectIndependentEntryAreas(candidates = [], direction = "range"
 
     // A different structural stage may provide Entry 2, but only when the
     // detector retained its own displacement/base evidence. Merely having a
-    // different label is not enough to manufacture a second entry.
+    // different label is not enough to manufacture a second entry. A current
+    // S/D area behind a primary S/R must also be qualified by its local
+    // historical-framework impulse (or carry explicit independent evidence).
+    // The broad major-swing Fib can validate a primary area, but must not
+    // manufacture an otherwise-unverified secondary S/D entry.
     if (candidateStage !== primaryStage) {
-      return hasIndependentStructuralEntryEvidence(candidate);
+      return hasIndependentSecondarySupplyDemandEvidence(candidate);
     }
 
     return (
@@ -181,6 +185,21 @@ export function selectIndependentEntryAreas(candidates = [], direction = "range"
   return secondary
     ? sequenceFibQualifiedAreas([primary, secondary], direction)
     : [primary];
+}
+
+export function hasIndependentSecondarySupplyDemandEvidence(area = {}) {
+  if (area?.independentEntryEvidence === true) return true;
+  if (!hasIndependentStructuralEntryEvidence(area)) return false;
+
+  const fibOriginModel = String(area?.fibOriginModel || "").toLowerCase();
+  const fibonacciSource = String(area?.fibonacciSource || "").toLowerCase();
+
+  return (
+    fibOriginModel.includes("historical_framework_local") ||
+    fibonacciSource.includes("historical_framework_local") ||
+    fibOriginModel.includes("chart_native_completed_directional_impulse") ||
+    fibonacciSource.includes("uploaded_chart_completed_impulse")
+  );
 }
 
 export function hasIndependentStructuralEntryEvidence(area = {}) {

@@ -235,7 +235,7 @@ test("uses configured approximation tolerance for required and feedback levels",
   );
 });
 
-test("batch mode rejects repeated generic strengths and weaknesses across charts", () => {
+test("batch mode does not mistake price-specific feedback for reused boilerplate", () => {
   const firstAnalysis = structuredClone(baseResult);
   const secondAnalysis = structuredClone(baseResult);
   firstAnalysis.finalFeedback = {
@@ -264,8 +264,35 @@ test("batch mode rejects repeated generic strengths and weaknesses across charts
     makeItem(secondAnalysis),
   ]);
 
+  assert.equal(checked[0].status, "passed");
+  assert.equal(checked[1].status, "passed");
+});
+
+test("batch mode still rejects identical generic feedback statements", () => {
+  const firstAnalysis = structuredClone(baseResult);
+  const secondAnalysis = structuredClone(baseResult);
+  const repeated = {
+    strengths: ["The chart structure is clear enough to review."],
+    weaknesses: [
+      "No completed trade is visible, so execution accuracy cannot be assessed.",
+      "A stop loss and target are not both shown, so risk cannot be assessed.",
+    ],
+  };
+  firstAnalysis.finalFeedback = structuredClone(repeated);
+  secondAnalysis.finalFeedback = structuredClone(repeated);
+
+  const makeItem = (analysis) => ({
+    status: "passed",
+    mode: "automatic",
+    analysis,
+    validation: validateBenchmarkResult(analysis, {}),
+  });
+  const checked = applyBatchFeedbackDiversityChecks([
+    makeItem(firstAnalysis),
+    makeItem(secondAnalysis),
+  ]);
+
   assert.equal(checked[0].status, "failed");
-  assert.equal(checked[1].status, "failed");
   assert.ok(checked[0].validation.criticalFailures.some(
     (check) => check.id === "batch_feedback_diversity"
   ));

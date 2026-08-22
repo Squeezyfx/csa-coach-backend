@@ -9,6 +9,7 @@ import {
   getMarketDataSymbolCandidates,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
+  hasIndependentSecondarySupplyDemandEvidence,
   hasIndependentStructuralEntryEvidence,
   isSupportedInstrumentCode,
   orderStructuralCandidatesForFib,
@@ -132,17 +133,40 @@ test("after Fib qualification bearish entries follow nearest-to-deeper price pat
   assert.deepEqual(sequenced.map((item) => item.id), ["near-resistance", "deep-supply"]);
 });
 
-test("Entry 2 may come from the next CSA structural stage when it independently qualifies", () => {
+test("Entry 2 may come from the next CSA structural stage when local framework Fib independently qualifies it", () => {
   const selected = selectIndependentEntryAreas(
     [
       { id: "entry-1", areaType: "converted support", authoritativeCenter: 1.4052, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 50, fibonacciScore: 1 },
       { id: "failed-local", areaType: "converted support", authoritativeCenter: 1.4048, authoritativeFrameworkLevel: true, requiredFibConfluence: false, structuralScore: 50, fibonacciScore: 0 },
-      { id: "entry-2", areaType: "demand", authoritativeCenter: 1.40341, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 55, fibonacciScore: 1, samePeriodDisplacementBaseValidated: true },
+      { id: "entry-2", areaType: "demand", authoritativeCenter: 1.40341, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 55, fibonacciScore: 1, samePeriodDisplacementBaseValidated: true, fibOriginModel: "historical_framework_local_period_impulse" },
     ],
     "bullish"
   );
 
   assert.deepEqual(selected.map((item) => item.id), ["entry-1", "entry-2"]);
+});
+
+test("broad major-swing Fib cannot manufacture a secondary supply or demand entry", () => {
+  const selected = selectIndependentEntryAreas(
+    [
+      { id: "entry-1", areaType: "converted support", authoritativeCenter: 1.35703, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 60, fibonacciScore: 1, priceSource: "independent_horizontal_line_reader_exact" },
+      { id: "false-entry-2", areaType: "demand", authoritativeCenter: 1.35366, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 71, fibonacciScore: 1, samePeriodDisplacementBaseValidated: true, fibOriginModel: "local_protected_swing_fallback", fibonacciSource: "major_break_significance_protected_swing_impulse" },
+    ],
+    "bullish"
+  );
+
+  assert.deepEqual(selected.map((item) => item.id), ["entry-1"]);
+});
+
+test("local historical framework impulse preserves a separately qualified demand Entry 2", () => {
+  assert.equal(
+    hasIndependentSecondarySupplyDemandEvidence({
+      areaType: "demand",
+      samePeriodDisplacementBaseValidated: true,
+      fibOriginModel: "historical_framework_local_period_impulse",
+    }),
+    true
+  );
 });
 
 test("Entry 2 may be a separate converted level only when it independently qualifies", () => {
@@ -266,6 +290,8 @@ test("selector reconciles exact chart/framework levels before choosing Fibonacci
   assert.match(serverSource, /structuralHintScore: scoreFibonacciFrameAgainstStructuralHints/);
   assert.match(serverSource, /chartExactFrameworkConfirmed/);
   assert.match(serverSource, /function rankChartNativeFallbackAreas/);
+  assert.match(serverSource, /function extractFocusedChartNativeEntryFallback/);
+  assert.match(serverSource, /focused_chart_native_entry_fallback/);
   assert.match(serverSource, /internalChartNativeFallback/);
 });
 

@@ -10542,8 +10542,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.29.0";
-const CSA_BUILD_ID = "CSA-v4.18.0-chart-native-fallback-entry-dedupe";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.30.0";
+const CSA_BUILD_ID = "CSA-v4.19.0-focused-fallback-secondary-independence";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -15916,7 +15916,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.13.0";
+const CSA_SELECTOR_VERSION = "4.14.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19104,8 +19104,12 @@ function buildExactChartFrameworkCandidates({
         "per_target_framework_price_reader",
       ].includes(String(item?.extractionSource || ""))
     )
-    .map((item) => nullablePositiveNumber(item?.displayedPrice))
-    .filter((price) => price !== null);
+    .map((item) => ({
+      price: nullablePositiveNumber(item?.displayedPrice),
+      extractionSource: String(item?.extractionSource || ""),
+      evidence: safeUserText(item?.description || item?.platformLabel || ""),
+    }))
+    .filter((item) => item.price !== null);
   const frameworkAreas = Array.isArray(marketReference?.csaAreas)
     ? marketReference.csaAreas
     : [];
@@ -19118,7 +19122,8 @@ function buildExactChartFrameworkCandidates({
   });
 
   return exactPrices
-    .map((chartPrice) => {
+    .map((exactLevel) => {
+      const chartPrice = exactLevel.price;
       const match = frameworkAreas
         .map((area) => ({
           area,
@@ -19132,9 +19137,23 @@ function buildExactChartFrameworkCandidates({
         .filter((item) => item.distance <= tolerance)
         .sort((a, b) => a.distance - b.distance)[0];
 
-      if (!match) return null;
+      // An independently read printed horizontal price is chart-native
+      // structural evidence even when the external provider did not return a
+      // matching framework area. It may enter the candidate pool as a
+      // potential converted S/R only; the shared structural and hidden-Fib
+      // gates below still decide whether it survives. Per-target model output
+      // is not allowed to create an unmatched level.
+      const chartNativeOnly =
+        !match &&
+        exactLevel.extractionSource ===
+          "independent_horizontal_line_reader_exact";
+      if (!match && !chartNativeOnly) return null;
 
-      const originalType = String(match.area?.type || "").toLowerCase();
+      const originalType = match
+        ? String(match.area?.type || "").toLowerCase()
+        : direction === "bullish"
+        ? "resistance"
+        : "support";
       const convertedType =
         direction === "bullish" &&
         originalType === "resistance" &&
@@ -19155,9 +19174,9 @@ function buildExactChartFrameworkCandidates({
       if (!sideCompatible) return null;
 
       const period =
-        match.area?.day ||
-        match.area?.period ||
-        match.area?.date ||
+        match?.area?.day ||
+        match?.area?.period ||
+        match?.area?.date ||
         null;
       const sourceIndex = dailyLevels.findIndex((level) =>
         [level?.periodLabel, level?.day, level?.key, level?.date]
@@ -19170,14 +19189,17 @@ function buildExactChartFrameworkCandidates({
 
       return {
         price: chartPrice,
-        frameworkPrice: match.frameworkPrice,
+        frameworkPrice: match?.frameworkPrice || chartPrice,
         type: convertedType,
         originalType,
-        source: "exact_chart_framework_level_pre_fib",
+        source: chartNativeOnly
+          ? "exact_chart_native_sr_level_pre_fib"
+          : "exact_chart_framework_level_pre_fib",
         priceSource: "independent_horizontal_line_reader_exact",
         chartReconciled: true,
         chartExactFrameworkConfirmed: true,
-        reconciliationDifference: match.distance,
+        reconciliationDifference: match?.distance || 0,
+        reconciliationEvidence: exactLevel.evidence,
         period,
         sourceIndex,
         conversionBreakConfirmed,
@@ -19185,11 +19207,15 @@ function buildExactChartFrameworkCandidates({
         priorPeriodSrConversion: conversionBreakConfirmed,
         authoritativeFrameworkLevel: true,
         stepwiseEntryStage: conversionBreakConfirmed
-          ? "earlier_broken_sr"
+          ? chartNativeOnly
+            ? "immediate_prior_broken_sr"
+            : "earlier_broken_sr"
           : originalType === "support" || originalType === "resistance"
           ? "support_resistance"
           : "supply_demand",
         authorityRank: 0,
+        authoritativeStructuralException: chartNativeOnly,
+        independentEntryEvidence: false,
       };
     })
     .filter(Boolean)
@@ -19232,6 +19258,94 @@ function normalizeChartNativeEntryFallback(value = {}) {
     candidates,
     source: "focused_uploaded_chart_structure_fallback",
   };
+}
+
+async function extractFocusedChartNativeEntryFallback({
+  imageBase64,
+  mimeType,
+  chartDetection = {},
+  submittedInstrument = "",
+  timeframe = "",
+} = {}) {
+  const context = {
+    instrument:
+      safeUserText(chartDetection?.instrument || submittedInstrument || ""),
+    timeframe: safeUserText(chartDetection?.timeframe || timeframe || ""),
+    latestVisiblePrice:
+      nullablePositiveNumber(chartDetection?.latestVisiblePrice),
+    direction: safeUserText(
+      chartDetection?.triggerDirection || chartDetection?.direction || ""
+    ),
+    visibleTrigger: safeUserText(chartDetection?.visibleTrigger || ""),
+    notes: safeUserText(chartDetection?.notes || ""),
+  };
+
+  const systemPrompt = `You are the focused chart-native CSA fallback reader. The external market-data provider is unavailable for this chart, so read only the uploaded screenshot and the supplied first-pass chart context.
+
+Apply this order exactly:
+1. Identify exact printed support/resistance prices and genuine converted levels.
+2. Identify an independent supply/demand base only when its own displacement is visibly clear.
+3. Draw one hidden completed directional impulse and test only 38.2%, 50%, or 61.8% retracement confluence.
+4. Return Entry 1 and only a genuinely separate optional Entry 2 in price-path order.
+
+Hard rules:
+- Fibonacci may qualify visible structure but may never create a price or area.
+- An S/R candidate must use an exact printed price from the screenshot.
+- A supply/demand candidate needs a visible base/zone plus its own displacement.
+- Candidate 2 must not be a nearby fragment, duplicate, or unverified reference.
+- Do not mention Fibonacci in customer-facing wording; this result is internal.
+- Set usable=false rather than guessing any unreadable direction, price, impulse, or role.
+- Return JSON only, with no markdown.
+
+Return exactly:
+{
+  "usable": false,
+  "direction": "bullish | bearish | range",
+  "currentPrice": null,
+  "swingHigh": null,
+  "swingLow": null,
+  "candidates": [
+    {
+      "price": null,
+      "zoneLow": null,
+      "zoneHigh": null,
+      "areaType": "support | resistance | demand | supply | converted support | converted resistance",
+      "exactVisiblePrice": false,
+      "conversionBreakConfirmed": false,
+      "structuralEvidence": "specific visible line lifecycle or displacement-base evidence",
+      "independentEntryEvidence": false,
+      "fibRatio": null,
+      "fibPrice": null
+    }
+  ]
+}`;
+
+  try {
+    const response = await runVisionModel({
+      systemPrompt,
+      userText:
+        `First-pass context: ${JSON.stringify(context)}. ` +
+        "Read the chart again for the focused internal fallback and return only the required JSON.",
+      imageBase64,
+      mimeType,
+      maxTokens: 1100,
+      openaiModel: "gpt-4.1-mini",
+      claudeModel: CLAUDE_MODEL,
+      temperature: 0,
+      imageDetail: "high",
+    });
+    const parsed = extractJsonObject(response.text || "");
+    if (!parsed) {
+      return normalizeChartNativeEntryFallback({ usable: false });
+    }
+    return normalizeChartNativeEntryFallback(parsed);
+  } catch (error) {
+    console.error("Focused chart-native fallback error:", error);
+    return {
+      ...normalizeChartNativeEntryFallback({ usable: false }),
+      reason: safeUserText(error?.message || "focused fallback failed"),
+    };
+  }
 }
 
 function rankChartNativeFallbackAreas({
@@ -27752,6 +27866,44 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           }
         );
       }
+    }
+
+    // When the external provider cannot serve the symbol (for example a
+    // broker index alias), do one small, focused vision pass instead of
+    // relying on the full prose review to also fit the internal fallback into
+    // its token budget. Supported instruments do not pay for this extra call.
+    if (
+      marketReference?.ok !== true &&
+      visualReview?.chartNativeEntryFallback?.usable !== true
+    ) {
+      const focusedFallbackStartedAt = csaNowMs();
+      const focusedChartNativeFallback =
+        await extractFocusedChartNativeEntryFallback({
+          imageBase64,
+          mimeType,
+          chartDetection,
+          submittedInstrument:
+            normalizedSymbol || submittedInstrument,
+          timeframe,
+        });
+
+      visualReview = {
+        ...visualReview,
+        chartNativeEntryFallback: focusedChartNativeFallback,
+      };
+
+      csaTimingLog(
+        "focused_chart_native_entry_fallback",
+        focusedFallbackStartedAt,
+        {
+          usable: focusedChartNativeFallback?.usable === true,
+          candidateCount: Array.isArray(
+            focusedChartNativeFallback?.candidates
+          )
+            ? focusedChartNativeFallback.candidates.length
+            : 0,
+        }
+      );
     }
 
     visualReview =
