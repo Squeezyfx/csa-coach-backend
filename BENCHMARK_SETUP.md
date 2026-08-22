@@ -2,7 +2,7 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.14.0-provider-alias-axis-year-terminal-leg`. Benchmark package v2.12 adds broker-index provider aliases, bottom-time-axis year reconciliation, and a tighter latest-break-to-terminal-extreme Fibonacci anchor. The batch-testing additions do not alter the customer analysis route.
+The included analysis backend is CSA build `v4.15.0-dominant-impulse-marked-level-authority`. Benchmark package v2.13 keeps broker-index aliases and time-axis reconciliation, makes the latest terminal leg a fallback rather than an override of a completed dominant impulse, gives exact chart-marked prices precedence only after the shared Fibonacci gate passes, and requires independent evidence before exposing Entry 2. The batch-testing additions do not alter the customer analysis route.
 
 After every chart in an automatic batch is marked **Consistent**, use **Save all as strict benchmarks** to populate and retain the verified direction, entry prices, structural roles and supply/demand zone boundaries in the current browser. Review those populated values once, then run Strict Regression without retyping the fixtures.
 

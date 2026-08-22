@@ -12,6 +12,7 @@ import {
   getMarketDataSymbolCandidates,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
+  shouldApplyFinalVisibleTerminalImpulse,
   isSupportedInstrumentCode,
   orderStructuralCandidatesForFib,
   parseChartHeaderText,
@@ -10508,8 +10509,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.25.0";
-const CSA_BUILD_ID = "CSA-v4.14.0-provider-alias-axis-year-terminal-leg";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.26.0";
+const CSA_BUILD_ID = "CSA-v4.15.0-dominant-impulse-marked-level-authority";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -13074,7 +13075,10 @@ function buildLatestImpulseFibonacci({
 
   let finalVisibleTerminalImpulseApplied = false;
 
-  if (finalVisibleTerminalImpulse?.enabled === true) {
+  if (shouldApplyFinalVisibleTerminalImpulse({
+    terminalImpulse: finalVisibleTerminalImpulse,
+    majorSelection,
+  })) {
     if (direction === "bullish") {
       selectedSwingLow = finalVisibleTerminalImpulse.originPrice;
       selectedSwingHigh = finalVisibleTerminalImpulse.terminalPrice;
@@ -15671,7 +15675,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.9.0";
+const CSA_SELECTOR_VERSION = "4.10.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -20130,6 +20134,7 @@ function rankRawEntryAreas({
         rawZone?.members?.[0]?.reinforcedByHistoricalIntradayStructure === true,
       supplyDemandRefinedBySamePeriodBase:
         rawZone?.members?.[0]?.supplyDemandRefinedBySamePeriodBase === true,
+      samePeriodDisplacementBaseValidated,
       stepwiseEntryStage:
         rawZone?.members?.[0]?.stepwiseEntryStage || null,
       standardStructuralStage:

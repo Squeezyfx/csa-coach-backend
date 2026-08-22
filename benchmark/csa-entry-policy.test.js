@@ -9,6 +9,7 @@ import {
   getMarketDataSymbolCandidates,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
+  hasIndependentStructuralEntryEvidence,
   isSupportedInstrumentCode,
   orderStructuralCandidatesForFib,
   parseChartHeaderText,
@@ -17,6 +18,7 @@ import {
   selectProtectiveSupplyDemandAnchor,
   sequenceFibQualifiedAreas,
   shouldMergeQualifiedSupplyDemandCluster,
+  shouldApplyFinalVisibleTerminalImpulse,
 } from "../csa-entry-policy.js";
 
 test("selector has no candidate-local Fibonacci source", () => {
@@ -135,7 +137,7 @@ test("Entry 2 may come from the next CSA structural stage when it independently 
     [
       { id: "entry-1", areaType: "converted support", authoritativeCenter: 1.4052, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 50, fibonacciScore: 1 },
       { id: "failed-local", areaType: "converted support", authoritativeCenter: 1.4048, authoritativeFrameworkLevel: true, requiredFibConfluence: false, structuralScore: 50, fibonacciScore: 0 },
-      { id: "entry-2", areaType: "demand", authoritativeCenter: 1.40341, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 55, fibonacciScore: 1 },
+      { id: "entry-2", areaType: "demand", authoritativeCenter: 1.40341, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 55, fibonacciScore: 1, samePeriodDisplacementBaseValidated: true },
     ],
     "bullish"
   );
@@ -146,13 +148,60 @@ test("Entry 2 may come from the next CSA structural stage when it independently 
 test("Entry 2 may be a separate converted level only when it independently qualifies", () => {
   const selected = selectIndependentEntryAreas(
     [
-      { id: "entry-1", areaType: "converted resistance", authoritativeCenter: 53275.6, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 60, fibonacciScore: 1 },
+      { id: "entry-1", areaType: "converted resistance", authoritativeCenter: 53275.6, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 60, fibonacciScore: 1, priceSource: "independent_horizontal_line_reader_exact" },
       { id: "entry-2", areaType: "converted resistance", authoritativeCenter: 53421.2, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 55, fibonacciScore: 1, priceSource: "independent_horizontal_line_reader_exact" },
     ],
     "bearish"
   );
 
   assert.deepEqual(selected.map((item) => item.id), ["entry-1", "entry-2"]);
+});
+
+test("exact marked level outranks a nearer inferred fragment after shared Fib qualification", () => {
+  const selected = selectIndependentEntryAreas(
+    [
+      { id: "inferred-supply", areaType: "supply", authoritativeCenter: 1.38285, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 52, fibonacciScore: 1, strongDepartureCount: 0 },
+      { id: "marked-conversion", areaType: "converted resistance", authoritativeCenter: 1.38022, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 60, fibonacciScore: 1, priceSource: "independent_horizontal_line_reader_exact" },
+    ],
+    "bearish"
+  );
+
+  assert.deepEqual(selected.map((item) => item.id), ["marked-conversion"]);
+});
+
+test("an inferred same-stage fragment cannot become Entry 2 behind a marked level", () => {
+  const selected = selectIndependentEntryAreas(
+    [
+      { id: "marked", areaType: "converted support", authoritativeCenter: 4436.15, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 60, fibonacciScore: 1, priceSource: "independent_horizontal_line_reader_exact" },
+      { id: "fragment", areaType: "converted support", authoritativeCenter: 4428.73, authoritativeFrameworkLevel: true, requiredFibConfluence: true, structuralScore: 55, fibonacciScore: 1, priceSource: "per_target_framework_price" },
+    ],
+    "bullish"
+  );
+
+  assert.deepEqual(selected.map((item) => item.id), ["marked"]);
+});
+
+test("independent supply or demand requires its own structural evidence", () => {
+  assert.equal(hasIndependentStructuralEntryEvidence({ areaType: "demand" }), false);
+  assert.equal(
+    hasIndependentStructuralEntryEvidence({
+      areaType: "demand",
+      samePeriodDisplacementBaseValidated: true,
+    }),
+    true
+  );
+});
+
+test("terminal impulse is a fallback and cannot replace a dominant major impulse", () => {
+  const terminalImpulse = { enabled: true };
+  assert.equal(
+    shouldApplyFinalVisibleTerminalImpulse({ terminalImpulse, majorSelection: null }),
+    true
+  );
+  assert.equal(
+    shouldApplyFinalVisibleTerminalImpulse({ terminalImpulse, majorSelection: { pivotPrice: 1.2 } }),
+    false
+  );
 });
 
 test("redundant same-stage Entry 2 is rejected without independent chart evidence", () => {

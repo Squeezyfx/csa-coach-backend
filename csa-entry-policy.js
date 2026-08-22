@@ -138,21 +138,66 @@ export function selectIndependentEntryAreas(candidates = [], direction = "range"
       Number(candidate?.fibonacciScore || 0) > 0
     );
 
-  if (qualified.length < 2) return qualified.slice(0, 1);
+  if (!qualified.length) return [];
 
-  const primary = qualified[0];
+  // An exact price read from a visible chart line is authoritative only after
+  // that level has independently passed structure and the shared Fibonacci
+  // gate above. When one exists, it must not be displaced by a nearby inferred
+  // candle fragment. This is evidence precedence, not a benchmark exception.
+  const exactMarked = qualified.filter(hasIndependentChartPriceEvidence);
+  const primary = exactMarked.length
+    ? sequenceFibQualifiedAreas(exactMarked, direction)[0]
+    : qualified[0];
+
+  if (qualified.length < 2) return [primary];
+
   const primaryStage = classifyCsaStructuralStage(primary).key;
-  const secondary = qualified.slice(1).find((candidate) => {
+  const secondary = qualified.find((candidate) => {
+    if (candidate === primary) return false;
+
     const candidateStage = classifyCsaStructuralStage(candidate).key;
 
-    if (candidateStage !== primaryStage) return true;
+    if (hasIndependentChartPriceEvidence(candidate)) return true;
+
+    // A different structural stage may provide Entry 2, but only when the
+    // detector retained its own displacement/base evidence. Merely having a
+    // different label is not enough to manufacture a second entry.
+    if (candidateStage !== primaryStage) {
+      return hasIndependentStructuralEntryEvidence(candidate);
+    }
+
     return (
-      candidate?.independentEntryEvidence === true ||
-      hasIndependentChartPriceEvidence(candidate)
+      candidate?.independentEntryEvidence === true
     );
   });
 
-  return secondary ? [primary, secondary] : [primary];
+  return secondary
+    ? sequenceFibQualifiedAreas([primary, secondary], direction)
+    : [primary];
+}
+
+export function hasIndependentStructuralEntryEvidence(area = {}) {
+  if (area?.independentEntryEvidence === true) return true;
+
+  const stage = classifyCsaStructuralStage(area).key;
+  if (stage !== "supply_demand") return false;
+
+  return (
+    area?.structuralZoneReinforcedByIntradayStructure === true ||
+    area?.supplyDemandRefinedBySamePeriodBase === true ||
+    area?.samePeriodDisplacementBaseValidated === true ||
+    Number(area?.strongDepartureCount || 0) > 0
+  );
+}
+
+export function shouldApplyFinalVisibleTerminalImpulse({
+  terminalImpulse = null,
+  majorSelection = null,
+} = {}) {
+  // The latest terminal leg is a fallback. It must not replace an already
+  // resolved, completed dominant structural impulse; doing so changes the Fib
+  // frame from chart to chart and admits/rejects levels inconsistently.
+  return terminalImpulse?.enabled === true && !majorSelection;
 }
 
 export function buildFinalVisibleTerminalImpulse({
