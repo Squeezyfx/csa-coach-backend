@@ -2,7 +2,7 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.23.0-full-inventory-fib-audit`. Benchmark package v2.21 inventories prior support/resistance and every genuine supply/demand candidate before applying deterministic hidden Fibonacci arithmetic. Each candidate is tested against 38.2%, 50%, and 61.8%; the model cannot skip a level merely because it guessed a different Fibonacci ratio. It supports up to three independently qualified alternative entries, retains broker-index aliases and time-axis reconciliation, and keeps the uploaded screenshot authoritative in benchmark dry-run mode. The batch-testing additions do not alter the customer analysis route.
+The included analysis backend is CSA build `v4.24.0-stable-selector-rollback`. Benchmark package v2.22 restores the proven chart-native selector and its conservative hidden Fibonacci gate after the v2.21 inventory merge caused cross-chart ranking regressions. It supports up to three independently qualified alternative entries, retains broker-index aliases and time-axis reconciliation, and keeps the uploaded screenshot authoritative in benchmark dry-run mode. The batch-testing additions do not alter the customer analysis route.
 
 After every chart in an automatic batch is marked **Consistent**, use **Save all as strict benchmarks** to populate and retain the verified direction, entry prices, structural roles and supply/demand zone boundaries in the current browser. Review those populated values once, then run Strict Regression without retyping the fixtures.
 
