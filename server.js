@@ -10556,7 +10556,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.33.0";
-const CSA_BUILD_ID = "CSA-v4.22.0-full-structure-three-entry-fib-audit";
+const CSA_BUILD_ID = "CSA-v4.23.0-full-inventory-fib-audit";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -15945,7 +15945,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.17.0";
+const CSA_SELECTOR_VERSION = "4.18.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19289,6 +19289,63 @@ function normalizeChartNativeEntryFallback(value = {}) {
   };
 }
 
+function mergeChartNativeEntryFallbacks(...fallbacks) {
+  const usable = fallbacks
+    .map((fallback) => normalizeChartNativeEntryFallback(fallback))
+    .filter((fallback) => fallback.usable === true);
+
+  if (!usable.length) {
+    return normalizeChartNativeEntryFallback({ usable: false });
+  }
+
+  const direction = usable[0].direction;
+  const compatible = usable.filter((fallback) => fallback.direction === direction);
+  const candidates = [];
+
+  for (const fallback of compatible) {
+    for (const candidate of fallback.candidates || []) {
+      const duplicateIndex = candidates.findIndex((existing) => {
+        const sameType = existing.areaType === candidate.areaType;
+        const samePrice = Math.abs(Number(existing.price) - Number(candidate.price)) <=
+          Math.max(0.0000001, Math.abs(Number(candidate.price)) * 0.000002);
+        return sameType && samePrice;
+      });
+
+      if (duplicateIndex === -1) {
+        candidates.push(candidate);
+        continue;
+      }
+
+      const previous = candidates[duplicateIndex];
+      candidates[duplicateIndex] = {
+        ...previous,
+        ...candidate,
+        exactVisiblePrice: previous.exactVisiblePrice || candidate.exactVisiblePrice,
+        conversionBreakConfirmed:
+          previous.conversionBreakConfirmed || candidate.conversionBreakConfirmed,
+        independentEntryEvidence:
+          previous.independentEntryEvidence || candidate.independentEntryEvidence,
+        structuralEvidence: [previous.structuralEvidence, candidate.structuralEvidence]
+          .filter(Boolean)
+          .join("; "),
+      };
+    }
+  }
+
+  const preferred = compatible[compatible.length - 1];
+  const swingLows = compatible
+    .map((fallback) => Number(fallback.swingLow || 0))
+    .filter((price) => price > 0);
+  return normalizeChartNativeEntryFallback({
+    usable: candidates.length > 0,
+    direction,
+    currentPrice: preferred.currentPrice || compatible[0].currentPrice,
+    swingHigh: Math.max(...compatible.map((fallback) => Number(fallback.swingHigh || 0))),
+    swingLow: swingLows.length ? Math.min(...swingLows) : null,
+    candidates,
+  });
+}
+
 async function extractFocusedChartNativeEntryFallback({
   imageBase64,
   mimeType,
@@ -19312,17 +19369,17 @@ async function extractFocusedChartNativeEntryFallback({
   const systemPrompt = `You are the focused chart-native CSA fallback reader. The external market-data provider is unavailable for this chart, so read only the uploaded screenshot and the supplied first-pass chart context.
 
 Apply this order exactly:
-1. Identify exact printed support/resistance prices and genuine converted levels.
-2. Identify an independent supply/demand base only when its own displacement is visibly clear.
-3. Draw one hidden completed directional impulse and test only 38.2%, 50%, or 61.8% retracement confluence.
-4. Inventory every visible structural candidate before filtering. Test each candidate against the same completed impulse, then return as many as three genuinely separate entries in price-path order.
+1. Inventory every usable prior support/resistance level, including broken-and-retested conversions. Do not discard a prior level merely because another level is closer to price.
+2. Inventory every genuine prior supply/demand base that has visible displacement. This includes a prior-session high/low base when it is the nearest valid supply/demand area on the retracement path.
+3. Draw one hidden completed directional impulse, then independently test every inventoried candidate against 38.2%, 50%, and 61.8%. Never rely on a guessed Fibonacci ratio supplied by a previous pass.
+4. Return all structurally valid candidates before filtering. The server will calculate confluence and sequence up to three distinct alternatives in price-path order.
 
 Hard rules:
 - Fibonacci may qualify visible structure but may never create a price or area.
 - An S/R candidate must use an exact printed price from the screenshot.
 - Never combine two separately printed support/resistance prices into one zone. Return each printed S/R line as its own candidate with zoneLow=zoneHigh=price. Only a genuine visible supply/demand base may use different zone boundaries.
 - A supply/demand candidate needs a visible base/zone plus its own displacement.
-- Do not stop after finding the first or second level. Inspect the next previous support/resistance and the next genuine supply/demand base too.
+- Do not stop after finding the first or second level. Inspect the next previous support/resistance and the next genuine supply/demand base too. A previous-session supply/demand zone must be returned when it is structurally valid even if a later conversion also qualifies.
 - A later entry must not be a nearby fragment, duplicate, or unverified reference. Entry 2 and Entry 3 are alternatives only if the earlier area fails; they are never instructions to add to a losing trade.
 - The screenshot is authoritative when its visible extremes or printed levels conflict with external OHLC data.
 - Do not mention Fibonacci in customer-facing wording; this result is internal.
@@ -19414,26 +19471,45 @@ function rankChartNativeFallbackAreas({
   ).map((candidate) => {
     const price = asPositiveNumber(candidate?.price);
     const areaType = String(candidate?.areaType || "").toLowerCase().trim();
-    const ratio = Number(candidate?.fibRatio);
-    const fibRatio = allowedFibRatios.find(
-      (allowed) => Number.isFinite(ratio) && Math.abs(ratio - allowed) <= 0.002
-    );
-    const computedFibPrice = fibRatio && impulseRange !== null
-      ? direction === "bearish"
-        ? swingLow + impulseRange * fibRatio
-        : swingHigh - impulseRange * fibRatio
-      : null;
     const fibTolerance = impulseRange !== null
       ? Math.max(approvedTolerance, impulseRange * 0.06)
       : approvedTolerance;
-    const arithmeticFibMatch = computedFibPrice !== null &&
-      Math.abs(price - computedFibPrice) <= fibTolerance;
+    const rawLow = asPositiveNumber(candidate?.zoneLow) || price;
+    const rawHigh = asPositiveNumber(candidate?.zoneHigh) || price;
+    const zoneLow = Math.min(rawLow, rawHigh);
+    const zoneHigh = Math.max(rawLow, rawHigh);
+    const isSupplyDemand = ["supply", "demand"].includes(areaType);
+
+    // A vision reader may identify correct structure but report a wrong or
+    // empty fibRatio. Fibonacci is deliberately a deterministic server-side
+    // gate: each candidate must be tested against all three permitted levels.
+    const fibonacciMatches = impulseRange === null
+      ? []
+      : allowedFibRatios.flatMap((ratio) => {
+          const computedPrice = direction === "bearish"
+            ? swingLow + impulseRange * ratio
+            : swingHigh - impulseRange * ratio;
+          const distance = isSupplyDemand
+            ? computedPrice < zoneLow
+              ? zoneLow - computedPrice
+              : computedPrice > zoneHigh
+              ? computedPrice - zoneHigh
+              : 0
+            : Math.abs(price - computedPrice);
+          if (distance > fibTolerance) return [];
+          return [{
+            label: ratio === 0.382 ? "38.2" : ratio === 0.5 ? "50.0" : "61.8",
+            ratio,
+            price: computedPrice,
+            distance,
+            matchType: "deterministic_chart_native_hidden_fibonacci",
+          }];
+        });
     const sideCompatible = price !== null && (
       direction === "bullish"
-        ? price < resolvedCurrentPrice
-        : price > resolvedCurrentPrice
+        ? zoneLow < resolvedCurrentPrice
+        : zoneHigh > resolvedCurrentPrice
     );
-    const isSupplyDemand = ["supply", "demand"].includes(areaType);
     const structuralEvidenceValid = isSupplyDemand
       ? candidate?.independentEntryEvidence === true &&
         Boolean(candidate?.structuralEvidence)
@@ -19442,17 +19518,11 @@ function rankChartNativeFallbackAreas({
     if (
       !allowedTypes.has(areaType) ||
       !sideCompatible ||
-      !fibRatio ||
-      !arithmeticFibMatch ||
+      !fibonacciMatches.length ||
       !structuralEvidenceValid
     ) {
       return null;
     }
-
-    const rawLow = asPositiveNumber(candidate?.zoneLow) || price;
-    const rawHigh = asPositiveNumber(candidate?.zoneHigh) || price;
-    const zoneLow = Math.min(rawLow, rawHigh);
-    const zoneHigh = Math.max(rawLow, rawHigh);
     const converted = ["converted support", "converted resistance"].includes(areaType);
 
     return {
@@ -19495,17 +19565,12 @@ function rankChartNativeFallbackAreas({
       structuralScore: 60,
       fibonacciScore: 1,
       requiredFibConfluence: true,
-      fibonacciMatches: [{
-        label: fibRatio === 0.382 ? "38.2" : fibRatio === 0.5 ? "50.0" : "61.8",
-        ratio: fibRatio,
-        price: computedFibPrice,
-        matchType: "deterministic_chart_native_hidden_fibonacci",
-      }],
+      fibonacciMatches,
       fibonacciSource: "uploaded_chart_completed_impulse",
       fibOriginModel: "chart_native_completed_directional_impulse",
       selectorQualityReason: safeUserText(candidate?.structuralEvidence || ""),
-      computedFibPrice,
-      fibonacciDistance: Math.abs(price - computedFibPrice),
+      computedFibPrice: fibonacciMatches[0]?.price ?? null,
+      fibonacciDistance: fibonacciMatches[0]?.distance ?? null,
       fibonacciTolerance: fibTolerance,
       validated: true,
     };
@@ -27970,10 +28035,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // broker index alias), do one small, focused vision pass instead of
     // relying on the full prose review to also fit the internal fallback into
     // its token budget. Supported instruments do not pay for this extra call.
-    if (
-      (BENCHMARK_DRY_RUN_ENABLED || marketReference?.ok !== true) &&
-      visualReview?.chartNativeEntryFallback?.usable !== true
-    ) {
+    if (BENCHMARK_DRY_RUN_ENABLED || marketReference?.ok !== true) {
       const focusedFallbackStartedAt = csaNowMs();
       const focusedChartNativeFallback =
         await extractFocusedChartNativeEntryFallback({
@@ -27987,7 +28049,13 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
 
       visualReview = {
         ...visualReview,
-        chartNativeEntryFallback: focusedChartNativeFallback,
+        // The first pass can identify a valid nearby level but omit an older
+        // supply/demand zone. Merge a dedicated inventory pass so every
+        // candidate survives to the deterministic Fibonacci stage.
+        chartNativeEntryFallback: mergeChartNativeEntryFallbacks(
+          visualReview?.chartNativeEntryFallback,
+          focusedChartNativeFallback
+        ),
       };
 
       csaTimingLog(
