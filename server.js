@@ -10,11 +10,13 @@ import {
   classifyCsaStructuralStage,
   consolidateQualifiedSupplyDemandClusters,
   expandExactSupportResistanceBoundaries,
+  findNearestAllowedFibonacciMatch,
   getMarketDataSymbolCandidates,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
   shouldApplyFinalVisibleTerminalImpulse,
   isSupportedInstrumentCode,
+  mergeFocusedSupplyDemandInventory,
   orderStructuralCandidatesForFib,
   parseChartHeaderText,
   reconcileLatestVisibleDateWithAxisYear,
@@ -7928,10 +7930,10 @@ SCORING RULES:
 INTERNAL CHART-NATIVE FALLBACK (never show this wording to the customer):
 - Complete this only when Twelve Data available for this review is "no".
 - Read the instrument, timeframe, final visible price, exact printed horizontal prices, and the latest completed directional impulse directly from the screenshot.
-- Apply the fixed order: (1) support/resistance and genuine conversions, (2) independent supply/demand displacement bases, (3) hidden 38.2/50/61.8 Fibonacci confluence, (4) Entry 1 then optional Entry 2 by price path.
+- Apply the fixed order: (1) support/resistance and genuine conversions, (2) independent supply/demand displacement bases, (3) hidden 38.2/50/61.8 Fibonacci confluence, (4) Entry 1, optional Entry 2, and optional Entry 3 by price path.
 - Fibonacci may qualify structure but may never create a level. Do not mention Fibonacci in any customer-facing field.
 - An S/R candidate requires an exact printed chart price. A supply/demand candidate requires a visible base/zone and its own displacement evidence.
-- Return no more than two candidates. Candidate 2 must be a genuinely separate structural opportunity; a nearby fragment or duplicate of Candidate 1 is not independent.
+- Return no more than three candidates. Candidate 2 and Candidate 3 must each be a genuinely separate structural opportunity; a nearby fragment or duplicate is not independent.
 - Set usable=false rather than guessing any unreadable price, impulse, direction, or structural role.
 
 Return exactly this JSON shape:
@@ -10555,8 +10557,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.33.0";
-const CSA_BUILD_ID = "CSA-v4.24.0-stable-selector-rollback";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.34.0";
+const CSA_BUILD_ID = "CSA-v4.25.0-targeted-sd-fib-recovery";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -19322,6 +19324,7 @@ Hard rules:
 - An S/R candidate must use an exact printed price from the screenshot.
 - Never combine two separately printed support/resistance prices into one zone. Return each printed S/R line as its own candidate with zoneLow=zoneHigh=price. Only a genuine visible supply/demand base may use different zone boundaries.
 - A supply/demand candidate needs a visible base/zone plus its own displacement.
+- For a supply/demand candidate, set price to the visible structural anchor of the zone (the reaction high/base anchor for supply or reaction low/base anchor for demand), never to a Fibonacci price.
 - Do not stop after finding the first or second level. Inspect the next previous support/resistance and the next genuine supply/demand base too.
 - A later entry must not be a nearby fragment, duplicate, or unverified reference. Entry 2 and Entry 3 are alternatives only if the earlier area fails; they are never instructions to add to a losing trade.
 - The screenshot is authoritative when its visible extremes or printed levels conflict with external OHLC data.
@@ -19401,7 +19404,6 @@ function rankChartNativeFallbackAreas({
   const allowedTypes = direction === "bullish"
     ? new Set(["support", "demand", "converted support"])
     : new Set(["resistance", "supply", "converted resistance"]);
-  const allowedFibRatios = [0.382, 0.5, 0.618];
   const approvedTolerance = getApprovedPriceTolerance(symbol);
   const swingHigh = asPositiveNumber(fallback?.swingHigh);
   const swingLow = asPositiveNumber(fallback?.swingLow);
@@ -19414,20 +19416,22 @@ function rankChartNativeFallbackAreas({
   ).map((candidate) => {
     const price = asPositiveNumber(candidate?.price);
     const areaType = String(candidate?.areaType || "").toLowerCase().trim();
-    const ratio = Number(candidate?.fibRatio);
-    const fibRatio = allowedFibRatios.find(
-      (allowed) => Number.isFinite(ratio) && Math.abs(ratio - allowed) <= 0.002
-    );
-    const computedFibPrice = fibRatio && impulseRange !== null
-      ? direction === "bearish"
-        ? swingLow + impulseRange * fibRatio
-        : swingHigh - impulseRange * fibRatio
-      : null;
     const fibTolerance = impulseRange !== null
       ? Math.max(approvedTolerance, impulseRange * 0.06)
       : approvedTolerance;
-    const arithmeticFibMatch = computedFibPrice !== null &&
-      Math.abs(price - computedFibPrice) <= fibTolerance;
+    const rawLow = asPositiveNumber(candidate?.zoneLow) || price;
+    const rawHigh = asPositiveNumber(candidate?.zoneHigh) || price;
+    const zoneLow = Math.min(rawLow, rawHigh);
+    const zoneHigh = Math.max(rawLow, rawHigh);
+    const fibMatch = findNearestAllowedFibonacciMatch({
+      direction,
+      swingHigh,
+      swingLow,
+      price,
+      zoneLow,
+      zoneHigh,
+      tolerance: fibTolerance,
+    });
     const sideCompatible = price !== null && (
       direction === "bullish"
         ? price < resolvedCurrentPrice
@@ -19442,17 +19446,14 @@ function rankChartNativeFallbackAreas({
     if (
       !allowedTypes.has(areaType) ||
       !sideCompatible ||
-      !fibRatio ||
-      !arithmeticFibMatch ||
+      !fibMatch ||
       !structuralEvidenceValid
     ) {
       return null;
     }
-    const rawLow = asPositiveNumber(candidate?.zoneLow) || price;
-    const rawHigh = asPositiveNumber(candidate?.zoneHigh) || price;
-    const zoneLow = Math.min(rawLow, rawHigh);
-    const zoneHigh = Math.max(rawLow, rawHigh);
     const converted = ["converted support", "converted resistance"].includes(areaType);
+    const fibRatio = fibMatch.ratio;
+    const computedFibPrice = fibMatch.fibPrice;
 
     return {
       direction: direction === "bullish" ? "buy" : "sell",
@@ -19504,7 +19505,7 @@ function rankChartNativeFallbackAreas({
       fibOriginModel: "chart_native_completed_directional_impulse",
       selectorQualityReason: safeUserText(candidate?.structuralEvidence || ""),
       computedFibPrice,
-      fibonacciDistance: Math.abs(price - computedFibPrice),
+      fibonacciDistance: fibMatch.distance,
       fibonacciTolerance: fibTolerance,
       validated: true,
     };
@@ -27969,10 +27970,10 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // broker index alias), do one small, focused vision pass instead of
     // relying on the full prose review to also fit the internal fallback into
     // its token budget. Supported instruments do not pay for this extra call.
-    if (
-      (BENCHMARK_DRY_RUN_ENABLED || marketReference?.ok !== true) &&
+    if (BENCHMARK_DRY_RUN_ENABLED || (
+      marketReference?.ok !== true &&
       visualReview?.chartNativeEntryFallback?.usable !== true
-    ) {
+    )) {
       const focusedFallbackStartedAt = csaNowMs();
       const focusedChartNativeFallback =
         await extractFocusedChartNativeEntryFallback({
@@ -27986,7 +27987,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
 
       visualReview = {
         ...visualReview,
-        chartNativeEntryFallback: focusedChartNativeFallback,
+        chartNativeEntryFallback: BENCHMARK_DRY_RUN_ENABLED
+          ? mergeFocusedSupplyDemandInventory(
+              visualReview?.chartNativeEntryFallback || {},
+              focusedChartNativeFallback
+            )
+          : focusedChartNativeFallback,
       };
 
       csaTimingLog(

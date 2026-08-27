@@ -7,12 +7,14 @@ import {
   classifyCsaStructuralStage,
   consolidateQualifiedSupplyDemandClusters,
   expandExactSupportResistanceBoundaries,
+  findNearestAllowedFibonacciMatch,
   getMarketDataSymbolCandidates,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
   hasIndependentSecondarySupplyDemandEvidence,
   hasIndependentStructuralEntryEvidence,
   isSupportedInstrumentCode,
+  mergeFocusedSupplyDemandInventory,
   orderStructuralCandidatesForFib,
   parseChartHeaderText,
   reconcileLatestVisibleDateWithAxisYear,
@@ -22,6 +24,110 @@ import {
   shouldMergeQualifiedSupplyDemandCluster,
   shouldApplyFinalVisibleTerminalImpulse,
 } from "../csa-entry-policy.js";
+
+test("server calculates every allowed Fib ratio instead of trusting the model label", () => {
+  const match = findNearestAllowedFibonacciMatch({
+    direction: "bearish",
+    swingHigh: 1.39091,
+    swingLow: 1.37575,
+    price: 1.38066,
+    zoneLow: 1.3805,
+    zoneHigh: 1.3808,
+    tolerance: (1.39091 - 1.37575) * 0.06,
+  });
+
+  assert.equal(match?.ratio, 0.382);
+});
+
+test("Fib proximity checks the full supply zone rather than only its center", () => {
+  const match = findNearestAllowedFibonacciMatch({
+    direction: "bearish",
+    swingHigh: 1.39091,
+    swingLow: 1.37575,
+    price: 1.3806,
+    zoneLow: 1.3805,
+    zoneHigh: 1.3812,
+    tolerance: 0.0004,
+  });
+
+  assert.equal(match?.ratio, 0.382);
+  assert.ok(match.distance < 0.0004);
+});
+
+test("focused inventory merges only independent supply or demand candidates", () => {
+  const primary = {
+    usable: true,
+    direction: "bearish",
+    swingHigh: 1.39091,
+    swingLow: 1.37575,
+    candidates: [
+      { price: 1.38437, areaType: "converted resistance", exactVisiblePrice: true },
+    ],
+  };
+  const focused = {
+    usable: true,
+    direction: "bearish",
+    candidates: [
+      { price: 1.38066, areaType: "supply", independentEntryEvidence: true, structuralEvidence: "completed rejection base with bearish displacement" },
+      { price: 1.38767, areaType: "resistance", exactVisiblePrice: true, structuralEvidence: "extra S/R" },
+      { price: 1.381, areaType: "supply", independentEntryEvidence: false, structuralEvidence: "uncertain base" },
+    ],
+  };
+
+  const merged = mergeFocusedSupplyDemandInventory(primary, focused);
+  assert.deepEqual(merged.candidates.map((item) => item.price), [1.38437, 1.38066]);
+  assert.equal(merged.swingHigh, 1.39091);
+  assert.equal(merged.swingLow, 1.37575);
+});
+
+test("USDCAD recovered supply and existing converted resistance retain the verified order", () => {
+  const swingHigh = 1.39091;
+  const swingLow = 1.37575;
+  const tolerance = (swingHigh - swingLow) * 0.06;
+  const areas = [
+    {
+      id: "thursday-supply",
+      areaType: "supply",
+      authoritativeCenter: 1.38066,
+      zoneLow: 1.3805,
+      zoneHigh: 1.3808,
+      authoritativeFrameworkLevel: true,
+      independentEntryEvidence: true,
+      structuralScore: 60,
+    },
+    {
+      id: "deeper-converted-resistance",
+      areaType: "converted resistance",
+      authoritativeCenter: 1.38437,
+      zoneLow: 1.38437,
+      zoneHigh: 1.38437,
+      authoritativeFrameworkLevel: true,
+      independentEntryEvidence: true,
+      structuralScore: 58,
+    },
+  ].map((area) => {
+    const match = findNearestAllowedFibonacciMatch({
+      direction: "bearish",
+      swingHigh,
+      swingLow,
+      price: area.authoritativeCenter,
+      zoneLow: area.zoneLow,
+      zoneHigh: area.zoneHigh,
+      tolerance,
+    });
+    return {
+      ...area,
+      requiredFibConfluence: Boolean(match),
+      fibonacciScore: match ? 1 : 0,
+    };
+  });
+
+  const selected = selectIndependentEntryAreas(areas, "bearish");
+  assert.deepEqual(selected.map((area) => area.id), [
+    "thursday-supply",
+    "deeper-converted-resistance",
+  ]);
+});
 
 test("keeps separately printed S/R boundaries as exact independent levels", () => {
   const expanded = expandExactSupportResistanceBoundaries([

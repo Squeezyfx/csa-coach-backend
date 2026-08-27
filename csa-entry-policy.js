@@ -124,6 +124,102 @@ export function sequenceFibQualifiedAreas(candidates = [], direction = "range") 
   });
 }
 
+export function findNearestAllowedFibonacciMatch({
+  direction = "range",
+  swingHigh = null,
+  swingLow = null,
+  price = null,
+  zoneLow = null,
+  zoneHigh = null,
+  tolerance = 0,
+} = {}) {
+  const high = Number(swingHigh);
+  const low = Number(swingLow);
+  const center = Number(price);
+  const rawLow = Number(zoneLow);
+  const rawHigh = Number(zoneHigh);
+  const allowedTolerance = Math.max(Number(tolerance) || 0, 0);
+
+  if (
+    !["bullish", "bearish"].includes(direction) ||
+    !Number.isFinite(high) ||
+    !Number.isFinite(low) ||
+    high <= low ||
+    !Number.isFinite(center)
+  ) {
+    return null;
+  }
+
+  const hasZone = Number.isFinite(rawLow) && Number.isFinite(rawHigh);
+  const lowerBoundary = hasZone ? Math.min(rawLow, rawHigh) : center;
+  const upperBoundary = hasZone ? Math.max(rawLow, rawHigh) : center;
+  const impulseRange = high - low;
+
+  const matches = [0.382, 0.5, 0.618]
+    .map((ratio) => {
+      const fibPrice = direction === "bearish"
+        ? low + impulseRange * ratio
+        : high - impulseRange * ratio;
+      const distance = fibPrice < lowerBoundary
+        ? lowerBoundary - fibPrice
+        : fibPrice > upperBoundary
+        ? fibPrice - upperBoundary
+        : 0;
+
+      return { ratio, fibPrice, distance };
+    })
+    .sort((a, b) => a.distance - b.distance || a.ratio - b.ratio);
+
+  return matches[0]?.distance <= allowedTolerance ? matches[0] : null;
+}
+
+export function mergeFocusedSupplyDemandInventory(
+  primaryFallback = {},
+  focusedFallback = {}
+) {
+  if (primaryFallback?.usable !== true) return focusedFallback;
+  if (
+    focusedFallback?.usable !== true ||
+    focusedFallback?.direction !== primaryFallback?.direction
+  ) {
+    return primaryFallback;
+  }
+
+  const primaryCandidates = Array.isArray(primaryFallback?.candidates)
+    ? primaryFallback.candidates
+    : [];
+  const focusedSupplyDemand = (Array.isArray(focusedFallback?.candidates)
+    ? focusedFallback.candidates
+    : []
+  ).filter((candidate) => {
+    const type = String(candidate?.areaType || "").toLowerCase().trim();
+    return (
+      ["supply", "demand"].includes(type) &&
+      candidate?.independentEntryEvidence === true &&
+      Boolean(String(candidate?.structuralEvidence || "").trim()) &&
+      Number.isFinite(Number(candidate?.price)) &&
+      Number(candidate.price) > 0
+    );
+  });
+
+  const merged = [...primaryCandidates];
+  for (const candidate of focusedSupplyDemand) {
+    const price = Number(candidate.price);
+    const type = String(candidate.areaType).toLowerCase().trim();
+    const duplicate = merged.some((existing) =>
+      String(existing?.areaType || "").toLowerCase().trim() === type &&
+      Math.abs(Number(existing?.price) - price) <= Number.EPSILON * 100
+    );
+    if (!duplicate) merged.push(candidate);
+  }
+
+  return {
+    ...primaryFallback,
+    candidates: merged,
+    focusedSupplyDemandInventoryMerged: merged.length > primaryCandidates.length,
+  };
+}
+
 export function expandExactSupportResistanceBoundaries(candidates = []) {
   return candidates
     .flatMap((candidate) => {
