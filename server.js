@@ -5,6 +5,7 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import Stripe from "stripe";
 import {
+  annotateFrameworkPeriodPriority,
   buildFinalVisibleTerminalImpulse,
   canonicalInstrumentCode,
   classifyCsaStructuralStage,
@@ -20,8 +21,10 @@ import {
   orderStructuralCandidatesForFib,
   parseChartHeaderText,
   reconcileLatestVisibleDateWithAxisYear,
+  replaceMisclassifiedZoneWithExactConvertedLines,
   selectProtectiveSupplyDemandAnchor,
   selectIndependentEntryAreas,
+  selectNearestFrameworkPeriodHints,
   sequenceFibQualifiedAreas,
   shouldMergeQualifiedSupplyDemandCluster,
 } from "./csa-entry-policy.js";
@@ -7933,6 +7936,8 @@ INTERNAL CHART-NATIVE FALLBACK (never show this wording to the customer):
 - Apply the fixed order: (1) support/resistance and genuine conversions, (2) independent supply/demand displacement bases, (3) hidden 38.2/50/61.8 Fibonacci confluence, (4) Entry 1, optional Entry 2, and optional Entry 3 by price path.
 - Fibonacci may qualify structure but may never create a level. Do not mention Fibonacci in any customer-facing field.
 - An S/R candidate requires an exact printed chart price. A supply/demand candidate requires a visible base/zone and its own displacement evidence.
+- Ordinary black price-axis tick labels are not zone boundaries. A supply/demand boundary must be a visibly drawn line/rectangle boundary or a candle-defined base boundary.
+- When two separately printed horizontal S/R lines are visible inside a proposed broad zone and price has broken them, preserve the two exact lines as converted S/R. Never replace them with one inferred supply/demand zone.
 - Return no more than three candidates. Candidate 2 and Candidate 3 must each be a genuinely separate structural opportunity; a nearby fragment or duplicate is not independent.
 - Set usable=false rather than guessing any unreadable price, impulse, direction, or structural role.
 
@@ -8197,8 +8202,12 @@ Return exactly this JSON shape:
       ).trim(),
       entryEvidence: safeUserText(parsed.entryEvidence),
       riskEvidence: safeUserText(parsed.riskEvidence),
-      chartNativeEntryFallback: normalizeChartNativeEntryFallback(
-        parsed.internalChartNativeFallback || {}
+      chartNativeEntryFallback: replaceMisclassifiedZoneWithExactConvertedLines(
+        normalizeChartNativeEntryFallback(parsed.internalChartNativeFallback || {}),
+        [
+          ...(Array.isArray(parsed.visibleMarkedLevels) ? parsed.visibleMarkedLevels : []),
+          ...(Array.isArray(parsed.visibleHorizontalLines) ? parsed.visibleHorizontalLines : []),
+        ]
       ),
       visualQualityWarning,
       raw: response.text || "",
@@ -10557,8 +10566,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.34.0";
-const CSA_BUILD_ID = "CSA-v4.25.0-targeted-sd-fib-recovery";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.35.0";
+const CSA_BUILD_ID = "CSA-v4.26.0-chronological-period-inventory";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -12458,6 +12467,13 @@ function buildLatestImpulseFibonacci({
         const aHintMatches = Number(a?.structuralHintScore?.matchCount || 0);
         const bHintMatches = Number(b?.structuralHintScore?.matchCount || 0);
 
+        // First prefer the impulse that explains more structure from the two
+        // nearest completed framework periods. Recency decides only when the
+        // nearby-period match counts are equal.
+        if (aHintMatches !== bHintMatches) {
+          return bHintMatches - aHintMatches;
+        }
+
         if (aHintMatches > 0 && bHintMatches > 0) {
           // Exact chart structure is evaluated before Fibonacci. Once two
           // completed impulses both agree with at least one exact structural
@@ -12488,10 +12504,6 @@ function buildLatestImpulseFibonacci({
           ) {
             return aHintDistance - bHintDistance;
           }
-        }
-
-        if (aHintMatches !== bHintMatches) {
-          return bHintMatches - aHintMatches;
         }
 
         const adjustedDifference =
@@ -15947,7 +15959,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.19.0";
+const CSA_SELECTOR_VERSION = "4.20.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19763,6 +19775,20 @@ function rankRawEntryAreas({
     });
   }
 
+  frameworkCandidates = annotateFrameworkPeriodPriority(
+    frameworkCandidates,
+    authoritativeFrameworkLevels.length
+  );
+
+  // The immediately previous completed framework period is inspected first,
+  // followed by the period before it. Older periods remain available only
+  // after those nearer periods have supplied no usable structural hints.
+  const nearestPeriodStructuralHints = selectNearestFrameworkPeriodHints(
+    frameworkCandidates,
+    authoritativeFrameworkLevels.length,
+    2
+  );
+
   // MAIN SELECTOR ADJACENT-CONVERSION INSERTION.
   // This runs inside the active entry selector, after framework candidates
   // are assembled and before any supply/demand refinement, structural gate,
@@ -19927,7 +19953,7 @@ function rankRawEntryAreas({
       finalVisibleFibEndpointAuthority,
     historicalFrameworkImpulseAuthority:
       historicalFrameworkFibImpulseAuthority,
-    structuralLevelHints: exactChartFrameworkCandidates,
+    structuralLevelHints: nearestPeriodStructuralHints,
   });
 
   const finalVisibleSupplyDemandCandidates =
@@ -20249,7 +20275,12 @@ function rankRawEntryAreas({
   // Standard CSA analysis order is fixed before any Fib evaluation. This does
   // not predetermine Entry 1: S/R is inspected first, S/D second, all surviving
   // candidates pass the same hidden Fib gate, and final entries follow price.
-  frameworkCandidates = orderStructuralCandidatesForFib(frameworkCandidates);
+  frameworkCandidates = orderStructuralCandidatesForFib(
+    annotateFrameworkPeriodPriority(
+      frameworkCandidates,
+      authoritativeFrameworkLevels.length
+    )
+  );
 
   const rawZones = frameworkCandidates.map((candidate) => {
     const refinedSamePeriodSdPrice =

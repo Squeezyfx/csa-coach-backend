@@ -109,10 +109,116 @@ export function orderStructuralCandidatesForFib(candidates = []) {
       stage: classifyCsaStructuralStage(candidate),
     }))
     .sort((a, b) => {
+      const aPeriodPriority = Number(a.candidate?.frameworkPeriodLookback);
+      const bPeriodPriority = Number(b.candidate?.frameworkPeriodLookback);
+      const aHasPeriodPriority = Number.isInteger(aPeriodPriority) && aPeriodPriority > 0;
+      const bHasPeriodPriority = Number.isInteger(bPeriodPriority) && bPeriodPriority > 0;
+
+      if (aHasPeriodPriority && bHasPeriodPriority && aPeriodPriority !== bPeriodPriority) {
+        return aPeriodPriority - bPeriodPriority;
+      }
+      if (aHasPeriodPriority !== bHasPeriodPriority) return aHasPeriodPriority ? -1 : 1;
       if (a.stage.rank !== b.stage.rank) return a.stage.rank - b.stage.rank;
       return a.index - b.index;
     })
     .map((item) => item.candidate);
+}
+
+export function annotateFrameworkPeriodPriority(candidates = [], totalPeriods = 0) {
+  const count = Number(totalPeriods);
+  return candidates.map((candidate) => {
+    const sourceIndex = Number(candidate?.sourceIndex);
+    const lookback = Number.isInteger(count) && count > 0 && Number.isInteger(sourceIndex)
+      ? count - sourceIndex
+      : null;
+    return {
+      ...candidate,
+      frameworkPeriodLookback:
+        Number.isInteger(lookback) && lookback > 0 ? lookback : null,
+    };
+  });
+}
+
+export function selectNearestFrameworkPeriodHints(
+  candidates = [],
+  totalPeriods = 0,
+  maximumLookback = 2
+) {
+  const annotated = annotateFrameworkPeriodPriority(candidates, totalPeriods);
+  const nearby = annotated.filter((candidate) =>
+    Number.isInteger(Number(candidate?.frameworkPeriodLookback)) &&
+    Number(candidate.frameworkPeriodLookback) <= Number(maximumLookback)
+  );
+  return nearby.length ? nearby : annotated;
+}
+
+export function replaceMisclassifiedZoneWithExactConvertedLines(
+  fallback = {},
+  visibleLevels = []
+) {
+  if (fallback?.usable !== true || !["bullish", "bearish"].includes(fallback?.direction)) {
+    return fallback;
+  }
+
+  const exactPrices = [...new Set((Array.isArray(visibleLevels) ? visibleLevels : [])
+    .map((level) => Number(level?.displayedPrice))
+    .filter((price) => Number.isFinite(price) && price > 0))];
+  if (exactPrices.length < 2) return fallback;
+
+  const candidates = [];
+  for (const candidate of Array.isArray(fallback?.candidates) ? fallback.candidates : []) {
+    const areaType = String(candidate?.areaType || "").toLowerCase().trim();
+    const rawLow = Number(candidate?.zoneLow);
+    const rawHigh = Number(candidate?.zoneHigh);
+    const hasBroadZone = Number.isFinite(rawLow) && Number.isFinite(rawHigh) && rawLow !== rawHigh;
+
+    if (
+      !["supply", "demand"].includes(areaType) ||
+      candidate?.conversionBreakConfirmed !== true ||
+      !hasBroadZone
+    ) {
+      candidates.push(candidate);
+      continue;
+    }
+
+    const zoneLow = Math.min(rawLow, rawHigh);
+    const zoneHigh = Math.max(rawLow, rawHigh);
+    const printedLinesInside = exactPrices
+      .filter((price) => price >= zoneLow && price <= zoneHigh)
+      .sort((a, b) => fallback.direction === "bearish" ? a - b : b - a);
+
+    if (printedLinesInside.length < 2) {
+      candidates.push(candidate);
+      continue;
+    }
+
+    const convertedType = fallback.direction === "bearish"
+      ? "converted resistance"
+      : "converted support";
+    for (const price of printedLinesInside) {
+      candidates.push({
+        ...candidate,
+        price,
+        zoneLow: price,
+        zoneHigh: price,
+        areaType: convertedType,
+        exactVisiblePrice: true,
+        independentEntryEvidence: true,
+        structuralEvidence: [
+          String(candidate?.structuralEvidence || "").trim(),
+          "exact printed horizontal line preserved as converted support/resistance",
+        ].filter(Boolean).join("; "),
+        fibRatio: null,
+        fibPrice: null,
+      });
+    }
+  }
+
+  return {
+    ...fallback,
+    candidates,
+    exactConvertedLineOverrideApplied: candidates.length !== fallback.candidates.length,
+  };
 }
 
 export function sequenceFibQualifiedAreas(candidates = [], direction = "range") {
@@ -154,6 +260,20 @@ export function findNearestAllowedFibonacciMatch({
   const lowerBoundary = hasZone ? Math.min(rawLow, rawHigh) : center;
   const upperBoundary = hasZone ? Math.max(rawLow, rawHigh) : center;
   const impulseRange = high - low;
+  const firstRetracementPrice = direction === "bearish"
+    ? low + impulseRange * 0.382
+    : high - impulseRange * 0.382;
+
+  // A proximity allowance may absorb broker/zone-boundary variation, but it
+  // must never pull an entirely shallow candidate across the 38.2 threshold.
+  // Bearish candidates below 38.2 and bullish candidates above 38.2 remain
+  // structural references rather than entries.
+  if (
+    (direction === "bearish" && upperBoundary < firstRetracementPrice) ||
+    (direction === "bullish" && lowerBoundary > firstRetracementPrice)
+  ) {
+    return null;
+  }
 
   const matches = [0.382, 0.5, 0.618]
     .map((ratio) => {

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  annotateFrameworkPeriodPriority,
   buildFinalVisibleTerminalImpulse,
   canonicalInstrumentCode,
   classifyCsaStructuralStage,
@@ -18,14 +19,82 @@ import {
   orderStructuralCandidatesForFib,
   parseChartHeaderText,
   reconcileLatestVisibleDateWithAxisYear,
+  replaceMisclassifiedZoneWithExactConvertedLines,
   selectIndependentEntryAreas,
+  selectNearestFrameworkPeriodHints,
   selectProtectiveSupplyDemandAnchor,
   sequenceFibQualifiedAreas,
   shouldMergeQualifiedSupplyDemandCluster,
   shouldApplyFinalVisibleTerminalImpulse,
 } from "../csa-entry-policy.js";
 
+test("framework inventory checks the immediate previous period before older periods", () => {
+  const ordered = orderStructuralCandidatesForFib(
+    annotateFrameworkPeriodPriority([
+      { id: "older-sr", sourceIndex: 1, areaType: "resistance" },
+      { id: "previous-sd", sourceIndex: 3, areaType: "supply" },
+      { id: "previous-sr", sourceIndex: 3, areaType: "converted resistance" },
+      { id: "second-previous-sr", sourceIndex: 2, areaType: "converted resistance" },
+    ], 4)
+  );
+
+  assert.deepEqual(ordered.map((item) => item.id), [
+    "previous-sr",
+    "previous-sd",
+    "second-previous-sr",
+    "older-sr",
+  ]);
+});
+
+test("impulse hints use the two nearest completed framework periods first", () => {
+  const hints = selectNearestFrameworkPeriodHints([
+    { id: "old", sourceIndex: 0 },
+    { id: "second-previous", sourceIndex: 2 },
+    { id: "previous", sourceIndex: 3 },
+  ], 4, 2);
+  assert.deepEqual(hints.map((item) => item.id), ["second-previous", "previous"]);
+});
+
+test("two printed converted S/R lines override an inferred broad demand zone", () => {
+  const corrected = replaceMisclassifiedZoneWithExactConvertedLines({
+    usable: true,
+    direction: "bullish",
+    candidates: [{
+      price: 4436.15,
+      zoneLow: 4415.55,
+      zoneHigh: 4436.15,
+      areaType: "demand",
+      conversionBreakConfirmed: true,
+      structuralEvidence: "price broke above the prior resistance region",
+    }],
+  }, [
+    { displayedPrice: 4436.15 },
+    { displayedPrice: 4428.73 },
+    { displayedPrice: 4367.25 },
+  ]);
+
+  assert.deepEqual(corrected.candidates.map((item) => [item.price, item.areaType]), [
+    [4436.15, "converted support"],
+    [4428.73, "converted support"],
+  ]);
+  assert.ok(corrected.candidates.every((item) => item.zoneLow === item.zoneHigh));
+});
+
 test("server calculates every allowed Fib ratio instead of trusting the model label", () => {
+  const match = findNearestAllowedFibonacciMatch({
+    direction: "bearish",
+    swingHigh: 1.39091,
+    swingLow: 1.37575,
+    price: 1.38154,
+    zoneLow: 1.3815,
+    zoneHigh: 1.3816,
+    tolerance: (1.39091 - 1.37575) * 0.06,
+  });
+
+  assert.equal(match?.ratio, 0.382);
+});
+
+test("USDCAD 1.38066 remains below the conservative 38.2 proximity gate", () => {
   const match = findNearestAllowedFibonacciMatch({
     direction: "bearish",
     swingHigh: 1.39091,
@@ -35,8 +104,7 @@ test("server calculates every allowed Fib ratio instead of trusting the model la
     zoneHigh: 1.3808,
     tolerance: (1.39091 - 1.37575) * 0.06,
   });
-
-  assert.equal(match?.ratio, 0.382);
+  assert.equal(match, null);
 });
 
 test("Fib proximity checks the full supply zone rather than only its center", () => {
@@ -44,9 +112,9 @@ test("Fib proximity checks the full supply zone rather than only its center", ()
     direction: "bearish",
     swingHigh: 1.39091,
     swingLow: 1.37575,
-    price: 1.3806,
-    zoneLow: 1.3805,
-    zoneHigh: 1.3812,
+    price: 1.381,
+    zoneLow: 1.3808,
+    zoneHigh: 1.3816,
     tolerance: 0.0004,
   });
 
@@ -80,7 +148,7 @@ test("focused inventory merges only independent supply or demand candidates", ()
   assert.equal(merged.swingLow, 1.37575);
 });
 
-test("USDCAD recovered supply and existing converted resistance retain the verified order", () => {
+test("USDCAD excludes the below-38.2 supply and retains converted resistance only", () => {
   const swingHigh = 1.39091;
   const swingLow = 1.37575;
   const tolerance = (swingHigh - swingLow) * 0.06;
@@ -123,10 +191,7 @@ test("USDCAD recovered supply and existing converted resistance retain the verif
   });
 
   const selected = selectIndependentEntryAreas(areas, "bearish");
-  assert.deepEqual(selected.map((area) => area.id), [
-    "thursday-supply",
-    "deeper-converted-resistance",
-  ]);
+  assert.deepEqual(selected.map((area) => area.id), ["deeper-converted-resistance"]);
 });
 
 test("keeps separately printed S/R boundaries as exact independent levels", () => {
@@ -427,7 +492,8 @@ test("final-visible terminal impulse must improve exact structural confluence", 
 test("selector reconciles exact chart/framework levels before choosing Fibonacci", () => {
   const serverSource = readFileSync(new URL("../server.js", import.meta.url), "utf8");
   assert.match(serverSource, /function buildExactChartFrameworkCandidates/);
-  assert.match(serverSource, /structuralLevelHints: exactChartFrameworkCandidates/);
+  assert.match(serverSource, /structuralLevelHints: nearestPeriodStructuralHints/);
+  assert.match(serverSource, /selectNearestFrameworkPeriodHints/);
   assert.match(serverSource, /structuralHintScore: scoreFibonacciFrameAgainstStructuralHints/);
   assert.match(serverSource, /chartExactFrameworkConfirmed/);
   assert.match(serverSource, /function rankChartNativeFallbackAreas/);
