@@ -177,6 +177,25 @@ test("USDCAD local marked impulse wins when its independent confluence is materi
   assert.equal(frame?.structureLedOverrideApplied, true);
 });
 
+test("a closer prior-period USDCAD frame beats broad matches that skip its valid level", () => {
+  const frame = selectStructureLedChartNativeImpulseFrame({
+    direction: "bearish",
+    currentPrice: 1.37913,
+    swingLow: 1.3793,
+    swingHigh: 1.39685,
+    approvedTolerance: 0.0002,
+    candidates: [
+      { price: 1.38437, zoneLow: 1.38437, zoneHigh: 1.38437, areaType: "converted resistance", exactVisiblePrice: true },
+      { price: 1.38767, zoneLow: 1.38767, zoneHigh: 1.38767, areaType: "converted resistance", exactVisiblePrice: true },
+      { price: 1.39091, zoneLow: 1.39091, zoneHigh: 1.39091, areaType: "supply", independentEntryEvidence: true },
+    ],
+  });
+
+  assert.equal(frame?.swingHigh, 1.38767);
+  assert.deepEqual(frame?.matchedPrices, [1.38437]);
+  assert.equal(frame?.structureLedOverrideApplied, true);
+});
+
 test("a break-passed USA30 line beneath a confirmed conversion retains converted role", () => {
   const normalized = promoteConfirmedBreakPassedExactLevels({
     usable: true,
@@ -386,11 +405,12 @@ test("does not split a genuine supply/demand zone", () => {
   assert.deepEqual(expandExactSupportResistanceBoundaries([candidate]), [candidate]);
 });
 
-test("selector has no candidate-local Fibonacci source", () => {
+test("selector permits one shared prior-period structural Fibonacci frame", () => {
   const serverSource = readFileSync(new URL("../server.js", import.meta.url), "utf8");
   assert.equal(serverSource.includes("candidate_specific_prior_sr_break_period_impulse"), false);
   assert.equal(serverSource.includes("buildPriorConversionRelevantFibonacci"), false);
-  assert.match(serverSource, /const relevantFibonacci = fibonacci;/);
+  assert.match(serverSource, /priorPeriodStructuralFrame/);
+  assert.match(serverSource, /previous_period_sr_sd_local_completed_impulse/);
 });
 
 test("normalizes common index aliases while preserving broker index tickers", () => {

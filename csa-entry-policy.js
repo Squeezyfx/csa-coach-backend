@@ -577,6 +577,21 @@ export function selectStructureLedChartNativeImpulseFrame({
   // not reduce the best match count. Single-level charts retain the reported
   // completed impulse, preventing a nearby line from manufacturing its own
   // Fibonacci frame.
+  const materiallyCloserStructureLedFrame = scored
+    .filter((frame) =>
+      frame.index !== 0 &&
+      frame.matchCount >= 1 &&
+      Number.isFinite(frame.nearestCurrentDistance) &&
+      Number.isFinite(original.nearestCurrentDistance) &&
+      frame.nearestCurrentDistance <
+        original.nearestCurrentDistance - original.range * 0.05
+    )
+    .sort((a, b) =>
+      a.nearestCurrentDistance - b.nearestCurrentDistance ||
+      a.range - b.range ||
+      a.index - b.index
+    )[0] || null;
+
   const multiLevelSelection = bestMatchCount >= 2
     ? scored
         .filter((frame) => frame.matchCount === bestMatchCount)
@@ -599,7 +614,16 @@ export function selectStructureLedChartNativeImpulseFrame({
       a.index - b.index
     )[0] || null;
 
-  const selected = multiLevelSelection || materiallyCloserSingleLevel || original;
+  // The broad frame can match several older levels simply because its range
+  // is wider.  It must not therefore suppress a nearer completed local leg
+  // whose independently confirmed S/R or S/D confluence is materially closer
+  // to the current price.  This keeps the prior-period inventory intact while
+  // still applying one shared, deterministic Fib frame to all candidates.
+  const selected =
+    materiallyCloserStructureLedFrame ||
+    multiLevelSelection ||
+    materiallyCloserSingleLevel ||
+    original;
 
   return {
     ...selected,

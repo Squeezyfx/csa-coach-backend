@@ -10629,8 +10629,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.37.0";
-const CSA_BUILD_ID = "CSA-v4.28.0-local-frame-stacked-line-audit";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.38.0";
+const CSA_BUILD_ID = "CSA-v4.29.0-previous-period-sr-sd-fib-priority";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -15925,7 +15925,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.22.0";
+const CSA_SELECTOR_VERSION = "4.23.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -20325,6 +20325,51 @@ function rankRawEntryAreas({
     };
   });
 
+  // Inspect the immediate previous completed period and the period before it
+  // as a full S/R + S/D inventory before applying the shared Fibonacci gate.
+  // A broad market-data impulse may otherwise make a farther line look valid
+  // and skip the nearer prior structure visible on the chart.
+  const priorPeriodStructuralFrame = selectStructureLedChartNativeImpulseFrame({
+    direction,
+    swingHigh: fibonacci?.swingHigh,
+    swingLow: fibonacci?.swingLow,
+    candidates: rawZones.flatMap((rawZone) => (rawZone?.members || []).map((member) => ({
+      price: asPositiveNumber(member?.price) || asPositiveNumber(member?.frameworkPrice),
+      zoneLow: rawZone?.zoneLow,
+      zoneHigh: rawZone?.zoneHigh,
+      areaType: member?.type || rawZone?.authoritativeType,
+      exactVisiblePrice: member?.chartExactFrameworkConfirmed === true,
+      independentEntryEvidence:
+        member?.samePeriodDisplacementBaseValidated === true ||
+        member?.independentSupplyDemandCandidate === true ||
+        member?.chartExactFrameworkConfirmed === true,
+    }))),
+    currentPrice,
+    approvedTolerance: priceTolerance,
+  });
+
+  const relevantFibonacci =
+    priorPeriodStructuralFrame?.structureLedOverrideApplied === true
+      ? {
+          ...fibonacci,
+          swingHigh: priorPeriodStructuralFrame.swingHigh,
+          swingLow: priorPeriodStructuralFrame.swingLow,
+          impulseRange: priorPeriodStructuralFrame.range,
+          levels: [0.382, 0.5, 0.618].map((ratio) => ({
+            ratio,
+            label: ratio === 0.5 ? "50%" : `${(ratio * 100).toFixed(1)}%`,
+            price: direction === "bearish"
+              ? priorPeriodStructuralFrame.swingLow + priorPeriodStructuralFrame.range * ratio
+              : priorPeriodStructuralFrame.swingHigh - priorPeriodStructuralFrame.range * ratio,
+          })),
+          source: "previous_period_structure_led_completed_impulse",
+          fibOriginModel: "previous_period_sr_sd_local_completed_impulse",
+          selectionReason:
+            "nearest_prior_period_sr_sd_inventory_materially_closer_than_broad_impulse",
+          priorPeriodStructuralFrame,
+        }
+      : fibonacci;
+
   const fibGateDiagnostics = [];
   const structuralGateDiagnostics = [];
   const structuralReferenceAreas = [];
@@ -20350,7 +20395,27 @@ function rankRawEntryAreas({
       Number.isFinite(Number(rawZone?.zoneHigh)) &&
       Number(rawZone.zoneHigh) > Number(rawZone.zoneLow);
 
-    const compacted = hasHistoricalIntradayZone || hasFrameworkSrReinforcementZone
+    const rawAreaType = String(rawZone?.authoritativeType || "")
+      .toLowerCase()
+      .trim();
+    const isExactFrameworkSr =
+      ["support", "resistance", "converted support", "converted resistance"]
+        .includes(rawAreaType) &&
+      rawZone?.members?.some?.((member) =>
+        member?.chartExactFrameworkConfirmed === true
+      ) === true;
+
+    // A printed S/R line is a price, not a candle-width zone.  Giving it a
+    // synthetic width can make a farther line inherit Fibonacci confluence
+    // that belongs to neither the line nor its actual prior-period structure.
+    const compacted = isExactFrameworkSr
+      ? {
+          zoneLow: Number(rawZone.resolvedEntryPrice),
+          zoneHigh: Number(rawZone.resolvedEntryPrice),
+          center: Number(rawZone.resolvedEntryPrice),
+          halfWidth: 0,
+        }
+      : hasHistoricalIntradayZone || hasFrameworkSrReinforcementZone
       ? {
           zoneLow: Math.min(Number(rawZone.zoneLow), Number(rawZone.zoneHigh)),
           zoneHigh: Math.max(Number(rawZone.zoneLow), Number(rawZone.zoneHigh)),
@@ -20633,8 +20698,6 @@ function rankRawEntryAreas({
     // completed impulse. Candidate-local break-period Fib anchors made nearby
     // levels look valid in isolation and created unstable Entry 1/Entry 2
     // choices across otherwise identical runs.
-    const relevantFibonacci = fibonacci;
-
     const fibConfluence = evaluateRequiredFibonacciConfluence({
       fibonacci: relevantFibonacci,
       zoneLow,
