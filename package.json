@@ -1,14 +1,20 @@
 {
   "name": "csa-coach-backend",
-  "version": "2.0.0",
-  "description": "CSA Coach backend with consolidated deterministic analysis facts, Supabase journal storage and Stripe subscriptions",
+  "version": "2.32.0",
+  "description": "CSA Coach backend with isolated multi-chart benchmark regression runner",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js"
+    "start:benchmark": "node benchmark-server.js",
+    "check": "node --check server.js && node --check csa-entry-policy.js && node --check benchmark-server.js && node --check benchmark/target-client.js && node --check benchmark/validator.js && node --check benchmark/public/app.js",
+    "test:benchmarks": "node --test benchmark/validator.test.js benchmark/csa-entry-policy.test.js benchmark/fixture-promotion.test.js benchmark/target-client.test.js benchmark/five-chart-regression.test.js benchmark/verified-baselines.test.js benchmark/verified-chart-fixtures.test.js benchmark/weekly-fibonacci-policy.test.js"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.61.0",
     "@supabase/supabase-js": "^2.52.0",
     "cors": "^2.8.5",
     "express": "^4.18.2",
