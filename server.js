@@ -10629,8 +10629,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.38.0";
-const CSA_BUILD_ID = "CSA-v4.29.0-previous-period-sr-sd-fib-priority";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.39.0";
+const CSA_BUILD_ID = "CSA-v4.30.0-prior-level-conversion-compatibility";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -15925,7 +15925,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.23.0";
+const CSA_SELECTOR_VERSION = "4.24.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,

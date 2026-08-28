@@ -415,7 +415,9 @@ export function promoteConfirmedBreakPassedExactLevels(fallback = {}) {
   const convertedType = fallback.direction === "bearish"
     ? "converted resistance"
     : "converted support";
-  const plainType = fallback.direction === "bearish" ? "resistance" : "support";
+  const breakableSourceTypes = fallback.direction === "bearish"
+    ? new Set(["support", "resistance"])
+    : new Set(["resistance", "support"]);
   const candidates = Array.isArray(fallback?.candidates)
     ? fallback.candidates.map((candidate) => ({ ...candidate }))
     : [];
@@ -427,7 +429,9 @@ export function promoteConfirmedBreakPassedExactLevels(fallback = {}) {
     const sideCompatible = fallback.direction === "bearish"
       ? price > currentPrice
       : price < currentPrice;
-    const breakEvidence = /breakdown|broke\s+(below|above)|passed\s+through|breakout/.test(evidence);
+    const breakEvidence =
+      /breakdown|broke\s+(below|above)|passed\s+through|breakout/.test(evidence) ||
+      /continu(?:ed|ing)\s+(?:lower|higher)\s+through/.test(evidence);
     const confirmedSibling = candidates.some((other) => {
       if (String(other?.areaType || "").toLowerCase().trim() !== convertedType) return false;
       const otherPrice = Number(other?.price);
@@ -437,7 +441,7 @@ export function promoteConfirmedBreakPassedExactLevels(fallback = {}) {
     });
 
     if (
-      type !== plainType ||
+      !breakableSourceTypes.has(type) ||
       candidate?.exactVisiblePrice !== true ||
       !Number.isFinite(price) ||
       !sideCompatible ||
