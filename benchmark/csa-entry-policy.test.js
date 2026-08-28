@@ -140,6 +140,13 @@ test("targeted stacked-line read can restore one missing XAUUSD label", () => {
   ]);
 });
 
+test("XAUUSD band recovery requires a separate printed label before adding an entry", () => {
+  const serverSource = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  assert.match(serverSource, /one supplied converted line is explicitly described as a band/);
+  assert.match(serverSource, /Return an empty array only after confirming there is no second printed line/);
+  assert.match(serverSource, /mergeAdjacentExactConvertedLines/);
+});
+
 test("chart-native impulse uses the nearer USA30 frame that validates two closer levels", () => {
   const frame = selectStructureLedChartNativeImpulseFrame({
     direction: "bearish",

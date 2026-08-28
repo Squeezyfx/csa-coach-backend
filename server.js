@@ -6118,20 +6118,8 @@ Return any additional, distinct USER-DRAWN horizontal line labels that are visib
 Return JSON only:
 {"lines":[{"colour":"blue | red | green | orange | other","displayedPrice":null,"platformLabel":null,"evidence":"brief visual proof"}]}`;
 
-  try {
-    const response = await runVisionModel({
-      systemPrompt: prompt,
-      userText: "Read only additional close-stacked user-drawn horizontal price labels. Return JSON only.",
-      imageBase64,
-      mimeType,
-      maxTokens: 600,
-      openaiModel: "gpt-4.1",
-      claudeModel: CLAUDE_MODEL,
-      temperature: 0,
-      imageDetail: "high",
-    });
-    const parsed = extractJsonObject(response.text || "");
-    return (Array.isArray(parsed?.lines) ? parsed.lines : [])
+  const normalizeReadLines = (parsed) =>
+    (Array.isArray(parsed?.lines) ? parsed.lines : [])
       .map((line) => ({
         displayedPrice:
           nullablePositiveNumber(line?.displayedPrice) ||
@@ -6146,6 +6134,46 @@ Return JSON only:
           Number.EPSILON * 100
         )
       );
+
+  try {
+    const response = await runVisionModel({
+      systemPrompt: prompt,
+      userText: "Read only additional close-stacked user-drawn horizontal price labels. Return JSON only.",
+      imageBase64,
+      mimeType,
+      maxTokens: 600,
+      openaiModel: "gpt-4.1",
+      claudeModel: CLAUDE_MODEL,
+      temperature: 0,
+      imageDetail: "high",
+    });
+    const initialLines = normalizeReadLines(extractJsonObject(response.text || ""));
+    if (initialLines.length) return initialLines;
+
+    // A first-pass description that calls a plotted level a "band" is
+    // evidence that two price labels may be touching.  Re-read only that
+    // compact case instead of widening normal S/R zones or guessing a Fib
+    // price.  The second pass may add a line only when its printed label is
+    // independently visible.
+    const hasCloseBandEvidence = converted.some((candidate) =>
+      /\b(?:band|stacked|touching|overlapping)\b/i.test(
+        String(candidate?.structuralEvidence || "")
+      )
+    );
+    if (!hasCloseBandEvidence) return [];
+
+    const recoveryResponse = await runVisionModel({
+      systemPrompt: `${prompt}\n\nRECHECK REQUIRED: one supplied converted line is explicitly described as a band. Count every separate horizontal stroke immediately around that band and transcribe each separate printed price tag. A second tag may sit directly below or above the first. Return an empty array only after confirming there is no second printed line.`,
+      userText: "Re-read the close stacked price labels only. Return JSON only.",
+      imageBase64,
+      mimeType,
+      maxTokens: 800,
+      openaiModel: "gpt-4.1",
+      claudeModel: CLAUDE_MODEL,
+      temperature: 0,
+      imageDetail: "high",
+    });
+    return normalizeReadLines(extractJsonObject(recoveryResponse.text || ""));
   } catch (error) {
     console.warn("Close-stacked line reader failed:", error?.message || error);
     return [];
@@ -10629,8 +10657,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.40.0";
-const CSA_BUILD_ID = "CSA-v4.31.0-confirmed-break-wording";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.41.0";
+const CSA_BUILD_ID = "CSA-v4.32.0-stacked-band-recovery";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -15925,7 +15953,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.25.0";
+const CSA_SELECTOR_VERSION = "4.26.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
