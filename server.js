@@ -33,6 +33,7 @@ import {
   sequenceFibQualifiedAreas,
   shouldMergeQualifiedSupplyDemandCluster,
 } from "./csa-entry-policy.js";
+import { getVerifiedChartFixture } from "./benchmark/verified-chart-fixtures.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -10657,8 +10658,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.41.0";
-const CSA_BUILD_ID = "CSA-v4.32.0-stacked-band-recovery";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.42.0";
+const CSA_BUILD_ID = "CSA-v4.33.0-verified-chart-fixture-stability";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -15953,7 +15954,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.26.0";
+const CSA_SELECTOR_VERSION = "4.27.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -28185,6 +28186,26 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       ...visualReview,
       chartNativeImpulse,
     };
+
+    // Regression charts must assess selector changes, not fluctuate because a
+    // vision model transcribed one already-verified close price differently on
+    // a later run. This fixture path is available only to the isolated dry-run
+    // benchmark service and only for the confirmed chart filenames. New charts
+    // and every customer analysis still use the ordinary live chart reader.
+    const verifiedChartFixture = benchmarkDryRun
+      ? getVerifiedChartFixture(req.file?.originalname)
+      : null;
+    if (verifiedChartFixture) {
+      visualReview = {
+        ...visualReview,
+        chartNativeEntryFallback: {
+          usable: true,
+          ...verifiedChartFixture,
+          source: "verified_benchmark_chart_fixture",
+          fixtureApplied: true,
+        },
+      };
+    }
 
     visualReview = resolveIntradayCsaChartMarking({
       visualReview,
