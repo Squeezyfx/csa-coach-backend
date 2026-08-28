@@ -21,6 +21,7 @@ import {
   mergeFocusedSupplyDemandInventory,
   orderStructuralCandidatesForFib,
   parseChartHeaderText,
+  promoteConfirmedBreakPassedExactLevels,
   reconcileLatestVisibleDateWithAxisYear,
   replaceMisclassifiedZoneWithExactConvertedLines,
   selectIndependentEntryAreas,
@@ -114,6 +115,31 @@ test("independent line audit restores a closely stacked converted XAUUSD level",
   assert.equal(merged.candidates[1].exactVisiblePrice, true);
 });
 
+test("targeted stacked-line read can restore one missing XAUUSD label", () => {
+  const merged = mergeAdjacentExactConvertedLines({
+    usable: true,
+    direction: "bullish",
+    swingLow: 4324.64,
+    swingHigh: 4532.24,
+    candidates: [{
+      price: 4436.15,
+      zoneLow: 4436.15,
+      zoneHigh: 4436.15,
+      areaType: "converted support",
+      exactVisiblePrice: true,
+      conversionBreakConfirmed: true,
+      structuralEvidence: "blue dashed resistance broke and held above",
+    }],
+  }, [
+    { displayedPrice: 4428.73, colour: "blue", evidence: "separate lower blue line" },
+  ]);
+
+  assert.deepEqual(merged.candidates.map((candidate) => candidate.price), [
+    4436.15,
+    4428.73,
+  ]);
+});
+
 test("chart-native impulse uses the nearer USA30 frame that validates two closer levels", () => {
   const frame = selectStructureLedChartNativeImpulseFrame({
     direction: "bearish",
@@ -130,6 +156,52 @@ test("chart-native impulse uses the nearer USA30 frame that validates two closer
   assert.equal(frame?.swingLow, 52823.2);
   assert.equal(frame?.structureLedOverrideApplied, true);
   assert.deepEqual(frame?.matchedPrices, [53275.6, 53421.2]);
+});
+
+test("USDCAD local marked impulse wins when its independent confluence is materially nearer", () => {
+  const frame = selectStructureLedChartNativeImpulseFrame({
+    direction: "bearish",
+    currentPrice: 1.37913,
+    swingLow: 1.378,
+    swingHigh: 1.409,
+    candidates: [
+      { price: 1.38437, zoneLow: 1.38437, zoneHigh: 1.38437, areaType: "converted resistance", exactVisiblePrice: true },
+      { price: 1.38767, zoneLow: 1.38767, zoneHigh: 1.38767, areaType: "converted resistance", exactVisiblePrice: true },
+      { price: 1.39091, zoneLow: 1.39091, zoneHigh: 1.39091, areaType: "converted resistance", exactVisiblePrice: true },
+    ],
+  });
+
+  assert.equal(frame?.swingHigh, 1.39091);
+  assert.equal(frame?.swingLow, 1.378);
+  assert.deepEqual(frame?.matchedPrices, [1.38437]);
+  assert.equal(frame?.structureLedOverrideApplied, true);
+});
+
+test("a break-passed USA30 line beneath a confirmed conversion retains converted role", () => {
+  const normalized = promoteConfirmedBreakPassedExactLevels({
+    usable: true,
+    direction: "bearish",
+    currentPrice: 52823.2,
+    candidates: [
+      {
+        price: 53275.6,
+        areaType: "resistance",
+        exactVisiblePrice: true,
+        conversionBreakConfirmed: false,
+        structuralEvidence: "price passed through this level on the breakdown",
+      },
+      {
+        price: 53421.2,
+        areaType: "converted resistance",
+        exactVisiblePrice: true,
+        conversionBreakConfirmed: true,
+        structuralEvidence: "prior support broke and held below",
+      },
+    ],
+  });
+
+  assert.equal(normalized.candidates[0].areaType, "converted resistance");
+  assert.equal(normalized.candidates[0].conversionBreakConfirmed, true);
 });
 
 test("recent structure-compatible impulse outranks an older broad frame", () => {

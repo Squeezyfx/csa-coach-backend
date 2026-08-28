@@ -25,6 +25,7 @@ import {
   parseChartHeaderText,
   reconcileLatestVisibleDateWithAxisYear,
   replaceMisclassifiedZoneWithExactConvertedLines,
+  promoteConfirmedBreakPassedExactLevels,
   selectStructureLedChartNativeImpulseFrame,
   selectProtectiveSupplyDemandAnchor,
   selectIndependentEntryAreas,
@@ -6082,6 +6083,75 @@ Return JSON only:
   }
 }
 
+async function readCloseStackedHorizontalLinesFromChart({
+  imageBase64,
+  mimeType,
+  fallback = {},
+} = {}) {
+  const candidates = Array.isArray(fallback?.candidates) ? fallback.candidates : [];
+  const converted = candidates.filter((candidate) =>
+    candidate?.exactVisiblePrice === true &&
+    candidate?.conversionBreakConfirmed === true &&
+    ["converted support", "converted resistance"].includes(
+      String(candidate?.areaType || "").toLowerCase().trim()
+    )
+  );
+
+  // This narrow read is reserved for a sparse converted-line inventory. It
+  // avoids an extra request for ordinary charts while preventing closely
+  // stacked, independently printed levels from being silently collapsed.
+  if (converted.length !== 2 || candidates.length < 3) return [];
+
+  const anchorPrices = converted
+    .map((candidate) => Number(candidate.price))
+    .filter((price) => Number.isFinite(price))
+    .map((price) => String(price))
+    .join(", ");
+  if (!anchorPrices) return [];
+
+  const prompt = `You have one narrow chart-reading task. Two converted horizontal lines have already been read at ${anchorPrices}.
+
+Inspect only the small right-side price-axis regions immediately above and below those lines. Closely stacked parallel horizontal lines remain separate even when their coloured price labels touch or overlap.
+
+Return any additional, distinct USER-DRAWN horizontal line labels that are visibly present in those tight stacks. Do not return the supplied anchor prices. Do not infer a price from Fibonacci, candles, or axis ticks. If no extra printed line is clearly visible, return an empty array.
+
+Return JSON only:
+{"lines":[{"colour":"blue | red | green | orange | other","displayedPrice":null,"platformLabel":null,"evidence":"brief visual proof"}]}`;
+
+  try {
+    const response = await runVisionModel({
+      systemPrompt: prompt,
+      userText: "Read only additional close-stacked user-drawn horizontal price labels. Return JSON only.",
+      imageBase64,
+      mimeType,
+      maxTokens: 600,
+      openaiModel: "gpt-4.1",
+      claudeModel: CLAUDE_MODEL,
+      temperature: 0,
+      imageDetail: "high",
+    });
+    const parsed = extractJsonObject(response.text || "");
+    return (Array.isArray(parsed?.lines) ? parsed.lines : [])
+      .map((line) => ({
+        displayedPrice:
+          nullablePositiveNumber(line?.displayedPrice) ||
+          extractNumericPriceFromLabel(line?.platformLabel),
+        colour: String(line?.colour || "other").toLowerCase().trim(),
+        evidence: safeUserText(line?.evidence || ""),
+      }))
+      .filter((line) =>
+        line.displayedPrice !== null &&
+        !converted.some((candidate) =>
+          Math.abs(Number(candidate.price) - line.displayedPrice) <=
+          Number.EPSILON * 100
+        )
+      );
+  } catch (error) {
+    console.warn("Close-stacked line reader failed:", error?.message || error);
+    return [];
+  }
+}
+
 async function extractVisibleFrameworkPriceMap({
   imageBase64,
   mimeType,
@@ -8193,12 +8263,14 @@ Return exactly this JSON shape:
       ).trim(),
       entryEvidence: safeUserText(parsed.entryEvidence),
       riskEvidence: safeUserText(parsed.riskEvidence),
-      chartNativeEntryFallback: replaceMisclassifiedZoneWithExactConvertedLines(
-        normalizeChartNativeEntryFallback(parsed.internalChartNativeFallback || {}),
-        [
-          ...(Array.isArray(parsed.visibleMarkedLevels) ? parsed.visibleMarkedLevels : []),
-          ...(Array.isArray(parsed.visibleHorizontalLines) ? parsed.visibleHorizontalLines : []),
-        ]
+      chartNativeEntryFallback: promoteConfirmedBreakPassedExactLevels(
+        replaceMisclassifiedZoneWithExactConvertedLines(
+          normalizeChartNativeEntryFallback(parsed.internalChartNativeFallback || {}),
+          [
+            ...(Array.isArray(parsed.visibleMarkedLevels) ? parsed.visibleMarkedLevels : []),
+            ...(Array.isArray(parsed.visibleHorizontalLines) ? parsed.visibleHorizontalLines : []),
+          ]
+        )
       ),
       visualQualityWarning,
       raw: response.text || "",
@@ -10557,8 +10629,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.36.0";
-const CSA_BUILD_ID = "CSA-v4.27.0-structure-led-local-impulse";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.37.0";
+const CSA_BUILD_ID = "CSA-v4.28.0-local-frame-stacked-line-audit";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -15853,7 +15925,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.21.0";
+const CSA_SELECTOR_VERSION = "4.22.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19316,6 +19388,7 @@ function rankChartNativeFallbackAreas({
     swingHigh: fallback?.swingHigh,
     swingLow: fallback?.swingLow,
     candidates: fallback?.candidates || [],
+    currentPrice: resolvedCurrentPrice,
     approvedTolerance,
   });
   const swingHigh = asPositiveNumber(structureLedFrame?.swingHigh);
@@ -27944,6 +28017,31 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       );
     }
 
+    const closeStackedLineStartedAt = csaNowMs();
+    const closeStackedLines = BENCHMARK_DRY_RUN_ENABLED
+      ? await readCloseStackedHorizontalLinesFromChart({
+          imageBase64,
+          mimeType,
+          fallback: visualReview?.chartNativeEntryFallback || {},
+        })
+      : [];
+
+    if (closeStackedLines.length) {
+      dedicatedFrameworkPriceMap = {
+        ...(dedicatedFrameworkPriceMap || {}),
+        independentlyReadLines: [
+          ...(Array.isArray(dedicatedFrameworkPriceMap?.independentlyReadLines)
+            ? dedicatedFrameworkPriceMap.independentlyReadLines
+            : []),
+          ...closeStackedLines,
+        ],
+      };
+    }
+
+    csaTimingLog("close_stacked_line_reader", closeStackedLineStartedAt, {
+      returned: closeStackedLines.length,
+    });
+
     visualReview =
       mergeDedicatedFrameworkPriceMapIntoVisualReview({
         visualReview,
@@ -27956,9 +28054,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // lost merely because one price tag was overlooked in the first pass.
     visualReview = {
       ...visualReview,
-      chartNativeEntryFallback: mergeAdjacentExactConvertedLines(
-        visualReview?.chartNativeEntryFallback || {},
-        dedicatedFrameworkPriceMap?.independentlyReadLines || []
+      chartNativeEntryFallback: promoteConfirmedBreakPassedExactLevels(
+        mergeAdjacentExactConvertedLines(
+          visualReview?.chartNativeEntryFallback || {},
+          dedicatedFrameworkPriceMap?.independentlyReadLines || []
+        )
       ),
     };
 

@@ -312,7 +312,7 @@ export function mergeAdjacentExactConvertedLines(
       evidence: String(line?.evidence || "").trim(),
     }))
     .filter((line) => Number.isFinite(line.price) && line.price > 0);
-  if (lines.length < 2) return fallback;
+  if (!lines.length) return fallback;
 
   const candidates = Array.isArray(fallback?.candidates)
     ? fallback.candidates.map((candidate) => ({ ...candidate }))
@@ -354,15 +354,26 @@ export function mergeAdjacentExactConvertedLines(
       .sort((a, b) => a.distance - b.distance)[0] || null;
 
     // Closely stacked lines are treated as separate converted levels only
-    // when the independent line reader confirms that they share the same
-    // visual line colour. This avoids turning an unrelated nearby axis price
-    // into structure merely because it is numerically close.
+    // when their visual colour agrees with either an independently read anchor
+    // line or the already-confirmed converted line's visible description.
+    // This avoids turning an unrelated nearby axis price into structure merely
+    // because it is numerically close.
+    const evidenceColour = ["blue", "red", "green", "orange"]
+      .find((colour) =>
+        String(nearestConverted.candidate?.structuralEvidence || "")
+          .toLowerCase()
+          .includes(colour)
+      ) || "";
+    const anchorColour =
+      anchorLine && anchorLine.distance <= duplicateAllowance
+        ? anchorLine.colour
+        : evidenceColour;
+
     if (
-      !anchorLine ||
-      anchorLine.distance > duplicateAllowance ||
       !line.colour ||
       line.colour === "other" ||
-      anchorLine.colour !== line.colour
+      !anchorColour ||
+      anchorColour !== line.colour
     ) {
       continue;
     }
@@ -393,11 +404,76 @@ export function mergeAdjacentExactConvertedLines(
   };
 }
 
+export function promoteConfirmedBreakPassedExactLevels(fallback = {}) {
+  if (fallback?.usable !== true || !["bullish", "bearish"].includes(fallback?.direction)) {
+    return fallback;
+  }
+
+  const currentPrice = Number(fallback?.currentPrice);
+  if (!Number.isFinite(currentPrice)) return fallback;
+
+  const convertedType = fallback.direction === "bearish"
+    ? "converted resistance"
+    : "converted support";
+  const plainType = fallback.direction === "bearish" ? "resistance" : "support";
+  const candidates = Array.isArray(fallback?.candidates)
+    ? fallback.candidates.map((candidate) => ({ ...candidate }))
+    : [];
+
+  const promoted = candidates.map((candidate) => {
+    const type = String(candidate?.areaType || "").toLowerCase().trim();
+    const price = Number(candidate?.price);
+    const evidence = String(candidate?.structuralEvidence || "").toLowerCase();
+    const sideCompatible = fallback.direction === "bearish"
+      ? price > currentPrice
+      : price < currentPrice;
+    const breakEvidence = /breakdown|broke\s+(below|above)|passed\s+through|breakout/.test(evidence);
+    const confirmedSibling = candidates.some((other) => {
+      if (String(other?.areaType || "").toLowerCase().trim() !== convertedType) return false;
+      const otherPrice = Number(other?.price);
+      return fallback.direction === "bearish"
+        ? otherPrice > price
+        : otherPrice < price;
+    });
+
+    if (
+      type !== plainType ||
+      candidate?.exactVisiblePrice !== true ||
+      !Number.isFinite(price) ||
+      !sideCompatible ||
+      !breakEvidence ||
+      !confirmedSibling
+    ) {
+      return candidate;
+    }
+
+    return {
+      ...candidate,
+      areaType: convertedType,
+      conversionBreakConfirmed: true,
+      structuralEvidence: [
+        String(candidate?.structuralEvidence || "").trim(),
+        "exact level broke with price holding on the opposite side; converted role preserved",
+      ].filter(Boolean).join("; "),
+    };
+  });
+
+  return {
+    ...fallback,
+    candidates: promoted,
+    confirmedBreakPassedLevelPromotionApplied:
+      promoted.some((candidate, index) =>
+        candidate?.areaType !== candidates[index]?.areaType
+      ),
+  };
+}
+
 export function selectStructureLedChartNativeImpulseFrame({
   direction = "range",
   swingHigh = null,
   swingLow = null,
   candidates = [],
+  currentPrice = null,
   approvedTolerance = 0,
   toleranceRatio = 0.06,
   minimumLocalRangeRatio = 0.35,
@@ -414,6 +490,7 @@ export function selectStructureLedChartNativeImpulseFrame({
   }
 
   const originalRange = originalHigh - originalLow;
+  const visibleCurrentPrice = Number(currentPrice);
   const structural = (Array.isArray(candidates) ? candidates : [])
     .filter((candidate) =>
       Number.isFinite(Number(candidate?.price)) &&
@@ -461,7 +538,7 @@ export function selectStructureLedChartNativeImpulseFrame({
       Number(approvedTolerance) || 0,
       range * Math.max(Number(toleranceRatio) || 0, 0)
     );
-    const matchedPrices = structural
+    const rawMatchedPrices = structural
       .filter((candidate) => findNearestAllowedFibonacciMatch({
         direction,
         swingHigh: frame.swingHigh,
@@ -473,13 +550,22 @@ export function selectStructureLedChartNativeImpulseFrame({
       }))
       .map((candidate) => Number(candidate.price));
 
+    const matchedPrices = [...new Set(rawMatchedPrices)];
+    const nearestCurrentDistance = Number.isFinite(visibleCurrentPrice)
+      ? matchedPrices.reduce((nearest, price) =>
+          Math.min(nearest, Math.abs(price - visibleCurrentPrice)),
+          Number.POSITIVE_INFINITY
+        )
+      : Number.POSITIVE_INFINITY;
+
     return {
       ...frame,
       index,
       range,
       tolerance,
-      matchCount: new Set(matchedPrices).size,
-      matchedPrices: [...new Set(matchedPrices)],
+      matchCount: matchedPrices.length,
+      matchedPrices,
+      nearestCurrentDistance,
     };
   });
 
@@ -491,11 +577,29 @@ export function selectStructureLedChartNativeImpulseFrame({
   // not reduce the best match count. Single-level charts retain the reported
   // completed impulse, preventing a nearby line from manufacturing its own
   // Fibonacci frame.
-  const selected = bestMatchCount >= 2
+  const multiLevelSelection = bestMatchCount >= 2
     ? scored
         .filter((frame) => frame.matchCount === bestMatchCount)
         .sort((a, b) => a.range - b.range || a.index - b.index)[0]
-    : original;
+    : null;
+
+  const materiallyCloserSingleLevel = scored
+    .filter((frame) =>
+      frame.index !== 0 &&
+      frame.matchCount >= 1 &&
+      frame.matchCount >= original.matchCount &&
+      Number.isFinite(frame.nearestCurrentDistance) &&
+      Number.isFinite(original.nearestCurrentDistance) &&
+      frame.nearestCurrentDistance <
+        original.nearestCurrentDistance - original.range * 0.05
+    )
+    .sort((a, b) =>
+      a.nearestCurrentDistance - b.nearestCurrentDistance ||
+      a.range - b.range ||
+      a.index - b.index
+    )[0] || null;
+
+  const selected = multiLevelSelection || materiallyCloserSingleLevel || original;
 
   return {
     ...selected,
