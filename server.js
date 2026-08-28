@@ -34,6 +34,7 @@ import {
   shouldMergeQualifiedSupplyDemandCluster,
 } from "./csa-entry-policy.js";
 import { getVerifiedChartFixture } from "./benchmark/verified-chart-fixtures.js";
+import { buildVisibleWeekFibonacciFrame } from "./benchmark/weekly-fibonacci-policy.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -11319,6 +11320,39 @@ function buildLatestImpulseFibonacci({
     );
 
   if (ordered.length < 10) return null;
+
+  // CSA H1 policy: all structural candidates are compared with one
+  // deterministic current-week high/low Fib frame. Do not let a shorter
+  // structure-led or chart-native impulse manufacture confluence.
+  const visibleWeekFrame = finalVisibleEndpointAuthority?.enabled === true
+    ? buildVisibleWeekFibonacciFrame({ candles: ordered, direction, timeframe })
+    : null;
+  if (visibleWeekFrame) {
+    return {
+      ...visibleWeekFrame,
+      marketDataSwingHigh: visibleWeekFrame.swingHigh,
+      marketDataSwingLow: visibleWeekFrame.swingLow,
+      priceSource: "external_ohlc_visible_current_week",
+      chartNativeConfidence: null,
+      historicalFrameworkImpulseAuthority: null,
+      finalVisibleTerminalImpulse: null,
+      finalVisibleEndpointAuthority: {
+        price: finalVisibleEndpointAuthority?.price ?? null,
+        applied: false,
+        reason: "H1 uses the visible current-week high/low Fibonacci frame",
+        tolerance: null,
+        source: finalVisibleEndpointAuthority?.source || "final_visible_chart_price",
+      },
+      selectionReason: "H1 current visible week high/low",
+      controllingEvent: null,
+      latestOppositeEvent: null,
+      protectedSwing: null,
+      outerStructuralOrigin: null,
+      brokenMajorLevel: null,
+      majorBreakCandidateCount: 0,
+      majorBreakCandidateAudit: [],
+    };
+  }
 
   const structureConfig =
     getStructureEngineConfig(timeframe);

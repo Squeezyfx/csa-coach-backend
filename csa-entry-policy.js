@@ -12,12 +12,13 @@ const INSTRUMENT_ALIASES = new Map([
   ["US30", "USA30"], ["DJ30", "USA30"], ["DOW30", "USA30"], ["DJI", "USA30"],
   ["NAS100", "USTEC"], ["NASDAQ100", "USTEC"], ["US100", "USTEC"],
   ["SPX500", "US500"], ["SP500", "US500"],
+  ["USDINDEX", "USDINDEX"], ["DXY", "USDINDEX"],
 ]);
 
 const SUPPORTED_INSTRUMENTS = new Set([
   "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
   "EURCHF", "EURGBP", "GBPJPY", "XAUUSD", "BTCUSD", "ETHUSD", "USA30",
-  "US500", "USTEC", "GER40", "UK100", "JP225",
+  "US500", "USTEC", "GER40", "UK100", "JP225", "USDINDEX",
 ]);
 
 export function canonicalInstrumentCode(input = "") {
@@ -42,6 +43,7 @@ export function getMarketDataSymbolCandidates(input = "") {
     GER40: ["DAX", "GER40"],
     UK100: ["FTSE", "UK100"],
     JP225: ["N225", "JP225"],
+    USDINDEX: ["DXY", "USDINDEX"],
   };
 
   return candidatesByInstrument[canonical] || [canonical || String(input || "")];
