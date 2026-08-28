@@ -438,7 +438,7 @@ test("automatic mode verifies chart context, ordered structure and hidden Fibona
       { areaType: "demand", frameworkPrice: 0.69845, structurallyValid: true },
     ],
     fibCandidates: [
-      { areaType: "support", resolvedEntryPrice: 0.70104, passed: true },
+      { areaType: "support", resolvedEntryPrice: 0.70104, passed: true, matchedLevels: [{ ratio: 0.5 }] },
       { areaType: "demand", resolvedEntryPrice: 0.69845, passed: false },
     ],
   };
@@ -449,6 +449,10 @@ test("automatic mode verifies chart context, ordered structure and hidden Fibona
   assert.equal(
     result.checks.find((check) => check.id === "automatic_fibonacci_confluence")?.passed,
     true
+  );
+  assert.match(
+    result.checks.find((check) => check.id === "automatic_fibonacci_confluence")?.details || "",
+    /Entry 1 .*50%/
   );
 });
 
@@ -520,6 +524,10 @@ test("automatic mode accepts explicit chart-native fallback Fibonacci diagnostic
   assert.equal(
     result.checks.find((check) => check.id === "automatic_fibonacci_confluence")?.passed,
     true
+  );
+  assert.match(
+    result.checks.find((check) => check.id === "automatic_fibonacci_confluence")?.details || "",
+    /Entry 1 .*50%/
   );
 });
 

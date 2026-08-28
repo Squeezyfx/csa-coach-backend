@@ -444,9 +444,17 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const everyEntryIsStructured = entries.every((entry) =>
       recognizedTypes.has(normalizeAreaType(entry.areaType))
     );
-    const everyEntryHasFibConfluence = entries.every((entry) => {
+    const formatFibLabel = (match = {}) => {
+      const ratio = finiteNumber(match?.ratio);
+      if (ratio !== null) {
+        return ratio === 0.5 ? "50%" : `${(ratio * 100).toFixed(1)}%`;
+      }
+      const label = String(match?.label || "").trim();
+      return label ? label.replace(/\.0(?=%)/, "") : null;
+    };
+    const fibEvidenceForEntry = (entry) => {
       const entryPrice = finiteNumber(entry.center);
-      if (entryPrice === null) return false;
+      if (entryPrice === null) return [];
       const tolerance = defaultTolerance(entryPrice);
       const matchedEvaluatedCandidate = fibCandidates.some((candidate) => {
         if (candidate?.passed !== true) return false;
@@ -458,7 +466,27 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
           Math.abs(candidatePrice - entryPrice) <= tolerance;
       });
 
-      if (matchedEvaluatedCandidate) return true;
+      const candidateEvidence = fibCandidates
+        .filter((candidate) => {
+          if (candidate?.passed !== true) return false;
+          const candidatePrice =
+            finiteNumber(candidate.resolvedEntryPrice) ??
+            finiteNumber(candidate.chartReconciledPrice) ??
+            finiteNumber(candidate.frameworkPrice);
+          return candidatePrice !== null && Math.abs(candidatePrice - entryPrice) <= tolerance;
+        })
+        .flatMap((candidate) => [
+          ...(Array.isArray(candidate?.matchedLevels) ? candidate.matchedLevels : []),
+          ...(Array.isArray(candidate?.evaluatedFibLevels)
+            ? candidate.evaluatedFibLevels.filter((match) => match?.passed === true)
+            : []),
+        ])
+        .map(formatFibLabel)
+        .filter(Boolean);
+
+      if (matchedEvaluatedCandidate) {
+        return [...new Set(candidateEvidence)];
+      }
 
       // The chart-native fallback already performs the same ordered
       // structure -> hidden-Fibonacci gate before it promotes an entry. Its
@@ -466,14 +494,14 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       // than the full structuralCandidates/fibCandidates audit arrays. Match
       // those entries by price and require an explicit 38.2/50/61.8 record;
       // never infer confluence from a selected price alone.
-      return fallbackSelectedEntries.some((candidate) => {
+      const fallbackEvidence = fallbackSelectedEntries.flatMap((candidate) => {
         const candidatePrice =
           finiteNumber(candidate.authoritativeCenter) ??
           finiteNumber(candidate.resolvedEntryPrice);
         const matches = Array.isArray(candidate?.fibonacciMatches)
           ? candidate.fibonacciMatches
           : [];
-        const hasApprovedFib = matches.some((match) => {
+        const approvedMatches = matches.filter((match) => {
           const ratio = finiteNumber(match?.ratio);
           const approvedRatio = ratio !== null
             ? [0.382, 0.5, 0.618].find((approved) => Math.abs(ratio - approved) <= 0.002)
@@ -488,10 +516,15 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
           );
           return Math.abs(candidatePrice - computedPrice) <= arithmeticTolerance;
         });
-        return candidatePrice !== null && hasApprovedFib &&
-          Math.abs(candidatePrice - entryPrice) <= tolerance;
+        return candidatePrice !== null &&
+          Math.abs(candidatePrice - entryPrice) <= tolerance
+          ? approvedMatches.map(formatFibLabel).filter(Boolean)
+          : [];
       });
-    });
+      return [...new Set(fallbackEvidence)];
+    };
+    const entryFibEvidence = entries.map((entry) => fibEvidenceForEntry(entry));
+    const everyEntryHasFibConfluence = entryFibEvidence.every((evidence) => evidence.length > 0);
 
     addCheck(
       checks,
@@ -540,7 +573,9 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       "Selected entries pass hidden Fibonacci confluence",
       everyEntryHasFibConfluence,
       everyEntryHasFibConfluence
-        ? `${entries.length} selected entr${entries.length === 1 ? "y is" : "ies are"} backed by a passed 38.2%, 50% or 61.8% candidate check.`
+        ? entries.map((entry, index) =>
+            `Entry ${index + 1} (${entry.levelText || entry.center}): ${entryFibEvidence[index].join(" / ")}`
+          ).join("; ")
         : "At least one selected entry was not matched to a passed hidden Fibonacci candidate."
     );
   }
