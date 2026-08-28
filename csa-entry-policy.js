@@ -152,6 +152,76 @@ export function selectNearestFrameworkPeriodHints(
   return nearby.length ? nearby : annotated;
 }
 
+export function compareStructureLedCompletedImpulseCandidates(a = {}, b = {}) {
+  const aHintMatches = Number(a?.structuralHintScore?.matchCount || 0);
+  const bHintMatches = Number(b?.structuralHintScore?.matchCount || 0);
+
+  if ((aHintMatches > 0) !== (bHintMatches > 0)) {
+    return aHintMatches > 0 ? -1 : 1;
+  }
+
+  if (aHintMatches > 0 && bHintMatches > 0) {
+    const recencyDifference = Number(b?.breakIndex) - Number(a?.breakIndex);
+    if (Number.isFinite(recencyDifference) && recencyDifference !== 0) {
+      return recencyDifference;
+    }
+
+    if (aHintMatches !== bHintMatches) {
+      return bHintMatches - aHintMatches;
+    }
+
+    const aHintDistance = Number(a?.structuralHintScore?.normalizedDistanceSum);
+    const bHintDistance = Number(b?.structuralHintScore?.normalizedDistanceSum);
+    if (
+      Number.isFinite(aHintDistance) &&
+      Number.isFinite(bHintDistance) &&
+      Math.abs(aHintDistance - bHintDistance) > 0.05
+    ) {
+      return aHintDistance - bHintDistance;
+    }
+  }
+
+  const adjustedDifference =
+    Number(b?.hierarchyAdjustedScore || 0) -
+    Number(a?.hierarchyAdjustedScore || 0);
+  if (Math.abs(adjustedDifference) > 3) return adjustedDifference;
+
+  if (Number(b?.hierarchyPosition) !== Number(a?.hierarchyPosition)) {
+    return Number(b?.hierarchyPosition || 0) - Number(a?.hierarchyPosition || 0);
+  }
+
+  if (Number(b?.breakIndex) !== Number(a?.breakIndex)) {
+    return Number(b?.breakIndex || 0) - Number(a?.breakIndex || 0);
+  }
+
+  return Number(a?.pivotIndex || 0) - Number(b?.pivotIndex || 0);
+}
+
+export function isMostRecentStructureCompatibleImpulse(
+  selection = null,
+  candidates = []
+) {
+  if (
+    !selection ||
+    Number(selection?.structuralHintScore?.matchCount || 0) <= 0 ||
+    !Number.isFinite(Number(selection?.breakIndex))
+  ) {
+    return false;
+  }
+
+  const compatible = (Array.isArray(candidates) ? candidates : [])
+    .filter((candidate) =>
+      Number(candidate?.structuralHintScore?.matchCount || 0) > 0 &&
+      Number.isFinite(Number(candidate?.breakIndex))
+    );
+  if (!compatible.length) return false;
+
+  const mostRecentBreakIndex = Math.max(
+    ...compatible.map((candidate) => Number(candidate.breakIndex))
+  );
+  return Number(selection.breakIndex) === mostRecentBreakIndex;
+}
+
 export function replaceMisclassifiedZoneWithExactConvertedLines(
   fallback = {},
   visibleLevels = []
@@ -218,6 +288,221 @@ export function replaceMisclassifiedZoneWithExactConvertedLines(
     ...fallback,
     candidates,
     exactConvertedLineOverrideApplied: candidates.length !== fallback.candidates.length,
+  };
+}
+
+export function mergeAdjacentExactConvertedLines(
+  fallback = {},
+  independentlyReadLines = [],
+  maximumAdjacentRangeRatio = 0.05
+) {
+  if (fallback?.usable !== true || !["bullish", "bearish"].includes(fallback?.direction)) {
+    return fallback;
+  }
+
+  const swingHigh = Number(fallback?.swingHigh);
+  const swingLow = Number(fallback?.swingLow);
+  const impulseRange = swingHigh - swingLow;
+  if (!Number.isFinite(impulseRange) || impulseRange <= 0) return fallback;
+
+  const lines = (Array.isArray(independentlyReadLines) ? independentlyReadLines : [])
+    .map((line) => ({
+      price: Number(line?.displayedPrice),
+      colour: String(line?.colour || "other").toLowerCase().trim(),
+      evidence: String(line?.evidence || "").trim(),
+    }))
+    .filter((line) => Number.isFinite(line.price) && line.price > 0);
+  if (lines.length < 2) return fallback;
+
+  const candidates = Array.isArray(fallback?.candidates)
+    ? fallback.candidates.map((candidate) => ({ ...candidate }))
+    : [];
+  const convertedType = fallback.direction === "bearish"
+    ? "converted resistance"
+    : "converted support";
+  const adjacencyAllowance = impulseRange * Math.max(Number(maximumAdjacentRangeRatio) || 0, 0);
+  const duplicateAllowance = Math.max(impulseRange * 0.00001, Number.EPSILON * 100);
+
+  for (const line of lines) {
+    if (candidates.some((candidate) =>
+      Math.abs(Number(candidate?.price) - line.price) <= duplicateAllowance
+    )) {
+      continue;
+    }
+
+    const nearestConverted = candidates
+      .filter((candidate) =>
+        String(candidate?.areaType || "").toLowerCase().trim() === convertedType &&
+        candidate?.exactVisiblePrice === true &&
+        candidate?.conversionBreakConfirmed === true
+      )
+      .map((candidate) => ({
+        candidate,
+        distance: Math.abs(Number(candidate.price) - line.price),
+      }))
+      .filter((item) => Number.isFinite(item.distance) && item.distance <= adjacencyAllowance)
+      .sort((a, b) => a.distance - b.distance)[0] || null;
+    if (!nearestConverted) continue;
+
+    const anchorLine = lines
+      .map((candidateLine) => ({
+        ...candidateLine,
+        distance: Math.abs(
+          candidateLine.price - Number(nearestConverted.candidate.price)
+        ),
+      }))
+      .sort((a, b) => a.distance - b.distance)[0] || null;
+
+    // Closely stacked lines are treated as separate converted levels only
+    // when the independent line reader confirms that they share the same
+    // visual line colour. This avoids turning an unrelated nearby axis price
+    // into structure merely because it is numerically close.
+    if (
+      !anchorLine ||
+      anchorLine.distance > duplicateAllowance ||
+      !line.colour ||
+      line.colour === "other" ||
+      anchorLine.colour !== line.colour
+    ) {
+      continue;
+    }
+
+    candidates.push({
+      ...nearestConverted.candidate,
+      price: line.price,
+      zoneLow: line.price,
+      zoneHigh: line.price,
+      areaType: convertedType,
+      exactVisiblePrice: true,
+      conversionBreakConfirmed: true,
+      independentEntryEvidence: true,
+      structuralEvidence: [
+        line.evidence,
+        "adjacent independently read exact horizontal line preserved as a separate converted level",
+      ].filter(Boolean).join("; "),
+      fibRatio: null,
+      fibPrice: null,
+    });
+  }
+
+  return {
+    ...fallback,
+    candidates,
+    adjacentExactConvertedLineMergeApplied:
+      candidates.length > (fallback?.candidates || []).length,
+  };
+}
+
+export function selectStructureLedChartNativeImpulseFrame({
+  direction = "range",
+  swingHigh = null,
+  swingLow = null,
+  candidates = [],
+  approvedTolerance = 0,
+  toleranceRatio = 0.06,
+  minimumLocalRangeRatio = 0.35,
+} = {}) {
+  const originalHigh = Number(swingHigh);
+  const originalLow = Number(swingLow);
+  if (
+    !["bullish", "bearish"].includes(direction) ||
+    !Number.isFinite(originalHigh) ||
+    !Number.isFinite(originalLow) ||
+    originalHigh <= originalLow
+  ) {
+    return null;
+  }
+
+  const originalRange = originalHigh - originalLow;
+  const structural = (Array.isArray(candidates) ? candidates : [])
+    .filter((candidate) =>
+      Number.isFinite(Number(candidate?.price)) &&
+      Number(candidate.price) > 0 &&
+      (
+        candidate?.exactVisiblePrice === true ||
+        (
+          ["supply", "demand"].includes(
+            String(candidate?.areaType || "").toLowerCase().trim()
+          ) &&
+          candidate?.independentEntryEvidence === true
+        )
+      )
+    );
+
+  const frames = [{
+    swingHigh: originalHigh,
+    swingLow: originalLow,
+    source: "reported_completed_impulse",
+  }];
+
+  for (const candidate of structural) {
+    const price = Number(candidate.price);
+    const localHigh = direction === "bearish" ? price : originalHigh;
+    const localLow = direction === "bullish" ? price : originalLow;
+    const localRange = localHigh - localLow;
+    if (
+      localRange <= 0 ||
+      localRange < originalRange * Math.max(Number(minimumLocalRangeRatio) || 0, 0) ||
+      localRange >= originalRange
+    ) {
+      continue;
+    }
+    frames.push({
+      swingHigh: localHigh,
+      swingLow: localLow,
+      source: "nearer_exact_structural_origin",
+      originCandidatePrice: price,
+    });
+  }
+
+  const scored = frames.map((frame, index) => {
+    const range = frame.swingHigh - frame.swingLow;
+    const tolerance = Math.max(
+      Number(approvedTolerance) || 0,
+      range * Math.max(Number(toleranceRatio) || 0, 0)
+    );
+    const matchedPrices = structural
+      .filter((candidate) => findNearestAllowedFibonacciMatch({
+        direction,
+        swingHigh: frame.swingHigh,
+        swingLow: frame.swingLow,
+        price: Number(candidate.price),
+        zoneLow: Number(candidate?.zoneLow ?? candidate.price),
+        zoneHigh: Number(candidate?.zoneHigh ?? candidate.price),
+        tolerance,
+      }))
+      .map((candidate) => Number(candidate.price));
+
+    return {
+      ...frame,
+      index,
+      range,
+      tolerance,
+      matchCount: new Set(matchedPrices).size,
+      matchedPrices: [...new Set(matchedPrices)],
+    };
+  });
+
+  const bestMatchCount = Math.max(...scored.map((frame) => frame.matchCount));
+  const original = scored[0];
+
+  // A local structural origin may replace the reported broad origin only
+  // when it independently explains at least two visible structures and does
+  // not reduce the best match count. Single-level charts retain the reported
+  // completed impulse, preventing a nearby line from manufacturing its own
+  // Fibonacci frame.
+  const selected = bestMatchCount >= 2
+    ? scored
+        .filter((frame) => frame.matchCount === bestMatchCount)
+        .sort((a, b) => a.range - b.range || a.index - b.index)[0]
+    : original;
+
+  return {
+    ...selected,
+    originalSwingHigh: originalHigh,
+    originalSwingLow: originalLow,
+    originalMatchCount: original.matchCount,
+    structureLedOverrideApplied: selected.index !== 0,
   };
 }
 

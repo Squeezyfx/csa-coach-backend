@@ -6,6 +6,7 @@ import {
   buildFinalVisibleTerminalImpulse,
   canonicalInstrumentCode,
   classifyCsaStructuralStage,
+  compareStructureLedCompletedImpulseCandidates,
   consolidateQualifiedSupplyDemandClusters,
   expandExactSupportResistanceBoundaries,
   findNearestAllowedFibonacciMatch,
@@ -14,7 +15,9 @@ import {
   hasIndependentChartPriceEvidence,
   hasIndependentSecondarySupplyDemandEvidence,
   hasIndependentStructuralEntryEvidence,
+  isMostRecentStructureCompatibleImpulse,
   isSupportedInstrumentCode,
+  mergeAdjacentExactConvertedLines,
   mergeFocusedSupplyDemandInventory,
   orderStructuralCandidatesForFib,
   parseChartHeaderText,
@@ -23,6 +26,7 @@ import {
   selectIndependentEntryAreas,
   selectNearestFrameworkPeriodHints,
   selectProtectiveSupplyDemandAnchor,
+  selectStructureLedChartNativeImpulseFrame,
   sequenceFibQualifiedAreas,
   shouldMergeQualifiedSupplyDemandCluster,
   shouldApplyFinalVisibleTerminalImpulse,
@@ -78,6 +82,88 @@ test("two printed converted S/R lines override an inferred broad demand zone", (
     [4428.73, "converted support"],
   ]);
   assert.ok(corrected.candidates.every((item) => item.zoneLow === item.zoneHigh));
+});
+
+test("independent line audit restores a closely stacked converted XAUUSD level", () => {
+  const merged = mergeAdjacentExactConvertedLines({
+    usable: true,
+    direction: "bullish",
+    swingLow: 4324.64,
+    swingHigh: 4532.24,
+    candidates: [{
+      price: 4436.15,
+      zoneLow: 4436.15,
+      zoneHigh: 4436.15,
+      areaType: "converted support",
+      exactVisiblePrice: true,
+      conversionBreakConfirmed: true,
+      independentEntryEvidence: true,
+      structuralEvidence: "prior resistance broke and held above",
+    }],
+  }, [
+    { displayedPrice: 4436.15, colour: "blue", evidence: "upper blue line" },
+    { displayedPrice: 4428.73, colour: "blue", evidence: "lower blue line" },
+    { displayedPrice: 4367.25, colour: "red", evidence: "red support line" },
+  ]);
+
+  assert.deepEqual(merged.candidates.map((candidate) => candidate.price), [
+    4436.15,
+    4428.73,
+  ]);
+  assert.equal(merged.candidates[1].areaType, "converted support");
+  assert.equal(merged.candidates[1].exactVisiblePrice, true);
+});
+
+test("chart-native impulse uses the nearer USA30 frame that validates two closer levels", () => {
+  const frame = selectStructureLedChartNativeImpulseFrame({
+    direction: "bearish",
+    swingLow: 52823.2,
+    swingHigh: 54314.8,
+    candidates: [
+      { price: 53275.6, zoneLow: 53275.6, zoneHigh: 53275.6, areaType: "converted resistance", exactVisiblePrice: true },
+      { price: 53421.2, zoneLow: 53421.2, zoneHigh: 53421.2, areaType: "converted resistance", exactVisiblePrice: true },
+      { price: 53788, zoneLow: 53788, zoneHigh: 53788, areaType: "converted resistance", exactVisiblePrice: true },
+    ],
+  });
+
+  assert.equal(frame?.swingHigh, 53788);
+  assert.equal(frame?.swingLow, 52823.2);
+  assert.equal(frame?.structureLedOverrideApplied, true);
+  assert.deepEqual(frame?.matchedPrices, [53275.6, 53421.2]);
+});
+
+test("recent structure-compatible impulse outranks an older broad frame", () => {
+  const olderBroad = {
+    id: "older-broad",
+    breakIndex: 120,
+    pivotIndex: 80,
+    hierarchyAdjustedScore: 180,
+    hierarchyPosition: 0.9,
+    structuralHintScore: { matchCount: 2, normalizedDistanceSum: 0.1 },
+  };
+  const recentLocal = {
+    id: "recent-local",
+    breakIndex: 220,
+    pivotIndex: 190,
+    hierarchyAdjustedScore: 80,
+    hierarchyPosition: 0.5,
+    structuralHintScore: { matchCount: 1, normalizedDistanceSum: 0.3 },
+  };
+
+  const ordered = [olderBroad, recentLocal]
+    .sort(compareStructureLedCompletedImpulseCandidates);
+  assert.deepEqual(ordered.map((candidate) => candidate.id), [
+    "recent-local",
+    "older-broad",
+  ]);
+  assert.equal(
+    isMostRecentStructureCompatibleImpulse(recentLocal, ordered),
+    true
+  );
+  assert.equal(
+    isMostRecentStructureCompatibleImpulse(olderBroad, ordered),
+    false
+  );
 });
 
 test("server calculates every allowed Fib ratio instead of trusting the model label", () => {
@@ -500,6 +586,9 @@ test("selector reconciles exact chart/framework levels before choosing Fibonacci
   assert.match(serverSource, /function extractFocusedChartNativeEntryFallback/);
   assert.match(serverSource, /focused_chart_native_entry_fallback/);
   assert.match(serverSource, /internalChartNativeFallback/);
+  assert.match(serverSource, /Closely stacked parallel lines are separate lines/);
+  assert.match(serverSource, /mergeAdjacentExactConvertedLines/);
+  assert.match(serverSource, /selectStructureLedChartNativeImpulseFrame/);
 });
 
 test("Fibonacci qualification cannot use the whole 50%-61.8% interval as confluence", () => {

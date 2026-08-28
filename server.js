@@ -9,19 +9,23 @@ import {
   buildFinalVisibleTerminalImpulse,
   canonicalInstrumentCode,
   classifyCsaStructuralStage,
+  compareStructureLedCompletedImpulseCandidates,
   consolidateQualifiedSupplyDemandClusters,
   expandExactSupportResistanceBoundaries,
   findNearestAllowedFibonacciMatch,
   getMarketDataSymbolCandidates,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
+  isMostRecentStructureCompatibleImpulse,
   shouldApplyFinalVisibleTerminalImpulse,
   isSupportedInstrumentCode,
+  mergeAdjacentExactConvertedLines,
   mergeFocusedSupplyDemandInventory,
   orderStructuralCandidatesForFib,
   parseChartHeaderText,
   reconcileLatestVisibleDateWithAxisYear,
   replaceMisclassifiedZoneWithExactConvertedLines,
+  selectStructureLedChartNativeImpulseFrame,
   selectProtectiveSupplyDemandAnchor,
   selectIndependentEntryAreas,
   selectNearestFrameworkPeriodHints,
@@ -5885,13 +5889,7 @@ async function readFrameworkPricesBatchFromChart({
   structureLabel,
   marketReference,
 }) {
-  if (!Array.isArray(targets) || !targets.length) {
-    return {
-      ok: false,
-      matches: [],
-      reason: "No framework targets were provided.",
-    };
-  }
+  const normalizedTargets = Array.isArray(targets) ? targets : [];
 
   const prompt = `
 You have ONE narrow chart-reading task.
@@ -5908,11 +5906,13 @@ TIMEFRAME: ${timeframe}
 STRICT READING RULES:
 1. Scan the full right-side price axis from top to bottom.
 2. Return every coloured or dashed horizontal line that crosses the chart and has a printed price tag or price-axis label.
-3. Copy the printed digits exactly into displayedPrice and platformLabel.
-4. Exclude the live/current-price label, bid/ask quote, OHLC header values, ordinary axis tick labels, candle prices, and dates.
-5. If a horizontal line is visible but its printed digits are not readable, set displayedPrice to null. Do not estimate or reconstruct digits.
-6. Never invent digits.
-7. Return the lines in visual top-to-bottom order.
+3. Closely stacked parallel lines are separate lines. Slow down around overlapping or touching price tags, count every distinct horizontal stroke, and read each attached label separately.
+4. Before finishing, scan the price axis a second time and confirm that the number of returned items equals the number of distinct user-drawn horizontal strokes.
+5. Copy the printed digits exactly into displayedPrice and platformLabel.
+6. Exclude the live/current-price label, bid/ask quote, OHLC header values, ordinary axis tick labels, candle prices, and dates.
+7. If a horizontal line is visible but its printed digits are not readable, set displayedPrice to null. Do not estimate or reconstruct digits.
+8. Never invent digits.
+9. Return the lines in visual top-to-bottom order.
 
 Return JSON only:
 {
@@ -6009,7 +6009,7 @@ Return JSON only:
         ) === index
       );
 
-    const normalizedMatches = targets.map((target) => {
+    const normalizedMatches = normalizedTargets.map((target) => {
       const nearest = independentlyReadLines
         .map((line) => ({
           ...line,
@@ -6102,15 +6102,6 @@ async function extractVisibleFrameworkPriceMap({
     marketReference,
     timeframe
   );
-
-  if (!targets.length) {
-    return {
-      ok: false,
-      matches: [],
-      reason:
-        "No focused framework entry areas were available for price reconciliation.",
-    };
-  }
 
   const structureLabel =
     marketReference?.profile?.structureLabel ||
@@ -7938,7 +7929,7 @@ INTERNAL CHART-NATIVE FALLBACK (never show this wording to the customer):
 - An S/R candidate requires an exact printed chart price. A supply/demand candidate requires a visible base/zone and its own displacement evidence.
 - Ordinary black price-axis tick labels are not zone boundaries. A supply/demand boundary must be a visibly drawn line/rectangle boundary or a candle-defined base boundary.
 - When two separately printed horizontal S/R lines are visible inside a proposed broad zone and price has broken them, preserve the two exact lines as converted S/R. Never replace them with one inferred supply/demand zone.
-- Return no more than three candidates. Candidate 2 and Candidate 3 must each be a genuinely separate structural opportunity; a nearby fragment or duplicate is not independent.
+- Inventory every independently visible structural candidate, up to twelve. Do not pre-limit the inventory to the three final entries. The deterministic selector will apply the structural and Fibonacci gates, then choose no more than three genuinely separate entries.
 - Set usable=false rather than guessing any unreadable price, impulse, direction, or structural role.
 
 Return exactly this JSON shape:
@@ -10566,8 +10557,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.35.0";
-const CSA_BUILD_ID = "CSA-v4.26.0-chronological-period-inventory";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.36.0";
+const CSA_BUILD_ID = "CSA-v4.27.0-structure-led-local-impulse";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -11174,7 +11165,13 @@ function scoreFibonacciFrameAgainstStructuralHints({
           allowance > 0 ? nearest.distance / allowance : 0,
       };
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((match, index, allMatches) =>
+      allMatches.findIndex((candidate) =>
+        Math.abs(Number(candidate.price) - Number(match.price)) <=
+        Number.EPSILON * 100
+      ) === index
+    );
 
   return {
     matchCount: matches.length,
@@ -12463,113 +12460,7 @@ function buildLatestImpulseFibonacci({
           Number(candidate?.structuralHintScore?.matchCount || 0) > 0
         )
       )
-      .sort((a, b) => {
-        const aHintMatches = Number(a?.structuralHintScore?.matchCount || 0);
-        const bHintMatches = Number(b?.structuralHintScore?.matchCount || 0);
-
-        // First prefer the impulse that explains more structure from the two
-        // nearest completed framework periods. Recency decides only when the
-        // nearby-period match counts are equal.
-        if (aHintMatches !== bHintMatches) {
-          return bHintMatches - aHintMatches;
-        }
-
-        if (aHintMatches > 0 && bHintMatches > 0) {
-          // Exact chart structure is evaluated before Fibonacci. Once two
-          // completed impulses both agree with at least one exact structural
-          // level, prefer the more recent completed break. This prevents a
-          // stale, broad swing from winning merely because its wider Fib grid
-          // happens to overlap more old levels.
-          const recencyDifference =
-            Number(b.breakIndex) - Number(a.breakIndex);
-
-          if (
-            Number.isFinite(recencyDifference) &&
-            recencyDifference !== 0
-          ) {
-            return recencyDifference;
-          }
-
-          const aHintDistance = Number(
-            a?.structuralHintScore?.normalizedDistanceSum
-          );
-          const bHintDistance = Number(
-            b?.structuralHintScore?.normalizedDistanceSum
-          );
-
-          if (
-            Number.isFinite(aHintDistance) &&
-            Number.isFinite(bHintDistance) &&
-            Math.abs(aHintDistance - bHintDistance) > 0.05
-          ) {
-            return aHintDistance - bHintDistance;
-          }
-        }
-
-        const adjustedDifference =
-          Number(
-            b.hierarchyAdjustedScore
-          ) -
-          Number(
-            a.hierarchyAdjustedScore
-          );
-
-        if (
-          Math.abs(
-            adjustedDifference
-          ) > 3
-        ) {
-          return adjustedDifference;
-        }
-
-        // When hierarchy-adjusted scores are close, explicitly prefer the
-        // outer structural ceiling/floor before considering recency.
-        if (
-          Number(
-            b.hierarchyPosition
-          ) !==
-          Number(
-            a.hierarchyPosition
-          )
-        ) {
-          return (
-            Number(
-              b.hierarchyPosition
-            ) -
-            Number(
-              a.hierarchyPosition
-            )
-          );
-        }
-
-        if (
-          Number(
-            b.breakIndex
-          ) !==
-          Number(
-            a.breakIndex
-          )
-        ) {
-          return (
-            Number(
-              b.breakIndex
-            ) -
-            Number(
-              a.breakIndex
-            )
-          );
-        }
-
-        // Final tie-break toward the older pivot.
-        return (
-          Number(
-            a.pivotIndex
-          ) -
-          Number(
-            b.pivotIndex
-          )
-        );
-      });
+      .sort(compareStructureLedCompletedImpulseCandidates);
 
   const majorSelection =
     majorBreakCandidates[0] ||
@@ -13027,6 +12918,12 @@ function buildLatestImpulseFibonacci({
         majorSelection,
     });
 
+  const structureLedRecentImpulse =
+    isMostRecentStructureCompatibleImpulse(
+      majorSelection,
+      majorBreakCandidates
+    );
+
   if (majorSelection && outerStructuralOrigin && structuralLevelHints.length) {
     const localFrameScore = scoreFibonacciFrameAgainstStructuralHints({
       direction,
@@ -13058,17 +12955,14 @@ function buildLatestImpulseFibonacci({
     });
     const localMatches = Number(localFrameScore.matchCount || 0);
     const outerMatches = Number(outerFrameScore.matchCount || 0);
-    const localDistance = Number(localFrameScore.normalizedDistanceSum || 0);
-    const outerDistance = Number(outerFrameScore.normalizedDistanceSum || 0);
 
-    // A broader outer origin is retained only when it explains at least as
-    // much exact structure as the protected local swing. On equal matches,
-    // require the outer frame to be no worse on normalized distance.
+    // A broader outer origin is retained only when it explains strictly more
+    // nearby-period structure than the protected local swing. Equal matches
+    // stay with the local completed impulse; otherwise an old broad origin can
+    // win merely because its wider grid is marginally closer to one price.
     if (
-      localMatches > outerMatches ||
-      (localMatches > 0 &&
-        localMatches === outerMatches &&
-        localDistance < outerDistance)
+      structureLedRecentImpulse ||
+      (localMatches > 0 && localMatches >= outerMatches)
     ) {
       outerStructuralOrigin = null;
     }
@@ -15959,7 +15853,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.20.0";
+const CSA_SELECTOR_VERSION = "4.21.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19329,7 +19223,7 @@ Apply this order exactly:
 1. Identify exact printed support/resistance prices and genuine converted levels.
 2. Identify an independent supply/demand base only when its own displacement is visibly clear.
 3. Draw one hidden completed directional impulse and test only 38.2%, 50%, or 61.8% retracement confluence.
-4. Inventory every visible structural candidate before filtering. Test each candidate against the same completed impulse, then return as many as three genuinely separate entries in price-path order.
+4. Inventory every visible structural candidate before filtering, up to twelve. Do not discard a line merely because three nearer candidates have already been found. The deterministic selector will test each candidate against the same completed impulse and return no more than three final entries.
 
 Hard rules:
 - Fibonacci may qualify visible structure but may never create a price or area.
@@ -19375,7 +19269,7 @@ Return exactly:
         "Read the chart again for the focused internal fallback and return only the required JSON.",
       imageBase64,
       mimeType,
-      maxTokens: 1100,
+      maxTokens: 1800,
       openaiModel: "gpt-4.1-mini",
       claudeModel: CLAUDE_MODEL,
       temperature: 0,
@@ -19417,8 +19311,15 @@ function rankChartNativeFallbackAreas({
     ? new Set(["support", "demand", "converted support"])
     : new Set(["resistance", "supply", "converted resistance"]);
   const approvedTolerance = getApprovedPriceTolerance(symbol);
-  const swingHigh = asPositiveNumber(fallback?.swingHigh);
-  const swingLow = asPositiveNumber(fallback?.swingLow);
+  const structureLedFrame = selectStructureLedChartNativeImpulseFrame({
+    direction,
+    swingHigh: fallback?.swingHigh,
+    swingLow: fallback?.swingLow,
+    candidates: fallback?.candidates || [],
+    approvedTolerance,
+  });
+  const swingHigh = asPositiveNumber(structureLedFrame?.swingHigh);
+  const swingLow = asPositiveNumber(structureLedFrame?.swingLow);
   const impulseRange = swingHigh !== null && swingLow !== null && swingHigh > swingLow
     ? swingHigh - swingLow
     : null;
@@ -19547,8 +19448,11 @@ function rankChartNativeFallbackAreas({
       fallbackSource: "uploaded_chart_only",
       fibonacci: {
         source: "uploaded_chart_completed_impulse",
-        swingLow: fallback.swingLow ?? null,
-        swingHigh: fallback.swingHigh ?? null,
+        swingLow: swingLow ?? null,
+        swingHigh: swingHigh ?? null,
+        reportedSwingLow: fallback.swingLow ?? null,
+        reportedSwingHigh: fallback.swingHigh ?? null,
+        structureLedFrame: structureLedFrame || null,
       },
       structuralCandidates: fallback.candidates || [],
       fibonacciQualifiedCandidates: candidates,
@@ -28045,6 +27949,18 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         visualReview,
         priceMap: dedicatedFrameworkPriceMap,
       });
+
+    // The dedicated line reader is intentionally independent of the trading
+    // analysis pass. Feed its exact, colour-confirmed lines back into the
+    // chart-native inventory so closely stacked converted S/R levels are not
+    // lost merely because one price tag was overlooked in the first pass.
+    visualReview = {
+      ...visualReview,
+      chartNativeEntryFallback: mergeAdjacentExactConvertedLines(
+        visualReview?.chartNativeEntryFallback || {},
+        dedicatedFrameworkPriceMap?.independentlyReadLines || []
+      ),
+    };
 
     const chartNativeImpulseStartedAt =
       csaNowMs();
