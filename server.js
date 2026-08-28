@@ -19325,6 +19325,10 @@ function normalizeChartNativeEntryFallback(value = {}) {
       candidates.length > 0,
     direction,
     currentPrice: nullablePositiveNumber(value?.currentPrice),
+    // H1 CSA Fibonacci is anchored to the screenshot-visible current week.
+    // These are deliberately separate from the older generic impulse fields.
+    currentWeekHigh: nullablePositiveNumber(value?.currentWeekHigh),
+    currentWeekLow: nullablePositiveNumber(value?.currentWeekLow),
     swingHigh: nullablePositiveNumber(value?.swingHigh),
     swingLow: nullablePositiveNumber(value?.swingLow),
     candidates,
@@ -19357,7 +19361,7 @@ async function extractFocusedChartNativeEntryFallback({
 Apply this order exactly:
 1. Identify exact printed support/resistance prices and genuine converted levels.
 2. Identify an independent supply/demand base only when its own displacement is visibly clear.
-3. Draw one hidden completed directional impulse and test only 38.2%, 50%, or 61.8% retracement confluence.
+3. For an H1 chart, read the high and low of the CURRENT VISIBLE CALENDAR WEEK (Monday through the final visible candle). This is the only Fibonacci frame. Do not use an older or smaller impulse.
 4. Inventory every visible structural candidate before filtering, up to twelve. Do not discard a line merely because three nearer candidates have already been found. The deterministic selector will test each candidate against the same completed impulse and return no more than three final entries.
 
 Hard rules:
@@ -19369,6 +19373,7 @@ Hard rules:
 - Do not stop after finding the first or second level. Inspect the next previous support/resistance and the next genuine supply/demand base too.
 - A later entry must not be a nearby fragment, duplicate, or unverified reference. Entry 2 and Entry 3 are alternatives only if the earlier area fails; they are never instructions to add to a losing trade.
 - The screenshot is authoritative when its visible extremes or printed levels conflict with external OHLC data.
+- Return currentWeekHigh and currentWeekLow from the visible current week. If either is unreadable, set it to null rather than borrowing an older swing.
 - Do not mention Fibonacci in customer-facing wording; this result is internal.
 - Set usable=false rather than guessing any unreadable direction, price, impulse, or role.
 - Return JSON only, with no markdown.
@@ -19378,6 +19383,8 @@ Return exactly:
   "usable": false,
   "direction": "bullish | bearish | range",
   "currentPrice": null,
+  "currentWeekHigh": null,
+  "currentWeekLow": null,
   "swingHigh": null,
   "swingLow": null,
   "candidates": [
@@ -19429,6 +19436,7 @@ function rankChartNativeFallbackAreas({
   direction = "range",
   currentPrice = null,
   symbol = "",
+  timeframe = "",
 } = {}) {
   const fallback = visualReview?.chartNativeEntryFallback || {};
   const resolvedCurrentPrice =
@@ -19446,7 +19454,18 @@ function rankChartNativeFallbackAreas({
     ? new Set(["support", "demand", "converted support"])
     : new Set(["resistance", "supply", "converted resistance"]);
   const approvedTolerance = getApprovedPriceTolerance(symbol);
-  const structureLedFrame = selectStructureLedChartNativeImpulseFrame({
+  const visibleWeekHigh = asPositiveNumber(fallback?.currentWeekHigh);
+  const visibleWeekLow = asPositiveNumber(fallback?.currentWeekLow);
+  const visibleWeekFrame = String(timeframe || visualReview?.timeframe || "").toUpperCase() === "H1" &&
+    visibleWeekHigh !== null && visibleWeekLow !== null && visibleWeekHigh > visibleWeekLow
+    ? {
+        swingHigh: visibleWeekHigh,
+        swingLow: visibleWeekLow,
+        source: "uploaded_chart_visible_current_week_high_low",
+        structureLedOverrideApplied: false,
+      }
+    : null;
+  const structureLedFrame = visibleWeekFrame || selectStructureLedChartNativeImpulseFrame({
     direction,
     swingHigh: fallback?.swingHigh,
     swingLow: fallback?.swingLow,
@@ -19465,8 +19484,10 @@ function rankChartNativeFallbackAreas({
   ).map((candidate) => {
     const price = asPositiveNumber(candidate?.price);
     const areaType = String(candidate?.areaType || "").toLowerCase().trim();
+    // A structural level must be close to one actual 38.2/50/61.8 price;
+    // a broad local-impulse allowance must not rescue a shallow nearby line.
     const fibTolerance = impulseRange !== null
-      ? Math.max(approvedTolerance, impulseRange * 0.06)
+      ? Math.max(approvedTolerance, impulseRange * 0.01)
       : approvedTolerance;
     const rawLow = asPositiveNumber(candidate?.zoneLow) || price;
     const rawHigh = asPositiveNumber(candidate?.zoneHigh) || price;
@@ -19550,8 +19571,12 @@ function rankChartNativeFallbackAreas({
         price: computedFibPrice,
         matchType: "deterministic_chart_native_hidden_fibonacci",
       }],
-      fibonacciSource: "uploaded_chart_completed_impulse",
-      fibOriginModel: "chart_native_completed_directional_impulse",
+      fibonacciSource: visibleWeekFrame
+        ? "uploaded_chart_visible_current_week_high_low"
+        : "uploaded_chart_completed_impulse",
+      fibOriginModel: visibleWeekFrame
+        ? "uploaded_chart_visible_current_week_high_low"
+        : "chart_native_completed_directional_impulse",
       selectorQualityReason: safeUserText(candidate?.structuralEvidence || ""),
       computedFibPrice,
       fibonacciDistance: fibMatch.distance,
@@ -19583,12 +19608,15 @@ function rankChartNativeFallbackAreas({
       direction,
       fallbackSource: "uploaded_chart_only",
       fibonacci: {
-        source: "uploaded_chart_completed_impulse",
+        source: visibleWeekFrame
+          ? "uploaded_chart_visible_current_week_high_low"
+          : "uploaded_chart_completed_impulse",
         swingLow: swingLow ?? null,
         swingHigh: swingHigh ?? null,
         reportedSwingLow: fallback.swingLow ?? null,
         reportedSwingHigh: fallback.swingHigh ?? null,
         structureLedFrame: structureLedFrame || null,
+        visibleWeekFrame: visibleWeekFrame || null,
       },
       structuralCandidates: fallback.candidates || [],
       fibonacciQualifiedCandidates: candidates,
@@ -19619,6 +19647,7 @@ function rankRawEntryAreas({
       direction,
       currentPrice,
       symbol,
+      timeframe,
     });
     if (chartNativeFallback) return chartNativeFallback;
   }
@@ -19706,6 +19735,7 @@ function rankRawEntryAreas({
       direction,
       currentPrice,
       symbol,
+      timeframe,
     });
 
     if (chartNativeFallback) {
@@ -20411,8 +20441,12 @@ function rankRawEntryAreas({
     approvedTolerance: priceTolerance,
   });
 
+  // H1's current visible-week frame is the single source of Fibonacci truth.
+  // Never let a later prior-period/candidate-local frame replace it.
   const relevantFibonacci =
-    priorPeriodStructuralFrame?.structureLedOverrideApplied === true
+    fibonacci?.fibOriginModel === "visible_current_week_high_low"
+      ? fibonacci
+      : priorPeriodStructuralFrame?.structureLedOverrideApplied === true
       ? {
           ...fibonacci,
           swingHigh: priorPeriodStructuralFrame.swingHigh,
