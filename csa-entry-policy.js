@@ -430,7 +430,7 @@ export function promoteConfirmedBreakPassedExactLevels(fallback = {}) {
       ? price > currentPrice
       : price < currentPrice;
     const breakEvidence =
-      /breakdown|broke\s+(below|above)|passed\s+through|breakout/.test(evidence) ||
+      /breakdown|broke\s+(below|above)|break(?:ing)?\s+(lower|higher)|passed\s+through|breakout/.test(evidence) ||
       /continu(?:ed|ing)\s+(?:lower|higher)\s+through/.test(evidence);
     const confirmedSibling = candidates.some((other) => {
       if (String(other?.areaType || "").toLowerCase().trim() !== convertedType) return false;

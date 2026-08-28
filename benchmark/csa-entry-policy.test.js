@@ -223,7 +223,7 @@ test("a break-passed USA30 line beneath a confirmed conversion retains converted
   assert.equal(normalized.candidates[0].conversionBreakConfirmed, true);
 });
 
-test("a continued bearish move through a printed USA30 support retains its converted role", () => {
+test("a completed bearish break through a printed USA30 support retains its converted role", () => {
   const normalized = promoteConfirmedBreakPassedExactLevels({
     usable: true,
     direction: "bearish",
@@ -233,7 +233,7 @@ test("a continued bearish move through a printed USA30 support retains its conve
         price: 53275.6,
         areaType: "support",
         exactVisiblePrice: true,
-        structuralEvidence: "Price briefly interacted with this level before continuing lower through it.",
+        structuralEvidence: "Price briefly paused near this level before breaking lower. Now a nearby overhead reference.",
       },
       {
         price: 53421.2,
