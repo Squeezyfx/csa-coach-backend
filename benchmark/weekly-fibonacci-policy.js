@@ -48,6 +48,8 @@ export function buildVisiblePeriodFibonacciFrame({ candles = [], direction = "ra
 
   const highCandle = periodCandles.reduce((best, candle) => Number(candle.high) > Number(best.high) ? candle : best);
   const lowCandle = periodCandles.reduce((best, candle) => Number(candle.low) < Number(best.low) ? candle : best);
+  const periodOpen = Number(periodCandles[0].open);
+  const periodClose = Number(periodCandles.at(-1).close);
   const swingHigh = Number(highCandle.high);
   const swingLow = Number(lowCandle.low);
   if (!(swingHigh > swingLow)) return null;
@@ -59,6 +61,18 @@ export function buildVisiblePeriodFibonacciFrame({ candles = [], direction = "ra
     period,
     swingHigh,
     swingLow,
+    periodOpen: Number.isFinite(periodOpen) ? periodOpen : null,
+    periodClose: Number.isFinite(periodClose) ? periodClose : null,
+    // This is deliberately separate from the immediate H1 leg. A current
+    // week can be bullish overall while the final H1 candles are pulling back.
+    periodCandleDirection:
+      Number.isFinite(periodOpen) && Number.isFinite(periodClose)
+        ? periodClose > periodOpen
+          ? "bullish"
+          : periodClose < periodOpen
+          ? "bearish"
+          : "range"
+        : "range",
     swingHighTime: highCandle.datetime,
     swingLowTime: lowCandle.datetime,
     impulseRange: range,

@@ -24,4 +24,6 @@ test("reviewed current-period Fib charts retain their verified structural entrie
   assert.deepEqual(getVerifiedChartFixture("2911.PNG")?.candidates.map((item) => item.price), [1.36202]);
   assert.deepEqual(getVerifiedChartFixture("2909.PNG")?.candidates.map((item) => item.price), [98.96]);
   assert.deepEqual(getVerifiedChartFixture("2910.PNG")?.candidates, []);
+  assert.equal(getVerifiedChartFixture("2914.PNG")?.direction, "bullish");
+  assert.deepEqual(getVerifiedChartFixture("2914.PNG")?.candidates.map((item) => item.price), [53524.2, 53384.7]);
 });

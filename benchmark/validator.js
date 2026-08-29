@@ -444,6 +444,15 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const fallbackRange = fallbackSwingHigh !== null && fallbackSwingLow !== null && fallbackSwingHigh > fallbackSwingLow
       ? fallbackSwingHigh - fallbackSwingLow
       : null;
+    const requiresCurrentPeriodFrame = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"].includes(
+      String(detectedTimeframe || "").toUpperCase()
+    );
+    const currentPeriodFrameAvailable =
+      !requiresCurrentPeriodFrame ||
+      (
+        fallbackRange !== null &&
+        !String(selectorDiagnostics?.fibonacci?.source || "").endsWith("_required")
+      );
     const recognizedTypes = new Set([
       "support", "resistance", "converted support", "converted resistance",
       "demand", "supply",
@@ -548,6 +557,15 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       "Directional bias resolved",
       direction !== "unknown",
       `Resolved direction: ${direction}.`
+    );
+    addCheck(
+      checks,
+      "automatic_fibonacci_period_frame",
+      "Current-period Fibonacci high and low were read",
+      currentPeriodFrameAvailable,
+      currentPeriodFrameAvailable
+        ? `Frame: high ${fallbackSwingHigh}, low ${fallbackSwingLow}.`
+        : "No entry can be accepted until the required current-period high and low are both read from the chart."
     );
     addCheck(
       checks,

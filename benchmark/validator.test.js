@@ -457,6 +457,7 @@ test("automatic mode verifies chart context, ordered structure and hidden Fibona
   };
   automatic.analysisFacts.selectorDiagnostics = {
     selectorVersion: "4.6.2",
+    fibonacci: { source: "uploaded_chart_visible_current_week_high_low", swingHigh: 0.702, swingLow: 0.7 },
     structuralCandidates: [
       { areaType: "support", frameworkPrice: 0.70104, structurallyValid: true },
       { areaType: "demand", frameworkPrice: 0.69845, structurallyValid: true },
@@ -478,6 +479,23 @@ test("automatic mode verifies chart context, ordered structure and hidden Fibona
     result.checks.find((check) => check.id === "automatic_fibonacci_confluence")?.details || "",
     /Entry 1 .*50%/
   );
+});
+
+test("automatic mode does not accept a no-entry result without its required period Fib frame", () => {
+  const automatic = structuredClone(baseResult);
+  automatic.chartDetection = { detectedInstrument: "AUDUSD", detectedTimeframe: "H1" };
+  automatic.analysisFacts.selectedEntryAreas = [];
+  automatic.finalFeedback.entry1 = null;
+  automatic.analysisFacts.selectorDiagnostics = {
+    selectorVersion: "4.6.2",
+    fibonacci: { source: "uploaded_chart_visible_current_week_high_low_required", swingHigh: null, swingLow: null },
+    structuralCandidates: [],
+    fibCandidates: [],
+  };
+
+  const result = validateBenchmarkResult(automatic, { automaticMode: true });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks.find((check) => check.id === "automatic_fibonacci_period_frame")?.passed, false);
 });
 
 test("automatic mode rejects a selected entry that did not pass Fibonacci confluence", () => {

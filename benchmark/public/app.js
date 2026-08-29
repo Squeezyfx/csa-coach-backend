@@ -213,7 +213,9 @@ function renderRun(run) {
     const detectedTimeframe = item.analysis?.chartDetection?.detectedTimeframe || "Not detected";
     const direction = item.validation?.direction || "unknown";
     const entries = item.validation?.selectedEntries || [];
-    const diagnosticEntries = item.analysis?.analysisFacts?.selectorDiagnostics?.selectedEntries || [];
+    const selectorDiagnostics = item.analysis?.analysisFacts?.selectorDiagnostics || {};
+    const diagnosticEntries = selectorDiagnostics.selectedEntries || [];
+    const fibonacci = selectorDiagnostics.fibonacci || {};
     const fibLabelForEntry = (entry, index) => {
       const diagnostic = diagnosticEntries.find((candidate) => Number(candidate?.executionOrder) === index + 1) || {};
       const matches = Array.isArray(diagnostic?.fibonacciMatches) ? diagnostic.fibonacciMatches : [];
@@ -233,6 +235,28 @@ function renderRun(run) {
       }).filter(Boolean))];
       return entry && labels.length ? ` · Fib: ${labels.join(" / ")}` : "";
     };
+    const fibAuditHtml = (() => {
+      const high = Number(fibonacci.swingHigh);
+      const low = Number(fibonacci.swingLow);
+      const range = high - low;
+      if (!Number.isFinite(high) || !Number.isFinite(low) || !(range > 0)) {
+        return `<details class="fib-audit"><summary>Fibonacci selection audit</summary><p>Current-period high/low could not be read. No-entry output must be reviewed, not accepted.</p></details>`;
+      }
+      const levels = direction === "bearish"
+        ? [["38.2%", low + range * 0.382], ["50%", low + range * 0.5], ["61.8%", low + range * 0.618]]
+        : [["38.2%", high - range * 0.382], ["50%", high - range * 0.5], ["61.8%", high - range * 0.618]];
+      const precision = Math.min(6, Math.max(2, String(entries[0]?.levelText || high).split(".")[1]?.length || 2));
+      const candidates = Array.isArray(selectorDiagnostics.structuralCandidates) ? selectorDiagnostics.structuralCandidates : [];
+      const selectedPrices = new Set(diagnosticEntries.map((candidate) => Number(candidate?.authoritativeCenter ?? candidate?.resolvedEntryPrice)).filter(Number.isFinite));
+      const candidateRows = candidates.length
+        ? candidates.map((candidate) => {
+            const price = Number(candidate?.price ?? candidate?.authoritativeCenter);
+            const state = selectedPrices.has(price) ? "selected" : "not selected";
+            return `<li>${escapeHtml(String(candidate?.areaType || "structure"))} ${Number.isFinite(price) ? price.toFixed(precision) : "unreadable"} — ${state}</li>`;
+          }).join("")
+        : "<li>No structural candidates were returned.</li>";
+      return `<details class="fib-audit"><summary>Fibonacci selection audit</summary><p>Frame: ${escapeHtml(String(fibonacci.source || "current period"))}; high ${high.toFixed(precision)}, low ${low.toFixed(precision)}.</p><p>Fib: ${levels.map(([label, price]) => `${label} ${price.toFixed(precision)}`).join(" · ")}</p><ul>${candidateRows}</ul></details>`;
+    })();
     const findingsHtml = item.mode === "automatic" && item.status !== "error"
       ? `<div class="auto-findings"><span><b>Chart:</b> ${escapeHtml(detectedInstrument)} ${escapeHtml(detectedTimeframe)}</span><span><b>Bias:</b> ${escapeHtml(direction)}</span><span><b>Entry 1:</b> ${escapeHtml(entries[0] ? `${entries[0].center} (${entries[0].areaType || "area"})${fibLabelForEntry(entries[0], 0)}` : "No valid entry")}</span><span><b>Entry 2:</b> ${escapeHtml(entries[1] ? `${entries[1].center} (${entries[1].areaType || "area"})${fibLabelForEntry(entries[1], 1)}` : "Not selected")}</span><span><b>Entry 3:</b> ${escapeHtml(entries[2] ? `${entries[2].center} (${entries[2].areaType || "area"})${fibLabelForEntry(entries[2], 2)}` : "Not selected")}</span></div>`
       : "";
@@ -247,7 +271,7 @@ function renderRun(run) {
     const baselineHtml = item.verifiedBaselineId
       ? `<p class="baseline-note">Compared with verified baseline ${escapeHtml(item.verifiedBaselineId)}.</p>`
       : `<p class="baseline-note">Rule checks only; accuracy has not yet been verified.</p>`;
-    return `<article class="result ${item.status}"><div class="result-top"><div><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.fileName)} · ${(item.durationMs / 1000).toFixed(1)}s</p></div><span class="badge">${escapeHtml(statusLabel)}</span></div><p>${headline}</p>${baselineHtml}${findingsHtml}${checkHtml ? `<ul class="checks">${checkHtml}</ul>` : ""}<details><summary>Full analysis response</summary><pre>${escapeHtml(JSON.stringify(item.analysis, null, 2))}</pre></details></article>`;
+    return `<article class="result ${item.status}"><div class="result-top"><div><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.fileName)} · ${(item.durationMs / 1000).toFixed(1)}s</p></div><span class="badge">${escapeHtml(statusLabel)}</span></div><p>${headline}</p>${baselineHtml}${findingsHtml}${fibAuditHtml}${checkHtml ? `<ul class="checks">${checkHtml}</ul>` : ""}<details><summary>Full analysis response</summary><pre>${escapeHtml(JSON.stringify(item.analysis, null, 2))}</pre></details></article>`;
   }).join("");
   promoteButton.hidden = !(
     automatic &&

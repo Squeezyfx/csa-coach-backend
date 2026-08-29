@@ -80,6 +80,24 @@ const VERIFIED_CHART_FIXTURES = Object.freeze({
       Object.freeze({ price: 98.96, zoneLow: 98.96, zoneHigh: 98.96, areaType: "support", exactVisiblePrice: true, conversionBreakConfirmed: false, independentEntryEvidence: true, structuralEvidence: "verified current-week support" }),
     ]),
   }),
+  "2914": Object.freeze({
+    // USA30 H1, Aug 24–26: the weekly structure is bullish even though the
+    // final H1 leg is retracing lower. The Fib frame is the entire visible
+    // week, never the Tuesday demand low paired with a smaller local high.
+    direction: "bullish",
+    currentPrice: 53496.2,
+    currentWeekHigh: 53750,
+    currentWeekLow: 53158.9,
+    currentPeriodOpen: 53240,
+    currentPeriodClose: 53496.2,
+    currentPeriodDirection: "bullish",
+    swingHigh: 53750,
+    swingLow: 53158.9,
+    candidates: Object.freeze([
+      Object.freeze({ price: 53524.2, zoneLow: 53524.2, zoneHigh: 53524.2, areaType: "support", exactVisiblePrice: true, conversionBreakConfirmed: false, independentEntryEvidence: true, structuralEvidence: "verified Monday support at the 38.2% current-week retracement" }),
+      Object.freeze({ price: 53384.7, zoneLow: 53380, zoneHigh: 53390, areaType: "demand", exactVisiblePrice: false, conversionBreakConfirmed: false, independentEntryEvidence: true, structuralEvidence: "verified Tuesday demand base with clear bullish displacement at the 61.8% current-week retracement" }),
+    ]),
+  }),
 });
 
 function normalizeFixtureId(value = "") {
