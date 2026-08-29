@@ -213,10 +213,24 @@ function renderRun(run) {
     const detectedTimeframe = item.analysis?.chartDetection?.detectedTimeframe || "Not detected";
     const direction = item.validation?.direction || "unknown";
     const entries = item.validation?.selectedEntries || [];
+    const diagnosticEntries = item.analysis?.analysisFacts?.selectorDiagnostics?.selectedEntries || [];
+    const fibLabelForEntry = (entry, index) => {
+      const diagnostic = diagnosticEntries.find((candidate) => Number(candidate?.executionOrder) === index + 1) || {};
+      const matches = Array.isArray(diagnostic?.fibonacciMatches) ? diagnostic.fibonacciMatches : [];
+      const labels = [...new Set(matches.map((match) => {
+        const ratio = Number(match?.ratio);
+        const label = Number.isFinite(ratio)
+          ? (ratio === 0.5 ? "50%" : `${(ratio * 100).toFixed(1)}%`)
+          : String(match?.label || "").replace(/\.0(?=%)/, "");
+        const price = Number(match?.price);
+        return label && Number.isFinite(price) ? `${label} @ ${price}` : label;
+      }).filter(Boolean))];
+      return entry && labels.length ? ` · Fib: ${labels.join(" / ")}` : "";
+    };
     const findingsHtml = item.mode === "automatic" && item.status !== "error"
-      ? `<div class="auto-findings"><span><b>Chart:</b> ${escapeHtml(detectedInstrument)} ${escapeHtml(detectedTimeframe)}</span><span><b>Bias:</b> ${escapeHtml(direction)}</span><span><b>Entry 1:</b> ${escapeHtml(entries[0] ? `${entries[0].center} (${entries[0].areaType || "area"})` : "No valid entry")}</span><span><b>Entry 2:</b> ${escapeHtml(entries[1] ? `${entries[1].center} (${entries[1].areaType || "area"})` : "Not selected")}</span><span><b>Entry 3:</b> ${escapeHtml(entries[2] ? `${entries[2].center} (${entries[2].areaType || "area"})` : "Not selected")}</span></div>`
+      ? `<div class="auto-findings"><span><b>Chart:</b> ${escapeHtml(detectedInstrument)} ${escapeHtml(detectedTimeframe)}</span><span><b>Bias:</b> ${escapeHtml(direction)}</span><span><b>Entry 1:</b> ${escapeHtml(entries[0] ? `${entries[0].center} (${entries[0].areaType || "area"})${fibLabelForEntry(entries[0], 0)}` : "No valid entry")}</span><span><b>Entry 2:</b> ${escapeHtml(entries[1] ? `${entries[1].center} (${entries[1].areaType || "area"})${fibLabelForEntry(entries[1], 1)}` : "Not selected")}</span><span><b>Entry 3:</b> ${escapeHtml(entries[2] ? `${entries[2].center} (${entries[2].areaType || "area"})${fibLabelForEntry(entries[2], 2)}` : "Not selected")}</span></div>`
       : "";
-    const checkHtml = checks.map((check) => `<li class="${check.passed ? "pass" : "fail"}">${check.passed ? "✓" : "✕"} ${escapeHtml(check.label)}${check.passed ? "" : ` — ${escapeHtml(check.details)}`}</li>`).join("");
+    const checkHtml = checks.map((check) => `<li class="${check.passed ? "pass" : "fail"}">${check.passed ? "✓" : "✕"} ${escapeHtml(check.label)}${!check.passed || check.id === "automatic_fibonacci_confluence" ? ` — ${escapeHtml(check.details)}` : ""}</li>`).join("");
     const statusLabel = item.mode === "automatic"
       ? item.status === "passed"
         ? item.verifiedBaselineId ? "baseline match" : "rule-valid"

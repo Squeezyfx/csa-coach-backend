@@ -34,7 +34,7 @@ import {
   shouldMergeQualifiedSupplyDemandCluster,
 } from "./csa-entry-policy.js";
 import { getVerifiedChartFixture } from "./benchmark/verified-chart-fixtures.js";
-import { buildVisibleWeekFibonacciFrame } from "./benchmark/weekly-fibonacci-policy.js";
+import { buildVisiblePeriodFibonacciFrame } from "./benchmark/weekly-fibonacci-policy.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -11321,18 +11321,18 @@ function buildLatestImpulseFibonacci({
 
   if (ordered.length < 10) return null;
 
-  // CSA H1 policy: all structural candidates are compared with one
-  // deterministic current-week high/low Fib frame. Do not let a shorter
-  // structure-led or chart-native impulse manufacture confluence.
-  const visibleWeekFrame = finalVisibleEndpointAuthority?.enabled === true
-    ? buildVisibleWeekFibonacciFrame({ candles: ordered, direction, timeframe })
+  // One deterministic current-period Fib frame applies to every candidate:
+  // M1-H1=current week, H4=current month, D1/W1=current year. Do not let a
+  // shorter structure-led/chart-native impulse manufacture confluence.
+  const visiblePeriodFrame = finalVisibleEndpointAuthority?.enabled === true
+    ? buildVisiblePeriodFibonacciFrame({ candles: ordered, direction, timeframe })
     : null;
-  if (visibleWeekFrame) {
+  if (visiblePeriodFrame) {
     return {
-      ...visibleWeekFrame,
-      marketDataSwingHigh: visibleWeekFrame.swingHigh,
-      marketDataSwingLow: visibleWeekFrame.swingLow,
-      priceSource: "external_ohlc_visible_current_week",
+      ...visiblePeriodFrame,
+      marketDataSwingHigh: visiblePeriodFrame.swingHigh,
+      marketDataSwingLow: visiblePeriodFrame.swingLow,
+      priceSource: `external_ohlc_${visiblePeriodFrame.source}`,
       chartNativeConfidence: null,
       historicalFrameworkImpulseAuthority: null,
       finalVisibleTerminalImpulse: null,
@@ -19437,11 +19437,21 @@ Return exactly:
 }
 
 async function extractVisibleCurrentWeekFrame({ imageBase64, mimeType, timeframe = "" } = {}) {
-  if (String(timeframe || "").toUpperCase() !== "H1") return null;
+  const tf = String(timeframe || "").toUpperCase();
+  const period = ["M1", "M5", "M15", "M30", "H1"].includes(tf)
+    ? "calendar week (Monday through the final visible candle)"
+    : tf === "H4"
+    ? "calendar month (day 1 through the final visible candle)"
+    : ["D1", "W1"].includes(tf)
+    ? "calendar year (January 1 through the final visible candle)"
+    : tf === "MN"
+    ? "full visible range"
+    : null;
+  if (!period) return null;
   try {
     const response = await runVisionModel({
-      systemPrompt: `Read only this H1 chart and return JSON only. Find the final visible candle, then find Monday at the start of that same calendar week on the time axis. From Monday through the final candle only, read the highest wick and lowest wick. Do not include any candle from the preceding week and do not use a smaller impulse. If either endpoint is unclear, return null for both. Return exactly: {"currentWeekHigh":null,"currentWeekLow":null,"confidence":"high | medium | low"}.`,
-      userText: "This is an internal weekly Fibonacci anchor check. Return only JSON.",
+      systemPrompt: `Read only this ${tf} chart and return JSON only. Find the final visible candle, then use the ${period} as the single Fibonacci anchor. Read the highest wick and lowest wick only inside that period. Do not include an earlier period and do not use a smaller local impulse. If either endpoint is unclear, return null for both. Return exactly: {"currentWeekHigh":null,"currentWeekLow":null,"confidence":"high | medium | low"}.`,
+      userText: "This is an internal current-period Fibonacci anchor check. Return only JSON.",
       imageBase64,
       mimeType,
       maxTokens: 300,
@@ -19457,7 +19467,7 @@ async function extractVisibleCurrentWeekFrame({ imageBase64, mimeType, timeframe
       ? { currentWeekHigh: high, currentWeekLow: low, confidence: String(parsed.confidence || "") }
       : null;
   } catch (error) {
-    console.error("Visible current-week frame extraction error:", error);
+    console.error("Visible current-period frame extraction error:", error);
     return null;
   }
 }
@@ -19495,14 +19505,27 @@ function rankChartNativeFallbackAreas({
       .filter((candidate) => candidate?.currentWeekExtreme === "low")
       .map((candidate) => candidate?.zoneLow ?? candidate?.price)
   );
-  const visibleWeekHigh = asPositiveNumber(candidateWeekHigh) || asPositiveNumber(fallback?.currentWeekHigh);
-  const visibleWeekLow = asPositiveNumber(candidateWeekLow) || asPositiveNumber(fallback?.currentWeekLow);
-  const visibleWeekFrame = String(timeframe || visualReview?.timeframe || "").toUpperCase() === "H1" &&
+  // The dedicated current-period reader is authoritative. Candidate extremes
+  // are only an audit fallback, never a way to replace its high/low with a
+  // smaller local range that happens to qualify a line.
+  const visibleWeekHigh = asPositiveNumber(fallback?.currentWeekHigh) || asPositiveNumber(candidateWeekHigh);
+  const visibleWeekLow = asPositiveNumber(fallback?.currentWeekLow) || asPositiveNumber(candidateWeekLow);
+  const frameTimeframe = String(timeframe || visualReview?.timeframe || "").toUpperCase();
+  const framePeriod = ["M1", "M5", "M15", "M30", "H1"].includes(frameTimeframe)
+    ? "week"
+    : frameTimeframe === "H4"
+    ? "month"
+    : ["D1", "W1"].includes(frameTimeframe)
+    ? "year"
+    : frameTimeframe === "MN"
+    ? "visible_range"
+    : null;
+  const visibleWeekFrame = framePeriod &&
     visibleWeekHigh !== null && visibleWeekLow !== null && visibleWeekHigh > visibleWeekLow
     ? {
         swingHigh: visibleWeekHigh,
         swingLow: visibleWeekLow,
-        source: "uploaded_chart_visible_current_week_high_low",
+        source: `uploaded_chart_visible_current_${framePeriod}_high_low`,
         structureLedOverrideApplied: false,
       }
     : null;
@@ -19613,10 +19636,10 @@ function rankChartNativeFallbackAreas({
         matchType: "deterministic_chart_native_hidden_fibonacci",
       }],
       fibonacciSource: visibleWeekFrame
-        ? "uploaded_chart_visible_current_week_high_low"
+        ? visibleWeekFrame.source
         : "uploaded_chart_completed_impulse",
       fibOriginModel: visibleWeekFrame
-        ? "uploaded_chart_visible_current_week_high_low"
+        ? visibleWeekFrame.source
         : "chart_native_completed_directional_impulse",
       selectorQualityReason: safeUserText(candidate?.structuralEvidence || ""),
       computedFibPrice,
@@ -19650,7 +19673,7 @@ function rankChartNativeFallbackAreas({
       fallbackSource: "uploaded_chart_only",
       fibonacci: {
         source: visibleWeekFrame
-          ? "uploaded_chart_visible_current_week_high_low"
+          ? visibleWeekFrame.source
           : "uploaded_chart_completed_impulse",
         swingLow: swingLow ?? null,
         swingHigh: swingHigh ?? null,

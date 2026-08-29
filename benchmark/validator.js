@@ -446,11 +446,13 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     );
     const formatFibLabel = (match = {}) => {
       const ratio = finiteNumber(match?.ratio);
+      const price = finiteNumber(match?.price);
+      const suffix = price === null ? "" : ` @ ${String(price)}`;
       if (ratio !== null) {
-        return ratio === 0.5 ? "50%" : `${(ratio * 100).toFixed(1)}%`;
+        return `${ratio === 0.5 ? "50%" : `${(ratio * 100).toFixed(1)}%`}${suffix}`;
       }
       const label = String(match?.label || "").trim();
-      return label ? label.replace(/\.0(?=%)/, "") : null;
+      return label ? `${label.replace(/\.0(?=%)/, "")}${suffix}` : null;
     };
     const fibEvidenceForEntry = (entry) => {
       const entryPrice = finiteNumber(entry.center);
