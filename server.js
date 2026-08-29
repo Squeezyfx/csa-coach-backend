@@ -19313,6 +19313,9 @@ function normalizeChartNativeEntryFallback(value = {}) {
       conversionBreakConfirmed: candidate?.conversionBreakConfirmed === true,
       structuralEvidence: safeUserText(candidate?.structuralEvidence || ""),
       independentEntryEvidence: candidate?.independentEntryEvidence === true,
+      currentWeekExtreme: ["high", "low"].includes(String(candidate?.currentWeekExtreme || "").toLowerCase())
+        ? String(candidate.currentWeekExtreme).toLowerCase()
+        : null,
       fibRatio: Number(candidate?.fibRatio),
       fibPrice: nullablePositiveNumber(candidate?.fibPrice),
     }))
@@ -19361,7 +19364,7 @@ async function extractFocusedChartNativeEntryFallback({
 Apply this order exactly:
 1. Identify exact printed support/resistance prices and genuine converted levels.
 2. Identify an independent supply/demand base only when its own displacement is visibly clear.
-3. For an H1 chart, read the high and low of the CURRENT VISIBLE CALENDAR WEEK (Monday through the final visible candle). This is the only Fibonacci frame. Do not use an older or smaller impulse.
+3. For an H1 chart, first locate Monday on the visible axis, then read the highest wick and lowest wick from Monday through the final visible candle. This is the only Fibonacci frame. Do not use an older or smaller impulse.
 4. Inventory every visible structural candidate before filtering, up to twelve. Do not discard a line merely because three nearer candidates have already been found. The deterministic selector will test each candidate against the same completed impulse and return no more than three final entries.
 
 Hard rules:
@@ -19374,6 +19377,7 @@ Hard rules:
 - A later entry must not be a nearby fragment, duplicate, or unverified reference. Entry 2 and Entry 3 are alternatives only if the earlier area fails; they are never instructions to add to a losing trade.
 - The screenshot is authoritative when its visible extremes or printed levels conflict with external OHLC data.
 - Return currentWeekHigh and currentWeekLow from the visible current week. If either is unreadable, set it to null rather than borrowing an older swing.
+- Mark the candidate that is the current week high with currentWeekExtreme="high" and the candidate that is the current week low with currentWeekExtreme="low" only if that marked level is genuinely a visible structural level. This is an audit aid; do not invent a candidate solely to mark an extreme.
 - Do not mention Fibonacci in customer-facing wording; this result is internal.
 - Set usable=false rather than guessing any unreadable direction, price, impulse, or role.
 - Return JSON only, with no markdown.
@@ -19397,6 +19401,7 @@ Return exactly:
       "conversionBreakConfirmed": false,
       "structuralEvidence": "specific visible line lifecycle or displacement-base evidence",
       "independentEntryEvidence": false,
+      "currentWeekExtreme": "high | low | null",
       "fibRatio": null,
       "fibPrice": null
     }
@@ -19431,6 +19436,32 @@ Return exactly:
   }
 }
 
+async function extractVisibleCurrentWeekFrame({ imageBase64, mimeType, timeframe = "" } = {}) {
+  if (String(timeframe || "").toUpperCase() !== "H1") return null;
+  try {
+    const response = await runVisionModel({
+      systemPrompt: `Read only this H1 chart and return JSON only. Find the final visible candle, then find Monday at the start of that same calendar week on the time axis. From Monday through the final candle only, read the highest wick and lowest wick. Do not include any candle from the preceding week and do not use a smaller impulse. If either endpoint is unclear, return null for both. Return exactly: {"currentWeekHigh":null,"currentWeekLow":null,"confidence":"high | medium | low"}.`,
+      userText: "This is an internal weekly Fibonacci anchor check. Return only JSON.",
+      imageBase64,
+      mimeType,
+      maxTokens: 300,
+      openaiModel: "gpt-4.1-mini",
+      claudeModel: CLAUDE_MODEL,
+      temperature: 0,
+      imageDetail: "high",
+    });
+    const parsed = extractJsonObject(response.text || "") || {};
+    const high = nullablePositiveNumber(parsed.currentWeekHigh);
+    const low = nullablePositiveNumber(parsed.currentWeekLow);
+    return high !== null && low !== null && high > low
+      ? { currentWeekHigh: high, currentWeekLow: low, confidence: String(parsed.confidence || "") }
+      : null;
+  } catch (error) {
+    console.error("Visible current-week frame extraction error:", error);
+    return null;
+  }
+}
+
 function rankChartNativeFallbackAreas({
   visualReview = {},
   direction = "range",
@@ -19454,8 +19485,18 @@ function rankChartNativeFallbackAreas({
     ? new Set(["support", "demand", "converted support"])
     : new Set(["resistance", "supply", "converted resistance"]);
   const approvedTolerance = getApprovedPriceTolerance(symbol);
-  const visibleWeekHigh = asPositiveNumber(fallback?.currentWeekHigh);
-  const visibleWeekLow = asPositiveNumber(fallback?.currentWeekLow);
+  const candidateWeekHigh = maxFinite(
+    (fallback?.candidates || [])
+      .filter((candidate) => candidate?.currentWeekExtreme === "high")
+      .map((candidate) => candidate?.zoneHigh ?? candidate?.price)
+  );
+  const candidateWeekLow = minFinite(
+    (fallback?.candidates || [])
+      .filter((candidate) => candidate?.currentWeekExtreme === "low")
+      .map((candidate) => candidate?.zoneLow ?? candidate?.price)
+  );
+  const visibleWeekHigh = asPositiveNumber(candidateWeekHigh) || asPositiveNumber(fallback?.currentWeekHigh);
+  const visibleWeekLow = asPositiveNumber(candidateWeekLow) || asPositiveNumber(fallback?.currentWeekLow);
   const visibleWeekFrame = String(timeframe || visualReview?.timeframe || "").toUpperCase() === "H1" &&
     visibleWeekHigh !== null && visibleWeekLow !== null && visibleWeekHigh > visibleWeekLow
     ? {
@@ -19635,7 +19676,24 @@ function rankRawEntryAreas({
   timeframe = "H1",
 }) {
   if (!["bullish", "bearish"].includes(direction)) {
-    return { areas: [], validation: { passed: true, errors: [] } };
+    return {
+      areas: [],
+      referenceAreas: [],
+      validation: { passed: true, errors: [] },
+      regressionDiagnostics: {
+        selectorVersion: CSA_SELECTOR_VERSION,
+        direction,
+        fallbackSource: "no_entry_direction_unresolved",
+        fibonacci: {
+          source: "not_available",
+          swingLow: null,
+          swingHigh: null,
+        },
+        structuralCandidates: [],
+        fibCandidates: [],
+        selectedEntries: [],
+      },
+    };
   }
 
   // The isolated benchmark service treats the uploaded screenshot as the
@@ -19650,6 +19708,30 @@ function rankRawEntryAreas({
       timeframe,
     });
     if (chartNativeFallback) return chartNativeFallback;
+
+    // In H1 benchmark mode, an unreadable screenshot weekly range produces
+    // no entry.  Falling through to external or local-impulse Fib data would
+    // silently violate the screenshot-authoritative weekly rule.
+    if (String(timeframe || "").toUpperCase() === "H1") {
+      return {
+        areas: [],
+        referenceAreas: [],
+        validation: { passed: true, errors: [] },
+        regressionDiagnostics: {
+          selectorVersion: CSA_SELECTOR_VERSION,
+          direction,
+          fallbackSource: "no_entry_missing_visible_current_week_frame",
+          fibonacci: {
+            source: "uploaded_chart_visible_current_week_high_low_required",
+            swingLow: null,
+            swingHigh: null,
+          },
+          structuralCandidates: visualReview?.chartNativeEntryFallback?.candidates || [],
+          fibCandidates: [],
+          selectedEntries: [],
+        },
+      };
+    }
   }
 
   const candles =
@@ -28143,24 +28225,52 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       visualReview?.chartNativeEntryFallback?.usable !== true
     )) {
       const focusedFallbackStartedAt = csaNowMs();
-      const focusedChartNativeFallback =
-        await extractFocusedChartNativeEntryFallback({
+      const [
+        focusedChartNativeFallback,
+        visibleCurrentWeekFrame,
+      ] = await Promise.all([
+        extractFocusedChartNativeEntryFallback({
           imageBase64,
           mimeType,
           chartDetection,
           submittedInstrument:
             normalizedSymbol || submittedInstrument,
           timeframe,
-        });
+        }),
+        // The focused entry reader may correctly identify levels while still
+        // choosing a smaller local swing. Keep the weekly anchor independent
+        // and make it authoritative for H1 benchmark selection.
+        BENCHMARK_DRY_RUN_ENABLED
+          ? extractVisibleCurrentWeekFrame({
+              imageBase64,
+              mimeType,
+              timeframe,
+            })
+          : Promise.resolve(null),
+      ]);
+
+      const mergedChartNativeFallback = BENCHMARK_DRY_RUN_ENABLED
+        ? mergeFocusedSupplyDemandInventory(
+            visualReview?.chartNativeEntryFallback || {},
+            focusedChartNativeFallback
+          )
+        : focusedChartNativeFallback;
 
       visualReview = {
         ...visualReview,
-        chartNativeEntryFallback: BENCHMARK_DRY_RUN_ENABLED
-          ? mergeFocusedSupplyDemandInventory(
-              visualReview?.chartNativeEntryFallback || {},
-              focusedChartNativeFallback
-            )
-          : focusedChartNativeFallback,
+        chartNativeEntryFallback: {
+          ...mergedChartNativeFallback,
+          currentWeekHigh:
+            visibleCurrentWeekFrame?.currentWeekHigh ??
+            mergedChartNativeFallback?.currentWeekHigh ??
+            null,
+          currentWeekLow:
+            visibleCurrentWeekFrame?.currentWeekLow ??
+            mergedChartNativeFallback?.currentWeekLow ??
+            null,
+          currentWeekFrameConfidence:
+            visibleCurrentWeekFrame?.confidence || null,
+        },
       };
 
       csaTimingLog(
@@ -28173,6 +28283,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           )
             ? focusedChartNativeFallback.candidates.length
             : 0,
+          visibleCurrentWeekFrame,
         }
       );
     }
