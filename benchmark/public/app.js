@@ -223,7 +223,13 @@ function renderRun(run) {
           ? (ratio === 0.5 ? "50%" : `${(ratio * 100).toFixed(1)}%`)
           : String(match?.label || "").replace(/\.0(?=%)/, "");
         const price = Number(match?.price);
-        return label && Number.isFinite(price) ? `${label} @ ${price}` : label;
+        const precision = String(entry?.levelText || entry?.center || "").split(".")[1]?.length;
+        const formattedPrice = Number.isFinite(price)
+          ? Number.isInteger(precision) && precision > 0 && precision <= 6
+            ? price.toFixed(precision)
+            : String(price)
+          : "";
+        return label && formattedPrice ? `${label} @ ${formattedPrice}` : label;
       }).filter(Boolean))];
       return entry && labels.length ? ` · Fib: ${labels.join(" / ")}` : "";
     };

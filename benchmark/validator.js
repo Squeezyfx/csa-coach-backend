@@ -371,7 +371,14 @@ export function applyBatchFeedbackDiversityChecks(results = []) {
       const shared = [...new Set(eligible[left].templates)].filter((template) =>
         eligible[right].templates.includes(template)
       );
-      if (shared.length < 2) continue;
+      // A couple of generic readiness reminders are acceptable when most of
+      // the feedback is chart-specific. Reject a run only when repeated
+      // boilerplate makes up at least half of the shorter chart's feedback.
+      const shorterFeedbackCount = Math.min(
+        eligible[left].templates.length,
+        eligible[right].templates.length
+      );
+      if (shared.length < 2 || shared.length / shorterFeedbackCount < 0.5) continue;
       collisions.set(eligible[left].index, Math.max(collisions.get(eligible[left].index) || 0, shared.length));
       collisions.set(eligible[right].index, Math.max(collisions.get(eligible[right].index) || 0, shared.length));
     }

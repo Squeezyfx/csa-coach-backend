@@ -300,6 +300,30 @@ test("batch mode still rejects identical generic feedback statements", () => {
   ));
 });
 
+test("batch mode permits a small overlap of generic readiness reminders", () => {
+  const makeAnalysis = (instrument, price) => ({
+    ...structuredClone(baseResult),
+    finalFeedback: {
+      strengths: [
+        `On ${instrument}, the support around ${price} is structurally valid.`,
+        `For ${instrument}, only the level around ${price} qualified for the plan.`,
+      ],
+      weaknesses: [
+        `On ${instrument}, no completed trade is visible at ${price}.`,
+        "Price has not yet retested the planned support area, so there is no confirmed entry yet.",
+        "No fresh bullish trigger is visible at the planned support area yet.",
+      ],
+    },
+  });
+  const checked = applyBatchFeedbackDiversityChecks([
+    { status: "passed", mode: "automatic", analysis: makeAnalysis("USDCHF H1", "0.80290"), validation: validateBenchmarkResult(baseResult, {}) },
+    { status: "passed", mode: "automatic", analysis: makeAnalysis("USDIndex H1", "98.9600"), validation: validateBenchmarkResult(baseResult, {}) },
+  ]);
+
+  assert.equal(checked[0].status, "passed");
+  assert.equal(checked[1].status, "passed");
+});
+
 test("accepts a demand entry anchor anywhere inside the configured demand zone", () => {
   const demand = structuredClone(baseResult);
   demand.analysis = "Bullish. Entry 1 is support around 1.40520. If it fails, watch the demand area around 1.40395.";
