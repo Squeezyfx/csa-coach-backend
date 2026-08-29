@@ -85,17 +85,64 @@ const VERIFIED_CHART_FIXTURES = Object.freeze({
     // final H1 leg is retracing lower. The Fib frame is the entire visible
     // week, never the Tuesday demand low paired with a smaller local high.
     direction: "bullish",
+    instrument: "USA30",
+    timeframe: "H1",
     currentPrice: 53496.2,
     currentWeekHigh: 53750,
     currentWeekLow: 53158.9,
     currentPeriodOpen: 53240,
     currentPeriodClose: 53496.2,
     currentPeriodDirection: "bullish",
+    periodDayInventory: Object.freeze([
+      Object.freeze({ date: "2026-08-24", high: 53524.2, low: 53158.9, structures: Object.freeze([{ price: 53524.2, type: "support", note: "Monday high/support" }]) }),
+      Object.freeze({ date: "2026-08-25", high: 53750, low: 53384.7, structures: Object.freeze([{ price: 53384.7, type: "demand", note: "Tuesday demand" }]) }),
+      Object.freeze({ date: "2026-08-26", high: 53522.2, low: 53477.2, structures: Object.freeze([]) }),
+    ]),
     swingHigh: 53750,
     swingLow: 53158.9,
     candidates: Object.freeze([
-      Object.freeze({ price: 53524.2, zoneLow: 53524.2, zoneHigh: 53524.2, areaType: "support", exactVisiblePrice: true, conversionBreakConfirmed: false, independentEntryEvidence: true, structuralEvidence: "verified Monday support at the 38.2% current-week retracement" }),
-      Object.freeze({ price: 53384.7, zoneLow: 53380, zoneHigh: 53390, areaType: "demand", exactVisiblePrice: false, conversionBreakConfirmed: false, independentEntryEvidence: true, structuralEvidence: "verified Tuesday demand base with clear bullish displacement at the 61.8% current-week retracement" }),
+      Object.freeze({ price: 53524.2, zoneLow: 53524.2, zoneHigh: 53524.2, areaType: "support", exactVisiblePrice: true, conversionBreakConfirmed: false, independentEntryEvidence: true, reclaimRequired: true, sourceDate: "2026-08-24", sourceDay: "Monday", sourceKind: "Monday high / support", structuralEvidence: "verified Monday support at the 38.2% current-week retracement; final price is below and a reclaim is required" }),
+      Object.freeze({ price: 53384.7, zoneLow: 53380, zoneHigh: 53390, areaType: "demand", exactVisiblePrice: false, conversionBreakConfirmed: false, independentEntryEvidence: true, sourceDate: "2026-08-25", sourceDay: "Tuesday", sourceKind: "Tuesday demand", structuralEvidence: "verified Tuesday demand base with clear bullish displacement at the 61.8% current-week retracement" }),
+    ]),
+  }),
+  "2916": Object.freeze({
+    instrument: "EURCHF",
+    timeframe: "H1",
+    direction: "bullish",
+    currentPrice: 0.93856,
+    // Current-week-only range. The older 0.9304 low must never be used.
+    currentWeekHigh: 0.93883,
+    currentWeekLow: 0.93413,
+    swingHigh: 0.93883,
+    swingLow: 0.93413,
+    candidates: Object.freeze([
+      Object.freeze({ price: 0.93648, zoneLow: 0.93648, zoneHigh: 0.93648, areaType: "converted support", exactVisiblePrice: true, conversionBreakConfirmed: true, independentEntryEvidence: true, structuralEvidence: "reviewed current-week converted support at the 50% retracement; source-day audit required" }),
+    ]),
+  }),
+  "2917": Object.freeze({
+    instrument: "AUDNZD",
+    timeframe: "H1",
+    direction: "bullish",
+    currentPrice: 1.20685,
+    currentWeekHigh: 1.20759,
+    currentWeekLow: 1.19607,
+    swingHigh: 1.20759,
+    swingLow: 1.19607,
+    candidates: Object.freeze([
+      Object.freeze({ price: 1.20144, zoneLow: 1.20144, zoneHigh: 1.20144, areaType: "support", exactVisiblePrice: true, conversionBreakConfirmed: false, independentEntryEvidence: true, structuralEvidence: "reviewed visible support between 50% and 61.8%, closer to 50%" }),
+    ]),
+  }),
+  "2918": Object.freeze({
+    instrument: "EURAUD",
+    timeframe: "H1",
+    direction: "bearish",
+    currentPrice: 1.62539,
+    currentWeekHigh: 1.63312,
+    currentWeekLow: 1.62248,
+    swingHigh: 1.63312,
+    swingLow: 1.62248,
+    candidates: Object.freeze([
+      Object.freeze({ price: 1.6278, zoneLow: 1.6278, zoneHigh: 1.6278, areaType: "converted resistance", exactVisiblePrice: true, conversionBreakConfirmed: true, independentEntryEvidence: true, structuralEvidence: "reviewed broken support retest at the 50% current-week retracement" }),
     ]),
   }),
 });

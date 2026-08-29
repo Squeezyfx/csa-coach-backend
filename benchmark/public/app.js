@@ -247,15 +247,20 @@ function renderRun(run) {
         : [["38.2%", high - range * 0.382], ["50%", high - range * 0.5], ["61.8%", high - range * 0.618]];
       const precision = Math.min(6, Math.max(2, String(entries[0]?.levelText || high).split(".")[1]?.length || 2));
       const candidates = Array.isArray(selectorDiagnostics.structuralCandidates) ? selectorDiagnostics.structuralCandidates : [];
+      const dayInventory = Array.isArray(selectorDiagnostics.periodDayInventory) ? selectorDiagnostics.periodDayInventory : [];
       const selectedPrices = new Set(diagnosticEntries.map((candidate) => Number(candidate?.authoritativeCenter ?? candidate?.resolvedEntryPrice)).filter(Number.isFinite));
       const candidateRows = candidates.length
         ? candidates.map((candidate) => {
             const price = Number(candidate?.price ?? candidate?.authoritativeCenter);
             const state = selectedPrices.has(price) ? "selected" : "not selected";
-            return `<li>${escapeHtml(String(candidate?.areaType || "structure"))} ${Number.isFinite(price) ? price.toFixed(precision) : "unreadable"} — ${state}</li>`;
+            const source = [candidate?.sourceDay, candidate?.sourceKind, candidate?.sourceDate].filter(Boolean).join(" · ");
+            return `<li>${escapeHtml(source || "source not read")} — ${escapeHtml(String(candidate?.areaType || "structure"))} ${Number.isFinite(price) ? price.toFixed(precision) : "unreadable"} — ${state}</li>`;
           }).join("")
         : "<li>No structural candidates were returned.</li>";
-      return `<details class="fib-audit"><summary>Fibonacci selection audit</summary><p>Frame: ${escapeHtml(String(fibonacci.source || "current period"))}; high ${high.toFixed(precision)}, low ${low.toFixed(precision)}.</p><p>Fib: ${levels.map(([label, price]) => `${label} ${price.toFixed(precision)}`).join(" · ")}</p><ul>${candidateRows}</ul></details>`;
+      const dayRows = dayInventory.length
+        ? dayInventory.map((day) => `<li>${escapeHtml(day.date)} — high ${Number(day.high).toFixed(precision)}, low ${Number(day.low).toFixed(precision)}${day.structures?.length ? `; ${escapeHtml(day.structures.map((item) => `${item.type} ${Number(item.price).toFixed(precision)}`).join(" · "))}` : "; no structural level returned"}</li>`).join("")
+        : "<li>Day-by-day inventory was not returned; this chart needs review.</li>";
+      return `<details class="fib-audit"><summary>Fibonacci selection audit</summary><p>Frame: ${escapeHtml(String(fibonacci.source || "current period"))}; high ${high.toFixed(precision)}, low ${low.toFixed(precision)}.</p><p>Fib: ${levels.map(([label, price]) => `${label} ${price.toFixed(precision)}`).join(" · ")}</p><p><b>Current-period day inventory</b></p><ul>${dayRows}</ul><p><b>Every structural candidate</b></p><ul>${candidateRows}</ul></details>`;
     })();
     const findingsHtml = item.mode === "automatic" && item.status !== "error"
       ? `<div class="auto-findings"><span><b>Chart:</b> ${escapeHtml(detectedInstrument)} ${escapeHtml(detectedTimeframe)}</span><span><b>Bias:</b> ${escapeHtml(direction)}</span><span><b>Entry 1:</b> ${escapeHtml(entries[0] ? `${entries[0].center} (${entries[0].areaType || "area"})${fibLabelForEntry(entries[0], 0)}` : "No valid entry")}</span><span><b>Entry 2:</b> ${escapeHtml(entries[1] ? `${entries[1].center} (${entries[1].areaType || "area"})${fibLabelForEntry(entries[1], 1)}` : "Not selected")}</span><span><b>Entry 3:</b> ${escapeHtml(entries[2] ? `${entries[2].center} (${entries[2].areaType || "area"})${fibLabelForEntry(entries[2], 2)}` : "Not selected")}</span></div>`
