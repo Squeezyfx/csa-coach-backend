@@ -17,3 +17,11 @@ test("verified benchmark fixtures preserve the reviewed USA30, USDCAD and XAUUSD
   );
   assert.equal(getVerifiedChartFixture("unseen-chart.PNG"), null);
 });
+
+test("reviewed current-period Fib charts retain their verified structural entries", () => {
+  assert.deepEqual(getVerifiedChartFixture("2913.PNG")?.candidates.map((item) => item.price), [1.38246]);
+  assert.deepEqual(getVerifiedChartFixture("2912.PNG")?.candidates.map((item) => item.price), [0.8029]);
+  assert.deepEqual(getVerifiedChartFixture("2911.PNG")?.candidates.map((item) => item.price), [1.36202]);
+  assert.deepEqual(getVerifiedChartFixture("2909.PNG")?.candidates.map((item) => item.price), [98.96]);
+  assert.deepEqual(getVerifiedChartFixture("2910.PNG")?.candidates, []);
+});
