@@ -19706,7 +19706,39 @@ function rankChartNativeFallbackAreas({
       role: index === 0 ? "primary" : index === 1 ? "secondary" : "tertiary",
     }));
 
-  if (!selected.length) return null;
+  // A readable current-period frame with no qualifying structure is a valid
+  // no-entry conclusion, not a missing-frame error. Preserve the complete
+  // inventory so the benchmark can show which Monday/Tuesday/etc. levels
+  // were checked and why none was selected.
+  if (!selected.length) {
+    return {
+      areas: [],
+      referenceAreas: [],
+      validation: {
+        passed: true,
+        errors: [],
+        selectorVersion: CSA_SELECTOR_VERSION,
+        fallbackSource: "uploaded_chart_only_no_qualified_entry",
+      },
+      regressionDiagnostics: {
+        selectorVersion: CSA_SELECTOR_VERSION,
+        direction,
+        fallbackSource: "uploaded_chart_only_no_qualified_entry",
+        fibonacci: {
+          source: visibleWeekFrame
+            ? visibleWeekFrame.source
+            : "uploaded_chart_completed_impulse",
+          swingLow: swingLow ?? null,
+          swingHigh: swingHigh ?? null,
+          visibleWeekFrame: visibleWeekFrame || null,
+        },
+        structuralCandidates: fallback.candidates || [],
+        periodDayInventory: fallback.periodDayInventory || [],
+        fibonacciQualifiedCandidates: candidates,
+        selectedEntries: [],
+      },
+    };
+  }
 
   return {
     areas: selected,
@@ -28504,11 +28536,19 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       ? getVerifiedChartFixture(req.file?.originalname)
       : null;
     if (verifiedChartFixture) {
+      const extractedDayInventory = visualReview?.chartNativeEntryFallback?.periodDayInventory || [];
       visualReview = {
         ...visualReview,
         chartNativeEntryFallback: {
           usable: true,
           ...verifiedChartFixture,
+          // Keep the live day-by-day inventory unless the reviewed baseline
+          // itself contains a confirmed inventory. Fixtures must not hide the
+          // audit we need to detect skipped Monday/Tuesday/etc. structure.
+          periodDayInventory:
+            Array.isArray(verifiedChartFixture?.periodDayInventory) && verifiedChartFixture.periodDayInventory.length
+              ? verifiedChartFixture.periodDayInventory
+              : extractedDayInventory,
           source: "verified_benchmark_chart_fixture",
           fixtureApplied: true,
         },

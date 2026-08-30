@@ -437,8 +437,11 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       ? selectorDiagnostics.selectedEntries
       : [];
     const fallbackSelectorCompleted =
-      selectorDiagnostics?.fallbackSource === "uploaded_chart_only" &&
-      fallbackSelectedEntries.length > 0;
+      String(selectorDiagnostics?.fallbackSource || "").startsWith("uploaded_chart_only") &&
+      (
+        Array.isArray(selectorDiagnostics?.structuralCandidates) ||
+        fallbackSelectedEntries.length > 0
+      );
     const fallbackSwingHigh = finiteNumber(selectorDiagnostics?.fibonacci?.swingHigh);
     const fallbackSwingLow = finiteNumber(selectorDiagnostics?.fibonacci?.swingLow);
     const fallbackRange = fallbackSwingHigh !== null && fallbackSwingLow !== null && fallbackSwingHigh > fallbackSwingLow

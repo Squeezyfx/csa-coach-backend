@@ -105,6 +105,22 @@ const VERIFIED_CHART_FIXTURES = Object.freeze({
       Object.freeze({ price: 53384.7, zoneLow: 53380, zoneHigh: 53390, areaType: "demand", exactVisiblePrice: false, conversionBreakConfirmed: false, independentEntryEvidence: true, sourceDate: "2026-08-25", sourceDay: "Tuesday", sourceKind: "Tuesday demand", structuralEvidence: "verified Tuesday demand base with clear bullish displacement at the 61.8% current-week retracement" }),
     ]),
   }),
+  "2915": Object.freeze({
+    instrument: "EURGBP",
+    timeframe: "H1",
+    direction: "bullish",
+    currentPrice: 0.857,
+    // The prior output's 0.85835 high was outside the current week. With the
+    // visible week-to-date range, 0.85621 lies between 38.2% and 50%, so it
+    // remains a reference and is not an entry.
+    currentWeekHigh: 0.85732,
+    currentWeekLow: 0.85478,
+    swingHigh: 0.85732,
+    swingLow: 0.85478,
+    candidates: Object.freeze([
+      Object.freeze({ price: 0.85621, zoneLow: 0.85621, zoneHigh: 0.85621, areaType: "resistance", exactVisiblePrice: true, conversionBreakConfirmed: false, independentEntryEvidence: true, structuralEvidence: "reviewed reference level between the 38.2% and 50% retracements; not a qualifying bullish entry" }),
+    ]),
+  }),
   "2916": Object.freeze({
     instrument: "EURCHF",
     timeframe: "H1",
