@@ -467,6 +467,10 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       const ratio = finiteNumber(match?.ratio);
       const price = finiteNumber(match?.price);
       const suffix = price === null ? "" : ` @ ${String(price)}`;
+      const explicitLabel = String(match?.label || "").trim();
+      if (explicitLabel.toLowerCase().startsWith("between ")) {
+        return `${explicitLabel}${suffix}`;
+      }
       if (ratio !== null) {
         return `${ratio === 0.5 ? "50%" : `${(ratio * 100).toFixed(1)}%`}${suffix}`;
       }

@@ -221,9 +221,12 @@ function renderRun(run) {
       const matches = Array.isArray(diagnostic?.fibonacciMatches) ? diagnostic.fibonacciMatches : [];
       const labels = [...new Set(matches.map((match) => {
         const ratio = Number(match?.ratio);
-        const label = Number.isFinite(ratio)
+        const explicitLabel = String(match?.label || "").trim();
+        const label = explicitLabel.toLowerCase().startsWith("between ")
+          ? explicitLabel
+          : Number.isFinite(ratio)
           ? (ratio === 0.5 ? "50%" : `${(ratio * 100).toFixed(1)}%`)
-          : String(match?.label || "").replace(/\.0(?=%)/, "");
+          : explicitLabel.replace(/\.0(?=%)/, "");
         const price = Number(match?.price);
         const precision = String(entry?.levelText || entry?.center || "").split(".")[1]?.length;
         const formattedPrice = Number.isFinite(price)

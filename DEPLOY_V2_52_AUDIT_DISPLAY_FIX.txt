@@ -1,0 +1,26 @@
+CSA Benchmark v2.52 — Fibonacci-band audit display update
+
+This package fixes automatic chart-header recognition for AUDNZD and EURAUD,
+expands support for forex crosses, crypto, metals, energy, indices and common
+equity CFDs, and prevents a transient vision false-negative from rejecting an
+already-confirmed benchmark fixture before its deterministic review can run.
+
+Important deployment requirement
+--------------------------------
+The Render service running "npm run start:benchmark" is only the benchmark
+runner. It forwards chart images to the separate service in
+BENCHMARK_TARGET_URL. Both services must use this package:
+
+1. Benchmark runner: start command "npm run start:benchmark"
+2. Staging analysis target: start command "npm start"
+
+The target service must have:
+  BENCHMARK_DRY_RUN_ENABLED=true
+  BENCHMARK_INTERNAL_KEY=<the matching runner key>
+
+After both services deploy, run the same five chart files again. The returned
+analysisFacts.buildId must be:
+  CSA-v4.38.0-fib-band-audit-display
+
+If the report shows an earlier build ID, the benchmark is still pointing at an
+older target deployment and no chart-analysis change has reached it yet.
