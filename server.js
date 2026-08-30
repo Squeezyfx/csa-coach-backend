@@ -27951,10 +27951,13 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // protection.
     if (benchmarkAutoDetectContext) {
       let detectedInstrument = String(
-        chartDetection?.detectedInstrument || ""
+        chartDetection?.detectedInstrument ||
+        (isDetectedInstrumentUsable(submittedInstrument) ? submittedInstrument : "")
       ).trim();
       let detectedTimeframe = comparableTimeframe(
-        chartDetection?.detectedTimeframe || ""
+        chartDetection?.detectedTimeframe ||
+        comparableTimeframe(timeframe || "") ||
+        ""
       );
 
       if (!isDetectedInstrumentUsable(detectedInstrument) || !detectedTimeframe) {

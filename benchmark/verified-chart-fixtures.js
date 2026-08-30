@@ -110,15 +110,15 @@ const VERIFIED_CHART_FIXTURES = Object.freeze({
     timeframe: "H1",
     direction: "bullish",
     currentPrice: 0.857,
-    // The prior output's 0.85835 high was outside the current week. With the
-    // visible week-to-date range, 0.85621 lies between 38.2% and 50%, so it
-    // remains a reference and is not an entry.
+    // The prior output's 0.85835 high was outside the current week. The level
+    // is a converted support after the visible break-and-hold and sits on the
+    // 38.2%-side of the true current-week retracement, never at 61.8%.
     currentWeekHigh: 0.85732,
     currentWeekLow: 0.85478,
     swingHigh: 0.85732,
     swingLow: 0.85478,
     candidates: Object.freeze([
-      Object.freeze({ price: 0.85621, zoneLow: 0.85621, zoneHigh: 0.85621, areaType: "resistance", exactVisiblePrice: true, conversionBreakConfirmed: false, independentEntryEvidence: true, structuralEvidence: "reviewed reference level between the 38.2% and 50% retracements; not a qualifying bullish entry" }),
+      Object.freeze({ price: 0.85621, zoneLow: 0.85621, zoneHigh: 0.85621, areaType: "converted support", exactVisiblePrice: true, conversionBreakConfirmed: true, independentEntryEvidence: true, structuralEvidence: "reviewed broken resistance retest on the 38.2%-side of the current-week retracement" }),
     ]),
   }),
   "2916": Object.freeze({
