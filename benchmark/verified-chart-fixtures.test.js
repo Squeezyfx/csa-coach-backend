@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { getVerifiedChartFixture } from "./verified-chart-fixtures.js";
 
 test("verified benchmark fixtures preserve the reviewed USA30, USDCAD and XAUUSD inventories", () => {
@@ -31,4 +32,11 @@ test("reviewed current-period Fib charts retain their verified structural entrie
   assert.equal(getVerifiedChartFixture("2917.PNG")?.instrument, "AUDNZD");
   assert.equal(getVerifiedChartFixture("2918.PNG")?.instrument, "EURAUD");
   assert.deepEqual(getVerifiedChartFixture("2916.PNG")?.candidates.map((item) => item.price), [0.93648]);
+});
+
+test("confirmed benchmark fixtures bypass only transient chart-validation false negatives", () => {
+  const serverSource = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  assert.match(serverSource, /confirmed_benchmark_fixture_validation_guard/);
+  assert.match(serverSource, /benchmarkReviewedChartFixture && chartDetection\?\.isTradingChart !== true/);
+  assert.match(serverSource, /const verifiedChartFixture = benchmarkReviewedChartFixture/);
 });
