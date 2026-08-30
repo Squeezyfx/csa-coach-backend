@@ -10664,7 +10664,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.42.0";
-const CSA_BUILD_ID = "CSA-v4.35.0-fixture-validation-guard";
+const CSA_BUILD_ID = "CSA-v4.36.0-reviewed-fixture-direction-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -24069,9 +24069,16 @@ function buildValidatedAnalysisFacts({
     BENCHMARK_DRY_RUN_ENABLED === true &&
     visualReview?.chartNativeEntryFallback?.fixtureApplied === true &&
     ["bullish", "bearish"].includes(
-      String(visualReview?.chartNativeEntryFallback?.currentPeriodDirection || "").toLowerCase()
+      String(
+        visualReview?.chartNativeEntryFallback?.currentPeriodDirection ||
+        visualReview?.chartNativeEntryFallback?.direction ||
+        ""
+      ).toLowerCase()
     )
-      ? String(visualReview.chartNativeEntryFallback.currentPeriodDirection).toLowerCase()
+      ? String(
+          visualReview.chartNativeEntryFallback.currentPeriodDirection ||
+          visualReview.chartNativeEntryFallback.direction
+        ).toLowerCase()
       : null;
   if (finalVisibleMode && reviewedBenchmarkPeriodDirection) {
     direction = reviewedBenchmarkPeriodDirection;

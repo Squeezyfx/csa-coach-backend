@@ -40,3 +40,8 @@ test("confirmed benchmark fixtures bypass only transient chart-validation false 
   assert.match(serverSource, /benchmarkReviewedChartFixture && chartDetection\?\.isTradingChart !== true/);
   assert.match(serverSource, /const verifiedChartFixture = benchmarkReviewedChartFixture/);
 });
+
+test("reviewed fixtures may provide directional bias without a separate period-direction field", () => {
+  const serverSource = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  assert.match(serverSource, /currentPeriodDirection \|\|\s*visualReview\?\.chartNativeEntryFallback\?\.direction/);
+});
