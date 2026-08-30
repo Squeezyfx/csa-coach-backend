@@ -8,18 +8,84 @@ const SR_TYPES = new Set([
 const SD_TYPES = new Set(["supply", "demand"]);
 
 const INSTRUMENT_ALIASES = new Map([
-  ["GOLD", "XAUUSD"], ["BTCUSDT", "BTCUSD"],
+  ["GOLD", "XAUUSD"], ["SILVER", "XAGUSD"], ["BTCUSDT", "BTCUSD"],
   ["US30", "USA30"], ["DJ30", "USA30"], ["DOW30", "USA30"], ["DJI", "USA30"],
   ["NAS100", "USTEC"], ["NASDAQ100", "USTEC"], ["US100", "USTEC"],
   ["SPX500", "US500"], ["SP500", "US500"],
+  ["DE40", "GER40"], ["DAX40", "GER40"], ["GER30", "GER40"],
+  ["FTSE100", "UK100"], ["NIKKEI225", "JP225"], ["HK50", "HK50"],
+  ["AUS200", "AUS200"], ["FRA40", "FRA40"], ["ESP35", "ESP35"],
+  ["EU50", "EU50"], ["STOXX50", "EU50"], ["CHINA50", "CHINA50"],
+  ["WTI", "USOIL"], ["USOIL", "USOIL"], ["BRENT", "UKOIL"], ["UKOIL", "UKOIL"],
   ["USDINDEX", "USDINDEX"], ["DXY", "USDINDEX"],
 ]);
 
 const SUPPORTED_INSTRUMENTS = new Set([
+  // Major, minor and cross FX pairs.  Further valid ISO currency pairs are
+  // accepted by isRecognizedForexPair below, so a new cross never needs a
+  // code release just to pass chart-header verification.
   "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
-  "EURCHF", "EURGBP", "GBPJPY", "XAUUSD", "BTCUSD", "ETHUSD", "USA30",
-  "US500", "USTEC", "GER40", "UK100", "JP225", "USDINDEX",
+  "EURGBP", "EURJPY", "EURCHF", "EURCAD", "EURAUD", "EURNZD",
+  "GBPJPY", "GBPCHF", "GBPCAD", "GBPAUD", "GBPNZD",
+  "AUDJPY", "AUDCHF", "AUDCAD", "AUDNZD", "NZDJPY", "NZDCHF", "NZDCAD",
+  "CADJPY", "CADCHF", "CHFJPY", "USDMXN", "USDZAR", "USDTRY", "USDSEK",
+  "USDNOK", "USDSGD", "USDHKD", "EURSEK", "EURNOK", "EURPLN", "EURTRY",
+  "GBPSEK", "GBPNOK", "AUDSGD", "NZDSGD", "SGDJPY",
+  // Metals, energy and frequently charted crypto assets.
+  "XAUUSD", "XAGUSD", "XPTUSD", "XPDUSD", "USOIL", "UKOIL", "NATGAS",
+  "BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "ADAUSD", "DOGEUSD", "LTCUSD",
+  "BCHUSD", "BNBUSD", "AVAXUSD", "LINKUSD", "DOTUSD", "MATICUSD", "TRXUSD",
+  // Indices.
+  "USA30", "US500", "USTEC", "GER40", "UK100", "JP225", "HK50", "AUS200",
+  "FRA40", "ESP35", "EU50", "CHINA50", "USDINDEX",
+  // Widely used equity CFD symbols.  This list is deliberately explicit; a
+  // random OCR word is never treated as a ticker.
+  "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "NFLX", "AMD",
+  "INTC", "COIN", "MSTR", "JPM", "BAC", "XOM", "CVX", "WMT", "DIS", "NKE",
+  "BABA", "TENCENT", "TM", "V", "MA",
 ]);
+
+const ISO_FX_CURRENCIES = new Set([
+  "USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "SGD", "HKD",
+  "SEK", "NOK", "DKK", "PLN", "CZK", "HUF", "TRY", "ZAR", "MXN", "BRL",
+  "CNH", "CNY", "INR", "KRW", "THB", "ILS", "AED", "SAR",
+]);
+
+const CRYPTO_BASES = new Set([
+  "BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "LTC", "BCH", "BNB", "AVAX",
+  "LINK", "DOT", "MATIC", "POL", "TRX", "UNI", "ATOM", "NEAR", "APT", "SUI",
+  "FIL", "ETC", "XLM", "SHIB", "PEPE",
+]);
+
+function isRecognizedForexPair(code = "") {
+  return /^[A-Z]{6}$/.test(code) &&
+    ISO_FX_CURRENCIES.has(code.slice(0, 3)) &&
+    ISO_FX_CURRENCIES.has(code.slice(3, 6)) &&
+    code.slice(0, 3) !== code.slice(3, 6);
+}
+
+function normalizeRecognizedCryptoPair(code = "") {
+  for (const quote of ["USDT", "USDC", "USD", "EUR", "BTC", "ETH"]) {
+    if (!code.endsWith(quote)) continue;
+    const base = code.slice(0, -quote.length);
+    if (CRYPTO_BASES.has(base)) return `${base}${quote === "USDT" || quote === "USDC" ? "USD" : quote}`;
+  }
+  return "";
+}
+
+function findRecognizedInstrumentInside(raw = "") {
+  for (let index = 0; index <= raw.length - 6; index += 1) {
+    const candidate = raw.slice(index, index + 6);
+    if (isRecognizedForexPair(candidate)) return candidate;
+  }
+  for (const base of CRYPTO_BASES) {
+    for (const quote of ["USDT", "USDC", "USD", "EUR", "BTC", "ETH"]) {
+      const candidate = `${base}${quote}`;
+      if (raw.includes(candidate)) return normalizeRecognizedCryptoPair(candidate);
+    }
+  }
+  return "";
+}
 
 export function canonicalInstrumentCode(input = "") {
   const raw = String(input).toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -27,11 +93,15 @@ export function canonicalInstrumentCode(input = "") {
   for (const [alias, canonical] of INSTRUMENT_ALIASES) {
     if (raw === alias || raw.includes(alias)) return canonical;
   }
-  return [...SUPPORTED_INSTRUMENTS].find((symbol) => raw.includes(symbol)) || raw;
+  return [...SUPPORTED_INSTRUMENTS].find((symbol) => raw.includes(symbol)) ||
+    findRecognizedInstrumentInside(raw) || raw;
 }
 
 export function isSupportedInstrumentCode(input = "") {
-  return SUPPORTED_INSTRUMENTS.has(canonicalInstrumentCode(input));
+  const canonical = canonicalInstrumentCode(input);
+  return SUPPORTED_INSTRUMENTS.has(canonical) ||
+    isRecognizedForexPair(canonical) ||
+    Boolean(normalizeRecognizedCryptoPair(canonical));
 }
 
 export function getMarketDataSymbolCandidates(input = "") {

@@ -452,6 +452,10 @@ test("normalizes common index aliases while preserving broker index tickers", ()
   assert.equal(canonicalInstrumentCode("DJ30.cash"), "USA30");
   assert.equal(canonicalInstrumentCode("NAS100"), "USTEC");
   assert.equal(canonicalInstrumentCode("XAUUSD,H1"), "XAUUSD");
+  assert.equal(canonicalInstrumentCode("AUDNZD,H1"), "AUDNZD");
+  assert.equal(canonicalInstrumentCode("EURAUD,H1"), "EURAUD");
+  assert.equal(canonicalInstrumentCode("SOLUSDT,H1"), "SOLUSD");
+  assert.equal(canonicalInstrumentCode("DE40.cash,H1"), "GER40");
 });
 
 test("maps broker index names to provider candidates without changing CSA identity", () => {
@@ -477,6 +481,11 @@ test("accepts supported five-character index symbols without accepting junk", ()
   assert.equal(isSupportedInstrumentCode("USA30"), true);
   assert.equal(isSupportedInstrumentCode("US30.cash"), true);
   assert.equal(isSupportedInstrumentCode("XAUUSD"), true);
+  assert.equal(isSupportedInstrumentCode("AUDNZD"), true);
+  assert.equal(isSupportedInstrumentCode("EURAUD"), true);
+  assert.equal(isSupportedInstrumentCode("SEKJPY"), true);
+  assert.equal(isSupportedInstrumentCode("SOLUSDT"), true);
+  assert.equal(isSupportedInstrumentCode("DE40.cash"), true);
   assert.equal(isSupportedInstrumentCode("ABCDE"), false);
   assert.equal(isSupportedInstrumentCode("not detected"), false);
 });
