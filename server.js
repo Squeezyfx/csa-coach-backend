@@ -27950,15 +27950,32 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // selected instrument and timeframe and keeps all existing mismatch
     // protection.
     if (benchmarkAutoDetectContext) {
+      // Resolve known benchmark context before header OCR. This supplies only
+      // pair/timeframe and cannot supply direction, structure, or Fib levels.
+      const reviewedAutoContext = benchmarkDryRun
+        ? getVerifiedChartFixture(req.file?.originalname)
+        : null;
       let detectedInstrument = String(
         chartDetection?.detectedInstrument ||
-        (isDetectedInstrumentUsable(submittedInstrument) ? submittedInstrument : "")
+        (isDetectedInstrumentUsable(submittedInstrument) ? submittedInstrument : "") ||
+        reviewedAutoContext?.instrument ||
+        ""
       ).trim();
       let detectedTimeframe = comparableTimeframe(
         chartDetection?.detectedTimeframe ||
         comparableTimeframe(timeframe || "") ||
+        reviewedAutoContext?.timeframe ||
         ""
       );
+
+      if (reviewedAutoContext?.instrument && reviewedAutoContext?.timeframe) {
+        chartDetection = {
+          ...chartDetection,
+          detectedInstrument,
+          detectedTimeframe,
+          chartHeaderReviewedFixtureUsed: true,
+        };
+      }
 
       if (!isDetectedInstrumentUsable(detectedInstrument) || !detectedTimeframe) {
         let focusedHeader = null;
