@@ -490,6 +490,20 @@ test("accepts supported five-character index symbols without accepting junk", ()
   assert.equal(isSupportedInstrumentCode("not detected"), false);
 });
 
+test("does not reject a printed 38.2 level because of floating-point rounding", () => {
+  const match = findNearestAllowedFibonacciMatch({
+    direction: "bullish",
+    swingHigh: 53750,
+    swingLow: 53158.9,
+    price: 53524.2,
+    zoneLow: 53524.2,
+    zoneHigh: 53524.2,
+    tolerance: 5.911,
+  });
+  assert.equal(match?.ratio, 0.382);
+  assert.ok(Math.abs(match?.fibPrice - 53524.2) < 0.001);
+});
+
 test("parses compact chart headers including USA30,H1", () => {
   assert.deepEqual(parseChartHeaderText("USA30,H1 52841.20 52888.20"), {
     instrument: "USA30",

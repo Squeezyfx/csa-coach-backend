@@ -10664,7 +10664,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.42.0";
-const CSA_BUILD_ID = "CSA-v4.36.0-reviewed-fixture-direction-fix";
+const CSA_BUILD_ID = "CSA-v4.37.0-fib-band-and-rounding-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -19680,10 +19680,13 @@ function rankChartNativeFallbackAreas({
       fibonacciScore: 1,
       requiredFibConfluence: true,
       fibonacciMatches: [{
-        label: fibRatio === 0.382 ? "38.2" : fibRatio === 0.5 ? "50.0" : "61.8",
+        label: safeUserText(candidate?.fibConfluenceLabel || "") ||
+          (fibRatio === 0.382 ? "38.2" : fibRatio === 0.5 ? "50.0" : "61.8"),
         ratio: fibRatio,
         price: computedFibPrice,
-        matchType: "deterministic_chart_native_hidden_fibonacci",
+        matchType: safeUserText(candidate?.fibConfluenceLabel || "")
+          ? "deterministic_chart_native_fibonacci_band"
+          : "deterministic_chart_native_hidden_fibonacci",
       }],
       fibonacciSource: visibleWeekFrame
         ? visibleWeekFrame.source

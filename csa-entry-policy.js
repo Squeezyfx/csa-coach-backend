@@ -752,14 +752,21 @@ export function findNearestAllowedFibonacciMatch({
   const firstRetracementPrice = direction === "bearish"
     ? low + impulseRange * 0.382
     : high - impulseRange * 0.382;
+  // Preserve a price printed to the chart's available precision. For example,
+  // 53524.20 and a calculated 53524.1998 are the same visible 38.2% level;
+  // an IEEE floating-point remainder must not make it look shallow.
+  const boundaryRoundingEpsilon = Math.max(
+    Math.abs(firstRetracementPrice) * 1e-8,
+    1e-10
+  );
 
   // A proximity allowance may absorb broker/zone-boundary variation, but it
   // must never pull an entirely shallow candidate across the 38.2 threshold.
   // Bearish candidates below 38.2 and bullish candidates above 38.2 remain
   // structural references rather than entries.
   if (
-    (direction === "bearish" && upperBoundary < firstRetracementPrice) ||
-    (direction === "bullish" && lowerBoundary > firstRetracementPrice)
+    (direction === "bearish" && upperBoundary < firstRetracementPrice - boundaryRoundingEpsilon) ||
+    (direction === "bullish" && lowerBoundary > firstRetracementPrice + boundaryRoundingEpsilon)
   ) {
     return null;
   }

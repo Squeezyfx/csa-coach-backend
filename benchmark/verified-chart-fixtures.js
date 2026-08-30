@@ -118,7 +118,7 @@ const VERIFIED_CHART_FIXTURES = Object.freeze({
     swingHigh: 0.85732,
     swingLow: 0.85478,
     candidates: Object.freeze([
-      Object.freeze({ price: 0.85621, zoneLow: 0.85621, zoneHigh: 0.85621, areaType: "converted support", exactVisiblePrice: true, conversionBreakConfirmed: true, independentEntryEvidence: true, structuralEvidence: "reviewed broken resistance retest on the 38.2%-side of the current-week retracement" }),
+      Object.freeze({ price: 0.85621, zoneLow: 0.85621, zoneHigh: 0.85621, areaType: "converted support", exactVisiblePrice: true, conversionBreakConfirmed: true, independentEntryEvidence: true, fibConfluenceLabel: "between 38.2% and 50%", structuralEvidence: "reviewed broken resistance retest between the 38.2% and 50% current-week retracements" }),
     ]),
   }),
   "2916": Object.freeze({
@@ -145,7 +145,7 @@ const VERIFIED_CHART_FIXTURES = Object.freeze({
     swingHigh: 1.20759,
     swingLow: 1.19607,
     candidates: Object.freeze([
-      Object.freeze({ price: 1.20144, zoneLow: 1.20144, zoneHigh: 1.20144, areaType: "support", exactVisiblePrice: true, conversionBreakConfirmed: false, independentEntryEvidence: true, structuralEvidence: "reviewed visible support between 50% and 61.8%, closer to 50%" }),
+      Object.freeze({ price: 1.20144, zoneLow: 1.20144, zoneHigh: 1.20144, areaType: "support", exactVisiblePrice: true, conversionBreakConfirmed: false, independentEntryEvidence: true, fibConfluenceLabel: "between 50% and 61.8% (closer to 50%)", structuralEvidence: "reviewed visible support between 50% and 61.8%, closer to 50%" }),
     ]),
   }),
   "2918": Object.freeze({
