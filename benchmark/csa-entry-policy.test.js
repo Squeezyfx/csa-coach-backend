@@ -456,6 +456,9 @@ test("normalizes common index aliases while preserving broker index tickers", ()
   assert.equal(canonicalInstrumentCode("EURAUD,H1"), "EURAUD");
   assert.equal(canonicalInstrumentCode("SOLUSDT,H1"), "SOLUSD");
   assert.equal(canonicalInstrumentCode("DE40.cash,H1"), "GER40");
+  assert.equal(canonicalInstrumentCode("Cocoa,Daily"), "COCOA");
+  assert.equal(canonicalInstrumentCode("Platinum,Daily"), "XPTUSD");
+  assert.equal(canonicalInstrumentCode("USA500.S,Daily"), "US500");
 });
 
 test("maps broker index names to provider candidates without changing CSA identity", () => {
@@ -486,6 +489,9 @@ test("accepts supported five-character index symbols without accepting junk", ()
   assert.equal(isSupportedInstrumentCode("SEKJPY"), true);
   assert.equal(isSupportedInstrumentCode("SOLUSDT"), true);
   assert.equal(isSupportedInstrumentCode("DE40.cash"), true);
+  assert.equal(isSupportedInstrumentCode("Cocoa"), true);
+  assert.equal(isSupportedInstrumentCode("Platinum"), true);
+  assert.equal(isSupportedInstrumentCode("USA500.S"), true);
   assert.equal(isSupportedInstrumentCode("ABCDE"), false);
   assert.equal(isSupportedInstrumentCode("not detected"), false);
 });

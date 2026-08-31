@@ -10664,7 +10664,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.42.0";
-const CSA_BUILD_ID = "CSA-v4.38.0-fib-band-audit-display";
+const CSA_BUILD_ID = "CSA-v4.39.0-current-period-frame-enforcement";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -19345,6 +19345,9 @@ function normalizeChartNativeEntryFallback(value = {}) {
     currentPeriodDirection: ["bullish", "bearish", "range"].includes(String(value?.currentPeriodDirection || "").toLowerCase())
       ? String(value.currentPeriodDirection).toLowerCase()
       : null,
+    // A fixed calendar-period Fib is usable only when the reader could see
+    // the beginning of that actual period (Monday, month start, or Jan 1).
+    currentPeriodFrameVerified: value?.currentPeriodFrameVerified === true,
     periodDayInventory: (Array.isArray(value?.periodDayInventory) ? value.periodDayInventory : [])
       .slice(0, 7)
       .map((day) => ({
@@ -19488,7 +19491,7 @@ async function extractVisibleCurrentWeekFrame({ imageBase64, mimeType, timeframe
   if (!period) return null;
   try {
     const response = await runVisionModel({
-      systemPrompt: `Read only this ${tf} chart and return JSON only. Find the final visible candle, then use the ${period} as the single Fibonacci anchor. Read the first candle open, highest wick, lowest wick and final candle close only inside that period. Do not include an earlier period and do not use a smaller local impulse. The period direction is based on first open versus final close, not the final intraday pullback. If either high or low is unclear, return null for both. Return exactly: {"currentWeekHigh":null,"currentWeekLow":null,"currentPeriodOpen":null,"currentPeriodClose":null,"currentPeriodDirection":"bullish | bearish | range","confidence":"high | medium | low"}.`,
+      systemPrompt: `Read only this ${tf} chart and return JSON only. Find the final visible candle, then use the ${period} as the single Fibonacci anchor. Read the first candle open, highest wick, lowest wick and final candle close only inside that period. Do not include an earlier period and do not use a smaller local impulse. The period direction is based on first open versus final close, not the final intraday pullback.\n\nBefore reading prices, verify that the screenshot visibly includes the start of this exact period. For H1 it must include Monday; for H4 it must include day 1 of the current calendar month; for D1/W1 it must include January 1 of the current calendar year. A chart starting later (for example June on a D1 chart) is NOT sufficient for a year-to-date frame. If that start is not visible, set currentPeriodFrameVerified=false and return null for every price. Never estimate missing history.\n\nIf either high or low is unclear, return null for both. Return exactly: {"currentPeriodFrameVerified":false,"currentWeekHigh":null,"currentWeekLow":null,"currentPeriodOpen":null,"currentPeriodClose":null,"currentPeriodDirection":"bullish | bearish | range","confidence":"high | medium | low"}.`,
       userText: "This is an internal current-period Fibonacci anchor check. Return only JSON.",
       imageBase64,
       mimeType,
@@ -19506,8 +19509,8 @@ async function extractVisibleCurrentWeekFrame({ imageBase64, mimeType, timeframe
     const periodDirection = ["bullish", "bearish", "range"].includes(String(parsed.currentPeriodDirection || "").toLowerCase())
       ? String(parsed.currentPeriodDirection).toLowerCase()
       : null;
-    return high !== null && low !== null && high > low
-      ? { currentWeekHigh: high, currentWeekLow: low, periodOpen, periodClose, periodDirection, confidence: String(parsed.confidence || "") }
+    return parsed.currentPeriodFrameVerified === true && high !== null && low !== null && high > low
+      ? { currentPeriodFrameVerified: true, currentWeekHigh: high, currentWeekLow: low, periodOpen, periodClose, periodDirection, confidence: String(parsed.confidence || "") }
       : null;
   } catch (error) {
     console.error("Visible current-period frame extraction error:", error);
@@ -19538,21 +19541,16 @@ function rankChartNativeFallbackAreas({
     ? new Set(["support", "demand", "converted support"])
     : new Set(["resistance", "supply", "converted resistance"]);
   const approvedTolerance = getApprovedPriceTolerance(symbol);
-  const candidateWeekHigh = maxFinite(
-    (fallback?.candidates || [])
-      .filter((candidate) => candidate?.currentWeekExtreme === "high")
-      .map((candidate) => candidate?.zoneHigh ?? candidate?.price)
-  );
-  const candidateWeekLow = minFinite(
-    (fallback?.candidates || [])
-      .filter((candidate) => candidate?.currentWeekExtreme === "low")
-      .map((candidate) => candidate?.zoneLow ?? candidate?.price)
-  );
   // The dedicated current-period reader is authoritative. Candidate extremes
-  // are only an audit fallback, never a way to replace its high/low with a
-  // smaller local range that happens to qualify a line.
-  const visibleWeekHigh = asPositiveNumber(fallback?.currentWeekHigh) || asPositiveNumber(candidateWeekHigh);
-  const visibleWeekLow = asPositiveNumber(fallback?.currentWeekLow) || asPositiveNumber(candidateWeekLow);
+  // may never replace its high/low with a smaller local range that happens to
+  // qualify a line. Reviewed fixtures are deliberately treated as verified.
+  const currentPeriodFrameVerified = fallback?.fixtureApplied === true || fallback?.currentPeriodFrameVerified === true;
+  const visibleWeekHigh = currentPeriodFrameVerified
+    ? asPositiveNumber(fallback?.currentWeekHigh)
+    : null;
+  const visibleWeekLow = currentPeriodFrameVerified
+    ? asPositiveNumber(fallback?.currentWeekLow)
+    : null;
   const frameTimeframe = String(timeframe || visualReview?.timeframe || "").toUpperCase();
   const framePeriod = ["M1", "M5", "M15", "M30", "H1"].includes(frameTimeframe)
     ? "week"
@@ -19569,17 +19567,21 @@ function rankChartNativeFallbackAreas({
         swingHigh: visibleWeekHigh,
         swingLow: visibleWeekLow,
         source: `uploaded_chart_visible_current_${framePeriod}_high_low`,
+        currentPeriodFrameVerified,
+        fixtureApplied: fallback?.fixtureApplied === true,
         structureLedOverrideApplied: false,
       }
     : null;
-  const structureLedFrame = visibleWeekFrame || selectStructureLedChartNativeImpulseFrame({
+  // A fixed period must never fall back to an older/local impulse. Missing
+  // week/month/year coverage is intentionally sent to Needs review.
+  const structureLedFrame = visibleWeekFrame || (!framePeriod && selectStructureLedChartNativeImpulseFrame({
     direction,
     swingHigh: fallback?.swingHigh,
     swingLow: fallback?.swingLow,
     candidates: fallback?.candidates || [],
     currentPrice: resolvedCurrentPrice,
     approvedTolerance,
-  });
+  }));
   const swingHigh = asPositiveNumber(structureLedFrame?.swingHigh);
   const swingLow = asPositiveNumber(structureLedFrame?.swingLow);
   const impulseRange = swingHigh !== null && swingLow !== null && swingHigh > swingLow
@@ -19818,10 +19820,17 @@ function rankRawEntryAreas({
     });
     if (chartNativeFallback) return chartNativeFallback;
 
-    // In H1 benchmark mode, an unreadable screenshot weekly range produces
-    // no entry.  Falling through to external or local-impulse Fib data would
-    // silently violate the screenshot-authoritative weekly rule.
-    if (String(timeframe || "").toUpperCase() === "H1") {
+    // An unreadable fixed current period produces no entry. Falling through
+    // to external or local-impulse Fib data would silently violate the
+    // screenshot-authoritative current week/month/year rule.
+    const requiredFramePeriod = ["M1", "M5", "M15", "M30", "H1"].includes(String(timeframe || "").toUpperCase())
+      ? "week"
+      : String(timeframe || "").toUpperCase() === "H4"
+      ? "month"
+      : ["D1", "W1"].includes(String(timeframe || "").toUpperCase())
+      ? "year"
+      : null;
+    if (requiredFramePeriod) {
       return {
         areas: [],
         referenceAreas: [],
@@ -19829,9 +19838,9 @@ function rankRawEntryAreas({
         regressionDiagnostics: {
           selectorVersion: CSA_SELECTOR_VERSION,
           direction,
-          fallbackSource: "no_entry_missing_visible_current_week_frame",
+          fallbackSource: `no_entry_missing_visible_current_${requiredFramePeriod}_frame`,
           fibonacci: {
-            source: "uploaded_chart_visible_current_week_high_low_required",
+            source: `uploaded_chart_visible_current_${requiredFramePeriod}_high_low_required`,
             swingLow: null,
             swingHigh: null,
           },
@@ -28489,6 +28498,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             visibleCurrentWeekFrame?.periodDirection ??
             mergedChartNativeFallback?.currentPeriodDirection ??
             null,
+          currentPeriodFrameVerified:
+            visibleCurrentWeekFrame?.currentPeriodFrameVerified === true,
           currentWeekFrameConfidence:
             visibleCurrentWeekFrame?.confidence || null,
         },

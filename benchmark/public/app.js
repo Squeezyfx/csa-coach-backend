@@ -265,8 +265,15 @@ function renderRun(run) {
         : "<li>Day-by-day inventory was not returned; this chart needs review.</li>";
       return `<details class="fib-audit"><summary>Fibonacci selection audit</summary><p>Frame: ${escapeHtml(String(fibonacci.source || "current period"))}; high ${high.toFixed(precision)}, low ${low.toFixed(precision)}.</p><p>Fib: ${levels.map(([label, price]) => `${label} ${price.toFixed(precision)}`).join(" · ")}</p><p><b>Current-period day inventory</b></p><ul>${dayRows}</ul><p><b>Every structural candidate</b></p><ul>${candidateRows}</ul></details>`;
     })();
+    const fibFrameSummary = (() => {
+      const high = Number(fibonacci.swingHigh);
+      const low = Number(fibonacci.swingLow);
+      if (!Number.isFinite(high) || !Number.isFinite(low) || !(high > low)) return "Current-period high/low not verified";
+      const precision = Math.min(6, Math.max(2, String(entries[0]?.levelText || high).split(".")[1]?.length || 2));
+      return `${String(fibonacci.source || "current period").replace(/^uploaded_chart_visible_current_/, "current ").replace(/_high_low$/, "")} · high ${high.toFixed(precision)} · low ${low.toFixed(precision)}`;
+    })();
     const findingsHtml = item.mode === "automatic" && item.status !== "error"
-      ? `<div class="auto-findings"><span><b>Chart:</b> ${escapeHtml(detectedInstrument)} ${escapeHtml(detectedTimeframe)}</span><span><b>Bias:</b> ${escapeHtml(direction)}</span><span><b>Entry 1:</b> ${escapeHtml(entries[0] ? `${entries[0].center} (${entries[0].areaType || "area"})${fibLabelForEntry(entries[0], 0)}` : "No valid entry")}</span><span><b>Entry 2:</b> ${escapeHtml(entries[1] ? `${entries[1].center} (${entries[1].areaType || "area"})${fibLabelForEntry(entries[1], 1)}` : "Not selected")}</span><span><b>Entry 3:</b> ${escapeHtml(entries[2] ? `${entries[2].center} (${entries[2].areaType || "area"})${fibLabelForEntry(entries[2], 2)}` : "Not selected")}</span></div>`
+      ? `<div class="auto-findings"><span><b>Chart:</b> ${escapeHtml(detectedInstrument)} ${escapeHtml(detectedTimeframe)}</span><span><b>Bias:</b> ${escapeHtml(direction)}</span><span><b>Fib frame:</b> ${escapeHtml(fibFrameSummary)}</span><span><b>Entry 1:</b> ${escapeHtml(entries[0] ? `${entries[0].center} (${entries[0].areaType || "area"})${fibLabelForEntry(entries[0], 0)}` : "No valid entry")}</span><span><b>Entry 2:</b> ${escapeHtml(entries[1] ? `${entries[1].center} (${entries[1].areaType || "area"})${fibLabelForEntry(entries[1], 1)}` : "Not selected")}</span><span><b>Entry 3:</b> ${escapeHtml(entries[2] ? `${entries[2].center} (${entries[2].areaType || "area"})${fibLabelForEntry(entries[2], 2)}` : "Not selected")}</span></div>`
       : "";
     const checkHtml = checks.map((check) => `<li class="${check.passed ? "pass" : "fail"}">${check.passed ? "✓" : "✕"} ${escapeHtml(check.label)}${!check.passed || check.id === "automatic_fibonacci_confluence" ? ` — ${escapeHtml(check.details)}` : ""}</li>`).join("");
     const statusLabel = item.mode === "automatic"

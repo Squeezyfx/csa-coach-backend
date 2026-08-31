@@ -1,0 +1,35 @@
+CSA Benchmark v2.53 — current-period enforcement and header coverage
+
+This update fixes three header aliases:
+- Cocoa,Daily → COCOA
+- Platinum,Daily → XPTUSD
+- USA500.S,Daily → US500
+
+It also enforces the CSA Fibonacci period rule for new benchmark charts:
+- H1 and lower: visible current calendar week
+- H4: visible current calendar month
+- D1/W1: visible current calendar year
+
+The reader must be able to see the beginning of the required period. A D1
+chart that starts in June, for example, is now labelled Needs review instead
+of silently using a partial year or an older local swing. The benchmark card
+now shows its exact selected Fib frame high and low beside the bias.
+
+Deploy the same ZIP to BOTH Render services:
+1. Benchmark runner: start command "npm run start:benchmark"
+2. Analysis target: start command "npm start"
+
+Keep BENCHMARK_TARGET_URL on the runner as:
+  http://csa-coach-claude-test:10000
+
+On the target, keep:
+  BENCHMARK_DRY_RUN_ENABLED=true
+  BENCHMARK_INTERNAL_KEY=<matching runner key>
+
+After both deployments are live, the target logs must report:
+  CSA-v4.39.0-current-period-frame-enforcement
+
+Then re-run only the 11 naked charts. Do not save any of them as verified
+benchmarks yet. The expected immediate behaviour is that Cocoa, Platinum and
+USA500 are recognised, D1 screenshots without January coverage require review,
+and H4 results display the exact current-month high/low they used.

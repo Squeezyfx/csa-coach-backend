@@ -11,13 +11,13 @@ const INSTRUMENT_ALIASES = new Map([
   ["GOLD", "XAUUSD"], ["SILVER", "XAGUSD"], ["BTCUSDT", "BTCUSD"],
   ["US30", "USA30"], ["DJ30", "USA30"], ["DOW30", "USA30"], ["DJI", "USA30"],
   ["NAS100", "USTEC"], ["NASDAQ100", "USTEC"], ["US100", "USTEC"],
-  ["SPX500", "US500"], ["SP500", "US500"],
+  ["SPX500", "US500"], ["SP500", "US500"], ["USA500", "US500"],
   ["DE40", "GER40"], ["DAX40", "GER40"], ["GER30", "GER40"],
   ["FTSE100", "UK100"], ["NIKKEI225", "JP225"], ["HK50", "HK50"],
   ["AUS200", "AUS200"], ["FRA40", "FRA40"], ["ESP35", "ESP35"],
   ["EU50", "EU50"], ["STOXX50", "EU50"], ["CHINA50", "CHINA50"],
   ["WTI", "USOIL"], ["USOIL", "USOIL"], ["BRENT", "UKOIL"], ["UKOIL", "UKOIL"],
-  ["USDINDEX", "USDINDEX"], ["DXY", "USDINDEX"],
+  ["USDINDEX", "USDINDEX"], ["DXY", "USDINDEX"], ["PLATINUM", "XPTUSD"], ["COCOA", "COCOA"],
 ]);
 
 const SUPPORTED_INSTRUMENTS = new Set([
@@ -32,7 +32,7 @@ const SUPPORTED_INSTRUMENTS = new Set([
   "USDNOK", "USDSGD", "USDHKD", "EURSEK", "EURNOK", "EURPLN", "EURTRY",
   "GBPSEK", "GBPNOK", "AUDSGD", "NZDSGD", "SGDJPY",
   // Metals, energy and frequently charted crypto assets.
-  "XAUUSD", "XAGUSD", "XPTUSD", "XPDUSD", "USOIL", "UKOIL", "NATGAS",
+  "XAUUSD", "XAGUSD", "XPTUSD", "XPDUSD", "USOIL", "UKOIL", "NATGAS", "COCOA",
   "BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "ADAUSD", "DOGEUSD", "LTCUSD",
   "BCHUSD", "BNBUSD", "AVAXUSD", "LINKUSD", "DOTUSD", "MATICUSD", "TRXUSD",
   // Indices.
@@ -114,6 +114,8 @@ export function getMarketDataSymbolCandidates(input = "") {
     UK100: ["FTSE", "UK100"],
     JP225: ["N225", "JP225"],
     USDINDEX: ["DXY", "USDINDEX"],
+    XPTUSD: ["XPTUSD"],
+    COCOA: ["COCOA"],
   };
 
   return candidatesByInstrument[canonical] || [canonical || String(input || "")];
