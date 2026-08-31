@@ -24064,7 +24064,35 @@ function buildValidatedAnalysisFacts({
     result: finalVisibleDirection,
   });
 
+  // CALENDAR-PERIOD FRAMEWORK AUTHORITY (P0 fix): the current week/month/year
+  // high-low framework (marketReference.directionalBias) reflects the whole
+  // period's structure. A late local bounce or pullback on the last few
+  // candles must not flip the primary directional bias against a framework
+  // that is clearly bullish or bearish. It only defers to the recent-candle
+  // engine when the framework itself is ambiguous (a "range" verdict).
+  const calendarPeriodBiasGroup = getBiasGroup(
+    marketReference?.directionalBias?.biasCode
+  );
+  const calendarPeriodDirection =
+    calendarPeriodBiasGroup === "bullish"
+      ? "bullish"
+      : calendarPeriodBiasGroup === "bearish"
+      ? "bearish"
+      : null;
+
   if (
+    finalVisibleMode &&
+    calendarPeriodDirection &&
+    ["bullish", "bearish"].includes(currentStructureRegime.direction) &&
+    currentStructureRegime.direction !== calendarPeriodDirection
+  ) {
+    direction = calendarPeriodDirection;
+    currentStructureRegime.direction = calendarPeriodDirection;
+    currentStructureRegime.source =
+      "calendar_period_framework_authoritative_direction";
+    currentStructureRegime.localRecentDirection =
+      finalVisibleDirection?.direction || null;
+  } else if (
     finalVisibleMode &&
     ["bullish", "bearish"].includes(
       currentStructureRegime.direction
