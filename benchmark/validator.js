@@ -1,6 +1,6 @@
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
-const BENCHMARK_VALIDATOR_VERSION = "1.7.0";
+const BENCHMARK_VALIDATOR_VERSION = "1.8.0";
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -404,6 +404,42 @@ function addCheck(checks, id, label, passed, details, critical = true) {
   checks.push({ id, label, passed: Boolean(passed), details: details || "", critical });
 }
 
+function expectedFrameworkInventory(timeframe = "", latestVisibleDate = "") {
+  const tf = String(timeframe || "").toUpperCase();
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(latestVisibleDate || ""))
+    ? new Date(`${latestVisibleDate}T00:00:00.000Z`)
+    : null;
+  if (!date || Number.isNaN(date.getTime())) return null;
+
+  if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) {
+    const weekday = date.getUTCDay();
+    return {
+      sourceUnit: "D1",
+      expectedCount: weekday >= 1 && weekday <= 5 ? weekday : 5,
+      label: "D1 candle inventory for the current trading week",
+    };
+  }
+
+  if (tf === "H4") {
+    const mondayWeeks = new Set();
+    for (let day = 1; day <= date.getUTCDate(); day += 1) {
+      const cursor = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), day));
+      const weekday = cursor.getUTCDay();
+      if (weekday === 0 || weekday === 6) continue;
+      const monday = new Date(cursor);
+      monday.setUTCDate(cursor.getUTCDate() - (weekday - 1));
+      mondayWeeks.add(monday.toISOString().slice(0, 10));
+    }
+    return {
+      sourceUnit: "W1",
+      expectedCount: mondayWeeks.size,
+      label: "W1 candle inventory for the current calendar month",
+    };
+  }
+
+  return null;
+}
+
 export function validateBenchmarkResult(result = {}, expectation = {}) {
   const checks = [];
   const toleranceOverride = finiteNumber(expectation.tolerance);
@@ -430,6 +466,23 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       result?.chartDetection?.detectedTimeframe || result?.detectedTimeframe || ""
     ).trim();
     const selectorDiagnostics = result?.analysisFacts?.selectorDiagnostics;
+    const frameworkInventory = Array.isArray(selectorDiagnostics?.periodInventory)
+      ? selectorDiagnostics.periodInventory
+      : Array.isArray(selectorDiagnostics?.periodDayInventory)
+      ? selectorDiagnostics.periodDayInventory
+      : [];
+    const latestVisibleDate = String(
+      result?.chartDetection?.latestVisibleDate || result?.detectedLatestVisibleDate || ""
+    );
+    const inventoryRequirement = expectedFrameworkInventory(detectedTimeframe, latestVisibleDate);
+    const inventoryPeriodsValid = frameworkInventory.every((period) => {
+      const high = finiteNumber(period?.high);
+      const low = finiteNumber(period?.low);
+      return high !== null && low !== null && high > low;
+    });
+    const frameworkInventoryComplete = !inventoryRequirement || (
+      frameworkInventory.length >= inventoryRequirement.expectedCount && inventoryPeriodsValid
+    );
     const fibCandidates = Array.isArray(selectorDiagnostics?.fibCandidates)
       ? selectorDiagnostics.fibCandidates
       : [];
@@ -564,6 +617,15 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       "Directional bias resolved",
       direction !== "unknown",
       `Resolved direction: ${direction}.`
+    );
+    addCheck(
+      checks,
+      "automatic_framework_period_inventory",
+      "Timeframe-specific D1/W1 candle highs and lows were inventoried",
+      frameworkInventoryComplete,
+      inventoryRequirement
+        ? `${inventoryRequirement.label}: expected ${inventoryRequirement.expectedCount}, returned ${frameworkInventory.length}.`
+        : "No dated H1/H4 inventory requirement could be calculated for this result."
     );
     addCheck(
       checks,

@@ -498,6 +498,63 @@ test("automatic mode does not accept a no-entry result without its required peri
   assert.equal(result.checks.find((check) => check.id === "automatic_fibonacci_period_frame")?.passed, false);
 });
 
+test("H4 automatic mode requires every visible W1 candle high and low", () => {
+  const automatic = structuredClone(baseResult);
+  automatic.chartDetection = {
+    detectedInstrument: "USDCAD",
+    detectedTimeframe: "H4",
+    latestVisibleDate: "2026-08-27",
+  };
+  automatic.analysisFacts.selectorDiagnostics = {
+    selectorVersion: "4.27.0",
+    fibonacci: { source: "uploaded_chart_visible_current_month_high_low", swingHigh: 1.40801, swingLow: 1.37308 },
+    structuralCandidates: [],
+    fibCandidates: [],
+    periodInventory: [
+      { periodLabel: "W1", sourceUnit: "W1", date: "2026-08-03", high: 1.40801, low: 1.39244 },
+      { periodLabel: "W2", sourceUnit: "W1", date: "2026-08-10", high: 1.39643, low: 1.38637 },
+      { periodLabel: "W3", sourceUnit: "W1", date: "2026-08-17", high: 1.39091, low: 1.37308 },
+    ],
+  };
+
+  const result = validateBenchmarkResult(automatic, { automaticMode: true });
+  assert.equal(
+    result.checks.find((check) => check.id === "automatic_framework_period_inventory")?.passed,
+    false
+  );
+  assert.match(
+    result.checks.find((check) => check.id === "automatic_framework_period_inventory")?.details || "",
+    /expected 4, returned 3/
+  );
+});
+
+test("H4 automatic mode accepts a complete W1-W4 high-low inventory", () => {
+  const automatic = structuredClone(baseResult);
+  automatic.chartDetection = {
+    detectedInstrument: "USDCAD",
+    detectedTimeframe: "H4",
+    latestVisibleDate: "2026-08-27",
+  };
+  automatic.analysisFacts.selectorDiagnostics = {
+    selectorVersion: "4.27.0",
+    fibonacci: { source: "uploaded_chart_visible_current_month_high_low", swingHigh: 1.40801, swingLow: 1.37308 },
+    structuralCandidates: [],
+    fibCandidates: [],
+    periodInventory: [
+      { periodLabel: "W1", sourceUnit: "W1", date: "2026-08-03", high: 1.40801, low: 1.39244 },
+      { periodLabel: "W2", sourceUnit: "W1", date: "2026-08-10", high: 1.39643, low: 1.38637 },
+      { periodLabel: "W3", sourceUnit: "W1", date: "2026-08-17", high: 1.39091, low: 1.37308 },
+      { periodLabel: "W4", sourceUnit: "W1", date: "2026-08-24", high: 1.39088, low: 1.37507 },
+    ],
+  };
+
+  const result = validateBenchmarkResult(automatic, { automaticMode: true });
+  assert.equal(
+    result.checks.find((check) => check.id === "automatic_framework_period_inventory")?.passed,
+    true
+  );
+});
+
 test("automatic mode rejects a selected entry that did not pass Fibonacci confluence", () => {
   const automatic = structuredClone(baseResult);
   automatic.chartDetection = {

@@ -93,3 +93,4 @@ export function strictFixtureFromAutomaticResult(item = {}, base = {}) {
     savedAt: new Date().toISOString(),
   };
 }
+

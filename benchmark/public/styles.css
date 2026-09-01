@@ -33,4 +33,18 @@ th,td { border-bottom:1px solid var(--line); padding:12px 10px; vertical-align:t
 .result.passed { border-left-color:var(--green); }.result.failed,.result.error { border-left-color:var(--red); }.result-top { display:flex; justify-content:space-between; gap:18px; }
 .badge { font-size:12px; font-weight:800; text-transform:uppercase; padding:4px 9px; border-radius:99px; background:#26313b; }.passed .badge { color:var(--green); }.failed .badge,.error .badge { color:var(--red); }
 .checks { margin:12px 0 0; padding-left:20px; }.checks .fail { color:#ff9999; }.checks .pass { color:#9be7c3; } details { margin-top:12px; } pre { overflow:auto; max-height:500px; background:#05080a; padding:12px; border-radius:8px; white-space:pre-wrap; }
+.structure-audit { margin:12px 0; padding:10px 12px; border:1px solid #294452; border-radius:8px; background:#091319; }
+.structure-audit summary { cursor:pointer; color:#e7f6ff; font-weight:700; }
+.structure-summary { margin:8px 0; color:#9fc5d5; }
+.structure-levels { display:grid; gap:8px; margin:10px 0 0; padding:0; list-style:none; }
+.structure-level { display:grid; grid-template-columns:minmax(70px,18%) 1fr; align-items:center; gap:10px; text-transform:capitalize; }
+.structure-line { display:block; height:3px; border-radius:3px; background:#8ba7b4; }
+.structure-level.support .structure-line,.structure-level.converted-support .structure-line,.structure-level.demand .structure-line { background:#39e58c; }
+.structure-level.resistance .structure-line,.structure-level.converted-resistance .structure-line,.structure-level.supply .structure-line { background:#ff6b6b; }
+.structure-level small { display:block; margin-top:2px; color:#7fa2b1; text-transform:none; }
+.period-audit { margin:12px 0; padding:10px 12px; border:1px solid #355467; border-radius:8px; background:#0a141b; }
+.period-audit summary { cursor:pointer; color:#e7f6ff; font-weight:700; }
+.period-inventory { min-width:0; margin-top:10px; }
+.period-inventory th,.period-inventory td { padding:7px 9px; }
+.period-inventory thead th { color:#8fb5c5; }
 @media (max-width:800px) { header,.panel-heading,.upload-panel,.mode-panel { align-items:flex-start; flex-direction:column; }.key-box { width:100%; }.mode-options { width:100%; grid-template-columns:1fr; }.result-actions { width:100%; justify-content:flex-start; }.summary-grid,.auto-findings { grid-template-columns:repeat(2,1fr); } }

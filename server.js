@@ -10664,7 +10664,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.42.0";
-const CSA_BUILD_ID = "CSA-v4.39.0-current-period-frame-enforcement";
+const CSA_BUILD_ID = "CSA-v4.40.0-timeframe-candle-inventory-enforcement";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -19306,6 +19306,11 @@ function buildExactChartFrameworkCandidates({
 
 function normalizeChartNativeEntryFallback(value = {}) {
   const direction = String(value?.direction || "").toLowerCase();
+  const rawPeriodInventory = Array.isArray(value?.periodInventory)
+    ? value.periodInventory
+    : Array.isArray(value?.periodDayInventory)
+    ? value.periodDayInventory
+    : [];
   const candidates = (Array.isArray(value?.candidates) ? value.candidates : [])
     .slice(0, 24)
     .map((candidate) => ({
@@ -19338,8 +19343,10 @@ function normalizeChartNativeEntryFallback(value = {}) {
     currentPrice: nullablePositiveNumber(value?.currentPrice),
     // H1 CSA Fibonacci is anchored to the screenshot-visible current week.
     // These are deliberately separate from the older generic impulse fields.
-    currentWeekHigh: nullablePositiveNumber(value?.currentWeekHigh),
-    currentWeekLow: nullablePositiveNumber(value?.currentWeekLow),
+    currentPeriodHigh: nullablePositiveNumber(value?.currentPeriodHigh ?? value?.currentWeekHigh),
+    currentPeriodLow: nullablePositiveNumber(value?.currentPeriodLow ?? value?.currentWeekLow),
+    currentWeekHigh: nullablePositiveNumber(value?.currentPeriodHigh ?? value?.currentWeekHigh),
+    currentWeekLow: nullablePositiveNumber(value?.currentPeriodLow ?? value?.currentWeekLow),
     currentPeriodOpen: nullablePositiveNumber(value?.currentPeriodOpen),
     currentPeriodClose: nullablePositiveNumber(value?.currentPeriodClose),
     currentPeriodDirection: ["bullish", "bearish", "range"].includes(String(value?.currentPeriodDirection || "").toLowerCase())
@@ -19348,19 +19355,38 @@ function normalizeChartNativeEntryFallback(value = {}) {
     // A fixed calendar-period Fib is usable only when the reader could see
     // the beginning of that actual period (Monday, month start, or Jan 1).
     currentPeriodFrameVerified: value?.currentPeriodFrameVerified === true,
-    periodDayInventory: (Array.isArray(value?.periodDayInventory) ? value.periodDayInventory : [])
-      .slice(0, 7)
-      .map((day) => ({
-        date: /^\d{4}-\d{2}-\d{2}$/.test(String(day?.date || "")) ? String(day.date) : null,
-        high: nullablePositiveNumber(day?.high),
-        low: nullablePositiveNumber(day?.low),
-        structures: (Array.isArray(day?.structures) ? day.structures : []).slice(0, 12).map((item) => ({
+    periodInventory: rawPeriodInventory
+      .slice(0, 12)
+      .map((period, index) => ({
+        periodLabel: safeUserText(period?.periodLabel || period?.label || `Period ${index + 1}`),
+        sourceUnit: ["D1", "W1", "MN"].includes(String(period?.sourceUnit || "").toUpperCase())
+          ? String(period.sourceUnit).toUpperCase()
+          : null,
+        date: /^\d{4}-\d{2}-\d{2}$/.test(String(period?.date || "")) ? String(period.date) : null,
+        high: nullablePositiveNumber(period?.high),
+        low: nullablePositiveNumber(period?.low),
+        structures: (Array.isArray(period?.structures) ? period.structures : []).slice(0, 12).map((item) => ({
           price: nullablePositiveNumber(item?.price),
           type: safeUserText(item?.type || ""),
           note: safeUserText(item?.note || ""),
         })).filter((item) => item.price !== null),
       }))
-      .filter((day) => day.date && day.high !== null && day.low !== null && day.high >= day.low),
+      .filter((period) => period.date && period.high !== null && period.low !== null && period.high >= period.low),
+    // Backward-compatible alias retained for reviewed H1 fixtures and older
+    // benchmark consumers. New code must use periodInventory.
+    periodDayInventory: rawPeriodInventory
+      .slice(0, 12)
+      .map((period) => ({
+        date: /^\d{4}-\d{2}-\d{2}$/.test(String(period?.date || "")) ? String(period.date) : null,
+        high: nullablePositiveNumber(period?.high),
+        low: nullablePositiveNumber(period?.low),
+        structures: (Array.isArray(period?.structures) ? period.structures : []).slice(0, 12).map((item) => ({
+          price: nullablePositiveNumber(item?.price),
+          type: safeUserText(item?.type || ""),
+          note: safeUserText(item?.note || ""),
+        })).filter((item) => item.price !== null),
+      }))
+      .filter((period) => period.date && period.high !== null && period.low !== null && period.high >= period.low),
     swingHigh: nullablePositiveNumber(value?.swingHigh),
     swingLow: nullablePositiveNumber(value?.swingLow),
     candidates,
@@ -19375,6 +19401,20 @@ async function extractFocusedChartNativeEntryFallback({
   submittedInstrument = "",
   timeframe = "",
 } = {}) {
+  const focusedTimeframe = String(timeframe || chartDetection?.timeframe || "").toUpperCase();
+  const inventoryRule = ["M1", "M5", "M15", "M30", "H1"].includes(focusedTimeframe)
+    ? `For ${focusedTimeframe}, treat each D1 candle inside the visible current trading week as one authoritative framework period. Return Monday, Tuesday, Wednesday, Thursday and Friday separately up to the final visible candle. Read each D1 candle's own high and low; do not replace them with smaller ${focusedTimeframe} swings.`
+    : focusedTimeframe === "H4"
+    ? "For H4, treat each W1 candle inside the visible current calendar month as one authoritative framework period. Return W1, W2, W3, W4 and W5 when present, up to the final visible candle. Read each W1 candle's own high and low; do not move a Friday candle into the next week or a Monday candle into the previous week."
+    : `Use the authoritative higher-timeframe candle inventory required for ${focusedTimeframe || "the detected timeframe"}.`;
+  const frameRule = ["M1", "M5", "M15", "M30", "H1"].includes(focusedTimeframe)
+    ? "For Fibonacci only, use the complete visible current calendar-week high and low from Monday through the final visible candle."
+    : focusedTimeframe === "H4"
+    ? "For Fibonacci only, use the complete visible current calendar-month high and low from day 1 through the final visible candle."
+    : "Use the complete required current-period high and low for Fibonacci.";
+  const sourceExamples = focusedTimeframe === "H4"
+    ? "W1 high, W2 low, W3 demand, W4 converted resistance"
+    : "Monday high, Tuesday low, Tuesday demand, Wednesday converted support";
   const context = {
     instrument:
       safeUserText(chartDetection?.instrument || submittedInstrument || ""),
@@ -19391,11 +19431,11 @@ async function extractFocusedChartNativeEntryFallback({
   const systemPrompt = `You are the focused chart-native CSA fallback reader. The external market-data provider is unavailable for this chart, so read only the uploaded screenshot and the supplied first-pass chart context.
 
 Apply this order exactly:
-1. Identify exact printed support/resistance prices and genuine converted levels.
-2. Identify an independent supply/demand base only when its own displacement is visibly clear.
-3. For an H1 chart, first locate Monday on the visible axis, then read the first Monday candle open, highest wick, lowest wick and final visible candle close from Monday through the final visible candle. This is the only Fibonacci frame. Do not use an older or smaller impulse. State the current-week direction from Monday open to final visible close; do not confuse a final H1 pullback with the weekly direction.
-4. Build periodDayInventory for every completed/current day in the current period: each day's date, high, low, and every genuine S/R or S/D structure. For an H1 chart ending Wednesday this must include Monday, Tuesday and Wednesday. Do not skip a day or stop after finding an entry.
-5. Inventory every visible structural candidate before filtering, up to twelve. Every candidate must name its sourceDate and sourceKind (for example Monday high, Tuesday low, Tuesday demand). The deterministic selector will test each candidate against the same completed impulse and return no more than three final entries.
+1. Build periodInventory before selecting any entry. ${inventoryRule}
+2. Identify support/resistance and genuine converted levels from every inventory period high and low.
+3. Identify independent supply/demand bases inside each inventory period only when their own displacement is visibly clear.
+4. ${frameRule} This Fibonacci frame qualifies structure but does not replace the individual D1/W1 inventory.
+5. Inventory every visible structural candidate before filtering, up to twelve. Every candidate must name its sourceDate and sourceKind (for example ${sourceExamples}). The deterministic selector will test each candidate against the same current-period Fibonacci frame and return no more than three final entries.
 
 Hard rules:
 - Fibonacci may qualify visible structure but may never create a price or area.
@@ -19407,8 +19447,8 @@ Hard rules:
 - Do not stop after finding the first or second level. Inspect the next previous support/resistance and the next genuine supply/demand base too.
 - A later entry must not be a nearby fragment, duplicate, or unverified reference. Entry 2 and Entry 3 are alternatives only if the earlier area fails; they are never instructions to add to a losing trade.
 - The screenshot is authoritative when its visible extremes or printed levels conflict with external OHLC data.
-- Return currentWeekHigh and currentWeekLow from the visible current week. If either is unreadable, set it to null rather than borrowing an older swing.
-- Mark the candidate that is the current week high with currentWeekExtreme="high" and the candidate that is the current week low with currentWeekExtreme="low" only if that marked level is genuinely a visible structural level. This is an audit aid; do not invent a candidate solely to mark an extreme.
+- Return currentPeriodHigh and currentPeriodLow for the required Fibonacci period. Also copy them into currentWeekHigh/currentWeekLow for backward compatibility. If either is unreadable, set both pairs to null rather than borrowing an older or smaller swing.
+- Do not skip, merge or renumber inventory periods. For H4, W1/W2/W3/W4/W5 are chronological W1 candles inside the calendar month, not arbitrary groups of H4 candles.
 - Do not mention Fibonacci in customer-facing wording; this result is internal.
 - Set usable=false rather than guessing any unreadable direction, price, impulse, or role.
 - Return JSON only, with no markdown.
@@ -19420,11 +19460,13 @@ Return exactly:
   "currentPrice": null,
   "currentWeekHigh": null,
   "currentWeekLow": null,
+  "currentPeriodHigh": null,
+  "currentPeriodLow": null,
   "currentPeriodOpen": null,
   "currentPeriodClose": null,
   "currentPeriodDirection": "bullish | bearish | range",
-  "periodDayInventory": [
-    {"date":"YYYY-MM-DD","high":null,"low":null,"structures":[{"price":null,"type":"support | resistance | demand | supply | converted support | converted resistance","note":"short structural reason"}]}
+  "periodInventory": [
+    {"periodLabel":"Monday | Tuesday | Wednesday | Thursday | Friday | W1 | W2 | W3 | W4 | W5","sourceUnit":"D1 | W1","date":"YYYY-MM-DD","high":null,"low":null,"structures":[{"price":null,"type":"support | resistance | demand | supply | converted support | converted resistance","note":"short structural reason"}]}
   ],
   "swingHigh": null,
   "swingLow": null,
@@ -19491,7 +19533,7 @@ async function extractVisibleCurrentWeekFrame({ imageBase64, mimeType, timeframe
   if (!period) return null;
   try {
     const response = await runVisionModel({
-      systemPrompt: `Read only this ${tf} chart and return JSON only. Find the final visible candle, then use the ${period} as the single Fibonacci anchor. Read the first candle open, highest wick, lowest wick and final candle close only inside that period. Do not include an earlier period and do not use a smaller local impulse. The period direction is based on first open versus final close, not the final intraday pullback.\n\nBefore reading prices, verify that the screenshot visibly includes the start of this exact period. For H1 it must include Monday; for H4 it must include day 1 of the current calendar month; for D1/W1 it must include January 1 of the current calendar year. A chart starting later (for example June on a D1 chart) is NOT sufficient for a year-to-date frame. If that start is not visible, set currentPeriodFrameVerified=false and return null for every price. Never estimate missing history.\n\nIf either high or low is unclear, return null for both. Return exactly: {"currentPeriodFrameVerified":false,"currentWeekHigh":null,"currentWeekLow":null,"currentPeriodOpen":null,"currentPeriodClose":null,"currentPeriodDirection":"bullish | bearish | range","confidence":"high | medium | low"}.`,
+      systemPrompt: `Read only this ${tf} chart and return JSON only. Find the final visible candle, then use the ${period} as the single Fibonacci anchor. Read the first candle open, highest wick, lowest wick and final candle close only inside that period. Do not include an earlier period and do not use a smaller local impulse. The period direction is based on first open versus final close, not the final intraday pullback.\n\nBefore reading prices, verify that the screenshot visibly includes the start of this exact period. For H1 it must include Monday; for H4 it must include day 1 of the current calendar month; for D1/W1 it must include January 1 of the current calendar year. A chart starting later (for example June on a D1 chart) is NOT sufficient for a year-to-date frame. If that start is not visible, set currentPeriodFrameVerified=false and return null for every price. Never estimate missing history.\n\nIf either high or low is unclear, return null for both. Return currentPeriodHigh/currentPeriodLow as the authoritative generic fields and repeat the same values in currentWeekHigh/currentWeekLow only for backward compatibility. Return exactly: {"currentPeriodFrameVerified":false,"currentPeriodHigh":null,"currentPeriodLow":null,"currentWeekHigh":null,"currentWeekLow":null,"currentPeriodOpen":null,"currentPeriodClose":null,"currentPeriodDirection":"bullish | bearish | range","confidence":"high | medium | low"}.`,
       userText: "This is an internal current-period Fibonacci anchor check. Return only JSON.",
       imageBase64,
       mimeType,
@@ -19502,15 +19544,15 @@ async function extractVisibleCurrentWeekFrame({ imageBase64, mimeType, timeframe
       imageDetail: "high",
     });
     const parsed = extractJsonObject(response.text || "") || {};
-    const high = nullablePositiveNumber(parsed.currentWeekHigh);
-    const low = nullablePositiveNumber(parsed.currentWeekLow);
+    const high = nullablePositiveNumber(parsed.currentPeriodHigh ?? parsed.currentWeekHigh);
+    const low = nullablePositiveNumber(parsed.currentPeriodLow ?? parsed.currentWeekLow);
     const periodOpen = nullablePositiveNumber(parsed.currentPeriodOpen);
     const periodClose = nullablePositiveNumber(parsed.currentPeriodClose);
     const periodDirection = ["bullish", "bearish", "range"].includes(String(parsed.currentPeriodDirection || "").toLowerCase())
       ? String(parsed.currentPeriodDirection).toLowerCase()
       : null;
     return parsed.currentPeriodFrameVerified === true && high !== null && low !== null && high > low
-      ? { currentPeriodFrameVerified: true, currentWeekHigh: high, currentWeekLow: low, periodOpen, periodClose, periodDirection, confidence: String(parsed.confidence || "") }
+      ? { currentPeriodFrameVerified: true, currentPeriodHigh: high, currentPeriodLow: low, currentWeekHigh: high, currentWeekLow: low, periodOpen, periodClose, periodDirection, confidence: String(parsed.confidence || "") }
       : null;
   } catch (error) {
     console.error("Visible current-period frame extraction error:", error);
@@ -19738,7 +19780,8 @@ function rankChartNativeFallbackAreas({
           visibleWeekFrame: visibleWeekFrame || null,
         },
         structuralCandidates: fallback.candidates || [],
-        periodDayInventory: fallback.periodDayInventory || [],
+        periodInventory: fallback.periodInventory || fallback.periodDayInventory || [],
+        periodDayInventory: fallback.periodDayInventory || fallback.periodInventory || [],
         fibonacciQualifiedCandidates: candidates,
         selectedEntries: [],
       },
@@ -19770,7 +19813,8 @@ function rankChartNativeFallbackAreas({
         visibleWeekFrame: visibleWeekFrame || null,
       },
       structuralCandidates: fallback.candidates || [],
-      periodDayInventory: fallback.periodDayInventory || [],
+      periodInventory: fallback.periodInventory || fallback.periodDayInventory || [],
+      periodDayInventory: fallback.periodDayInventory || fallback.periodInventory || [],
       fibonacciQualifiedCandidates: candidates,
       selectedEntries: selected,
     },
@@ -24064,80 +24108,7 @@ function buildValidatedAnalysisFacts({
     result: finalVisibleDirection,
   });
 
-  // CALENDAR-PERIOD FRAMEWORK AUTHORITY (P0 fix): the current week/month/year
-  // high-low framework (marketReference.directionalBias) reflects the whole
-  // period's structure. A late local bounce or pullback on the last few
-  // candles must not flip the primary directional bias against a framework
-  // that is clearly bullish or bearish. It only defers to the recent-candle
-  // engine when the framework itself is ambiguous (a "range" verdict).
-  const calendarPeriodBiasGroup = getBiasGroup(
-    marketReference?.directionalBias?.biasCode
-  );
-  const calendarPeriodDirection =
-    calendarPeriodBiasGroup === "bullish"
-      ? "bullish"
-      : calendarPeriodBiasGroup === "bearish"
-      ? "bearish"
-      : null;
-
   if (
-    finalVisibleMode &&
-    calendarPeriodDirection &&
-    ["bullish", "bearish"].includes(currentStructureRegime.direction) &&
-    currentStructureRegime.direction !== calendarPeriodDirection
-  ) {
-    direction = calendarPeriodDirection;
-    currentStructureRegime.direction = calendarPeriodDirection;
-    currentStructureRegime.source =
-      "calendar_period_framework_authoritative_direction";
-    currentStructureRegime.localRecentDirection =
-      finalVisibleDirection?.direction || null;
-
-    // effectiveBreakoutState/effectiveTransitionState (which become the real
-    // analysisFacts.breakoutState/.transitionState in the API response) are
-    // built from currentStructureRegime.bullishBreakout/.bearishBreakdown/
-    // .phase further below -- not from the direction/source fields set
-    // above. Without correcting these too, the exposed breakoutState JSON
-    // stays stale (e.g. bullishBreakout: true) even once direction and the
-    // coach-facing narrative are both correctly bearish.
-    const calendarBullish = calendarPeriodDirection === "bullish";
-    const calendarPhase = calendarBullish ? "bullish_breakout" : "bearish_breakdown";
-    currentStructureRegime.bullishBreakout = calendarBullish;
-    currentStructureRegime.bearishBreakdown = !calendarBullish;
-    currentStructureRegime.bullishRecoveryAfterBreakdown = false;
-    currentStructureRegime.bearishPullbackAfterBreakout = false;
-    currentStructureRegime.phase = calendarPhase;
-
-    // The coach-facing headline (directionDisplay) reads historicalPhase.phase
-    // directly -- NOT the corrected `direction` variable above, and its
-    // historicalCutoff branches are checked before any direction-based
-    // branches. Without also correcting historicalPhase here, a post-trade /
-    // historical-cutoff chart can still show "Bullish after a strong
-    // breakout" in the narrative while every structural field underneath it
-    // says bearish.
-    if (historicalPhase) {
-      historicalPhase.direction = calendarPeriodDirection;
-      historicalPhase.phase = calendarPhase;
-      historicalPhase.state = calendarPhase;
-      historicalPhase.bullishBreakout = calendarBullish;
-      historicalPhase.bearishBreakdown = !calendarBullish;
-      historicalPhase.bullishRecoveryAfterBreakdown = false;
-      historicalPhase.bearishPullbackAfterBreakout = false;
-      historicalPhase.source = "calendar_period_framework_authoritative_direction";
-    }
-    if (breakoutState) {
-      breakoutState.bullishBreakout = calendarBullish;
-      breakoutState.bearishBreakdown = !calendarBullish;
-      breakoutState.state = calendarPhase;
-      breakoutState.source = "calendar_period_framework_authoritative_direction";
-    }
-    if (transitionState) {
-      transitionState.bullishRecoveryAfterBreakdown = false;
-      transitionState.bearishPullbackAfterBreakout = false;
-      transitionState.state = calendarPhase;
-      transitionState.source = "calendar_period_framework_authoritative_direction";
-    }
-  } else if (
     finalVisibleMode &&
     ["bullish", "bearish"].includes(
       currentStructureRegime.direction
@@ -28551,12 +28522,28 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         ...visualReview,
         chartNativeEntryFallback: {
           ...mergedChartNativeFallback,
-          currentWeekHigh:
+          currentPeriodHigh:
+            visibleCurrentWeekFrame?.currentPeriodHigh ??
             visibleCurrentWeekFrame?.currentWeekHigh ??
+            mergedChartNativeFallback?.currentPeriodHigh ??
+            mergedChartNativeFallback?.currentWeekHigh ??
+            null,
+          currentPeriodLow:
+            visibleCurrentWeekFrame?.currentPeriodLow ??
+            visibleCurrentWeekFrame?.currentWeekLow ??
+            mergedChartNativeFallback?.currentPeriodLow ??
+            mergedChartNativeFallback?.currentWeekLow ??
+            null,
+          currentWeekHigh:
+            visibleCurrentWeekFrame?.currentPeriodHigh ??
+            visibleCurrentWeekFrame?.currentWeekHigh ??
+            mergedChartNativeFallback?.currentPeriodHigh ??
             mergedChartNativeFallback?.currentWeekHigh ??
             null,
           currentWeekLow:
+            visibleCurrentWeekFrame?.currentPeriodLow ??
             visibleCurrentWeekFrame?.currentWeekLow ??
+            mergedChartNativeFallback?.currentPeriodLow ??
             mergedChartNativeFallback?.currentWeekLow ??
             null,
           currentPeriodOpen:
@@ -28678,7 +28665,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // and every customer analysis still use the ordinary live chart reader.
     const verifiedChartFixture = benchmarkReviewedChartFixture;
     if (verifiedChartFixture) {
-      const extractedDayInventory = visualReview?.chartNativeEntryFallback?.periodDayInventory || [];
+      const extractedPeriodInventory = visualReview?.chartNativeEntryFallback?.periodInventory ||
+        visualReview?.chartNativeEntryFallback?.periodDayInventory || [];
       visualReview = {
         ...visualReview,
         chartNativeEntryFallback: {
@@ -28687,10 +28675,16 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           // Keep the live day-by-day inventory unless the reviewed baseline
           // itself contains a confirmed inventory. Fixtures must not hide the
           // audit we need to detect skipped Monday/Tuesday/etc. structure.
+          periodInventory:
+            Array.isArray(verifiedChartFixture?.periodInventory) && verifiedChartFixture.periodInventory.length
+              ? verifiedChartFixture.periodInventory
+              : Array.isArray(verifiedChartFixture?.periodDayInventory) && verifiedChartFixture.periodDayInventory.length
+              ? verifiedChartFixture.periodDayInventory
+              : extractedPeriodInventory,
           periodDayInventory:
             Array.isArray(verifiedChartFixture?.periodDayInventory) && verifiedChartFixture.periodDayInventory.length
               ? verifiedChartFixture.periodDayInventory
-              : extractedDayInventory,
+              : extractedPeriodInventory,
           source: "verified_benchmark_chart_fixture",
           fixtureApplied: true,
         },

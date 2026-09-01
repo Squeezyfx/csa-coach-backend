@@ -192,6 +192,35 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" }[char]));
 }
 
+function normalizeStructuralType(value) {
+  const type = String(value || "structure").trim().toLowerCase();
+  if (type.includes("converted support")) return "converted support";
+  if (type.includes("converted resistance")) return "converted resistance";
+  if (type.includes("demand")) return "demand";
+  if (type.includes("supply")) return "supply";
+  if (type.includes("support")) return "support";
+  if (type.includes("resistance")) return "resistance";
+  return "structure";
+}
+
+function structuralPriceText(candidate, precision) {
+  const low = Number(candidate?.zoneLow);
+  const high = Number(candidate?.zoneHigh);
+  const center = Number(candidate?.price ?? candidate?.authoritativeCenter);
+  if (Number.isFinite(low) && Number.isFinite(high) && high > low) {
+    return `${low.toFixed(precision)}–${high.toFixed(precision)}`;
+  }
+  return Number.isFinite(center) ? center.toFixed(precision) : "price unreadable";
+}
+
+function structuralCandidateKey(candidate) {
+  const type = normalizeStructuralType(candidate?.areaType ?? candidate?.type);
+  const low = Number(candidate?.zoneLow);
+  const high = Number(candidate?.zoneHigh);
+  const center = Number(candidate?.price ?? candidate?.authoritativeCenter);
+  return [type, Number.isFinite(low) ? low : "", Number.isFinite(high) ? high : "", Number.isFinite(center) ? center : ""].join(":");
+}
+
 function renderRun(run) {
   resultsPanel.hidden = false;
   const automatic = run.mode === "automatic" || run.results.every((item) => item.mode === "automatic");
@@ -216,6 +245,59 @@ function renderRun(run) {
     const selectorDiagnostics = item.analysis?.analysisFacts?.selectorDiagnostics || {};
     const diagnosticEntries = selectorDiagnostics.selectedEntries || [];
     const fibonacci = selectorDiagnostics.fibonacci || {};
+    const structuralCandidates = (() => {
+      const candidates = Array.isArray(selectorDiagnostics.structuralCandidates)
+        ? selectorDiagnostics.structuralCandidates
+        : [];
+      const references = Array.isArray(item.analysis?.analysisFacts?.structuralReferenceAreas)
+        ? item.analysis.analysisFacts.structuralReferenceAreas.map((reference) => ({
+            ...reference,
+            price: reference?.authoritativeCenter ?? reference?.price,
+            sourceKind: reference?.referenceOnly ? "additional structural reference" : reference?.sourceKind,
+          }))
+        : [];
+      const seen = new Set();
+      return [...candidates, ...references].filter((candidate) => {
+        const key = structuralCandidateKey(candidate);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    })();
+    const structureAuditHtml = (() => {
+      const precisionSeed = structuralCandidates.find((candidate) =>
+        Number.isFinite(Number(candidate?.price ?? candidate?.authoritativeCenter))
+      );
+      const precisionValue = Number(precisionSeed?.price ?? precisionSeed?.authoritativeCenter);
+      const precision = Math.min(6, Math.max(2, String(precisionValue).split(".")[1]?.length || 2));
+      if (!structuralCandidates.length) {
+        return `<details class="structure-audit" open><summary>S/R and S/D level audit</summary><p>No support, resistance, supply or demand level was returned. This chart requires review.</p></details>`;
+      }
+      const selectedKeys = new Set(diagnosticEntries.map(structuralCandidateKey));
+      const rows = structuralCandidates.map((candidate) => {
+        const type = normalizeStructuralType(candidate?.areaType ?? candidate?.type);
+        const source = [candidate?.sourceKind, candidate?.sourceDate].filter(Boolean).join(" · ");
+        const selected = selectedKeys.has(structuralCandidateKey(candidate));
+        const state = selected ? "qualified entry" : "structural reference";
+        return `<li class="structure-level ${escapeHtml(type.replace(/\s+/g, "-"))}"><span class="structure-line" aria-hidden="true"></span><span><b>${escapeHtml(type)}</b> ${escapeHtml(structuralPriceText(candidate, precision))}<small>${escapeHtml(source || state)} · ${escapeHtml(state)}</small></span></li>`;
+      }).join("");
+      const detectedTypes = [...new Set(structuralCandidates.map((candidate) => normalizeStructuralType(candidate?.areaType ?? candidate?.type)))];
+      return `<details class="structure-audit" open><summary>S/R and S/D level audit — ${structuralCandidates.length} detected</summary><p class="structure-summary">Detected: ${escapeHtml(detectedTypes.join(", "))}. These levels remain visible even when Fibonacci verification prevents entry selection.</p><ul class="structure-levels">${rows}</ul></details>`;
+    })();
+    const periodInventory = Array.isArray(selectorDiagnostics.periodInventory)
+      ? selectorDiagnostics.periodInventory
+      : Array.isArray(selectorDiagnostics.periodDayInventory)
+      ? selectorDiagnostics.periodDayInventory
+      : [];
+    const periodInventoryAuditHtml = (() => {
+      if (!periodInventory.length) {
+        return `<details class="period-audit" open><summary>D1/W1 candle high-low inventory</summary><p>The required timeframe-specific candle inventory was not returned. This chart requires review before S/R, S/D or entry selection can be accepted.</p></details>`;
+      }
+      const seed = periodInventory.find((period) => Number.isFinite(Number(period?.high)));
+      const precision = Math.min(6, Math.max(2, String(seed?.high || "").split(".")[1]?.length || 2));
+      const rows = periodInventory.map((period, index) => `<tr><th>${escapeHtml(period.periodLabel || `Period ${index + 1}`)}</th><td>${escapeHtml(period.sourceUnit || "")}</td><td>${Number(period.high).toFixed(precision)}</td><td>${Number(period.low).toFixed(precision)}</td></tr>`).join("");
+      return `<details class="period-audit" open><summary>D1/W1 candle high-low inventory — ${periodInventory.length} period${periodInventory.length === 1 ? "" : "s"}</summary><table class="period-inventory"><thead><tr><th>Period</th><th>Source</th><th>High</th><th>Low</th></tr></thead><tbody>${rows}</tbody></table></details>`;
+    })();
     const fibLabelForEntry = (entry, index) => {
       const diagnostic = diagnosticEntries.find((candidate) => Number(candidate?.executionOrder) === index + 1) || {};
       const matches = Array.isArray(diagnostic?.fibonacciMatches) ? diagnostic.fibonacciMatches : [];
@@ -249,8 +331,7 @@ function renderRun(run) {
         ? [["38.2%", low + range * 0.382], ["50%", low + range * 0.5], ["61.8%", low + range * 0.618]]
         : [["38.2%", high - range * 0.382], ["50%", high - range * 0.5], ["61.8%", high - range * 0.618]];
       const precision = Math.min(6, Math.max(2, String(entries[0]?.levelText || high).split(".")[1]?.length || 2));
-      const candidates = Array.isArray(selectorDiagnostics.structuralCandidates) ? selectorDiagnostics.structuralCandidates : [];
-      const dayInventory = Array.isArray(selectorDiagnostics.periodDayInventory) ? selectorDiagnostics.periodDayInventory : [];
+      const candidates = structuralCandidates;
       const selectedPrices = new Set(diagnosticEntries.map((candidate) => Number(candidate?.authoritativeCenter ?? candidate?.resolvedEntryPrice)).filter(Number.isFinite));
       const candidateRows = candidates.length
         ? candidates.map((candidate) => {
@@ -260,10 +341,7 @@ function renderRun(run) {
             return `<li>${escapeHtml(source || "source not read")} — ${escapeHtml(String(candidate?.areaType || "structure"))} ${Number.isFinite(price) ? price.toFixed(precision) : "unreadable"} — ${state}</li>`;
           }).join("")
         : "<li>No structural candidates were returned.</li>";
-      const dayRows = dayInventory.length
-        ? dayInventory.map((day) => `<li>${escapeHtml(day.date)} — high ${Number(day.high).toFixed(precision)}, low ${Number(day.low).toFixed(precision)}${day.structures?.length ? `; ${escapeHtml(day.structures.map((item) => `${item.type} ${Number(item.price).toFixed(precision)}`).join(" · "))}` : "; no structural level returned"}</li>`).join("")
-        : "<li>Day-by-day inventory was not returned; this chart needs review.</li>";
-      return `<details class="fib-audit"><summary>Fibonacci selection audit</summary><p>Frame: ${escapeHtml(String(fibonacci.source || "current period"))}; high ${high.toFixed(precision)}, low ${low.toFixed(precision)}.</p><p>Fib: ${levels.map(([label, price]) => `${label} ${price.toFixed(precision)}`).join(" · ")}</p><p><b>Current-period day inventory</b></p><ul>${dayRows}</ul><p><b>Every structural candidate</b></p><ul>${candidateRows}</ul></details>`;
+      return `<details class="fib-audit"><summary>Fibonacci selection audit</summary><p>Frame: ${escapeHtml(String(fibonacci.source || "current period"))}; high ${high.toFixed(precision)}, low ${low.toFixed(precision)}.</p><p>Fib: ${levels.map(([label, price]) => `${label} ${price.toFixed(precision)}`).join(" · ")}</p><p><b>Every structural candidate</b></p><ul>${candidateRows}</ul></details>`;
     })();
     const fibFrameSummary = (() => {
       const high = Number(fibonacci.swingHigh);
@@ -286,7 +364,7 @@ function renderRun(run) {
     const baselineHtml = item.verifiedBaselineId
       ? `<p class="baseline-note">Compared with verified baseline ${escapeHtml(item.verifiedBaselineId)}.</p>`
       : `<p class="baseline-note">Rule checks only; accuracy has not yet been verified.</p>`;
-    return `<article class="result ${item.status}"><div class="result-top"><div><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.fileName)} · ${(item.durationMs / 1000).toFixed(1)}s</p></div><span class="badge">${escapeHtml(statusLabel)}</span></div><p>${headline}</p>${baselineHtml}${findingsHtml}${fibAuditHtml}${checkHtml ? `<ul class="checks">${checkHtml}</ul>` : ""}<details><summary>Full analysis response</summary><pre>${escapeHtml(JSON.stringify(item.analysis, null, 2))}</pre></details></article>`;
+    return `<article class="result ${item.status}"><div class="result-top"><div><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.fileName)} · ${(item.durationMs / 1000).toFixed(1)}s</p></div><span class="badge">${escapeHtml(statusLabel)}</span></div><p>${headline}</p>${baselineHtml}${findingsHtml}${periodInventoryAuditHtml}${structureAuditHtml}${fibAuditHtml}${checkHtml ? `<ul class="checks">${checkHtml}</ul>` : ""}<details><summary>Full analysis response</summary><pre>${escapeHtml(JSON.stringify(item.analysis, null, 2))}</pre></details></article>`;
   }).join("");
   promoteButton.hidden = !(
     automatic &&
