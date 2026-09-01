@@ -1,0 +1,34 @@
+CSA BENCHMARK v2.56 — FRAMEWORK INVENTORY MERGE AND FIB AUTHORITY
+
+Deploy the complete contents of this folder.
+
+Authoritative structural inventory
+- M1, M5, M15, M30 and H1: read every D1 candle high and low inside the
+  current trading week, in chronological order, up to the visible cutoff.
+- H4: read every W1 candle high and low inside the current calendar month,
+  in chronological order (W1, W2, W3, W4 and W5 when present), up to the
+  visible cutoff.
+- Do not skip, merge or renumber periods.
+- Complete this inventory before checking S/R, S/D or Fibonacci confluence.
+
+Fibonacci remains a separate step
+- M1-H1: current calendar-week high and low.
+- H4: current calendar-month high and low.
+- Fibonacci qualifies structure; it never replaces the individual D1/W1
+  candle inventory and never creates a level.
+
+Automatic benchmark enforcement
+- A dated H1 chart must return every visible D1 period in its current week.
+- A dated H4 chart must return every visible W1 period in its current month.
+- Missing periods cause Needs Review before entry selection is accepted.
+- The report displays the D1/W1 inventory independently of the Fibonacci audit.
+
+v2.56 correction
+- Focused D1/W1 inventory survives the merge even when that reader finds no entry.
+- A complete inventory authoritatively reconstructs the current-period Fib frame:
+  highest inventory high to lowest inventory low.
+- An incomplete inventory still fails safely and cannot authorize an entry.
+
+Verification
+- Run: npm run check
+- Run: npm run test:benchmarks

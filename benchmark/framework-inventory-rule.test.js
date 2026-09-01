@@ -24,3 +24,9 @@ test("period inventory remains separate from the Fibonacci frame", () => {
   assert.match(serverSource, /currentPeriodHigh/);
   assert.match(serverSource, /periodInventory/);
 });
+
+test("a complete inventory can authoritatively reconstruct the current-period frame", () => {
+  assert.match(serverSource, /deriveVerifiedPeriodFrameFromInventory/);
+  assert.match(serverSource, /inventoryDerivedPeriodFrame/);
+  assert.match(serverSource, /inventory_verified/);
+});

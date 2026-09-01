@@ -795,12 +795,53 @@ export function mergeFocusedSupplyDemandInventory(
   primaryFallback = {},
   focusedFallback = {}
 ) {
-  if (primaryFallback?.usable !== true) return focusedFallback;
+  const focusedPeriodInventory = Array.isArray(focusedFallback?.periodInventory)
+    ? focusedFallback.periodInventory
+    : Array.isArray(focusedFallback?.periodDayInventory)
+    ? focusedFallback.periodDayInventory
+    : [];
+  const primaryPeriodInventory = Array.isArray(primaryFallback?.periodInventory)
+    ? primaryFallback.periodInventory
+    : Array.isArray(primaryFallback?.periodDayInventory)
+    ? primaryFallback.periodDayInventory
+    : [];
+  const authoritativePeriodInventory = focusedPeriodInventory.length
+    ? focusedPeriodInventory
+    : primaryPeriodInventory;
+  const focusedFrameMetadata = {
+    periodInventory: authoritativePeriodInventory,
+    periodDayInventory: authoritativePeriodInventory,
+    currentPeriodHigh:
+      focusedFallback?.currentPeriodHigh ?? focusedFallback?.currentWeekHigh ??
+      primaryFallback?.currentPeriodHigh ?? primaryFallback?.currentWeekHigh ?? null,
+    currentPeriodLow:
+      focusedFallback?.currentPeriodLow ?? focusedFallback?.currentWeekLow ??
+      primaryFallback?.currentPeriodLow ?? primaryFallback?.currentWeekLow ?? null,
+    currentWeekHigh:
+      focusedFallback?.currentPeriodHigh ?? focusedFallback?.currentWeekHigh ??
+      primaryFallback?.currentPeriodHigh ?? primaryFallback?.currentWeekHigh ?? null,
+    currentWeekLow:
+      focusedFallback?.currentPeriodLow ?? focusedFallback?.currentWeekLow ??
+      primaryFallback?.currentPeriodLow ?? primaryFallback?.currentWeekLow ?? null,
+    currentPeriodOpen:
+      focusedFallback?.currentPeriodOpen ?? primaryFallback?.currentPeriodOpen ?? null,
+    currentPeriodClose:
+      focusedFallback?.currentPeriodClose ?? primaryFallback?.currentPeriodClose ?? null,
+    currentPeriodDirection:
+      focusedFallback?.currentPeriodDirection ?? primaryFallback?.currentPeriodDirection ?? null,
+    currentPeriodFrameVerified:
+      focusedFallback?.currentPeriodFrameVerified === true ||
+      primaryFallback?.currentPeriodFrameVerified === true,
+  };
+
+  if (primaryFallback?.usable !== true) {
+    return { ...focusedFallback, ...focusedFrameMetadata };
+  }
   if (
     focusedFallback?.usable !== true ||
     focusedFallback?.direction !== primaryFallback?.direction
   ) {
-    return primaryFallback;
+    return { ...primaryFallback, ...focusedFrameMetadata };
   }
 
   const primaryCandidates = Array.isArray(primaryFallback?.candidates)
@@ -833,8 +874,76 @@ export function mergeFocusedSupplyDemandInventory(
 
   return {
     ...primaryFallback,
+    ...focusedFrameMetadata,
     candidates: merged,
     focusedSupplyDemandInventoryMerged: merged.length > primaryCandidates.length,
+  };
+}
+
+function expectedFrameworkInventoryCount(timeframe = "", latestVisibleDate = "") {
+  const tf = String(timeframe || "").toUpperCase();
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(latestVisibleDate || ""))
+    ? new Date(`${latestVisibleDate}T00:00:00.000Z`)
+    : null;
+  if (!date || Number.isNaN(date.getTime())) return null;
+
+  if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) {
+    const weekday = date.getUTCDay();
+    return weekday >= 1 && weekday <= 5 ? weekday : 5;
+  }
+
+  if (tf === "H4") {
+    const mondayWeeks = new Set();
+    for (let day = 1; day <= date.getUTCDate(); day += 1) {
+      const cursor = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), day));
+      const weekday = cursor.getUTCDay();
+      if (weekday === 0 || weekday === 6) continue;
+      const monday = new Date(cursor);
+      monday.setUTCDate(cursor.getUTCDate() - (weekday - 1));
+      mondayWeeks.add(monday.toISOString().slice(0, 10));
+    }
+    return mondayWeeks.size;
+  }
+
+  return null;
+}
+
+export function deriveVerifiedPeriodFrameFromInventory({
+  timeframe = "",
+  latestVisibleDate = "",
+  periodInventory = [],
+} = {}) {
+  const expectedCount = expectedFrameworkInventoryCount(timeframe, latestVisibleDate);
+  const validPeriods = (Array.isArray(periodInventory) ? periodInventory : [])
+    .map((period) => ({
+      ...period,
+      high: Number(period?.high),
+      low: Number(period?.low),
+    }))
+    .filter((period) =>
+      Number.isFinite(period.high) &&
+      Number.isFinite(period.low) &&
+      period.high > period.low
+    );
+
+  if (!expectedCount || validPeriods.length < expectedCount) {
+    return {
+      currentPeriodFrameVerified: false,
+      currentPeriodHigh: null,
+      currentPeriodLow: null,
+      expectedCount,
+      returnedCount: validPeriods.length,
+    };
+  }
+
+  const authoritativePeriods = validPeriods.slice(0, expectedCount);
+  return {
+    currentPeriodFrameVerified: true,
+    currentPeriodHigh: Math.max(...authoritativePeriods.map((period) => period.high)),
+    currentPeriodLow: Math.min(...authoritativePeriods.map((period) => period.low)),
+    expectedCount,
+    returnedCount: validPeriods.length,
+    source: "complete_framework_candle_inventory",
   };
 }
 

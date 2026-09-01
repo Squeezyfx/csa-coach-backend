@@ -8,6 +8,7 @@ import {
   classifyCsaStructuralStage,
   compareStructureLedCompletedImpulseCandidates,
   consolidateQualifiedSupplyDemandClusters,
+  deriveVerifiedPeriodFrameFromInventory,
   expandExactSupportResistanceBoundaries,
   findNearestAllowedFibonacciMatch,
   getMarketDataSymbolCandidates,
@@ -356,6 +357,63 @@ test("focused inventory merges only independent supply or demand candidates", ()
   assert.deepEqual(merged.candidates.map((item) => item.price), [1.38437, 1.38066]);
   assert.equal(merged.swingHigh, 1.39091);
   assert.equal(merged.swingLow, 1.37575);
+});
+
+test("focused framework inventory survives even when it has no entry candidates", () => {
+  const primary = {
+    usable: true,
+    direction: "bearish",
+    candidates: [{ price: 1.394, areaType: "converted resistance" }],
+  };
+  const focused = {
+    usable: false,
+    direction: "bearish",
+    candidates: [],
+    periodInventory: [
+      { periodLabel: "W1", sourceUnit: "W1", date: "2026-08-03", high: 1.40801, low: 1.39244 },
+      { periodLabel: "W2", sourceUnit: "W1", date: "2026-08-10", high: 1.39643, low: 1.38637 },
+      { periodLabel: "W3", sourceUnit: "W1", date: "2026-08-17", high: 1.39091, low: 1.37308 },
+      { periodLabel: "W4", sourceUnit: "W1", date: "2026-08-24", high: 1.39088, low: 1.37507 },
+    ],
+  };
+
+  const merged = mergeFocusedSupplyDemandInventory(primary, focused);
+  assert.equal(merged.periodInventory.length, 4);
+  assert.equal(merged.periodInventory[1].low, 1.38637);
+  assert.deepEqual(merged.candidates, primary.candidates);
+});
+
+test("complete H4 weekly inventory verifies the calendar-month Fibonacci frame", () => {
+  const frame = deriveVerifiedPeriodFrameFromInventory({
+    timeframe: "H4",
+    latestVisibleDate: "2026-08-27",
+    periodInventory: [
+      { high: 1.40801, low: 1.39244 },
+      { high: 1.39643, low: 1.38637 },
+      { high: 1.39091, low: 1.37308 },
+      { high: 1.39088, low: 1.37507 },
+    ],
+  });
+
+  assert.equal(frame.currentPeriodFrameVerified, true);
+  assert.equal(frame.expectedCount, 4);
+  assert.equal(frame.currentPeriodHigh, 1.40801);
+  assert.equal(frame.currentPeriodLow, 1.37308);
+});
+
+test("incomplete H4 weekly inventory cannot verify the month frame", () => {
+  const frame = deriveVerifiedPeriodFrameFromInventory({
+    timeframe: "H4",
+    latestVisibleDate: "2026-08-27",
+    periodInventory: [
+      { high: 1.40801, low: 1.39244 },
+      { high: 1.39643, low: 1.38637 },
+      { high: 1.39091, low: 1.37308 },
+    ],
+  });
+
+  assert.equal(frame.currentPeriodFrameVerified, false);
+  assert.equal(frame.expectedCount, 4);
 });
 
 test("USDCAD excludes the below-38.2 supply and retains converted resistance only", () => {

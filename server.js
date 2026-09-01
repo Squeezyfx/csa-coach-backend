@@ -11,6 +11,7 @@ import {
   classifyCsaStructuralStage,
   compareStructureLedCompletedImpulseCandidates,
   consolidateQualifiedSupplyDemandClusters,
+  deriveVerifiedPeriodFrameFromInventory,
   expandExactSupportResistanceBoundaries,
   findNearestAllowedFibonacciMatch,
   getMarketDataSymbolCandidates,
@@ -10664,7 +10665,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.42.0";
-const CSA_BUILD_ID = "CSA-v4.40.0-timeframe-candle-inventory-enforcement";
+const CSA_BUILD_ID = "CSA-v4.41.0-framework-inventory-merge-and-fib-authority";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -28518,31 +28519,46 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           )
         : focusedChartNativeFallback;
 
+      const inventoryDerivedPeriodFrame = deriveVerifiedPeriodFrameFromInventory({
+        timeframe,
+        latestVisibleDate: chartDetection?.latestVisibleDate || "",
+        periodInventory:
+          mergedChartNativeFallback?.periodInventory ||
+          mergedChartNativeFallback?.periodDayInventory ||
+          [],
+      });
+      const verifiedPeriodFrame =
+        visibleCurrentWeekFrame?.currentPeriodFrameVerified === true
+          ? visibleCurrentWeekFrame
+          : inventoryDerivedPeriodFrame?.currentPeriodFrameVerified === true
+          ? inventoryDerivedPeriodFrame
+          : null;
+
       visualReview = {
         ...visualReview,
         chartNativeEntryFallback: {
           ...mergedChartNativeFallback,
           currentPeriodHigh:
-            visibleCurrentWeekFrame?.currentPeriodHigh ??
-            visibleCurrentWeekFrame?.currentWeekHigh ??
+            verifiedPeriodFrame?.currentPeriodHigh ??
+            verifiedPeriodFrame?.currentWeekHigh ??
             mergedChartNativeFallback?.currentPeriodHigh ??
             mergedChartNativeFallback?.currentWeekHigh ??
             null,
           currentPeriodLow:
-            visibleCurrentWeekFrame?.currentPeriodLow ??
-            visibleCurrentWeekFrame?.currentWeekLow ??
+            verifiedPeriodFrame?.currentPeriodLow ??
+            verifiedPeriodFrame?.currentWeekLow ??
             mergedChartNativeFallback?.currentPeriodLow ??
             mergedChartNativeFallback?.currentWeekLow ??
             null,
           currentWeekHigh:
-            visibleCurrentWeekFrame?.currentPeriodHigh ??
-            visibleCurrentWeekFrame?.currentWeekHigh ??
+            verifiedPeriodFrame?.currentPeriodHigh ??
+            verifiedPeriodFrame?.currentWeekHigh ??
             mergedChartNativeFallback?.currentPeriodHigh ??
             mergedChartNativeFallback?.currentWeekHigh ??
             null,
           currentWeekLow:
-            visibleCurrentWeekFrame?.currentPeriodLow ??
-            visibleCurrentWeekFrame?.currentWeekLow ??
+            verifiedPeriodFrame?.currentPeriodLow ??
+            verifiedPeriodFrame?.currentWeekLow ??
             mergedChartNativeFallback?.currentPeriodLow ??
             mergedChartNativeFallback?.currentWeekLow ??
             null,
@@ -28559,9 +28575,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             mergedChartNativeFallback?.currentPeriodDirection ??
             null,
           currentPeriodFrameVerified:
-            visibleCurrentWeekFrame?.currentPeriodFrameVerified === true,
+            verifiedPeriodFrame?.currentPeriodFrameVerified === true,
           currentWeekFrameConfidence:
-            visibleCurrentWeekFrame?.confidence || null,
+            visibleCurrentWeekFrame?.confidence ||
+            (inventoryDerivedPeriodFrame?.currentPeriodFrameVerified === true
+              ? "inventory_verified"
+              : null),
         },
       };
 
