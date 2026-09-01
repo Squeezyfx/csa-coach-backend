@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CSA AI Coach — Batch Benchmark Tester</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">PRIVATE ADMIN TOOL</p>
+        <h1>Batch Benchmark Tester</h1>
+        <p class="subtitle">Run several charts independently and catch regressions before production.</p>
+      </div>
+      <div class="key-box">
+        <label for="adminKey">Admin key</label>
+        <input id="adminKey" type="password" autocomplete="off" placeholder="Benchmark admin key">
+      </div>
+    </header>
+
+    <section class="panel mode-panel" aria-labelledby="modeHeading">
+      <div>
+        <h2 id="modeHeading">Choose how to test</h2>
+        <p>Automatic mode is designed for large batches. Strict mode compares previously verified charts with saved expected results.</p>
+      </div>
+      <div class="mode-options" role="radiogroup" aria-label="Benchmark mode">
+        <label class="mode-option selected">
+          <input type="radio" name="benchmarkMode" value="automatic" checked>
+          <span><strong>Automatic batch</strong><small>Upload charts only</small></span>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="benchmarkMode" value="strict">
+          <span><strong>Strict regression</strong><small>Use verified answers</small></span>
+        </label>
+      </div>
+    </section>
+
+    <section class="panel upload-panel">
+      <div>
+        <h2>1. Select benchmark charts</h2>
+        <p>Each chart remains a separate AI request. Maximum 30 charts per batch.</p>
+      </div>
+      <label class="file-button">
+        Choose charts
+        <input id="chartFiles" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+      </label>
+    </section>
+
+    <section class="panel automatic-mode" id="casePanel" hidden>
+      <div class="panel-heading">
+        <div>
+          <h2 id="caseHeading">2. Review selected charts</h2>
+          <p id="caseDescription">No expected values are required. The engine will read each chart and apply the CSA rules in their fixed order.</p>
+        </div>
+        <button id="clearButton" class="button secondary" type="button">Clear</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Chart</th><th>Inputs</th><th>Expected outcome</th><th>Level checks</th>
+            </tr>
+          </thead>
+          <tbody id="caseRows"></tbody>
+        </table>
+      </div>
+      <div class="actions">
+        <button id="runButton" class="button primary" type="button">Analyse all charts</button>
+        <button id="saveButton" class="button secondary" type="button" hidden>Save expected values</button>
+        <span id="runStatus" role="status"></span>
+      </div>
+    </section>
+
+    <section class="panel" id="resultsPanel" hidden>
+      <div class="panel-heading">
+        <div>
+          <h2 id="resultsHeading">3. Automatic batch report</h2>
+          <p id="summaryText"></p>
+        </div>
+        <div class="result-actions">
+          <button id="promoteButton" class="button primary" type="button" hidden>Save all as strict benchmarks</button>
+          <button id="exportButton" class="button secondary" type="button">Export JSON</button>
+        </div>
+      </div>
+      <div class="summary-grid" id="summaryCards"></div>
+      <div id="resultCards" class="result-list"></div>
+    </section>
+  </main>
+  <template id="caseTemplate">
+    <tr>
+      <td><strong data-file-name></strong><input data-field="label" placeholder="Benchmark label"></td>
+      <td class="field-stack">
+        <input data-field="instrument" placeholder="Instrument, e.g. AUDUSD">
+        <select data-field="timeframe"><option>H1</option><option>M30</option><option>M15</option><option>H4</option><option>D1</option><option>W1</option><option>MN</option></select>
+        <select data-field="plan"><option value="starter">Starter output</option><option value="pro">Pro output</option><option value="elite">Elite output</option></select>
+        <select data-field="analysisType"><option value="post-trade">Post-trade</option><option value="pre-trade">Pre-trade</option></select>
+        <select data-field="cutoffMode"><option value="final_visible">Final visible candle</option><option value="selected_day">End of selected day</option></select>
+        <input data-field="chartDate" type="date">
+      </td>
+      <td class="field-stack">
+        <select data-field="expectedDirection"><option value="">Direction not checked</option><option value="bullish">Bullish</option><option value="bearish">Bearish</option><option value="range">Range-bound</option></select>
+        <input data-field="expectedEntry1" inputmode="decimal" placeholder="Expected Entry 1">
+        <select data-field="expectedEntry1Type">
+          <option value="">Entry 1 type not checked</option>
+          <option value="support">Support</option>
+          <option value="demand">Demand</option>
+          <option value="converted support">Converted support</option>
+          <option value="resistance">Resistance</option>
+          <option value="supply">Supply</option>
+          <option value="converted resistance">Converted resistance</option>
+          <option value="buy area">Any buy area</option>
+          <option value="sell area">Any sell area</option>
+        </select>
+        <div class="zone-fields" data-zone-group="1" hidden>
+          <input data-field="expectedEntry1ZoneLow" inputmode="decimal" placeholder="Entry 1 zone lower boundary">
+          <input data-field="expectedEntry1ZoneHigh" inputmode="decimal" placeholder="Entry 1 zone upper boundary">
+        </div>
+        <input data-field="expectedEntry2" inputmode="decimal" placeholder="Expected Entry 2">
+        <select data-field="expectedEntry2Type">
+          <option value="">Entry 2 type not checked</option>
+          <option value="support">Support</option>
+          <option value="demand">Demand</option>
+          <option value="converted support">Converted support</option>
+          <option value="resistance">Resistance</option>
+          <option value="supply">Supply</option>
+          <option value="converted resistance">Converted resistance</option>
+          <option value="buy area">Any buy area</option>
+          <option value="sell area">Any sell area</option>
+        </select>
+        <div class="zone-fields" data-zone-group="2" hidden>
+          <input data-field="expectedEntry2ZoneLow" inputmode="decimal" placeholder="Entry 2 zone lower boundary">
+          <input data-field="expectedEntry2ZoneHigh" inputmode="decimal" placeholder="Entry 2 zone upper boundary">
+        </div>
+        <label class="check"><input data-field="entry2Required" type="checkbox"> Entry 2 required</label>
+        <input data-field="expectedEntry3" inputmode="decimal" placeholder="Expected Entry 3">
+        <select data-field="expectedEntry3Type">
+          <option value="">Entry 3 type not checked</option>
+          <option value="support">Support</option>
+          <option value="demand">Demand</option>
+          <option value="converted support">Converted support</option>
+          <option value="resistance">Resistance</option>
+          <option value="supply">Supply</option>
+          <option value="converted resistance">Converted resistance</option>
+          <option value="buy area">Any buy area</option>
+          <option value="sell area">Any sell area</option>
+        </select>
+        <div class="zone-fields" data-zone-group="3" hidden>
+          <input data-field="expectedEntry3ZoneLow" inputmode="decimal" placeholder="Entry 3 zone lower boundary">
+          <input data-field="expectedEntry3ZoneHigh" inputmode="decimal" placeholder="Entry 3 zone upper boundary">
+        </div>
+        <label class="check"><input data-field="entry3Required" type="checkbox"> Entry 3 required</label>
+        <label class="check"><input data-field="noEntryExpected" type="checkbox"> No valid entry expected</label>
+      </td>
+      <td class="field-stack">
+        <input data-field="requiredLevels" placeholder="Required levels: 0.70104, 0.69845">
+        <input data-field="requiredFeedbackLevels" placeholder="Feedback must mention: 0.69845">
+        <input data-field="requiredFeedbackTerms" placeholder="Feedback must include all terms: demand, support">
+        <input data-field="forbiddenEntries" placeholder="Must not be entries: 0.69486">
+        <input data-field="tolerance" inputmode="decimal" placeholder="Entry tolerance for approximate/unmarked levels">
+        <textarea data-field="notes" rows="2" placeholder="Optional trade notes"></textarea>
+      </td>
+    </tr>
+  </template>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
+
