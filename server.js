@@ -24092,6 +24092,51 @@ function buildValidatedAnalysisFacts({
       "calendar_period_framework_authoritative_direction";
     currentStructureRegime.localRecentDirection =
       finalVisibleDirection?.direction || null;
+
+    // effectiveBreakoutState/effectiveTransitionState (which become the real
+    // analysisFacts.breakoutState/.transitionState in the API response) are
+    // built from currentStructureRegime.bullishBreakout/.bearishBreakdown/
+    // .phase further below -- not from the direction/source fields set
+    // above. Without correcting these too, the exposed breakoutState JSON
+    // stays stale (e.g. bullishBreakout: true) even once direction and the
+    // coach-facing narrative are both correctly bearish.
+    const calendarBullish = calendarPeriodDirection === "bullish";
+    const calendarPhase = calendarBullish ? "bullish_breakout" : "bearish_breakdown";
+    currentStructureRegime.bullishBreakout = calendarBullish;
+    currentStructureRegime.bearishBreakdown = !calendarBullish;
+    currentStructureRegime.bullishRecoveryAfterBreakdown = false;
+    currentStructureRegime.bearishPullbackAfterBreakout = false;
+    currentStructureRegime.phase = calendarPhase;
+
+    // The coach-facing headline (directionDisplay) reads historicalPhase.phase
+    // directly -- NOT the corrected `direction` variable above, and its
+    // historicalCutoff branches are checked before any direction-based
+    // branches. Without also correcting historicalPhase here, a post-trade /
+    // historical-cutoff chart can still show "Bullish after a strong
+    // breakout" in the narrative while every structural field underneath it
+    // says bearish.
+    if (historicalPhase) {
+      historicalPhase.direction = calendarPeriodDirection;
+      historicalPhase.phase = calendarPhase;
+      historicalPhase.state = calendarPhase;
+      historicalPhase.bullishBreakout = calendarBullish;
+      historicalPhase.bearishBreakdown = !calendarBullish;
+      historicalPhase.bullishRecoveryAfterBreakdown = false;
+      historicalPhase.bearishPullbackAfterBreakout = false;
+      historicalPhase.source = "calendar_period_framework_authoritative_direction";
+    }
+    if (breakoutState) {
+      breakoutState.bullishBreakout = calendarBullish;
+      breakoutState.bearishBreakdown = !calendarBullish;
+      breakoutState.state = calendarPhase;
+      breakoutState.source = "calendar_period_framework_authoritative_direction";
+    }
+    if (transitionState) {
+      transitionState.bullishRecoveryAfterBreakdown = false;
+      transitionState.bearishPullbackAfterBreakout = false;
+      transitionState.state = calendarPhase;
+      transitionState.source = "calendar_period_framework_authoritative_direction";
+    }
   } else if (
     finalVisibleMode &&
     ["bullish", "bearish"].includes(
