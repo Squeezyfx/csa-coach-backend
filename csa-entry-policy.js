@@ -947,6 +947,86 @@ export function deriveVerifiedPeriodFrameFromInventory({
   };
 }
 
+function dateOnlyFromCandle(value = "") {
+  const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : null;
+}
+
+function mondayForTradingCandle(date) {
+  const normalized = new Date(date);
+  if (Number.isNaN(normalized.getTime())) return null;
+  const weekday = normalized.getUTCDay();
+  const offset = weekday === 0 ? 1 : weekday === 6 ? 2 : 1 - weekday;
+  normalized.setUTCDate(normalized.getUTCDate() + offset);
+  return normalized;
+}
+
+export function aggregateH4CandlesIntoWeeklyInventory({
+  candles = [],
+  cutoffDate = "",
+} = {}) {
+  const cutoff = /^\d{4}-\d{2}-\d{2}$/.test(String(cutoffDate || ""))
+    ? new Date(`${cutoffDate}T23:59:59.999Z`)
+    : null;
+  if (!cutoff || Number.isNaN(cutoff.getTime())) return [];
+
+  const cutoffYear = cutoff.getUTCFullYear();
+  const cutoffMonth = cutoff.getUTCMonth();
+  const grouped = new Map();
+
+  for (const candle of Array.isArray(candles) ? candles : []) {
+    const dateOnly = dateOnlyFromCandle(candle?.datetime);
+    if (!dateOnly) continue;
+    const candleDate = new Date(`${dateOnly}T00:00:00.000Z`);
+    const high = Number(candle?.high);
+    const low = Number(candle?.low);
+    const open = Number(candle?.open);
+    const close = Number(candle?.close);
+    if (
+      Number.isNaN(candleDate.getTime()) ||
+      candleDate > cutoff ||
+      candleDate.getUTCFullYear() !== cutoffYear ||
+      candleDate.getUTCMonth() !== cutoffMonth ||
+      !Number.isFinite(high) ||
+      !Number.isFinite(low) ||
+      high <= low
+    ) {
+      continue;
+    }
+
+    const monday = mondayForTradingCandle(candleDate);
+    if (!monday || monday > cutoff) continue;
+    const key = monday.toISOString().slice(0, 10);
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, {
+        date: key,
+        high,
+        low,
+        open: Number.isFinite(open) ? open : null,
+        close: Number.isFinite(close) ? close : null,
+        candleCount: 1,
+      });
+      continue;
+    }
+
+    existing.high = Math.max(existing.high, high);
+    existing.low = Math.min(existing.low, low);
+    if (Number.isFinite(close)) existing.close = close;
+    existing.candleCount += 1;
+  }
+
+  return [...grouped.values()]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((period, index) => ({
+      ...period,
+      periodLabel: `W${index + 1}`,
+      sourceUnit: "W1",
+      structures: [],
+      source: "deterministic_visible_H4_candle_aggregation",
+    }));
+}
+
 export function expandExactSupportResistanceBoundaries(candidates = []) {
   return candidates
     .flatMap((candidate) => {

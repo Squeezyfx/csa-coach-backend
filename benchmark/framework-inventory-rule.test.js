@@ -30,3 +30,14 @@ test("a complete inventory can authoritatively reconstruct the current-period fr
   assert.match(serverSource, /inventoryDerivedPeriodFrame/);
   assert.match(serverSource, /inventory_verified/);
 });
+
+test("H4 inventory is deterministically aggregated before visual fallback selection", () => {
+  assert.match(serverSource, /aggregateH4CandlesIntoWeeklyInventory/);
+  assert.match(serverSource, /deterministicH4PeriodInventory/);
+  assert.match(serverSource, /deterministic_visible_H4_candle_aggregation/);
+});
+
+test("final-visible price synchronization cannot rewind to an older similar close", () => {
+  assert.match(serverSource, /anchorDate: chartDetection\?\.latestVisibleDate/);
+  assert.match(serverSource, /maximumDateDistanceDays: chartDetection\?\.latestVisibleDate \? 1 : null/);
+});

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   annotateFrameworkPeriodPriority,
+  aggregateH4CandlesIntoWeeklyInventory,
   buildFinalVisibleTerminalImpulse,
   canonicalInstrumentCode,
   classifyCsaStructuralStage,
@@ -414,6 +415,30 @@ test("incomplete H4 weekly inventory cannot verify the month frame", () => {
 
   assert.equal(frame.currentPeriodFrameVerified, false);
   assert.equal(frame.expectedCount, 4);
+});
+
+test("H4 candles are aggregated into Monday-Friday W1 periods without counting an opening weekend", () => {
+  const candles = [
+    { datetime: "2026-08-01 01:00:00", open: 1.401, high: 1.402, low: 1.400, close: 1.4015 },
+    { datetime: "2026-08-03 01:00:00", open: 1.4015, high: 1.40801, low: 1.399, close: 1.405 },
+    { datetime: "2026-08-07 21:00:00", open: 1.405, high: 1.406, low: 1.39244, close: 1.394 },
+    { datetime: "2026-08-10 01:00:00", open: 1.394, high: 1.39643, low: 1.393, close: 1.395 },
+    { datetime: "2026-08-14 21:00:00", open: 1.395, high: 1.3955, low: 1.38637, close: 1.388 },
+    { datetime: "2026-08-17 01:00:00", open: 1.388, high: 1.39091, low: 1.37308, close: 1.379 },
+    { datetime: "2026-08-24 01:00:00", open: 1.379, high: 1.39088, low: 1.37507, close: 1.38988 },
+  ];
+
+  const inventory = aggregateH4CandlesIntoWeeklyInventory({
+    candles,
+    cutoffDate: "2026-08-27",
+  });
+
+  assert.deepEqual(inventory.map((period) => period.periodLabel), ["W1", "W2", "W3", "W4"]);
+  assert.equal(inventory[0].date, "2026-08-03");
+  assert.equal(inventory[0].high, 1.40801);
+  assert.equal(inventory[0].low, 1.39244);
+  assert.equal(inventory[1].low, 1.38637);
+  assert.equal(inventory[3].low, 1.37507);
 });
 
 test("USDCAD excludes the below-38.2 supply and retains converted resistance only", () => {

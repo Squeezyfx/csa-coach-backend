@@ -2,7 +2,7 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.41.0-framework-inventory-merge-and-fib-authority`, packaged as benchmark v2.56.
+The included analysis backend is CSA build `v4.42.0-deterministic-h4-weekly-aggregation`, packaged as benchmark v2.57.
 
 ## Authoritative timeframe-candle rule
 

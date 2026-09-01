@@ -6,6 +6,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import Stripe from "stripe";
 import {
   annotateFrameworkPeriodPriority,
+  aggregateH4CandlesIntoWeeklyInventory,
   buildFinalVisibleTerminalImpulse,
   canonicalInstrumentCode,
   classifyCsaStructuralStage,
@@ -2015,9 +2016,33 @@ function getPeriodKeyAndLabel(date, profile) {
   const year = date.getUTCFullYear(), month = date.getUTCMonth();
   if (profile.structureMode === "daily-in-week") { const dateOnly = formatDateOnly(date); return { key: dateOnly, label: weekdayNameFromDate(dateOnly), date: dateOnly }; }
   if (profile.structureMode === "weekly-in-month") {
-    const monthStart = new Date(Date.UTC(year, month, 1));
-    const weekNumber = Math.ceil((date.getUTCDate() + monthStart.getUTCDay()) / 7);
-    return { key: `${year}-${String(month + 1).padStart(2, "0")}-W${weekNumber}`, label: `Week ${weekNumber}`, date: formatDateOnly(date) };
+    const tradingDate = new Date(date);
+    const weekday = tradingDate.getUTCDay();
+    if (weekday === 0) tradingDate.setUTCDate(tradingDate.getUTCDate() + 1);
+    if (weekday === 6) tradingDate.setUTCDate(tradingDate.getUTCDate() + 2);
+    const tradingYear = tradingDate.getUTCFullYear();
+    const tradingMonth = tradingDate.getUTCMonth();
+    const mondayWeeks = [];
+    const seen = new Set();
+    for (let day = 1; day <= tradingDate.getUTCDate(); day += 1) {
+      const cursor = new Date(Date.UTC(tradingYear, tradingMonth, day));
+      const cursorWeekday = cursor.getUTCDay();
+      if (cursorWeekday === 0 || cursorWeekday === 6) continue;
+      const monday = addDays(cursor, 1 - cursorWeekday);
+      const mondayKey = formatDateOnly(monday);
+      if (!seen.has(mondayKey)) {
+        seen.add(mondayKey);
+        mondayWeeks.push(mondayKey);
+      }
+    }
+    const targetMonday = addDays(tradingDate, 1 - tradingDate.getUTCDay());
+    const targetMondayKey = formatDateOnly(targetMonday);
+    const weekNumber = Math.max(1, mondayWeeks.indexOf(targetMondayKey) + 1);
+    return {
+      key: `${tradingYear}-${String(tradingMonth + 1).padStart(2, "0")}-W${weekNumber}`,
+      label: `Week ${weekNumber}`,
+      date: targetMondayKey,
+    };
   }
   if (profile.structureMode === "monthly-in-year") return { key: `${year}-${String(month + 1).padStart(2, "0")}`, label: getMonthName(month), date: `${year}-${String(month + 1).padStart(2, "0")}-01` };
   if (profile.structureMode === "quarterly-in-year") { const q = getQuarterLabel(month); return { key: `${year}-${q}`, label: q, date: `${year}-${q}` }; }
@@ -3881,6 +3906,8 @@ function findBestCandleForVisibleClose({
   candles = [],
   targetPrice = null,
   tolerance = 0,
+  anchorDate = "",
+  maximumDateDistanceDays = null,
 }) {
   const target = Number(targetPrice);
   if (!Array.isArray(candles) || !candles.length || !Number.isFinite(target)) {
@@ -3901,14 +3928,27 @@ function findBestCandleForVisibleClose({
         target >= Math.min(low, high) - tolerance * 0.10 &&
         target <= Math.max(low, high) + tolerance * 0.10;
 
+      const candleDate = candleDateOnly(candle?.datetime);
+      const anchor = parseISODateOnly(anchorDate);
+      const candidateDate = parseISODateOnly(candleDate);
+      const dateDistanceDays = anchor && candidateDate
+        ? Math.abs(getDaysBetweenDates(anchor, candidateDate))
+        : null;
+      const dateCompatible =
+        !Number.isFinite(Number(maximumDateDistanceDays)) ||
+        dateDistanceDays === null ||
+        dateDistanceDays <= Number(maximumDateDistanceDays);
+
       return {
         candle,
         index,
         closeDistance,
         targetInsideRange,
         acceptable:
-          closeDistance <= tolerance ||
-          (targetInsideRange && closeDistance <= tolerance * 1.5),
+          dateCompatible && (
+            closeDistance <= tolerance ||
+            (targetInsideRange && closeDistance <= tolerance * 1.5)
+          ),
       };
     })
     .filter((item) => item.acceptable)
@@ -3993,6 +4033,8 @@ async function synchronizeFinalVisibleMarketReference({
     candles: initialCandles,
     targetPrice: visiblePrice,
     tolerance: initialTolerance,
+    anchorDate: chartDetection?.latestVisibleDate || "",
+    maximumDateDistanceDays: chartDetection?.latestVisibleDate ? 1 : null,
   });
   let searchSource = "initial_market_reference";
 
@@ -4048,6 +4090,8 @@ async function synchronizeFinalVisibleMarketReference({
         candles: extendedReference?.timeframeCandles || [],
         targetPrice: visiblePrice,
         tolerance: extendedTolerance,
+        anchorDate: chartDetection?.latestVisibleDate || "",
+        maximumDateDistanceDays: chartDetection?.latestVisibleDate ? 1 : null,
       });
 
       if (extendedMatch) {
@@ -10665,7 +10709,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.42.0";
-const CSA_BUILD_ID = "CSA-v4.41.0-framework-inventory-merge-and-fib-authority";
+const CSA_BUILD_ID = "CSA-v4.42.0-deterministic-h4-weekly-aggregation";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -28519,12 +28563,34 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           )
         : focusedChartNativeFallback;
 
+      const deterministicH4PeriodInventory = comparableTimeframe(timeframe) === "H4"
+        ? aggregateH4CandlesIntoWeeklyInventory({
+            candles: marketReference?.timeframeCandles || [],
+            cutoffDate:
+              chartCutoff?.resolvedDate ||
+              chartDetection?.latestVisibleDate ||
+              "",
+          })
+        : [];
+      const authoritativeMergedFallback = deterministicH4PeriodInventory.length
+        ? {
+            ...mergedChartNativeFallback,
+            periodInventory: deterministicH4PeriodInventory,
+            periodDayInventory: deterministicH4PeriodInventory,
+            frameworkInventorySource:
+              "deterministic_visible_H4_candle_aggregation",
+          }
+        : mergedChartNativeFallback;
+
       const inventoryDerivedPeriodFrame = deriveVerifiedPeriodFrameFromInventory({
         timeframe,
-        latestVisibleDate: chartDetection?.latestVisibleDate || "",
+        latestVisibleDate:
+          chartCutoff?.resolvedDate ||
+          chartDetection?.latestVisibleDate ||
+          "",
         periodInventory:
-          mergedChartNativeFallback?.periodInventory ||
-          mergedChartNativeFallback?.periodDayInventory ||
+          authoritativeMergedFallback?.periodInventory ||
+          authoritativeMergedFallback?.periodDayInventory ||
           [],
       });
       const verifiedPeriodFrame =
@@ -28537,42 +28603,42 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       visualReview = {
         ...visualReview,
         chartNativeEntryFallback: {
-          ...mergedChartNativeFallback,
+          ...authoritativeMergedFallback,
           currentPeriodHigh:
             verifiedPeriodFrame?.currentPeriodHigh ??
             verifiedPeriodFrame?.currentWeekHigh ??
-            mergedChartNativeFallback?.currentPeriodHigh ??
-            mergedChartNativeFallback?.currentWeekHigh ??
+            authoritativeMergedFallback?.currentPeriodHigh ??
+            authoritativeMergedFallback?.currentWeekHigh ??
             null,
           currentPeriodLow:
             verifiedPeriodFrame?.currentPeriodLow ??
             verifiedPeriodFrame?.currentWeekLow ??
-            mergedChartNativeFallback?.currentPeriodLow ??
-            mergedChartNativeFallback?.currentWeekLow ??
+            authoritativeMergedFallback?.currentPeriodLow ??
+            authoritativeMergedFallback?.currentWeekLow ??
             null,
           currentWeekHigh:
             verifiedPeriodFrame?.currentPeriodHigh ??
             verifiedPeriodFrame?.currentWeekHigh ??
-            mergedChartNativeFallback?.currentPeriodHigh ??
-            mergedChartNativeFallback?.currentWeekHigh ??
+            authoritativeMergedFallback?.currentPeriodHigh ??
+            authoritativeMergedFallback?.currentWeekHigh ??
             null,
           currentWeekLow:
             verifiedPeriodFrame?.currentPeriodLow ??
             verifiedPeriodFrame?.currentWeekLow ??
-            mergedChartNativeFallback?.currentPeriodLow ??
-            mergedChartNativeFallback?.currentWeekLow ??
+            authoritativeMergedFallback?.currentPeriodLow ??
+            authoritativeMergedFallback?.currentWeekLow ??
             null,
           currentPeriodOpen:
             visibleCurrentWeekFrame?.periodOpen ??
-            mergedChartNativeFallback?.currentPeriodOpen ??
+            authoritativeMergedFallback?.currentPeriodOpen ??
             null,
           currentPeriodClose:
             visibleCurrentWeekFrame?.periodClose ??
-            mergedChartNativeFallback?.currentPeriodClose ??
+            authoritativeMergedFallback?.currentPeriodClose ??
             null,
           currentPeriodDirection:
             visibleCurrentWeekFrame?.periodDirection ??
-            mergedChartNativeFallback?.currentPeriodDirection ??
+            authoritativeMergedFallback?.currentPeriodDirection ??
             null,
           currentPeriodFrameVerified:
             verifiedPeriodFrame?.currentPeriodFrameVerified === true,
