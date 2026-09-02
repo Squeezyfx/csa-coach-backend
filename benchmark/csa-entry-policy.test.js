@@ -772,6 +772,19 @@ test("after Fib qualification bearish entries follow nearest-to-deeper price pat
   assert.deepEqual(sequenced.map((item) => item.id), ["near-resistance", "deep-supply"]);
 });
 
+test("GBPUSD H4 W1 high remains structural context outside the Fib boundary", () => {
+  const match = findNearestAllowedFibonacciMatch({
+    direction: "bullish",
+    swingHigh: 1.36752,
+    swingLow: 1.34183,
+    price: 1.35093,
+    zoneLow: 1.35093,
+    zoneHigh: 1.35093,
+    tolerance: 0.0006,
+  });
+  assert.equal(match, null);
+});
+
 test("Entry 2 may come from the next CSA structural stage when local framework Fib independently qualifies it", () => {
   const selected = selectIndependentEntryAreas(
     [

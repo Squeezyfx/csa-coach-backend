@@ -255,7 +255,11 @@ function renderBatchOverview(run) {
         : [Number(fib.swingHigh) - range * .382, Number(fib.swingHigh) - range * .5, Number(fib.swingHigh) - range * .618]
       : [];
     const periodText = periods.length
-      ? periods.map((period) => `${period.period}: H ${compactNumber(period.high, seed)} (${period.highRole || "—"}), L ${compactNumber(period.low, seed)} (${period.lowRole || "—"})`).join(" · ")
+      ? periods.map((period) => {
+          const highStatus = period.highVerified === false ? "estimate—not selectable" : period.highRole || "verified extreme";
+          const lowStatus = period.lowVerified === false ? "estimate—not selectable" : period.lowRole || "verified extreme";
+          return `${period.period}: H ${compactNumber(period.high, seed)} (${highStatus}), L ${compactNumber(period.low, seed)} (${lowStatus})`;
+        }).join(" · ")
       : "No verified period inventory";
     const entryText = entries.length
       ? entries.map((entry, index) => {
@@ -380,7 +384,9 @@ function renderRun(run) {
         const lowRole = audit.lowOriginalRole && audit.lowRole && audit.lowOriginalRole !== audit.lowRole
           ? `${audit.lowOriginalRole} → ${audit.lowRole}`
           : audit.lowRole || "not classified";
-        return `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(period.date || "")}</td><td>${Number(period.high).toFixed(precision)}</td><td>${escapeHtml(highRole)}</td><td>${Number(period.low).toFixed(precision)}</td><td>${escapeHtml(lowRole)}</td><td>${escapeHtml(audit.source || period.source || period.sourceUnit || "")}</td></tr>`;
+        const auditedHighRole = audit.highVerified === false ? "estimate—not selectable" : highRole;
+        const auditedLowRole = audit.lowVerified === false ? "estimate—not selectable" : lowRole;
+        return `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(period.date || "")}</td><td>${Number(period.high).toFixed(precision)}</td><td>${escapeHtml(auditedHighRole)}</td><td>${Number(period.low).toFixed(precision)}</td><td>${escapeHtml(auditedLowRole)}</td><td>${escapeHtml(audit.source || period.source || period.sourceUnit || "")}</td></tr>`;
       }).join("");
       return `<details class="period-audit" open><summary>D1/W1/MN candle high-low and structure inventory — ${periodInventory.length} period${periodInventory.length === 1 ? "" : "s"}</summary><p>Each high and low remains tied to its own higher-timeframe candle and structural classification.</p><p><b>Inventory authority:</b> ${escapeHtml(authorityText)} · chart verified: ${authority.focusedInventoryVerified === true ? "yes" : "no"} · market verified: ${authority.marketInventoryVerified === true ? "yes" : "no"}. ${escapeHtml(endpointText)}</p><div class="audit-table-wrap"><table class="period-inventory"><thead><tr><th>Period</th><th>Date</th><th>High</th><th>High role</th><th>Low</th><th>Low role</th><th>Price source</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
     })();

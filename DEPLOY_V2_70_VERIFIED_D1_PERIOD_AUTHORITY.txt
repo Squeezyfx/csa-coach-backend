@@ -1,0 +1,18 @@
+CSA Benchmark v2.70.0 — Verified D1 period authority
+
+Build: CSA-v4.53.0-verified-d1-period-authority
+Feedback engine: 10.48.0
+Selector: 4.36.0
+
+Fixes:
+- Unverified chart-only monthly estimates can remain visible for diagnosis but
+  are labelled estimate-not selectable and can no longer become authoritative
+  Entry 1-3 candidates.
+- USA30 D1 chart 2927 uses the human-reviewed January high 49754, February
+  high 50575, May low 48932 and June low 49779.
+- January high 49754 and June low 49779 are combined into one confluence area
+  instead of consuming two entry slots.
+- USA30 bullish entries follow nearest-to-deeper execution order: February
+  high 50575, January/June confluence 49754-49779, then May low 48932.
+- GBPUSD H4 W1 high 1.35093 remains visible structural context, but it is not
+  promoted because it is outside the current 38.2%-61.8% Fib boundary.

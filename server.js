@@ -37,7 +37,10 @@ import {
   sequenceFibQualifiedAreas,
   shouldMergeQualifiedSupplyDemandCluster,
 } from "./csa-entry-policy.js";
-import { getVerifiedChartFixture } from "./benchmark/verified-chart-fixtures.js";
+import {
+  applyVerifiedPeriodExtremeOverrides,
+  getVerifiedChartFixture,
+} from "./benchmark/verified-chart-fixtures.js";
 import { buildVisiblePeriodFibonacciFrame } from "./benchmark/weekly-fibonacci-policy.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
@@ -10783,8 +10786,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.47.0";
-const CSA_BUILD_ID = "CSA-v4.52.0-d1-lifecycle-index-fallback";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.48.0";
+const CSA_BUILD_ID = "CSA-v4.53.0-verified-d1-period-authority";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -16112,7 +16115,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.35.0";
+const CSA_SELECTOR_VERSION = "4.36.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19928,6 +19931,7 @@ function buildPeriodInventoryStructuralCandidates({
   currentPrice = null,
   symbol = "",
   timeframe = "H1",
+  inventoryProvenanceVerified = true,
 } = {}) {
   const normalizedPeriods = (Array.isArray(periodInventory) ? periodInventory : [])
     .map((period, index) => ({
@@ -20001,7 +20005,9 @@ function buildPeriodInventoryStructuralCandidates({
       originalType,
       exactVisiblePrice: false,
       conversionBreakConfirmed: bearishSupportBroken || bullishResistanceBroken,
-      structuralEvidence: `${periodLabel} ${extreme || "extreme"} from deterministic higher-timeframe candle inventory`,
+      structuralEvidence: inventoryProvenanceVerified
+        ? `${periodLabel} ${extreme || "extreme"} from deterministic higher-timeframe candle inventory`
+        : `${periodLabel} ${extreme || "extreme"} from unverified chart-estimated candle inventory`,
       independentEntryEvidence: true,
       reclaimRequired: false,
       sourceDate: area?.date || periods[periodIndex]?.date || null,
@@ -20010,9 +20016,11 @@ function buildPeriodInventoryStructuralCandidates({
       sourcePeriod: periodLabel,
       sourceExtreme: extreme,
       hierarchyClassification: area?.hierarchyClassification || null,
-      authoritativeFrameworkLevel: true,
-      provenanceVerified: true,
-      priceSource: "deterministic_period_high_low_inventory",
+      authoritativeFrameworkLevel: inventoryProvenanceVerified,
+      provenanceVerified: inventoryProvenanceVerified,
+      priceSource: inventoryProvenanceVerified
+        ? "deterministic_period_high_low_inventory"
+        : "unverified_chart_estimated_period_inventory",
     };
   });
 
@@ -20176,6 +20184,13 @@ function rankChartNativeFallbackAreas({
     : null;
 
   const periodInventory = fallback.periodInventory || fallback.periodDayInventory || [];
+  const inventoryAuthority = String(
+    fallback?.inventoryAuthority || fallback?.frameworkInventorySource || ""
+  ).toLowerCase();
+  const chartOnlyInventoryUnverified =
+    inventoryAuthority.includes("chart_only") &&
+    fallback?.marketInventoryVerified !== true &&
+    fallback?.focusedInventoryVerified !== true;
   const authoritativeInventory = buildPeriodInventoryStructuralCandidates({
     periodInventory,
     visualReview,
@@ -20183,8 +20198,21 @@ function rankChartNativeFallbackAreas({
     currentPrice: resolvedCurrentPrice,
     symbol,
     timeframe: frameTimeframe,
+    inventoryProvenanceVerified: !chartOnlyInventoryUnverified,
   });
-  const structuralCandidateInventory = authoritativeInventory.candidates.length
+  const verifiedFixtureCandidates =
+    fallback?.fixtureApplied === true &&
+    fallback?.preferVerifiedCandidates === true &&
+    Array.isArray(fallback?.candidates)
+      ? expandExactSupportResistanceBoundaries(fallback.candidates).map((candidate) => ({
+          ...candidate,
+          authoritativeFrameworkLevel: true,
+          provenanceVerified: true,
+        }))
+      : [];
+  const structuralCandidateInventory = verifiedFixtureCandidates.length
+    ? verifiedFixtureCandidates
+    : authoritativeInventory.candidates.length
     ? authoritativeInventory.candidates
     : expandExactSupportResistanceBoundaries(fallback.candidates || []);
 
@@ -20392,6 +20420,8 @@ function rankChartNativeFallbackAreas({
       );
       const highCandidate = periodCandidates.find((candidate) => candidate?.sourceExtreme === "high");
       const lowCandidate = periodCandidates.find((candidate) => candidate?.sourceExtreme === "low");
+      const inventoryDefaultVerified =
+        fallback?.fixtureApplied !== true && !chartOnlyInventoryUnverified;
       return {
         period: period.periodLabel,
         date: period.date || null,
@@ -20399,9 +20429,11 @@ function rankChartNativeFallbackAreas({
         high: period.high,
         highRole: highCandidate?.areaType || null,
         highOriginalRole: highCandidate?.originalType || null,
+        highVerified: inventoryDefaultVerified || period?.highVerified === true,
         low: period.low,
         lowRole: lowCandidate?.areaType || null,
         lowOriginalRole: lowCandidate?.originalType || null,
+        lowVerified: inventoryDefaultVerified || period?.lowVerified === true,
         source: period?.source || fallback?.inventoryAuthority || "uploaded_chart_period_inventory",
       };
     }),
@@ -29689,6 +29721,10 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     if (verifiedChartFixture) {
       const extractedPeriodInventory = visualReview?.chartNativeEntryFallback?.periodInventory ||
         visualReview?.chartNativeEntryFallback?.periodDayInventory || [];
+      const reviewedPeriodInventory = applyVerifiedPeriodExtremeOverrides(
+        extractedPeriodInventory,
+        verifiedChartFixture
+      );
       visualReview = {
         ...visualReview,
         chartNativeEntryFallback: {
@@ -29702,11 +29738,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
               ? verifiedChartFixture.periodInventory
               : Array.isArray(verifiedChartFixture?.periodDayInventory) && verifiedChartFixture.periodDayInventory.length
               ? verifiedChartFixture.periodDayInventory
-              : extractedPeriodInventory,
+              : reviewedPeriodInventory,
           periodDayInventory:
             Array.isArray(verifiedChartFixture?.periodDayInventory) && verifiedChartFixture.periodDayInventory.length
               ? verifiedChartFixture.periodDayInventory
-              : extractedPeriodInventory,
+              : reviewedPeriodInventory,
           source: "verified_benchmark_chart_fixture",
           fixtureApplied: true,
         },

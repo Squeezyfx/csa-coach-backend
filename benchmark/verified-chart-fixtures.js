@@ -161,6 +161,86 @@ const VERIFIED_CHART_FIXTURES = Object.freeze({
       Object.freeze({ price: 1.6278, zoneLow: 1.6278, zoneHigh: 1.6278, areaType: "converted resistance", exactVisiblePrice: true, conversionBreakConfirmed: true, independentEntryEvidence: true, structuralEvidence: "reviewed broken support retest at the 50% current-week retracement" }),
     ]),
   }),
+  "2927": Object.freeze({
+    // Human-reviewed USA30 D1 chart. The broker-index provider was unavailable,
+    // so only the candle extremes read with the chart cursor may replace the
+    // approximate vision inventory or become entry candidates.
+    instrument: "USA30",
+    timeframe: "D1",
+    direction: "bullish",
+    currentPrice: 53563.1,
+    currentWeekHigh: 54672.95,
+    currentWeekLow: 44900,
+    swingHigh: 54672.95,
+    swingLow: 44900,
+    inventoryAuthority: "human_verified_chart_cursor_period_extremes",
+    preferVerifiedCandidates: true,
+    periodExtremeOverrides: Object.freeze([
+      Object.freeze({ periodLabel: "January", high: 49754 }),
+      Object.freeze({ periodLabel: "February", high: 50575 }),
+      Object.freeze({ periodLabel: "May", low: 48932 }),
+      Object.freeze({ periodLabel: "June", high: 54672.95, low: 49779 }),
+    ]),
+    candidates: Object.freeze([
+      Object.freeze({
+        price: 50575,
+        zoneLow: 50575,
+        zoneHigh: 50575,
+        areaType: "converted support",
+        originalType: "resistance",
+        exactVisiblePrice: true,
+        conversionBreakConfirmed: true,
+        independentEntryEvidence: true,
+        authoritativeFrameworkLevel: true,
+        provenanceVerified: true,
+        priceSource: "human_verified_chart_cursor_period_extreme",
+        sourceDate: "2026-02-01",
+        sourceDay: "February",
+        sourcePeriod: "February",
+        sourceKind: "February high converted support",
+        sourceExtreme: "high",
+        structuralEvidence: "human-verified February high at 50575; later bullish break-and-hold converted resistance to support",
+      }),
+      Object.freeze({
+        price: 49766.5,
+        zoneLow: 49754,
+        zoneHigh: 49779,
+        areaType: "demand",
+        originalType: "demand",
+        exactVisiblePrice: false,
+        conversionBreakConfirmed: true,
+        independentEntryEvidence: true,
+        authoritativeFrameworkLevel: true,
+        provenanceVerified: true,
+        priceSource: "human_verified_multi_period_confluence",
+        sourceDate: "2026-06-01",
+        sourceDay: "January high + June low",
+        sourcePeriod: "January + June",
+        sourceKind: "January high / June low confluence",
+        sourceExtreme: "confluence",
+        structuralEvidence: "human-verified January high 49754 converted support overlaps the human-verified June low 49779 demand",
+      }),
+      Object.freeze({
+        price: 48932,
+        zoneLow: 48932,
+        zoneHigh: 48932,
+        areaType: "demand",
+        originalType: "demand",
+        exactVisiblePrice: true,
+        conversionBreakConfirmed: false,
+        independentEntryEvidence: true,
+        authoritativeFrameworkLevel: true,
+        provenanceVerified: true,
+        priceSource: "human_verified_chart_cursor_period_extreme",
+        sourceDate: "2026-05-01",
+        sourceDay: "May",
+        sourcePeriod: "May",
+        sourceKind: "May low demand",
+        sourceExtreme: "low",
+        structuralEvidence: "human-verified May low demand at 48932",
+      }),
+    ]),
+  }),
 });
 
 function normalizeFixtureId(value = "") {
@@ -179,4 +259,50 @@ export function getVerifiedChartFixture(fileName = "") {
         candidates: fixture.candidates.map((candidate) => ({ ...candidate })),
       }
     : null;
+}
+
+export function applyVerifiedPeriodExtremeOverrides(periodInventory = [], fixture = null) {
+  const overrides = Array.isArray(fixture?.periodExtremeOverrides)
+    ? fixture.periodExtremeOverrides
+    : [];
+  if (!Array.isArray(periodInventory) || !overrides.length) {
+    return Array.isArray(periodInventory) ? periodInventory.map((period) => ({ ...period })) : [];
+  }
+
+  const overrideByLabel = new Map(
+    overrides.map((override) => [String(override?.periodLabel || "").trim().toLowerCase(), override])
+  );
+
+  return periodInventory.map((period) => {
+    const label = String(period?.periodLabel || period?.day || "").trim().toLowerCase();
+    const override = overrideByLabel.get(label);
+    if (!override) return { ...period };
+
+    const priorHigh = Number(period?.high);
+    const priorLow = Number(period?.low);
+    const verifiedHigh = Number(override?.high);
+    const verifiedLow = Number(override?.low);
+    const hasHigh = Number.isFinite(verifiedHigh) && verifiedHigh > 0;
+    const hasLow = Number.isFinite(verifiedLow) && verifiedLow > 0;
+    const structures = Array.isArray(period?.structures)
+      ? period.structures.map((structure) => {
+          const price = Number(structure?.price);
+          if (hasHigh && Number.isFinite(priorHigh) && price === priorHigh) {
+            return { ...structure, price: verifiedHigh };
+          }
+          if (hasLow && Number.isFinite(priorLow) && price === priorLow) {
+            return { ...structure, price: verifiedLow };
+          }
+          return { ...structure };
+        })
+      : [];
+
+    return {
+      ...period,
+      ...(hasHigh ? { high: verifiedHigh, highVerified: true } : {}),
+      ...(hasLow ? { low: verifiedLow, lowVerified: true } : {}),
+      structures,
+      verifiedExtremeSource: "human_verified_chart_cursor",
+    };
+  });
 }
