@@ -2,9 +2,9 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.48.0-structural-bias-phase-separation`, packaged as benchmark v2.63.
+The included analysis backend is CSA build `v4.49.0-credit-saving-benchmark-diagnostics`, packaged as benchmark v2.64.
 
-v2.63 keeps verified D1/W1/MN candle data as the numerical authority and now prevents recent opposite candles from overwriting fixed-period structural bias. Pullback/recovery is reported as a separate phase. The benchmark also adds a one-row-per-chart diagnosis summary, flags bias disagreements or missing data, and aligns its Fibonacci validation tolerance with the selector.
+v2.64 adds a credit-saving diagnostic mode for automatic batches. It retains chart context/final-header reading and one focused period/structure inventory read, while skipping the full AI coaching review, separate framework price-map pass and chart-native impulse-mapping passes. Full feedback mode remains available for final customer-output testing. It retains v2.63's structural-bias/phase separation and compact batch diagnosis table.
 
 ## Authoritative timeframe-candle rule
 

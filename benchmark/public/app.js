@@ -13,6 +13,8 @@ const promoteButton = document.querySelector("#promoteButton");
 const runStatus = document.querySelector("#runStatus");
 const adminKey = document.querySelector("#adminKey");
 const batchOverview = document.querySelector("#batchOverview");
+const diagnosticSummaryOnly = document.querySelector("#diagnosticSummaryOnly");
+const diagnosticOption = document.querySelector("#diagnosticOption");
 let files = [];
 let lastRun = null;
 let benchmarkMode = "automatic";
@@ -101,6 +103,7 @@ function setMode(mode) {
     : "Run strict benchmarks";
   saveButton.hidden = benchmarkMode !== "strict";
   promoteButton.hidden = true;
+  diagnosticOption.hidden = benchmarkMode !== "automatic";
   resultsPanel.hidden = true;
 }
 
@@ -152,6 +155,8 @@ function collectCases() {
   return Array.from(rows.querySelectorAll("tr")).map((row, index) => ({
     mode: benchmarkMode,
     autoDetectContext: benchmarkMode === "automatic",
+    diagnosticSummaryOnly:
+      benchmarkMode === "automatic" && diagnosticSummaryOnly.checked,
     fileIndex: index,
     label: field(row, "label").value,
     instrument: field(row, "instrument").value,
@@ -283,7 +288,7 @@ function renderRun(run) {
   const automatic = run.mode === "automatic" || run.results.every((item) => item.mode === "automatic");
   document.querySelector("#resultsHeading").textContent = automatic ? "3. Automatic batch report" : "3. Regression report";
   document.querySelector("#summaryText").textContent = automatic
-    ? `Analysed ${run.summary.total} chart${run.summary.total === 1 ? "" : "s"} independently in ${(run.summary.durationMs / 1000).toFixed(1)} seconds. Verified charts are compared with their saved accuracy baselines; new charts are labelled rule-valid only and still require human review.`
+    ? `Analysed ${run.summary.total} chart${run.summary.total === 1 ? "" : "s"} independently in ${(run.summary.durationMs / 1000).toFixed(1)} seconds. ${run.diagnosticSummaryOnly ? "Credit-saving diagnostic mode skipped full AI coaching and retained the structural audit." : "Full feedback mode generated the customer-facing review."} Verified charts are compared with saved accuracy baselines; new charts still require human review.`
     : `Completed ${new Date(run.runAt).toLocaleString()} in ${(run.summary.durationMs / 1000).toFixed(1)} seconds.`;
   document.querySelector("#summaryCards").innerHTML = [
     summaryCard("Total", run.summary.total), summaryCard(automatic ? "Accepted" : "Passed", run.summary.passed),

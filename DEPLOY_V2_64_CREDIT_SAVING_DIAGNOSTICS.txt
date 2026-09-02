@@ -1,0 +1,27 @@
+CSA Benchmark v2.64 deployment
+
+Build: CSA-v4.49.0-credit-saving-benchmark-diagnostics
+Feedback engine: 10.44.0
+Selector: 4.32.0
+Validator: 1.14.0
+
+Credit-saving diagnostic mode
+- Enabled by default for Automatic batch.
+- Keeps chart validation, instrument/timeframe/final-header extraction and one
+  focused period/structure inventory read per chart.
+- Skips the full customer-facing AI coaching review.
+- Skips the separate framework price-map vision pass.
+- Skips chart-native impulse/wick-mapping vision passes.
+- Keeps deterministic period highs/lows, structural roles, fixed-period bias,
+  Fibonacci, Entry 1-3 decisions, review flags and exported diagnostic JSON.
+- Optional narrow conflict readers may still run only when the chart evidence
+  specifically requires them.
+
+Full feedback mode
+- Untick Credit-saving diagnostic when testing final customer-facing prose,
+  scores, strengths, weaknesses and coaching output.
+- Production customer analysis is unchanged.
+
+Verification
+- npm run check
+- npm run test:benchmarks

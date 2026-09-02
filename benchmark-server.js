@@ -92,6 +92,8 @@ function cleanCase(value = {}, index = 0) {
     notes: String(value.notes || "").slice(0, 3000),
     mode,
     autoDetectContext: mode === "automatic" || value.autoDetectContext === true,
+    diagnosticSummaryOnly:
+      mode === "automatic" && value.diagnosticSummaryOnly !== false,
     expectation: {
       expectedDirection: String(value.expectedDirection || "").trim(),
       expectedEntry1: value.expectedEntry1 ?? "",
@@ -130,6 +132,7 @@ function createAnalysisForm(testCase, file) {
   form.append("forceFreshAnalysis", "true");
   form.append("analysisFramework", "csa");
   form.append("autoDetectContext", testCase.autoDetectContext ? "true" : "false");
+  form.append("benchmarkDiagnosticSummaryOnly", testCase.diagnosticSummaryOnly ? "true" : "false");
   const context = testCase.verifiedBaseline ||
     (testCase.autoDetectContext ? reviewedAutomaticContext(file.originalname) : null);
   if (context?.instrument && context?.timeframe) {
@@ -310,7 +313,9 @@ app.post("/api/run", requireAdmin, upload.array("charts", 30), async (req, res) 
     const mode = cases.every((item) => item.mode === "automatic")
       ? "automatic"
       : "strict";
-    return res.json({ success: true, mode, runAt: new Date().toISOString(), summary, results });
+    const diagnosticSummaryOnly =
+      mode === "automatic" && cases.every((item) => item.diagnosticSummaryOnly === true);
+    return res.json({ success: true, mode, diagnosticSummaryOnly, runAt: new Date().toISOString(), summary, results });
   } catch (error) {
     console.error("Benchmark batch error:", error);
     return res.status(500).json({ success: false, error: error.message || "Benchmark run failed." });

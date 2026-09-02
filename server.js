@@ -10748,8 +10748,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.43.0";
-const CSA_BUILD_ID = "CSA-v4.48.0-structural-bias-phase-separation";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.44.0";
+const CSA_BUILD_ID = "CSA-v4.49.0-credit-saving-benchmark-diagnostics";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -28529,6 +28529,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       autoDetectContext = "false",
       benchmarkContextInstrument = "",
       benchmarkContextTimeframe = "",
+      benchmarkDiagnosticSummaryOnly = "false",
     } = req.body;
     let timeframe = requestedTimeframe;
     let submittedInstrument = instrument || pair || selectedPair || "Not provided";
@@ -28539,6 +28540,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const benchmarkAutoDetectContext =
       benchmarkDryRun &&
       String(autoDetectContext || "").trim().toLowerCase() === "true";
+    const benchmarkDiagnosticOnly =
+      benchmarkDryRun &&
+      String(benchmarkDiagnosticSummaryOnly || "").trim().toLowerCase() === "true";
     const selectedStrategy = benchmarkDryRun
       ? {
           analysisFramework: "csa",
@@ -28974,7 +28978,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       initialVisualReview,
       initialFrameworkPriceMap,
     ] = await Promise.all([
-      compareUploadedChartWithCsaFramework({
+      benchmarkDiagnosticOnly
+        ? Promise.resolve(visualFallback(
+            "Credit-saving benchmark diagnostic mode skipped full customer-facing visual feedback."
+          ))
+        : compareUploadedChartWithCsaFramework({
         imageBase64,
         mimeType,
         marketReference,
@@ -28988,7 +28996,14 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         personalStrategySnapshot:
           selectedStrategy.snapshot,
       }),
-      extractVisibleFrameworkPriceMap({
+      benchmarkDiagnosticOnly
+        ? Promise.resolve({
+            ok: false,
+            matches: [],
+            independentlyReadLines: [],
+            reason: "Skipped in credit-saving benchmark diagnostic mode.",
+          })
+        : extractVisibleFrameworkPriceMap({
         imageBase64,
         mimeType,
         marketReference,
@@ -29442,7 +29457,13 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       csaNowMs();
 
     const chartNativeImpulse =
-      await extractChartNativeImpulseAnchors({
+      benchmarkDiagnosticOnly
+        ? {
+            usable: false,
+            source: "credit_saving_benchmark_diagnostic",
+            reason: "Current-period inventory owns the diagnostic Fib frame; extra impulse-mapping vision calls were skipped.",
+          }
+        : await extractChartNativeImpulseAnchors({
         imageBase64,
         mimeType,
         marketReference,
@@ -29842,6 +29863,16 @@ ${(visualReview?.strategyMissingInformation || []).length
       cutoffReason: chartCutoff.reason,
       forceFreshAnalysis: forceFresh,
       benchmarkDryRun,
+      benchmarkDiagnosticOnly,
+      benchmarkProcessing: {
+        mode: benchmarkDiagnosticOnly ? "credit_saving_diagnostic" : "full_feedback",
+        fullVisualFeedbackSkipped: benchmarkDiagnosticOnly,
+        separateFrameworkPriceMapSkipped: benchmarkDiagnosticOnly,
+        chartNativeImpulseMappingSkipped: benchmarkDiagnosticOnly,
+        retainedVisionPasses: benchmarkDiagnosticOnly
+          ? ["chart_context_and_final_header", "focused_period_structure_inventory"]
+          : ["full_feedback_pipeline"],
+      },
       cutoffDiagnostics: {
         engineVersion: CSA_FEEDBACK_ENGINE_VERSION,
         cutoffMode: chartCutoff.mode,
