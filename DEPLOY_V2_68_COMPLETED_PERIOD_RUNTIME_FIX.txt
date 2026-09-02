@@ -1,0 +1,15 @@
+CSA Benchmark v2.68.0 — completed-period runtime fix
+
+Build: CSA-v4.51.1-completed-period-runtime-fix
+Feedback engine: 10.46.1
+Selector: 4.34.1
+
+Fix:
+- Restores the period inventory variable consumed by fixed-period bias.
+- Prevents provider-supported charts from failing with
+  "periods is not defined".
+- Adds a regression assertion covering the exact runtime variable contract.
+
+Completed-period rule retained:
+- Active unfinished period: live Fib/current price/current phase only.
+- Completed periods: structural S/R, S/D and Entry 1-3 candidates.

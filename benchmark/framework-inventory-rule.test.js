@@ -67,6 +67,11 @@ test("date labels alone cannot verify vision-estimated highs and lows", () => {
 
 test("verified fixed-period structure outranks the final pullback direction", () => {
   assert.match(serverSource, /deriveVerifiedFixedPeriodBias/);
+  const fixedBiasFunction = serverSource.match(
+    /function deriveVerifiedFixedPeriodBias\([\s\S]*?\n}\n\nfunction buildPeriodInventoryStructuralCandidates/
+  )?.[0] || "";
+  assert.match(fixedBiasFunction, /const periods =/);
+  assert.doesNotMatch(fixedBiasFunction, /const normalizedPeriods =/);
   assert.match(serverSource, /verified fixed-period structure is bullish/);
   assert.match(serverSource, /final bearish move treated as a pullback/);
   assert.match(serverSource, /latestClose < latestOpen/);

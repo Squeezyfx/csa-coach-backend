@@ -10759,8 +10759,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.46.0";
-const CSA_BUILD_ID = "CSA-v4.51.0-completed-period-structure";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.46.1";
+const CSA_BUILD_ID = "CSA-v4.51.1-completed-period-runtime-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -16088,7 +16088,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.34.0";
+const CSA_SELECTOR_VERSION = "4.34.1";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19780,7 +19780,7 @@ function deriveVerifiedFixedPeriodBias({
   currentPrice = null,
 } = {}) {
   const tf = comparableTimeframe(timeframe);
-  const normalizedPeriods = (Array.isArray(periodInventory) ? periodInventory : [])
+  const periods = (Array.isArray(periodInventory) ? periodInventory : [])
     .filter((period) => Number.isFinite(Number(period?.high)) && Number.isFinite(Number(period?.low)));
   if (!periods.length) return null;
   const high = Math.max(...periods.map((period) => Number(period.high)));
