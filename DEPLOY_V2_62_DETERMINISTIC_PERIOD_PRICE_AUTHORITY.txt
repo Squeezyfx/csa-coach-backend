@@ -1,0 +1,38 @@
+CSA Benchmark v2.62 deployment
+
+Build: CSA-v4.47.0-deterministic-period-price-authority
+Selector: 4.32.0
+Validator: 1.13.0
+
+Why this release is required
+- v2.61 fixed weekly dates and weekend handling, but the vision reader still attached unrelated chart prices to correctly labelled W1-W4 rows.
+- EURUSD W2 was visually estimated as 1.16050 even though deterministic W1 data returned 1.15853 and the chart benchmark is approximately 1.15839.
+- XAUUSD D1 visually invented a January low of 2620, corrupting the YTD range and bias.
+
+Authority rule
+- Verified D1/W1/MN candles control every period high and low.
+- The exact chart-header final candle is reconciled into the final period.
+- The period inventory then controls fixed-period bias and the Fibonacci high/low.
+- Vision-estimated period prices are comparison evidence only.
+- A vision inventory is not verified merely because it echoes the requested dates.
+- When deterministic period candles are unavailable, the benchmark returns no verified frame and no entry instead of guessing.
+- Material chart-versus-data differences remain displayed for diagnosis.
+
+Expected EURUSD H4 retest
+- W1: deterministic weekly high/low around 1.15900 / 1.15018.
+- W2: deterministic weekly high/low around 1.15853 / 1.15120. The screenshot may visually resolve the high near 1.15839.
+- W3: deterministic weekly high/low around 1.17109 / 1.15672.
+- W4: final low reconciles to the exact chart-header 1.15767.
+- Bias: bullish fixed-period structure with a sharp bearish pullback.
+- The false visual Fibonacci low 1.13660 must not be used.
+
+Deploy and verify
+1. Upload all files and preserve benchmark/.
+2. Commit to benchmark-testing.
+3. Redeploy staging analysis and the benchmark runner.
+4. Confirm CSA-v4.47.0-deterministic-period-price-authority in health/output.
+5. Retest EURUSD H4 alone before the other four charts.
+
+Validation
+- npm run check
+- npm run test:benchmarks

@@ -2,9 +2,9 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.46.0-midnight-week-boundaries-and-weekend-exclusion`, packaged as benchmark v2.61.
+The included analysis backend is CSA build `v4.47.0-deterministic-period-price-authority`, packaged as benchmark v2.62.
 
-v2.61 explicitly anchors every H4 week at Monday 00:00, ends it at Friday 20:00 for six-candle-per-day charts, and excludes Saturday/Sunday candles instead of shifting them into the following week. This prevents an early W3 candle—such as EURUSD 1.16133—from being reported as the W2 high. It retains v2.60's exact period dates, fixed-period bias reconciliation, tightly bounded Fibonacci edge allowance and visible price-source conflicts.
+v2.62 makes verified D1/W1/MN candle data the numerical authority for period highs/lows, fixed-period bias and Fibonacci. The vision model may identify chart structure and provide an auditable comparison, but correct date labels alone can no longer verify its estimated prices. When deterministic period data is unavailable, the engine returns no verified period frame and cannot select an entry from guessed prices. It retains v2.61's Monday 00:00 boundaries and weekend exclusion.
 
 ## Authoritative timeframe-candle rule
 

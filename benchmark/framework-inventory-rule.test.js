@@ -48,11 +48,21 @@ test("a complete inventory can authoritatively reconstruct the current-period fr
   assert.match(serverSource, /inventory_verified/);
 });
 
-test("complete uploaded-chart inventory outranks external aggregation", () => {
+test("complete deterministic inventory outranks vision-estimated period prices", () => {
   assert.match(serverSource, /aggregateH4CandlesIntoWeeklyInventory/);
   assert.match(serverSource, /focusedInventoryVerified/);
-  assert.match(serverSource, /uploaded_chart_complete_period_inventory/);
+  assert.match(serverSource, /const selectedPeriodInventory = marketInventoryVerified/);
+  assert.match(serverSource, /cutoff_safe_market_period_inventory_chart_endpoint_reconciled/);
   assert.match(serverSource, /inventoryPriceConflicts/);
+});
+
+test("date labels alone cannot verify vision-estimated highs and lows", () => {
+  assert.match(serverSource, /focusedInventoryDateSequenceVerified/);
+  assert.match(serverSource, /rawInventoryPriceConflicts\.length === 0/);
+  assert.match(serverSource, /usable: marketInventoryVerified && Boolean\(fallbackDirection\)/);
+  assert.match(serverSource, /rejectedFocusedPeriodInventory/);
+  assert.match(serverSource, /requiresReview: !marketInventoryVerified/);
+  assert.match(serverSource, /vision-estimated period price rejected/);
 });
 
 test("verified fixed-period structure outranks the final pullback direction", () => {
