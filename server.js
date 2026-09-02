@@ -10748,8 +10748,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.44.0";
-const CSA_BUILD_ID = "CSA-v4.49.0-credit-saving-benchmark-diagnostics";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.45.0";
+const CSA_BUILD_ID = "CSA-v4.50.0-structural-bias-direction-lock";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -16077,7 +16077,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.32.0";
+const CSA_SELECTOR_VERSION = "4.33.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19952,6 +19952,7 @@ function buildPeriodInventoryStructuralCandidates({
       rejectedVisualCandidates.push({
         ...candidate,
         provenanceVerified: false,
+        requiresReview: false,
         rejectionReason:
           "price is not a deterministic period high/low, an independently read chart label, or a validated supply/demand zone",
       });
@@ -20245,6 +20246,7 @@ function rankChartNativeFallbackAreas({
         deterministicInventoryPrice: deterministicPrice,
         conflictingFrameworkPrice: legacyPrice,
         difference,
+        requiresReview: false,
         resolution: "deterministic period high/low inventory retained",
       };
     }).filter(Boolean);
@@ -20358,6 +20360,7 @@ function rankChartNativeFallbackAreas({
         claimedPrice: candidate?.price ?? null,
         claimedRole: candidate?.areaType || null,
         claimedSource: candidate?.sourceKind || null,
+        requiresReview: candidate?.requiresReview === true,
         resolution: candidate?.rejectionReason || "rejected by provenance gate",
       })),
       ...legacyFrameworkConflicts,
@@ -24740,7 +24743,7 @@ function buildValidatedAnalysisFacts({
       currentStructureRegime.direction;
   }
 
-  // V4.48.0: the verified fixed-period inventory owns the structural bias.
+  // V4.50.0: the verified fixed-period inventory owns the structural bias.
   // A recent opposite candle sequence is the current phase (pullback/recovery),
   // not permission to silently reverse the monthly/weekly structural bias.
   if (
@@ -24753,7 +24756,11 @@ function buildValidatedAnalysisFacts({
     )
       ? currentStructureRegime.direction
       : null;
-    const structuralDirection = historicalPhase.direction;
+    const structuralDirection = ["bullish", "bearish"].includes(
+      verifiedMarketDirection
+    )
+      ? verifiedMarketDirection
+      : historicalPhase.direction;
     direction = structuralDirection;
     currentStructureRegime.direction = structuralDirection;
     if (recentDirection && recentDirection !== structuralDirection) {

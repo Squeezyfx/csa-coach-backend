@@ -2,9 +2,9 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.49.0-credit-saving-benchmark-diagnostics`, packaged as benchmark v2.65.
+The included analysis backend is CSA build `v4.50.0-structural-bias-direction-lock`, packaged as benchmark v2.66.
 
-v2.65 makes the credit-saving automatic-batch display summary-only. Complete per-chart diagnostics stay in Export JSON for troubleshooting, but the long individual review cards are not rendered. The underlying v2.64 reduced vision pipeline remains unchanged: it retains chart context/final-header reading and one focused period/structure inventory read, while skipping the full AI coaching review, separate framework price-map pass and chart-native impulse-mapping passes. Full feedback mode remains available for final customer-output testing.
+v2.66 locks selector direction, Fibonacci orientation and entry-side selection to the verified fixed-period structural bias. A recent opposite move remains visible as a pullback/recovery phase instead of reversing the framework direction. Resolved or rejected price readings remain in Export JSON as audit evidence but no longer appear as unresolved review conflicts. It retains v2.65's summary-only display and reduced vision pipeline.
 
 ## Authoritative timeframe-candle rule
 
