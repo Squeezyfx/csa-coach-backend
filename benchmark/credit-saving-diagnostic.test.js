@@ -26,6 +26,11 @@ test("automatic benchmark defaults to credit-saving diagnostics", () => {
   assert.match(runnerSource, /benchmarkDiagnosticSummaryOnly/);
 });
 
+test("credit-saving diagnostics render only the batch summary", () => {
+  assert.match(uiSource, /run\.diagnosticSummaryOnly \? "" : run\.results\.map/);
+  assert.match(uiSource, /complete troubleshooting data remains available through Export JSON/);
+});
+
 test("diagnostic mode skips the expensive optional vision stages", () => {
   assert.match(serverSource, /full customer-facing visual feedback/);
   assert.match(serverSource, /separateFrameworkPriceMapSkipped: benchmarkDiagnosticOnly/);

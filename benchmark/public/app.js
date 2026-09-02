@@ -275,7 +275,10 @@ function renderBatchOverview(run) {
     if (conflictCount) flags.push(`${conflictCount} price conflict${conflictCount === 1 ? "" : "s"}`);
     return `<tr class="${flags.length ? "overview-review" : "overview-clear"}"><th>${escapeHtml(`${facts.instrument || analysis.detectedPair || "Unknown"} ${facts.timeframe || analysis.detectedTimeframe || ""}`)}</th><td><b>${escapeHtml(structuralBias)}</b><small>${escapeHtml(String(phase).replaceAll("_", " "))}</small></td><td>${escapeHtml(compactNumber(facts.currentPrice, seed))}</td><td>${escapeHtml(Number(fib.swingHigh) > Number(fib.swingLow) ? `H ${compactNumber(fib.swingHigh, seed)} / L ${compactNumber(fib.swingLow, seed)}` : "Not verified")}<small>${escapeHtml(fibLevels.length ? `38.2 ${compactNumber(fibLevels[0], seed)} · 50 ${compactNumber(fibLevels[1], seed)} · 61.8 ${compactNumber(fibLevels[2], seed)}` : "")}</small></td><td class="overview-periods">${escapeHtml(periodText)}</td><td>${escapeHtml(entryText)}</td><td>${escapeHtml(flags.length ? flags.join("; ") : "clear")}</td></tr>`;
   }).join("");
-  batchOverview.innerHTML = `<div class="overview-heading"><div><h3>Batch diagnosis summary</h3><p>Structural bias and current phase are separated. Expand a chart below only when a row needs investigation.</p></div><label><input id="reviewOnly" type="checkbox"> Show review rows only</label></div><div class="audit-table-wrap"><table class="overview-table"><thead><tr><th>Chart</th><th>Structural bias / phase</th><th>Current</th><th>Fib frame / levels</th><th>Period highs & lows</th><th>Entries</th><th>Review flags</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const guidance = run.diagnosticSummaryOnly
+    ? "Credit-saving view: complete troubleshooting data remains available through Export JSON."
+    : "Structural bias and current phase are separated. Expand a chart below only when a row needs investigation.";
+  batchOverview.innerHTML = `<div class="overview-heading"><div><h3>Batch diagnosis summary</h3><p>${escapeHtml(guidance)}</p></div><label><input id="reviewOnly" type="checkbox"> Show review rows only</label></div><div class="audit-table-wrap"><table class="overview-table"><thead><tr><th>Chart</th><th>Structural bias / phase</th><th>Current</th><th>Fib frame / levels</th><th>Period highs & lows</th><th>Entries</th><th>Review flags</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   batchOverview.querySelector("#reviewOnly")?.addEventListener("change", (event) => {
     batchOverview.querySelectorAll("tbody tr").forEach((row) => {
       row.hidden = event.target.checked && !row.classList.contains("overview-review");
@@ -295,7 +298,7 @@ function renderRun(run) {
     summaryCard(automatic ? "Needs review" : "Failed", run.summary.failed), summaryCard("Errors", run.summary.errors),
   ].join("");
   renderBatchOverview(run);
-  document.querySelector("#resultCards").innerHTML = run.results.map((item) => {
+  document.querySelector("#resultCards").innerHTML = run.diagnosticSummaryOnly ? "" : run.results.map((item) => {
     const checks = item.validation?.checks || [];
     const failures = checks.filter((check) => !check.passed);
     const headline = item.status === "error"
