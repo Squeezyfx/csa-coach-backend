@@ -926,7 +926,57 @@ function expectedFrameworkInventoryCount(timeframe = "", latestVisibleDate = "")
     return mondayWeeks.size;
   }
 
+  if (tf === "D1") {
+    return date.getUTCMonth() + 1;
+  }
+
+  if (tf === "W1") {
+    return Math.floor(date.getUTCMonth() / 3) + 1;
+  }
+
   return null;
+}
+
+export function reconcileFinalPeriodWithVisibleCandle({
+  periodInventory = [],
+  visibleOpen = null,
+  visibleHigh = null,
+  visibleLow = null,
+  visibleClose = null,
+} = {}) {
+  const periods = (Array.isArray(periodInventory) ? periodInventory : [])
+    .map((period) => ({ ...period }));
+  if (!periods.length) return periods;
+
+  const high = Number(visibleHigh);
+  const low = Number(visibleLow);
+  const open = Number(visibleOpen);
+  const close = Number(visibleClose);
+  if (!Number.isFinite(high) || !Number.isFinite(low) || high < low) {
+    return periods;
+  }
+
+  const index = periods.length - 1;
+  const finalPeriod = periods[index];
+  const periodHigh = Number(finalPeriod?.high);
+  const periodLow = Number(finalPeriod?.low);
+  periods[index] = {
+    ...finalPeriod,
+    high: Number.isFinite(periodHigh) ? Math.max(periodHigh, high) : high,
+    low: Number.isFinite(periodLow) ? Math.min(periodLow, low) : low,
+    open: Number.isFinite(Number(finalPeriod?.open))
+      ? Number(finalPeriod.open)
+      : Number.isFinite(open)
+      ? open
+      : null,
+    close: Number.isFinite(close) ? close : finalPeriod?.close ?? null,
+    finalVisibleCandleReconciled: true,
+    finalVisibleCandleHigh: high,
+    finalVisibleCandleLow: low,
+    finalVisibleCandleClose: Number.isFinite(close) ? close : null,
+    source: `${String(finalPeriod?.source || "period_inventory")}+exact_visible_final_candle`,
+  };
+  return periods;
 }
 
 export function deriveVerifiedPeriodFrameFromInventory({

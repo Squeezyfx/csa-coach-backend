@@ -299,6 +299,12 @@ function renderRun(run) {
       const auditedRows = Array.isArray(transparencyAudit.periodStructureAudit)
         ? transparencyAudit.periodStructureAudit
         : [];
+      const authority = transparencyAudit.inventoryAuthority || {};
+      const endpoint = authority.finalVisibleCandle || {};
+      const authorityText = authority.selectedSource || "not reported";
+      const endpointText = [endpoint.high, endpoint.low, endpoint.close].every((value) => Number.isFinite(Number(value)))
+        ? `Final candle header: high ${Number(endpoint.high).toFixed(precision)}, low ${Number(endpoint.low).toFixed(precision)}, close ${Number(endpoint.close).toFixed(precision)}.`
+        : "Final candle header OHLC was not fully readable.";
       const rows = periodInventory.map((period, index) => {
         const label = period.periodLabel || `Period ${index + 1}`;
         const audit = auditedRows.find((row) => String(row?.period) === String(label)) || {};
@@ -310,7 +316,7 @@ function renderRun(run) {
           : audit.lowRole || "not classified";
         return `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(period.date || "")}</td><td>${Number(period.high).toFixed(precision)}</td><td>${escapeHtml(highRole)}</td><td>${Number(period.low).toFixed(precision)}</td><td>${escapeHtml(lowRole)}</td><td>${escapeHtml(audit.source || period.source || period.sourceUnit || "")}</td></tr>`;
       }).join("");
-      return `<details class="period-audit" open><summary>D1/W1 candle high-low and structure inventory — ${periodInventory.length} period${periodInventory.length === 1 ? "" : "s"}</summary><p>Each high and low remains tied to its own higher-timeframe candle and structural classification.</p><div class="audit-table-wrap"><table class="period-inventory"><thead><tr><th>Period</th><th>Date</th><th>High</th><th>High role</th><th>Low</th><th>Low role</th><th>Price source</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+      return `<details class="period-audit" open><summary>D1/W1/MN candle high-low and structure inventory — ${periodInventory.length} period${periodInventory.length === 1 ? "" : "s"}</summary><p>Each high and low remains tied to its own higher-timeframe candle and structural classification.</p><p><b>Inventory authority:</b> ${escapeHtml(authorityText)} · chart verified: ${authority.focusedInventoryVerified === true ? "yes" : "no"} · market verified: ${authority.marketInventoryVerified === true ? "yes" : "no"}. ${escapeHtml(endpointText)}</p><div class="audit-table-wrap"><table class="period-inventory"><thead><tr><th>Period</th><th>Date</th><th>High</th><th>High role</th><th>Low</th><th>Low role</th><th>Price source</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
     })();
     const fibLabelForEntry = (entry, index) => {
       const diagnostic = diagnosticEntries.find((candidate) => Number(candidate?.executionOrder) === index + 1) || {};
@@ -396,7 +402,14 @@ function renderRun(run) {
         ? transparencyAudit.provenanceConflicts
         : [];
       if (!conflicts.length) return `<details class="provenance-audit"><summary>Price-source conflicts — none</summary><p>No conflicting or unverified structural price was found.</p></details>`;
-      const rows = conflicts.map((conflict) => `<li><b>${escapeHtml(conflict.period || conflict.claimedSource || "Unverified source")}</b> — ${escapeHtml(String(conflict.claimedPrice ?? conflict.conflictingFrameworkPrice ?? "unknown price"))} — ${escapeHtml(conflict.resolution || "rejected")}</li>`).join("");
+      const rows = conflicts.map((conflict) => {
+        const values = conflict.extreme === "count"
+          ? `chart ${conflict.chartCount}, market ${conflict.marketCount}`
+          : Number.isFinite(Number(conflict.chartPrice)) && Number.isFinite(Number(conflict.marketPrice))
+          ? `${conflict.extreme}: chart ${conflict.chartPrice}, market ${conflict.marketPrice}`
+          : String(conflict.claimedPrice ?? conflict.conflictingFrameworkPrice ?? "unknown price");
+        return `<li><b>${escapeHtml(conflict.period || conflict.claimedSource || "Unverified source")}</b> — ${escapeHtml(values)} — ${escapeHtml(conflict.resolution || "rejected")}</li>`;
+      }).join("");
       return `<details class="provenance-audit" open><summary>Price-source conflicts — ${conflicts.length}</summary><p>These values were exposed instead of silently entering the selector.</p><ul>${rows}</ul></details>`;
     })();
     const fibFrameSummary = (() => {

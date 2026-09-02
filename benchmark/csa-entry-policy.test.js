@@ -24,6 +24,7 @@ import {
   orderStructuralCandidatesForFib,
   parseChartHeaderText,
   promoteConfirmedBreakPassedExactLevels,
+  reconcileFinalPeriodWithVisibleCandle,
   reconcileLatestVisibleDateWithAxisYear,
   replaceMisclassifiedZoneWithExactConvertedLines,
   selectIndependentEntryAreas,
@@ -34,6 +35,45 @@ import {
   shouldMergeQualifiedSupplyDemandCluster,
   shouldApplyFinalVisibleTerminalImpulse,
 } from "../csa-entry-policy.js";
+
+test("exact final candle expands only the final weekly period", () => {
+  const inventory = reconcileFinalPeriodWithVisibleCandle({
+    periodInventory: [
+      { periodLabel: "W1", high: 1.36, low: 1.34 },
+      { periodLabel: "W2", high: 1.365, low: 1.357 },
+    ],
+    visibleOpen: 1.3536,
+    visibleHigh: 1.35395,
+    visibleLow: 1.3526,
+    visibleClose: 1.35301,
+  });
+  assert.deepEqual([inventory[0].high, inventory[0].low], [1.36, 1.34]);
+  assert.equal(inventory[1].high, 1.365);
+  assert.equal(inventory[1].low, 1.3526);
+  assert.equal(inventory[1].close, 1.35301);
+  assert.equal(inventory[1].finalVisibleCandleReconciled, true);
+});
+
+test("D1 year frame requires every month through the visible month", () => {
+  const months = Array.from({ length: 8 }, (_, index) => ({
+    periodLabel: `M${index + 1}`,
+    high: 4500 + index * 10,
+    low: 4000 + index * 5,
+  }));
+  const complete = deriveVerifiedPeriodFrameFromInventory({
+    timeframe: "D1",
+    latestVisibleDate: "2026-08-28",
+    periodInventory: months,
+  });
+  assert.equal(complete.currentPeriodFrameVerified, true);
+  assert.equal(complete.expectedCount, 8);
+  const incomplete = deriveVerifiedPeriodFrameFromInventory({
+    timeframe: "D1",
+    latestVisibleDate: "2026-08-28",
+    periodInventory: months.slice(0, 7),
+  });
+  assert.equal(incomplete.currentPeriodFrameVerified, false);
+});
 
 test("framework inventory checks the immediate previous period before older periods", () => {
   const ordered = orderStructuralCandidatesForFib(

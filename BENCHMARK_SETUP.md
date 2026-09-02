@@ -2,7 +2,9 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.43.0-transparent-structure-fib-entry-audit`, packaged as benchmark v2.58.
+The included analysis backend is CSA build `v4.44.0-chart-period-price-authority`, packaged as benchmark v2.59.
+
+v2.59 makes the uploaded chart's complete fixed-period inventory the primary benchmark authority when verified. It reconciles the exact final header candle into the last period and exposes chart-versus-market price conflicts instead of silently selecting one.
 
 ## Authoritative timeframe-candle rule
 

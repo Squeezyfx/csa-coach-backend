@@ -19,6 +19,16 @@ test("focused automatic fallback inventories W1 candles for H4", () => {
   assert.match(serverSource, /Do not skip, merge or renumber inventory periods/);
 });
 
+test("focused automatic fallback inventories MN candles for D1", () => {
+  assert.match(serverSource, /For D1, treat each MN candle inside the visible current calendar year/);
+  assert.match(serverSource, /Return January through the final visible month separately/);
+});
+
+test("focused inventory returns the required verification flag", () => {
+  assert.match(serverSource, /"currentPeriodFrameVerified": false/);
+  assert.match(serverSource, /Set currentPeriodFrameVerified=true only when every required/);
+});
+
 test("period inventory remains separate from the Fibonacci frame", () => {
   assert.match(serverSource, /This Fibonacci frame qualifies structure but does not replace the individual D1\/W1 inventory/);
   assert.match(serverSource, /currentPeriodHigh/);
@@ -31,10 +41,18 @@ test("a complete inventory can authoritatively reconstruct the current-period fr
   assert.match(serverSource, /inventory_verified/);
 });
 
-test("H4 inventory is deterministically aggregated before visual fallback selection", () => {
+test("complete uploaded-chart inventory outranks external aggregation", () => {
   assert.match(serverSource, /aggregateH4CandlesIntoWeeklyInventory/);
-  assert.match(serverSource, /deterministicH4PeriodInventory/);
-  assert.match(serverSource, /deterministic_visible_H4_candle_aggregation/);
+  assert.match(serverSource, /focusedInventoryVerified/);
+  assert.match(serverSource, /uploaded_chart_complete_period_inventory/);
+  assert.match(serverSource, /inventoryPriceConflicts/);
+});
+
+test("final chart-header candle is reconciled into the final period", () => {
+  assert.match(serverSource, /latestVisibleOpen/);
+  assert.match(serverSource, /latestVisibleHigh/);
+  assert.match(serverSource, /latestVisibleLow/);
+  assert.match(serverSource, /reconcileFinalPeriodWithVisibleCandle/);
 });
 
 test("final-visible price synchronization cannot rewind to an older similar close", () => {

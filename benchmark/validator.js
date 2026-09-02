@@ -1,6 +1,6 @@
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
-const BENCHMARK_VALIDATOR_VERSION = "1.9.0";
+const BENCHMARK_VALIDATOR_VERSION = "1.10.0";
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -671,6 +671,23 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
           ? `${transparencyAudit.periodStructureAudit.length} period(s) and ${transparencyAudit.candidateEvaluationAudit.length} candidate(s) are fully auditable.`
           : "Selector 4.28+ must return period structure, Fib range, candidate decisions, Entry 1-3 decisions and provenance conflicts."
       );
+      if (String(transparencyAudit?.auditVersion || "").startsWith("1.1")) {
+        const inventoryConflicts = (Array.isArray(transparencyAudit.provenanceConflicts)
+          ? transparencyAudit.provenanceConflicts
+          : []).filter((conflict) =>
+            Number.isFinite(Number(conflict?.chartPrice)) ||
+            Number.isFinite(Number(conflict?.chartCount))
+          );
+        addCheck(
+          checks,
+          "automatic_period_price_authority",
+          "Chart and external period prices agree",
+          inventoryConflicts.length === 0,
+          inventoryConflicts.length
+            ? `${inventoryConflicts.length} period high/low conflict(s) were exposed. Review the chart values before saving this result.`
+            : "No unresolved chart-versus-market period high/low conflict was found."
+        );
+      }
     }
     addCheck(
       checks,

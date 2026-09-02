@@ -28,6 +28,7 @@ import {
   reconcileLatestVisibleDateWithAxisYear,
   replaceMisclassifiedZoneWithExactConvertedLines,
   promoteConfirmedBreakPassedExactLevels,
+  reconcileFinalPeriodWithVisibleCandle,
   selectStructureLedChartNativeImpulseFrame,
   selectProtectiveSupplyDemandAnchor,
   selectIndependentEntryAreas,
@@ -1490,9 +1491,11 @@ Important:
 - If the selected date is clearly far after the latest visible chart date, set selectedDateVisible=false and provide latestVisibleDate.
 - Inspect the bottom time axis separately and return its clearly printed four-digit year as visibleTimeAxisYear. Never take this year from account-expiry text such as "Account authorized until" or from unrelated platform chrome.
 - If latestVisibleDate and the bottom-axis year disagree, use the bottom-axis year for latestVisibleDate because the time axis defines the chart's visible history.
-- Inspect the far-right side of the time axis and the latest visible candle. When readable, return the latest visible candle time in 24-hour HH:mm format.
+- Inspect the far-right side of the time axis and the latest visible candle. A printed bottom-axis date is a tick label, not automatically the final candle date. If candles continue to its right, count those candles using the detected timeframe (one trading day per D1 candle; four hours per H4 candle, skipping closed weekends) before returning latestVisibleDate. Never copy the last printed tick as latestVisibleDate while later candles are visibly present.
+- Return latestPrintedAxisDate and visibleCandlesAfterLastPrintedDate so this endpoint-date calculation can be audited.
+- When readable, return the latest visible candle time in 24-hour HH:mm format.
 - latestVisibleTime must describe where the uploaded screenshot stops, not the current time and not a later market time.
-- Read the final visible candle CLOSE price from the chart header or final printed price label when it is clearly visible. Return it as latestVisiblePrice. Prefer an exact printed/header close over a visual estimate.
+- Read the final visible candle OPEN, HIGH, LOW and CLOSE from the top-left chart header when printed. Return all four exact values. latestVisiblePrice must equal latestVisibleClose. Prefer the exact header values over visual wick estimates.
 - latestVisiblePrice must describe the final candle visible in the uploaded screenshot, not a later external-data price. If the exact final close cannot be read confidently, return null rather than guessing.
 - If the final candle time cannot be read confidently, set latestVisibleTime=null and latestVisibleTimeConfidence="low". Never guess.
 - If the date axis is hard to read, set dateConfidence="low" instead of blocking the chart.
@@ -1559,10 +1562,16 @@ Return exactly this JSON shape:
   "detectedInstrument": "exact visible instrument/ticker such as GBPUSD, XAUUSD, BTCUSD, ETHUSD, AAPL, NVDA, USA30, US30, US500, USTEC, NAS100, GER40, UK100, JP225, or null",
   "detectedTimeframe": "H1 or M5 or H4 or D1 or W1 or MN or null",
   "latestVisibleDate": "YYYY-MM-DD or null",
+  "latestPrintedAxisDate": "YYYY-MM-DD or null",
+  "visibleCandlesAfterLastPrintedDate": 0,
   "visibleTimeAxisYear": 2026,
   "latestVisibleTime": "HH:mm in 24-hour time or null",
   "latestVisibleTimeConfidence": "high or medium or low",
   "latestVisiblePrice": 1.23456,
+  "latestVisibleOpen": 1.23456,
+  "latestVisibleHigh": 1.23456,
+  "latestVisibleLow": 1.23456,
+  "latestVisibleClose": 1.23456,
   "latestVisiblePriceConfidence": "high or medium or low",
   "dateConfidence": "high or medium or low",
   "visibleTrigger": "brief trigger description or null",
@@ -4614,9 +4623,15 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
     detectedInstrument: null,
     detectedTimeframe: null,
     latestVisibleDate: null,
+    latestPrintedAxisDate: null,
+    visibleCandlesAfterLastPrintedDate: null,
     latestVisibleTime: null,
     latestVisibleTimeConfidence: "low",
     latestVisiblePrice: null,
+    latestVisibleOpen: null,
+    latestVisibleHigh: null,
+    latestVisibleLow: null,
+    latestVisibleClose: null,
     latestVisiblePriceConfidence: "low",
     dateConfidence: "low",
     visibleTrigger: null,
@@ -4904,6 +4919,14 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
       detectedInstrument: isTradingChart ? parsed?.detectedInstrument || null : null,
       detectedTimeframe: isTradingChart ? parsed?.detectedTimeframe || null : null,
       latestVisibleDate: isTradingChart ? parsed?.latestVisibleDate || null : null,
+      latestPrintedAxisDate:
+        isTradingChart && /^\d{4}-\d{2}-\d{2}$/.test(String(parsed?.latestPrintedAxisDate || ""))
+          ? String(parsed.latestPrintedAxisDate)
+          : null,
+      visibleCandlesAfterLastPrintedDate:
+        isTradingChart && Number.isInteger(Number(parsed?.visibleCandlesAfterLastPrintedDate))
+          ? Math.max(0, Number(parsed.visibleCandlesAfterLastPrintedDate))
+          : null,
       visibleTimeAxisYear:
         isTradingChart && Number.isInteger(Number(parsed?.visibleTimeAxisYear))
           ? Number(parsed.visibleTimeAxisYear)
@@ -4917,8 +4940,24 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
           ? String(parsed?.latestVisibleTimeConfidence || "low").toLowerCase()
           : "low",
       latestVisiblePrice:
-        isTradingChart && Number.isFinite(Number(parsed?.latestVisiblePrice)) && Number(parsed.latestVisiblePrice) > 0
-          ? Number(parsed.latestVisiblePrice)
+        isTradingChart && Number.isFinite(Number(parsed?.latestVisibleClose ?? parsed?.latestVisiblePrice)) && Number(parsed.latestVisibleClose ?? parsed.latestVisiblePrice) > 0
+          ? Number(parsed.latestVisibleClose ?? parsed.latestVisiblePrice)
+          : null,
+      latestVisibleOpen:
+        isTradingChart && Number.isFinite(Number(parsed?.latestVisibleOpen)) && Number(parsed.latestVisibleOpen) > 0
+          ? Number(parsed.latestVisibleOpen)
+          : null,
+      latestVisibleHigh:
+        isTradingChart && Number.isFinite(Number(parsed?.latestVisibleHigh)) && Number(parsed.latestVisibleHigh) > 0
+          ? Number(parsed.latestVisibleHigh)
+          : null,
+      latestVisibleLow:
+        isTradingChart && Number.isFinite(Number(parsed?.latestVisibleLow)) && Number(parsed.latestVisibleLow) > 0
+          ? Number(parsed.latestVisibleLow)
+          : null,
+      latestVisibleClose:
+        isTradingChart && Number.isFinite(Number(parsed?.latestVisibleClose ?? parsed?.latestVisiblePrice)) && Number(parsed.latestVisibleClose ?? parsed?.latestVisiblePrice) > 0
+          ? Number(parsed.latestVisibleClose ?? parsed.latestVisiblePrice)
           : null,
       latestVisiblePriceConfidence:
         isTradingChart
@@ -10709,7 +10748,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.42.0";
-const CSA_BUILD_ID = "CSA-v4.43.0-transparent-structure-fib-entry-audit";
+const CSA_BUILD_ID = "CSA-v4.44.0-chart-period-price-authority";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -16037,7 +16076,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.28.0";
+const CSA_SELECTOR_VERSION = "4.29.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19451,11 +19490,19 @@ async function extractFocusedChartNativeEntryFallback({
     ? `For ${focusedTimeframe}, treat each D1 candle inside the visible current trading week as one authoritative framework period. Return Monday, Tuesday, Wednesday, Thursday and Friday separately up to the final visible candle. Read each D1 candle's own high and low; do not replace them with smaller ${focusedTimeframe} swings.`
     : focusedTimeframe === "H4"
     ? "For H4, treat each W1 candle inside the visible current calendar month as one authoritative framework period. Return W1, W2, W3, W4 and W5 when present, up to the final visible candle. Read each W1 candle's own high and low; do not move a Friday candle into the next week or a Monday candle into the previous week."
+    : focusedTimeframe === "D1"
+    ? "For D1, treat each MN candle inside the visible current calendar year as one authoritative framework period. Return January through the final visible month separately. Read each monthly candle's own high and low; do not replace them with smaller D1 swings."
+    : focusedTimeframe === "W1"
+    ? "For W1, group the visible current calendar year's MN candles into Q1, Q2, Q3 and Q4 up to the final visible candle. Return each quarter separately with its complete high and low."
     : `Use the authoritative higher-timeframe candle inventory required for ${focusedTimeframe || "the detected timeframe"}.`;
   const frameRule = ["M1", "M5", "M15", "M30", "H1"].includes(focusedTimeframe)
     ? "For Fibonacci only, use the complete visible current calendar-week high and low from Monday through the final visible candle."
     : focusedTimeframe === "H4"
     ? "For Fibonacci only, use the complete visible current calendar-month high and low from day 1 through the final visible candle."
+    : focusedTimeframe === "D1"
+    ? "For Fibonacci only, use the complete visible current calendar-year high and low from January 1 through the final visible candle."
+    : focusedTimeframe === "W1"
+    ? "For Fibonacci only, use the complete visible current calendar-year high and low from January 1 through the final visible candle."
     : "Use the complete required current-period high and low for Fibonacci.";
   const sourceExamples = focusedTimeframe === "H4"
     ? "W1 high, W2 low, W3 demand, W4 converted resistance"
@@ -19466,6 +19513,14 @@ async function extractFocusedChartNativeEntryFallback({
     timeframe: safeUserText(chartDetection?.timeframe || timeframe || ""),
     latestVisiblePrice:
       nullablePositiveNumber(chartDetection?.latestVisiblePrice),
+    latestVisibleOpen:
+      nullablePositiveNumber(chartDetection?.latestVisibleOpen),
+    latestVisibleHigh:
+      nullablePositiveNumber(chartDetection?.latestVisibleHigh),
+    latestVisibleLow:
+      nullablePositiveNumber(chartDetection?.latestVisibleLow),
+    latestVisibleClose:
+      nullablePositiveNumber(chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice),
     direction: safeUserText(
       chartDetection?.triggerDirection || chartDetection?.direction || ""
     ),
@@ -19493,6 +19548,8 @@ Hard rules:
 - A later entry must not be a nearby fragment, duplicate, or unverified reference. Entry 2 and Entry 3 are alternatives only if the earlier area fails; they are never instructions to add to a losing trade.
 - The screenshot is authoritative when its visible extremes or printed levels conflict with external OHLC data.
 - Return currentPeriodHigh and currentPeriodLow for the required Fibonacci period. Also copy them into currentWeekHigh/currentWeekLow for backward compatibility. If either is unreadable, set both pairs to null rather than borrowing an older or smaller swing.
+- Set currentPeriodFrameVerified=true only when every required D1/W1/MN period from the start of the current week/month/year through the final visible candle is present in periodInventory. Otherwise set it false.
+- Reconcile the final inventory period with the exact final-candle header OHLC supplied in context: its high may not be below latestVisibleHigh and its low may not be above latestVisibleLow. Do not alter earlier periods with final-candle prices.
 - Do not skip, merge or renumber inventory periods. For H4, W1/W2/W3/W4/W5 are chronological W1 candles inside the calendar month, not arbitrary groups of H4 candles.
 - Do not mention Fibonacci in customer-facing wording; this result is internal.
 - Set usable=false rather than guessing any unreadable direction, price, impulse, or role.
@@ -19510,6 +19567,7 @@ Return exactly:
   "currentPeriodOpen": null,
   "currentPeriodClose": null,
   "currentPeriodDirection": "bullish | bearish | range",
+  "currentPeriodFrameVerified": false,
   "periodInventory": [
     {"periodLabel":"Monday | Tuesday | Wednesday | Thursday | Friday | W1 | W2 | W3 | W4 | W5","sourceUnit":"D1 | W1","date":"YYYY-MM-DD","high":null,"low":null,"structures":[{"price":null,"type":"support | resistance | demand | supply | converted support | converted resistance","note":"short structural reason"}]}
   ],
@@ -19603,6 +19661,70 @@ async function extractVisibleCurrentWeekFrame({ imageBase64, mimeType, timeframe
     console.error("Visible current-period frame extraction error:", error);
     return null;
   }
+}
+
+function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", cutoffDate = "" } = {}) {
+  const tf = comparableTimeframe(timeframe);
+  if (tf === "H4") {
+    return aggregateH4CandlesIntoWeeklyInventory({
+      candles: marketReference?.timeframeCandles || [],
+      cutoffDate:
+        cutoffDate ||
+        marketReference?.chartCutoff?.resolvedDate ||
+        marketReference?.chartCutoff?.latestVisibleDate ||
+        "",
+    });
+  }
+
+  if (["D1", "W1", "MN"].includes(tf)) {
+    return (Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [])
+      .map((level, index) => ({
+        ...level,
+        periodLabel:
+          level?.periodLabel || level?.day || `${tf === "D1" ? "M" : "Period "}${index + 1}`,
+        sourceUnit: tf === "D1" ? "MN" : tf === "W1" ? "MN" : "MN",
+        structures: Array.isArray(level?.structures) ? level.structures : [],
+        source: level?.source || "market_reference_higher_timeframe_inventory",
+      }));
+  }
+  return [];
+}
+
+function comparePeriodInventories(primary = [], secondary = [], symbol = "") {
+  const tolerance = Math.max(getCleanBreakTolerance(symbol) * 2, Number.EPSILON * 100);
+  const conflicts = [];
+  const count = Math.min(primary.length, secondary.length);
+  for (let index = 0; index < count; index += 1) {
+    const chartPeriod = primary[index];
+    const marketPeriod = secondary[index];
+    for (const extreme of ["high", "low"]) {
+      const chartPrice = Number(chartPeriod?.[extreme]);
+      const marketPrice = Number(marketPeriod?.[extreme]);
+      if (!Number.isFinite(chartPrice) || !Number.isFinite(marketPrice)) continue;
+      const difference = Math.abs(chartPrice - marketPrice);
+      if (difference > tolerance) {
+        conflicts.push({
+          period: chartPeriod?.periodLabel || marketPeriod?.periodLabel || `Period ${index + 1}`,
+          extreme,
+          chartPrice,
+          marketPrice,
+          difference,
+          tolerance,
+          resolution: "uploaded chart inventory retained; external value exposed for review",
+        });
+      }
+    }
+  }
+  if (primary.length !== secondary.length) {
+    conflicts.push({
+      period: "inventory",
+      extreme: "count",
+      chartCount: primary.length,
+      marketCount: secondary.length,
+      resolution: "inventory count disagreement exposed for review",
+    });
+  }
+  return conflicts;
 }
 
 function buildPeriodInventoryStructuralCandidates({
@@ -19768,7 +19890,10 @@ function rankChartNativeFallbackAreas({
 
   if (
     fallback?.usable !== true ||
-    fallback?.direction !== direction ||
+    (
+      fallback?.direction !== direction &&
+      fallback?.currentPeriodFrameVerified !== true
+    ) ||
     resolvedCurrentPrice === null
   ) {
     return null;
@@ -20021,7 +20146,13 @@ function rankChartNativeFallbackAreas({
       };
     }).filter(Boolean);
   const transparencyAudit = {
-    auditVersion: "1.0.0",
+    auditVersion: "1.1.0",
+    inventoryAuthority: {
+      selectedSource: fallback?.inventoryAuthority || fallback?.frameworkInventorySource || "uploaded_chart",
+      focusedInventoryVerified: fallback?.focusedInventoryVerified === true,
+      marketInventoryVerified: fallback?.marketInventoryVerified === true,
+      finalVisibleCandle: fallback?.finalVisibleCandleAuthority || null,
+    },
     bias: {
       direction,
       currentPrice: resolvedCurrentPrice,
@@ -20043,7 +20174,7 @@ function rankChartNativeFallbackAreas({
         low: period.low,
         lowRole: lowCandidate?.areaType || null,
         lowOriginalRole: lowCandidate?.originalType || null,
-        source: "deterministic_visible_timeframe_candle_aggregation",
+        source: period?.source || fallback?.inventoryAuthority || "uploaded_chart_period_inventory",
       };
     }),
     fibonacciAudit: {
@@ -20125,6 +20256,9 @@ function rankChartNativeFallbackAreas({
         resolution: candidate?.rejectionReason || "rejected by provenance gate",
       })),
       ...legacyFrameworkConflicts,
+      ...(Array.isArray(fallback?.inventoryPriceConflicts)
+        ? fallback.inventoryPriceConflicts
+        : []),
     ],
   };
 
@@ -28901,24 +29035,84 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           )
         : focusedChartNativeFallback;
 
-      const deterministicH4PeriodInventory = comparableTimeframe(timeframe) === "H4"
-        ? aggregateH4CandlesIntoWeeklyInventory({
-            candles: marketReference?.timeframeCandles || [],
-            cutoffDate:
-              chartCutoff?.resolvedDate ||
-              chartDetection?.latestVisibleDate ||
-              "",
-          })
-        : [];
-      const authoritativeMergedFallback = deterministicH4PeriodInventory.length
-        ? {
-            ...mergedChartNativeFallback,
-            periodInventory: deterministicH4PeriodInventory,
-            periodDayInventory: deterministicH4PeriodInventory,
-            frameworkInventorySource:
-              "deterministic_visible_H4_candle_aggregation",
-          }
-        : mergedChartNativeFallback;
+      const finalVisibleCandle = {
+        visibleOpen: chartDetection?.latestVisibleOpen,
+        visibleHigh: chartDetection?.latestVisibleHigh,
+        visibleLow: chartDetection?.latestVisibleLow,
+        visibleClose:
+          chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
+      };
+      const focusedPeriodInventory = reconcileFinalPeriodWithVisibleCandle({
+        periodInventory:
+          mergedChartNativeFallback?.periodInventory ||
+          mergedChartNativeFallback?.periodDayInventory ||
+          [],
+        ...finalVisibleCandle,
+      });
+      const marketPeriodInventory = reconcileFinalPeriodWithVisibleCandle({
+        periodInventory: marketReferencePeriodInventory({
+          marketReference,
+          timeframe,
+          cutoffDate:
+            chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "",
+        }),
+        ...finalVisibleCandle,
+      });
+      const inventoryDate =
+        chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "";
+      const focusedInventoryFrame = deriveVerifiedPeriodFrameFromInventory({
+        timeframe,
+        latestVisibleDate: inventoryDate,
+        periodInventory: focusedPeriodInventory,
+      });
+      const marketInventoryFrame = deriveVerifiedPeriodFrameFromInventory({
+        timeframe,
+        latestVisibleDate: inventoryDate,
+        periodInventory: marketPeriodInventory,
+      });
+      const focusedInventoryVerified =
+        mergedChartNativeFallback?.currentPeriodFrameVerified === true &&
+        focusedInventoryFrame?.currentPeriodFrameVerified === true;
+      const marketInventoryVerified =
+        marketInventoryFrame?.currentPeriodFrameVerified === true;
+      const selectedPeriodInventory = focusedInventoryVerified
+        ? focusedPeriodInventory
+        : marketInventoryVerified
+        ? marketPeriodInventory
+        : focusedPeriodInventory.length
+        ? focusedPeriodInventory
+        : marketPeriodInventory;
+      const inventoryAuthority = focusedInventoryVerified
+        ? "uploaded_chart_complete_period_inventory"
+        : marketInventoryVerified
+        ? "cutoff_safe_market_period_inventory_chart_endpoint_reconciled"
+        : "unverified_period_inventory";
+      const inventoryPriceConflicts = comparePeriodInventories(
+        focusedPeriodInventory,
+        marketPeriodInventory,
+        normalizedSymbol || submittedInstrument
+      );
+      const authoritativeMergedFallback = {
+        ...mergedChartNativeFallback,
+        usable:
+          mergedChartNativeFallback?.usable === true ||
+          (marketInventoryVerified && ["bullish", "bearish"].includes(mergedChartNativeFallback?.direction)),
+        periodInventory: selectedPeriodInventory,
+        periodDayInventory: selectedPeriodInventory,
+        frameworkInventorySource: inventoryAuthority,
+        inventoryAuthority,
+        focusedInventoryVerified,
+        marketInventoryVerified,
+        inventoryPriceConflicts,
+        finalVisibleCandleAuthority: {
+          high: nullablePositiveNumber(chartDetection?.latestVisibleHigh),
+          low: nullablePositiveNumber(chartDetection?.latestVisibleLow),
+          close: nullablePositiveNumber(
+            chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice
+          ),
+          source: "exact_visible_chart_header_ohlc",
+        },
+      };
 
       const inventoryDerivedPeriodFrame = deriveVerifiedPeriodFrameFromInventory({
         timeframe,
@@ -28932,7 +29126,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           [],
       });
       const verifiedPeriodFrame =
-        visibleCurrentWeekFrame?.currentPeriodFrameVerified === true
+          focusedInventoryVerified
+          ? focusedInventoryFrame
+          : visibleCurrentWeekFrame?.currentPeriodFrameVerified === true
           ? visibleCurrentWeekFrame
           : inventoryDerivedPeriodFrame?.currentPeriodFrameVerified === true
           ? inventoryDerivedPeriodFrame
