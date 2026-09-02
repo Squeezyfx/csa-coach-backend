@@ -1,0 +1,32 @@
+CSA Benchmark v2.60 deployment
+
+Build: CSA-v4.45.0-exact-period-boundaries-and-fixed-period-bias
+Selector: 4.30.0
+Validator: 1.11.0
+
+What changed
+- The focused chart reader receives the exact start date for every required D1, W1 or MN candle.
+- Inventory verification rejects missing, shifted and extra periods.
+- Each high/low must be the highest/lowest wick only inside that exact period.
+- The verified fixed-period structure controls bias; the last sharp candle is treated as a pullback unless the controlling structure actually fails.
+- Valid structure just outside a Fibonacci band edge may use only a tightly capped 1% of impulse-range rounding allowance.
+- Independently verified chart prices remain authoritative while external-data disagreements stay visible in the audit.
+- The duplicate lower-quality period-frame vision request was removed; one full-quality focused read supplies both inventory and Fibonacci frame.
+
+Deploy
+1. Upload every file and preserve the benchmark/ directory.
+2. Commit to the benchmark-testing branch.
+3. Redeploy both the staging analysis service and benchmark runner.
+4. Confirm the health/build output shows CSA-v4.45.0-exact-period-boundaries-and-fixed-period-bias.
+5. Retest the same five charts before adding new charts.
+
+Expected first retest checks
+- D1 charts return January through August monthly inventory and a year-to-date Fibonacci high/low.
+- H4 charts return exactly W1 2026-08-03, W2 2026-08-10, W3 2026-08-17 and W4 2026-08-24.
+- EURUSD and GBPUSD H4 retain bullish fixed-period structure with a sharp bearish pullback.
+- XAUUSD H4 recognizes the final-week demand/converted-support region near the 38.2% retracement instead of rejecting it solely for a narrow boundary miss.
+- The JSON exposes period prices, roles, Fibonacci high/low, calculated ratios, entry decisions and price-source conflicts.
+
+Validation
+- Run: npm run check
+- Run: npm run test:benchmarks

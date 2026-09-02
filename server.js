@@ -13,6 +13,7 @@ import {
   compareStructureLedCompletedImpulseCandidates,
   consolidateQualifiedSupplyDemandClusters,
   deriveVerifiedPeriodFrameFromInventory,
+  expectedFrameworkPeriodDates,
   expandExactSupportResistanceBoundaries,
   findNearestAllowedFibonacciMatch,
   getMarketDataSymbolCandidates,
@@ -10748,7 +10749,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.42.0";
-const CSA_BUILD_ID = "CSA-v4.44.0-chart-period-price-authority";
+const CSA_BUILD_ID = "CSA-v4.46.0-midnight-week-boundaries-and-weekend-exclusion";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -16076,7 +16077,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.29.0";
+const CSA_SELECTOR_VERSION = "4.31.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19449,6 +19450,8 @@ function normalizeChartNativeEntryFallback(value = {}) {
         date: /^\d{4}-\d{2}-\d{2}$/.test(String(period?.date || "")) ? String(period.date) : null,
         high: nullablePositiveNumber(period?.high),
         low: nullablePositiveNumber(period?.low),
+        open: nullablePositiveNumber(period?.open),
+        close: nullablePositiveNumber(period?.close),
         structures: (Array.isArray(period?.structures) ? period.structures : []).slice(0, 12).map((item) => ({
           price: nullablePositiveNumber(item?.price),
           type: safeUserText(item?.type || ""),
@@ -19464,6 +19467,8 @@ function normalizeChartNativeEntryFallback(value = {}) {
         date: /^\d{4}-\d{2}-\d{2}$/.test(String(period?.date || "")) ? String(period.date) : null,
         high: nullablePositiveNumber(period?.high),
         low: nullablePositiveNumber(period?.low),
+        open: nullablePositiveNumber(period?.open),
+        close: nullablePositiveNumber(period?.close),
         structures: (Array.isArray(period?.structures) ? period.structures : []).slice(0, 12).map((item) => ({
           price: nullablePositiveNumber(item?.price),
           type: safeUserText(item?.type || ""),
@@ -19486,6 +19491,15 @@ async function extractFocusedChartNativeEntryFallback({
   timeframe = "",
 } = {}) {
   const focusedTimeframe = String(timeframe || chartDetection?.timeframe || "").toUpperCase();
+  const expectedPeriodDates = expectedFrameworkPeriodDates(
+    focusedTimeframe,
+    chartDetection?.latestVisibleDate || ""
+  );
+  const exactPeriodBoundaryRule = expectedPeriodDates.length
+    ? focusedTimeframe === "H4"
+      ? `The required H4 weekly boundaries are ${expectedPeriodDates.map((date, index) => `W${index + 1} starts ${date} 00:00 inclusive${expectedPeriodDates[index + 1] ? ` and ends immediately before ${expectedPeriodDates[index + 1]} 00:00` : " and ends at the final visible candle"}`).join("; ")}. Return exactly ${expectedPeriodDates.length} rows using those dates. The first candle of every W1 period is Monday 00:00. With the visible 00:00, 04:00, 08:00, 12:00, 16:00 and 20:00 H4 sequence, a Monday 04:00 label is the second candle, not the weekly start. Exclude Saturday and Sunday completely. Never assign Monday 00:00, 04:00 or 08:00—including an early third-candle high—to the previous week.`
+      : `The required period start dates, in exact chronological order, are ${expectedPeriodDates.join(", ")}. Return exactly ${expectedPeriodDates.length} inventory rows using those dates at 00:00. Ignore every candle before ${expectedPeriodDates[0]} 00:00. The last row ends at the final visible candle. Never create an extra row and never move an older wick into one of these periods.`
+    : "The exact fixed-period dates could not be calculated; set currentPeriodFrameVerified=false rather than inventing boundaries.";
   const inventoryRule = ["M1", "M5", "M15", "M30", "H1"].includes(focusedTimeframe)
     ? `For ${focusedTimeframe}, treat each D1 candle inside the visible current trading week as one authoritative framework period. Return Monday, Tuesday, Wednesday, Thursday and Friday separately up to the final visible candle. Read each D1 candle's own high and low; do not replace them with smaller ${focusedTimeframe} swings.`
     : focusedTimeframe === "H4"
@@ -19532,6 +19546,7 @@ async function extractFocusedChartNativeEntryFallback({
 
 Apply this order exactly:
 1. Build periodInventory before selecting any entry. ${inventoryRule}
+   ${exactPeriodBoundaryRule}
 2. Identify support/resistance and genuine converted levels from every inventory period high and low.
 3. Identify independent supply/demand bases inside each inventory period only when their own displacement is visibly clear.
 4. ${frameRule} This Fibonacci frame qualifies structure but does not replace the individual D1/W1 inventory.
@@ -19551,6 +19566,8 @@ Hard rules:
 - Set currentPeriodFrameVerified=true only when every required D1/W1/MN period from the start of the current week/month/year through the final visible candle is present in periodInventory. Otherwise set it false.
 - Reconcile the final inventory period with the exact final-candle header OHLC supplied in context: its high may not be below latestVisibleHigh and its low may not be above latestVisibleLow. Do not alter earlier periods with final-candle prices.
 - Do not skip, merge or renumber inventory periods. For H4, W1/W2/W3/W4/W5 are chronological W1 candles inside the calendar month, not arbitrary groups of H4 candles.
+- A period high is the highest candle wick only between that row's start date and the next row's start date. A period low is the lowest wick inside the same interval. Price-axis tick labels are scale references, not period extremes. Do not copy a convenient printed axis price unless a wick actually reaches it.
+- For H4, every completed week begins with Monday 00:00 and ends with Friday 20:00 on this six-candle-per-day chart. The next Monday 00:00 candle belongs only to the next W1 period. Saturday and Sunday never contribute a period high or low.
 - Do not mention Fibonacci in customer-facing wording; this result is internal.
 - Set usable=false rather than guessing any unreadable direction, price, impulse, or role.
 - Return JSON only, with no markdown.
@@ -19569,7 +19586,7 @@ Return exactly:
   "currentPeriodDirection": "bullish | bearish | range",
   "currentPeriodFrameVerified": false,
   "periodInventory": [
-    {"periodLabel":"Monday | Tuesday | Wednesday | Thursday | Friday | W1 | W2 | W3 | W4 | W5","sourceUnit":"D1 | W1","date":"YYYY-MM-DD","high":null,"low":null,"structures":[{"price":null,"type":"support | resistance | demand | supply | converted support | converted resistance","note":"short structural reason"}]}
+    {"periodLabel":"Monday | Tuesday | Wednesday | Thursday | Friday | W1 | W2 | W3 | W4 | W5 | January | February | March","sourceUnit":"D1 | W1 | MN","date":"YYYY-MM-DD","open":null,"high":null,"low":null,"close":null,"structures":[{"price":null,"type":"support | resistance | demand | supply | converted support | converted resistance","note":"short structural reason"}]}
   ],
   "swingHigh": null,
   "swingLow": null,
@@ -19602,8 +19619,8 @@ Return exactly:
         "Read the chart again for the focused internal fallback and return only the required JSON.",
       imageBase64,
       mimeType,
-      maxTokens: 1800,
-      openaiModel: "gpt-4.1-mini",
+      maxTokens: 3000,
+      openaiModel: "gpt-4.1",
       claudeModel: CLAUDE_MODEL,
       temperature: 0,
       imageDetail: "high",
@@ -19725,6 +19742,92 @@ function comparePeriodInventories(primary = [], secondary = [], symbol = "") {
     });
   }
   return conflicts;
+}
+
+function deriveVerifiedFixedPeriodBias({
+  timeframe = "",
+  periodInventory = [],
+  periodOpen = null,
+  periodClose = null,
+  currentPrice = null,
+} = {}) {
+  const tf = comparableTimeframe(timeframe);
+  const periods = (Array.isArray(periodInventory) ? periodInventory : [])
+    .filter((period) => Number.isFinite(Number(period?.high)) && Number.isFinite(Number(period?.low)));
+  if (!periods.length) return null;
+  const high = Math.max(...periods.map((period) => Number(period.high)));
+  const low = Math.min(...periods.map((period) => Number(period.low)));
+  const range = high - low;
+  const close = nullablePositiveNumber(periodClose) || nullablePositiveNumber(currentPrice);
+  if (!(range > 0) || close === null) return null;
+
+  if (tf === "D1") {
+    const position = (close - low) / range;
+    const latestPeriod = periods[periods.length - 1] || {};
+    const latestOpen = nullablePositiveNumber(latestPeriod?.open);
+    const latestClose = nullablePositiveNumber(latestPeriod?.close) || close;
+    if (position >= 0.618) {
+      return {
+        direction: "bullish",
+        phase: latestOpen !== null && latestClose < latestOpen
+          ? "bearish_pullback_after_bullish_structure"
+          : "bullish_structure",
+        high,
+        low,
+        close,
+        rangePosition: position,
+      };
+    }
+    if (position <= 0.382) {
+      return {
+        direction: "bearish",
+        phase: latestOpen !== null && latestClose > latestOpen
+          ? "bullish_recovery_after_bearish_structure"
+          : "bearish_structure",
+        high,
+        low,
+        close,
+        rangePosition: position,
+      };
+    }
+    return null;
+  }
+
+  if (tf === "H4") {
+    const open = nullablePositiveNumber(periodOpen) || nullablePositiveNumber(periods[0]?.open);
+    if (open === null) return null;
+    const normalizedMove = (close - open) / range;
+    const latestPeriod = periods[periods.length - 1] || {};
+    const latestOpen = nullablePositiveNumber(latestPeriod?.open);
+    const latestClose = nullablePositiveNumber(latestPeriod?.close) || close;
+    if (normalizedMove >= 0.08) {
+      return {
+        direction: "bullish",
+        phase: latestOpen !== null && latestClose < latestOpen
+          ? "bearish_pullback_after_bullish_breakout"
+          : "bullish_structure",
+        high,
+        low,
+        open,
+        close,
+        normalizedMove,
+      };
+    }
+    if (normalizedMove <= -0.08) {
+      return {
+        direction: "bearish",
+        phase: latestOpen !== null && latestClose > latestOpen
+          ? "bullish_recovery_after_bearish_breakdown"
+          : "bearish_structure",
+        high,
+        low,
+        open,
+        close,
+        normalizedMove,
+      };
+    }
+  }
+  return null;
 }
 
 function buildPeriodInventoryStructuralCandidates({
@@ -29019,13 +29122,10 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         // The focused entry reader may correctly identify levels while still
         // choosing a smaller local swing. Keep the weekly anchor independent
         // and make it authoritative for H1 benchmark selection.
-        BENCHMARK_DRY_RUN_ENABLED
-          ? extractVisibleCurrentWeekFrame({
-              imageBase64,
-              mimeType,
-              timeframe,
-            })
-          : Promise.resolve(null),
+        // The focused inventory now returns the verified fixed-period frame
+        // itself. Avoid a second vision call so one higher-quality read
+        // replaces two weaker, potentially conflicting reads.
+        Promise.resolve(null),
       ]);
 
       const mergedChartNativeFallback = BENCHMARK_DRY_RUN_ENABLED
@@ -29071,7 +29171,6 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         periodInventory: marketPeriodInventory,
       });
       const focusedInventoryVerified =
-        mergedChartNativeFallback?.currentPeriodFrameVerified === true &&
         focusedInventoryFrame?.currentPeriodFrameVerified === true;
       const marketInventoryVerified =
         marketInventoryFrame?.currentPeriodFrameVerified === true;
@@ -29091,12 +29190,52 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         focusedPeriodInventory,
         marketPeriodInventory,
         normalizedSymbol || submittedInstrument
+      ).map((conflict) => ({
+        ...conflict,
+        requiresReview: true,
+      }));
+      const fixedPeriodBias = deriveVerifiedFixedPeriodBias({
+        timeframe,
+        periodInventory: selectedPeriodInventory,
+        periodOpen:
+          mergedChartNativeFallback?.currentPeriodOpen ?? selectedPeriodInventory[0]?.open,
+        periodClose:
+          chartDetection?.latestVisibleClose ??
+          mergedChartNativeFallback?.currentPeriodClose ??
+          selectedPeriodInventory[selectedPeriodInventory.length - 1]?.close,
+        currentPrice:
+          chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
+      });
+      const rawInferredFallbackDirection = inferReviewDirection(
+        visualReview,
+        marketReference
       );
+      const inferredFallbackDirection = rawInferredFallbackDirection === "buy"
+        ? "bullish"
+        : rawInferredFallbackDirection === "sell"
+        ? "bearish"
+        : rawInferredFallbackDirection;
+      const fallbackDirection = ["bullish", "bearish"].includes(
+        fixedPeriodBias?.direction
+      )
+        ? fixedPeriodBias.direction
+        : ["bullish", "bearish"].includes(
+        mergedChartNativeFallback?.direction
+      )
+        ? mergedChartNativeFallback.direction
+        : ["bullish", "bearish"].includes(inferredFallbackDirection)
+        ? inferredFallbackDirection
+        : null;
       const authoritativeMergedFallback = {
         ...mergedChartNativeFallback,
+        direction: fallbackDirection || mergedChartNativeFallback?.direction,
+        currentPrice:
+          nullablePositiveNumber(mergedChartNativeFallback?.currentPrice) ||
+          nullablePositiveNumber(chartDetection?.latestVisibleClose) ||
+          nullablePositiveNumber(chartDetection?.latestVisiblePrice),
         usable:
           mergedChartNativeFallback?.usable === true ||
-          (marketInventoryVerified && ["bullish", "bearish"].includes(mergedChartNativeFallback?.direction)),
+          ((focusedInventoryVerified || marketInventoryVerified) && Boolean(fallbackDirection)),
         periodInventory: selectedPeriodInventory,
         periodDayInventory: selectedPeriodInventory,
         frameworkInventorySource: inventoryAuthority,
@@ -29112,7 +29251,31 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           ),
           source: "exact_visible_chart_header_ohlc",
         },
+        fixedPeriodBias,
       };
+
+      if (fixedPeriodBias && (focusedInventoryVerified || marketInventoryVerified)) {
+        marketReference = {
+          ...marketReference,
+          directionalBias: {
+            ...(marketReference?.directionalBias || {}),
+            bias: fixedPeriodBias.direction === "bullish" ? "Bullish" : "Bearish",
+            biasCode: fixedPeriodBias.direction,
+            confidence: "high",
+            traderBias:
+              fixedPeriodBias.direction === "bullish"
+                ? "The verified fixed-period structure is bullish, with any final bearish move treated as a pullback until controlling support fails."
+                : "The verified fixed-period structure is bearish, with any final bullish move treated as a recovery until controlling resistance breaks.",
+            reason:
+              "Direction was reconciled from the same verified fixed-period high/low inventory used by the benchmark and the exact final chart-header close.",
+            cutoffPhase: {
+              direction: fixedPeriodBias.direction,
+              phase: fixedPeriodBias.phase,
+              source: "verified_fixed_period_inventory_and_final_chart_close",
+            },
+          },
+        };
+      }
 
       const inventoryDerivedPeriodFrame = deriveVerifiedPeriodFrameFromInventory({
         timeframe,

@@ -10,6 +10,7 @@ import {
   compareStructureLedCompletedImpulseCandidates,
   consolidateQualifiedSupplyDemandClusters,
   deriveVerifiedPeriodFrameFromInventory,
+  expectedFrameworkPeriodDates,
   expandExactSupportResistanceBoundaries,
   findNearestAllowedFibonacciMatch,
   getMarketDataSymbolCandidates,
@@ -57,6 +58,7 @@ test("exact final candle expands only the final weekly period", () => {
 test("D1 year frame requires every month through the visible month", () => {
   const months = Array.from({ length: 8 }, (_, index) => ({
     periodLabel: `M${index + 1}`,
+    date: `2026-${String(index + 1).padStart(2, "0")}-01`,
     high: 4500 + index * 10,
     low: 4000 + index * 5,
   }));
@@ -73,6 +75,53 @@ test("D1 year frame requires every month through the visible month", () => {
     periodInventory: months.slice(0, 7),
   });
   assert.equal(incomplete.currentPeriodFrameVerified, false);
+});
+
+test("fixed-period verification requires the exact calendar sequence", () => {
+  assert.deepEqual(
+    expectedFrameworkPeriodDates("H4", "2026-08-27"),
+    ["2026-08-03", "2026-08-10", "2026-08-17", "2026-08-24"]
+  );
+  const misplaced = deriveVerifiedPeriodFrameFromInventory({
+    timeframe: "H4",
+    latestVisibleDate: "2026-08-27",
+    periodInventory: [
+      { date: "2026-07-27", high: 1.1, low: 1.0 },
+      { date: "2026-08-03", high: 1.2, low: 1.1 },
+      { date: "2026-08-10", high: 1.3, low: 1.2 },
+      { date: "2026-08-17", high: 1.4, low: 1.3 },
+      { date: "2026-08-24", high: 1.5, low: 1.4 },
+    ],
+  });
+  assert.equal(misplaced.currentPeriodFrameVerified, false);
+});
+
+test("fixed-period verification rejects an extra invented period", () => {
+  const frame = deriveVerifiedPeriodFrameFromInventory({
+    timeframe: "H4",
+    latestVisibleDate: "2026-08-27",
+    periodInventory: [
+      { date: "2026-08-03", high: 1.16, low: 1.15 },
+      { date: "2026-08-10", high: 1.17, low: 1.15 },
+      { date: "2026-08-17", high: 1.18, low: 1.16 },
+      { date: "2026-08-24", high: 1.17, low: 1.15 },
+      { date: "2026-08-31", high: 1.16, low: 1.14 },
+    ],
+  });
+  assert.equal(frame.currentPeriodFrameVerified, false);
+});
+
+test("XAUUSD final-week demand just above 38.2 passes the one-percent boundary allowance", () => {
+  const match = findNearestAllowedFibonacciMatch({
+    direction: "bullish",
+    swingHigh: 4696.744902,
+    swingLow: 4030.093054,
+    price: 4445.24,
+    zoneLow: 4445.24,
+    zoneHigh: 4445.24,
+    tolerance: (4696.744902 - 4030.093054) * 0.01,
+  });
+  assert.equal(match?.ratio, 0.382);
 });
 
 test("framework inventory checks the immediate previous period before older periods", () => {
@@ -429,10 +478,10 @@ test("complete H4 weekly inventory verifies the calendar-month Fibonacci frame",
     timeframe: "H4",
     latestVisibleDate: "2026-08-27",
     periodInventory: [
-      { high: 1.40801, low: 1.39244 },
-      { high: 1.39643, low: 1.38637 },
-      { high: 1.39091, low: 1.37308 },
-      { high: 1.39088, low: 1.37507 },
+      { date: "2026-08-03", high: 1.40801, low: 1.39244 },
+      { date: "2026-08-10", high: 1.39643, low: 1.38637 },
+      { date: "2026-08-17", high: 1.39091, low: 1.37308 },
+      { date: "2026-08-24", high: 1.39088, low: 1.37507 },
     ],
   });
 
@@ -447,9 +496,9 @@ test("incomplete H4 weekly inventory cannot verify the month frame", () => {
     timeframe: "H4",
     latestVisibleDate: "2026-08-27",
     periodInventory: [
-      { high: 1.40801, low: 1.39244 },
-      { high: 1.39643, low: 1.38637 },
-      { high: 1.39091, low: 1.37308 },
+      { date: "2026-08-03", high: 1.40801, low: 1.39244 },
+      { date: "2026-08-10", high: 1.39643, low: 1.38637 },
+      { date: "2026-08-17", high: 1.39091, low: 1.37308 },
     ],
   });
 
@@ -460,12 +509,12 @@ test("incomplete H4 weekly inventory cannot verify the month frame", () => {
 test("H4 candles are aggregated into Monday-Friday W1 periods without counting an opening weekend", () => {
   const candles = [
     { datetime: "2026-08-01 01:00:00", open: 1.401, high: 1.402, low: 1.400, close: 1.4015 },
-    { datetime: "2026-08-03 01:00:00", open: 1.4015, high: 1.40801, low: 1.399, close: 1.405 },
-    { datetime: "2026-08-07 21:00:00", open: 1.405, high: 1.406, low: 1.39244, close: 1.394 },
-    { datetime: "2026-08-10 01:00:00", open: 1.394, high: 1.39643, low: 1.393, close: 1.395 },
-    { datetime: "2026-08-14 21:00:00", open: 1.395, high: 1.3955, low: 1.38637, close: 1.388 },
-    { datetime: "2026-08-17 01:00:00", open: 1.388, high: 1.39091, low: 1.37308, close: 1.379 },
-    { datetime: "2026-08-24 01:00:00", open: 1.379, high: 1.39088, low: 1.37507, close: 1.38988 },
+    { datetime: "2026-08-03 00:00:00", open: 1.4015, high: 1.40801, low: 1.399, close: 1.405 },
+    { datetime: "2026-08-07 20:00:00", open: 1.405, high: 1.406, low: 1.39244, close: 1.394 },
+    { datetime: "2026-08-10 00:00:00", open: 1.394, high: 1.39643, low: 1.393, close: 1.395 },
+    { datetime: "2026-08-14 20:00:00", open: 1.395, high: 1.3955, low: 1.38637, close: 1.388 },
+    { datetime: "2026-08-17 00:00:00", open: 1.388, high: 1.39091, low: 1.37308, close: 1.379 },
+    { datetime: "2026-08-24 00:00:00", open: 1.379, high: 1.39088, low: 1.37507, close: 1.38988 },
   ];
 
   const inventory = aggregateH4CandlesIntoWeeklyInventory({
@@ -477,8 +526,29 @@ test("H4 candles are aggregated into Monday-Friday W1 periods without counting a
   assert.equal(inventory[0].date, "2026-08-03");
   assert.equal(inventory[0].high, 1.40801);
   assert.equal(inventory[0].low, 1.39244);
+  assert.equal(inventory[0].candleCount, 2);
   assert.equal(inventory[1].low, 1.38637);
   assert.equal(inventory[3].low, 1.37507);
+});
+
+test("EURUSD W2 stops before W3 Monday 00:00 and excludes weekend candles", () => {
+  const inventory = aggregateH4CandlesIntoWeeklyInventory({
+    cutoffDate: "2026-08-27",
+    candles: [
+      { datetime: "2026-08-10 00:00:00", open: 1.1558, high: 1.1578, low: 1.1549, close: 1.1564 },
+      { datetime: "2026-08-14 20:00:00", open: 1.1575, high: 1.15839, low: 1.1512, close: 1.1579 },
+      { datetime: "2026-08-16 20:00:00", open: 1.1580, high: 1.1608, low: 1.1577, close: 1.1595 },
+      { datetime: "2026-08-17 00:00:00", open: 1.1595, high: 1.1602, low: 1.15655, close: 1.1598 },
+      { datetime: "2026-08-17 04:00:00", open: 1.1598, high: 1.1607, low: 1.1588, close: 1.1604 },
+      { datetime: "2026-08-17 08:00:00", open: 1.1604, high: 1.16133, low: 1.1599, close: 1.1611 },
+    ],
+  });
+  assert.equal(inventory[0].date, "2026-08-10");
+  assert.equal(inventory[0].high, 1.15839);
+  assert.equal(inventory[0].candleCount, 2);
+  assert.equal(inventory[1].date, "2026-08-17");
+  assert.equal(inventory[1].high, 1.16133);
+  assert.equal(inventory[1].candleCount, 3);
 });
 
 test("USDCAD excludes the below-38.2 supply and retains converted resistance only", () => {

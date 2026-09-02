@@ -776,7 +776,7 @@ export function findNearestAllowedFibonacciMatch({
   // into the band.
   const boundaryAllowance = Math.max(
     boundaryRoundingEpsilon,
-    Math.min(allowedTolerance, impulseRange * 0.002)
+    Math.min(allowedTolerance, impulseRange * 0.01)
   );
   const intersectsAcceptedBand =
     upperBoundary >= acceptedBandLow - boundaryAllowance &&
@@ -937,6 +937,48 @@ function expectedFrameworkInventoryCount(timeframe = "", latestVisibleDate = "")
   return null;
 }
 
+export function expectedFrameworkPeriodDates(timeframe = "", latestVisibleDate = "") {
+  const tf = String(timeframe || "").toUpperCase();
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(latestVisibleDate || ""))
+    ? new Date(`${latestVisibleDate}T00:00:00.000Z`)
+    : null;
+  if (!date || Number.isNaN(date.getTime())) return [];
+
+  if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) {
+    const weekday = date.getUTCDay();
+    const monday = new Date(date);
+    monday.setUTCDate(date.getUTCDate() - Math.max(0, weekday - 1));
+    const count = weekday >= 1 && weekday <= 5 ? weekday : 5;
+    return Array.from({ length: count }, (_, index) => {
+      const cursor = new Date(monday);
+      cursor.setUTCDate(monday.getUTCDate() + index);
+      return cursor.toISOString().slice(0, 10);
+    });
+  }
+
+  if (tf === "H4") {
+    const dates = [];
+    for (let day = 1; day <= date.getUTCDate(); day += 1) {
+      const cursor = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), day));
+      if (cursor.getUTCDay() === 1) dates.push(cursor.toISOString().slice(0, 10));
+    }
+    return dates;
+  }
+
+  if (tf === "D1") {
+    return Array.from({ length: date.getUTCMonth() + 1 }, (_, month) =>
+      new Date(Date.UTC(date.getUTCFullYear(), month, 1)).toISOString().slice(0, 10)
+    );
+  }
+
+  if (tf === "W1") {
+    return Array.from({ length: Math.floor(date.getUTCMonth() / 3) + 1 }, (_, quarter) =>
+      new Date(Date.UTC(date.getUTCFullYear(), quarter * 3, 1)).toISOString().slice(0, 10)
+    );
+  }
+  return [];
+}
+
 export function reconcileFinalPeriodWithVisibleCandle({
   periodInventory = [],
   visibleOpen = null,
@@ -985,6 +1027,7 @@ export function deriveVerifiedPeriodFrameFromInventory({
   periodInventory = [],
 } = {}) {
   const expectedCount = expectedFrameworkInventoryCount(timeframe, latestVisibleDate);
+  const expectedDates = expectedFrameworkPeriodDates(timeframe, latestVisibleDate);
   const validPeriods = (Array.isArray(periodInventory) ? periodInventory : [])
     .map((period) => ({
       ...period,
@@ -997,13 +1040,22 @@ export function deriveVerifiedPeriodFrameFromInventory({
       period.high > period.low
     );
 
-  if (!expectedCount || validPeriods.length < expectedCount) {
+  const returnedDates = validPeriods.slice(0, expectedCount || 0).map((period) => period?.date || null);
+  const periodDateSequenceVerified =
+    expectedDates.length > 0 &&
+    returnedDates.length === expectedDates.length &&
+    expectedDates.every((date, index) => returnedDates[index] === date);
+
+  if (!expectedCount || validPeriods.length !== expectedCount || !periodDateSequenceVerified) {
     return {
       currentPeriodFrameVerified: false,
       currentPeriodHigh: null,
       currentPeriodLow: null,
       expectedCount,
       returnedCount: validPeriods.length,
+      expectedDates,
+      returnedDates,
+      periodDateSequenceVerified,
     };
   }
 
@@ -1014,6 +1066,9 @@ export function deriveVerifiedPeriodFrameFromInventory({
     currentPeriodLow: Math.min(...authoritativePeriods.map((period) => period.low)),
     expectedCount,
     returnedCount: validPeriods.length,
+    expectedDates,
+    returnedDates,
+    periodDateSequenceVerified,
     source: "complete_framework_candle_inventory",
   };
 }
@@ -1027,7 +1082,10 @@ function mondayForTradingCandle(date) {
   const normalized = new Date(date);
   if (Number.isNaN(normalized.getTime())) return null;
   const weekday = normalized.getUTCDay();
-  const offset = weekday === 0 ? 1 : weekday === 6 ? 2 : 1 - weekday;
+  // CSA weekly inventory is Monday-Friday only. Weekend candles must never be
+  // shifted into the following Monday because that contaminates the new week.
+  if (weekday === 0 || weekday === 6) return null;
+  const offset = 1 - weekday;
   normalized.setUTCDate(normalized.getUTCDate() + offset);
   return normalized;
 }

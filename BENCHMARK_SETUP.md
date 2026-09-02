@@ -2,15 +2,17 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.44.0-chart-period-price-authority`, packaged as benchmark v2.59.
+The included analysis backend is CSA build `v4.46.0-midnight-week-boundaries-and-weekend-exclusion`, packaged as benchmark v2.61.
 
-v2.59 makes the uploaded chart's complete fixed-period inventory the primary benchmark authority when verified. It reconciles the exact final header candle into the last period and exposes chart-versus-market price conflicts instead of silently selecting one.
+v2.61 explicitly anchors every H4 week at Monday 00:00, ends it at Friday 20:00 for six-candle-per-day charts, and excludes Saturday/Sunday candles instead of shifting them into the following week. This prevents an early W3 candle—such as EURUSD 1.16133—from being reported as the W2 high. It retains v2.60's exact period dates, fixed-period bias reconciliation, tightly bounded Fibonacci edge allowance and visible price-source conflicts.
 
 ## Authoritative timeframe-candle rule
 
 - For M1, M5, M15, M30 and H1, inventory every D1 candle high and low inside the current trading week, in chronological order up to the visible cutoff.
 - For H4, inventory every W1 candle high and low inside the current calendar month, in chronological order as W1, W2, W3, W4 and W5 when present.
 - Do not skip, merge or renumber periods. Complete this inventory before selecting S/R, S/D or entries.
+- Every row must use the exact calculated period start date. A shifted date, an older wick moved into the current period, or an invented extra W5/month invalidates the chart inventory.
+- For H4, Monday 00:00 is the first candle, Monday 04:00 is the second and Monday 08:00 is the third. None may be assigned to the previous week; weekend candles are ignored.
 - The Fibonacci frame is separate: M1-H1 uses the complete current-week high/low, while H4 uses the complete current-month high/low. Fibonacci qualifies the individual D1/W1 structures but never replaces them or creates a level.
 - A dated automatic H1/H4 result is rejected for review when the required D1/W1 inventory is incomplete.
 

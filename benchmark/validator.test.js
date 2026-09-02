@@ -595,7 +595,7 @@ test("selector 4.28 requires the transparent period, Fib, entry and provenance a
   );
 });
 
-test("selector 4.29 sends unresolved chart-versus-market period prices to review", () => {
+test("selector 4.30 sends unresolved chart-versus-market period prices to review", () => {
   const automatic = structuredClone(baseResult);
   automatic.chartDetection = {
     detectedInstrument: "GBPUSD",
@@ -603,7 +603,7 @@ test("selector 4.29 sends unresolved chart-versus-market period prices to review
     latestVisibleDate: "2026-08-28",
   };
   automatic.analysisFacts.selectorDiagnostics = {
-    selectorVersion: "4.29.0",
+    selectorVersion: "4.30.0",
     fibonacci: { source: "uploaded_chart_visible_current_month_high_low", swingHigh: 1.367, swingLow: 1.3418 },
     structuralCandidates: [],
     fibCandidates: [],
@@ -624,6 +624,7 @@ test("selector 4.29 sends unresolved chart-versus-market period prices to review
         extreme: "low",
         chartPrice: 1.3526,
         marketPrice: 1.35715,
+        requiresReview: true,
         resolution: "uploaded chart inventory retained; external value exposed for review",
       }],
     },
@@ -634,6 +635,47 @@ test("selector 4.29 sends unresolved chart-versus-market period prices to review
     false
   );
   assert.equal(result.passed, false);
+});
+
+test("selector 4.30 exposes but does not fail a resolved external-price disagreement", () => {
+  const automatic = structuredClone(baseResult);
+  automatic.chartDetection = {
+    detectedInstrument: "GBPUSD",
+    detectedTimeframe: "H4",
+    latestVisibleDate: "2026-08-28",
+  };
+  automatic.analysisFacts.selectorDiagnostics = {
+    selectorVersion: "4.30.0",
+    fibonacci: { source: "uploaded_chart_visible_current_month_high_low", swingHigh: 1.367, swingLow: 1.3418 },
+    structuralCandidates: [],
+    fibCandidates: [],
+    periodInventory: [
+      { periodLabel: "W1", date: "2026-08-03", high: 1.3509, low: 1.3418 },
+      { periodLabel: "W2", date: "2026-08-10", high: 1.3561, low: 1.3452 },
+      { periodLabel: "W3", date: "2026-08-17", high: 1.367, low: 1.352 },
+      { periodLabel: "W4", date: "2026-08-24", high: 1.3652, low: 1.3526 },
+    ],
+    transparencyAudit: {
+      auditVersion: "1.1.0",
+      periodStructureAudit: [{ period: "W1", high: 1.3509, low: 1.3418 }],
+      fibonacciAudit: { swingHigh: 1.367, swingLow: 1.3418 },
+      candidateEvaluationAudit: [],
+      entryDecisionAudit: [{ entry: 1 }, { entry: 2 }, { entry: 3 }],
+      provenanceConflicts: [{
+        period: "W4",
+        extreme: "low",
+        chartPrice: 1.3526,
+        marketPrice: 1.35715,
+        requiresReview: false,
+        resolution: "exact-boundary chart inventory retained; external comparison exposed",
+      }],
+    },
+  };
+  const result = validateBenchmarkResult(automatic, { automaticMode: true });
+  assert.equal(
+    result.checks.find((check) => check.id === "automatic_period_price_authority")?.passed,
+    true
+  );
 });
 
 test("automatic mode rejects a selected entry that did not pass Fibonacci confluence", () => {

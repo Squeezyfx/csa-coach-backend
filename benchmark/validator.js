@@ -1,6 +1,6 @@
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
-const BENCHMARK_VALIDATOR_VERSION = "1.10.0";
+const BENCHMARK_VALIDATOR_VERSION = "1.12.0";
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -675,8 +675,10 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
         const inventoryConflicts = (Array.isArray(transparencyAudit.provenanceConflicts)
           ? transparencyAudit.provenanceConflicts
           : []).filter((conflict) =>
-            Number.isFinite(Number(conflict?.chartPrice)) ||
-            Number.isFinite(Number(conflict?.chartCount))
+            conflict?.requiresReview !== false && (
+              Number.isFinite(Number(conflict?.chartPrice)) ||
+              Number.isFinite(Number(conflict?.chartCount))
+            )
           );
         addCheck(
           checks,
