@@ -3669,6 +3669,30 @@ async function fetchTwelveDataStructureLevels({
       .sort((a, b) => String(a.key).localeCompare(String(b.key)));
   }
 
+  // D1/W1/MN use the provider-first branch above rather than the dedicated
+  // D1/W1 alignment branch. Apply the same lifecycle contract here so the
+  // current month/quarter/year cannot be mistaken for a completed period.
+  dailyLevels = dailyLevels.map((level) => {
+    const isCurrentIncomplete =
+      currentFrameworkPeriodComplete !== true &&
+      currentFrameworkPeriod?.key &&
+      String(level?.key) === String(currentFrameworkPeriod.key);
+    return isCurrentIncomplete
+      ? {
+          ...level,
+          source: "partial_period_from_cutoff_safe_selected_timeframe",
+          nativeHigherTimeframeAuthority: false,
+          partialPeriod: true,
+          periodLifecycle: "in_progress",
+        }
+      : {
+          ...level,
+          partialPeriod: level?.partialPeriod === true,
+          periodLifecycle:
+            level?.partialPeriod === true ? "in_progress" : "completed",
+        };
+  });
+
   const sourceIntegrityWarnings = dailyLevels
     .filter((level) => level?.sourceIntegrityWarning === true)
     .map((level) => String(level.key));
@@ -10759,8 +10783,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.46.1";
-const CSA_BUILD_ID = "CSA-v4.51.1-completed-period-runtime-fix";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.47.0";
+const CSA_BUILD_ID = "CSA-v4.52.0-d1-lifecycle-index-fallback";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -16088,7 +16112,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.34.1";
+const CSA_SELECTOR_VERSION = "4.35.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19691,6 +19715,37 @@ async function extractVisibleCurrentWeekFrame({ imageBase64, mimeType, timeframe
   }
 }
 
+function applyCurrentFrameworkPeriodLifecycle({
+  periods = [],
+  timeframe = "",
+  cutoffDateTime = "",
+  explicitlyComplete = null,
+} = {}) {
+  const inventory = Array.isArray(periods) ? periods : [];
+  if (!inventory.length) return [];
+  const cutoffDate = candleDateOnly(cutoffDateTime);
+  const expectedDates = expectedFrameworkPeriodDates(timeframe, cutoffDate || "");
+  const currentStartDate = expectedDates[expectedDates.length - 1] || null;
+  const profile = getSupportedCsaTimeframeProfile(timeframe);
+  const currentComplete = typeof explicitlyComplete === "boolean"
+    ? explicitlyComplete
+    : isFrameworkPeriodCompleteAtCutoff({ cutoffDateTime, profile });
+
+  return inventory.map((period, index) => {
+    const isCurrentPeriod = Boolean(
+      currentStartDate && String(period?.date || "") === String(currentStartDate)
+    ) || index === inventory.length - 1;
+    const inProgress = period?.partialPeriod === true || (
+      currentComplete !== true && isCurrentPeriod
+    );
+    return {
+      ...period,
+      partialPeriod: inProgress,
+      periodLifecycle: inProgress ? "in_progress" : "completed",
+    };
+  });
+}
+
 function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", cutoffDate = "" } = {}) {
   const tf = comparableTimeframe(timeframe);
   if (tf === "H4") {
@@ -19721,7 +19776,7 @@ function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", 
   }
 
   if (["D1", "W1", "MN"].includes(tf)) {
-    return (Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [])
+    const periods = (Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [])
       .map((level, index) => ({
         ...level,
         periodLabel:
@@ -19731,6 +19786,14 @@ function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", 
         source: level?.source || "market_reference_higher_timeframe_inventory",
         periodLifecycle: level?.partialPeriod === true ? "in_progress" : "completed",
       }));
+    return applyCurrentFrameworkPeriodLifecycle({
+      periods,
+      timeframe: tf,
+      cutoffDateTime:
+        marketReference?.chartCutoff?.endDateTime ||
+        `${cutoffDate || marketReference?.chartCutoff?.resolvedDate || ""} 23:59:59`,
+      explicitlyComplete: marketReference?.currentFrameworkPeriodComplete,
+    });
   }
   return [];
 }
@@ -29265,14 +29328,14 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         visibleClose:
           chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
       };
-      const focusedPeriodInventory = reconcileFinalPeriodWithVisibleCandle({
+      const focusedReconciledPeriodInventory = reconcileFinalPeriodWithVisibleCandle({
         periodInventory:
           mergedChartNativeFallback?.periodInventory ||
           mergedChartNativeFallback?.periodDayInventory ||
           [],
         ...finalVisibleCandle,
       });
-      const marketPeriodInventory = reconcileFinalPeriodWithVisibleCandle({
+      const marketReconciledPeriodInventory = reconcileFinalPeriodWithVisibleCandle({
         periodInventory: marketReferencePeriodInventory({
           marketReference,
           timeframe,
@@ -29280,6 +29343,21 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "",
         }),
         ...finalVisibleCandle,
+      });
+      const lifecycleCutoffDateTime =
+        chartCutoff?.endDateTime ||
+        `${chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || ""} 23:59:59`;
+      const focusedPeriodInventory = applyCurrentFrameworkPeriodLifecycle({
+        periods: focusedReconciledPeriodInventory,
+        timeframe,
+        cutoffDateTime: lifecycleCutoffDateTime,
+        explicitlyComplete: marketReference?.currentFrameworkPeriodComplete,
+      });
+      const marketPeriodInventory = applyCurrentFrameworkPeriodLifecycle({
+        periods: marketReconciledPeriodInventory,
+        timeframe,
+        cutoffDateTime: lifecycleCutoffDateTime,
+        explicitlyComplete: marketReference?.currentFrameworkPeriodComplete,
       });
       const inventoryDate =
         chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "";
@@ -29310,20 +29388,43 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         focusedInventoryDateSequenceVerified &&
         marketInventoryVerified &&
         rawInventoryPriceConflicts.length === 0;
+      // Broker indices such as USA30 may be readable on the uploaded chart
+      // even when Twelve Data has no matching CFD symbol. In that narrow case,
+      // retain a complete focused inventory for diagnosis instead of returning
+      // no bias/period data at all. It remains explicitly human-review-only.
+      const chartOnlyInventoryVerified =
+        marketReference?.ok !== true &&
+        focusedInventoryDateSequenceVerified &&
+        focusedPeriodInventory.length > 0;
+      const inventoryUsable = marketInventoryVerified || chartOnlyInventoryVerified;
       const selectedPeriodInventory = marketInventoryVerified
         ? marketPeriodInventory
+        : chartOnlyInventoryVerified
+        ? focusedPeriodInventory
         : [];
       const inventoryAuthority = marketInventoryVerified
         ? "cutoff_safe_market_period_inventory_chart_endpoint_reconciled"
+        : chartOnlyInventoryVerified
+        ? "complete_chart_only_period_inventory_provider_unavailable_human_review"
         : "unverified_period_inventory";
-      const inventoryPriceConflicts = rawInventoryPriceConflicts.map((conflict) => ({
-        ...conflict,
-        requiresReview: !marketInventoryVerified,
-        resolution: marketInventoryVerified
-          ? "verified deterministic candle retained; vision-estimated period price rejected"
-          : conflict.resolution,
-      }));
-      const fixedPeriodBias = marketInventoryVerified
+      const inventoryPriceConflicts = chartOnlyInventoryVerified
+        ? [{
+            period: "inventory",
+            extreme: "provider_authority",
+            chartCount: focusedPeriodInventory.length,
+            marketCount: 0,
+            requiresReview: true,
+            resolution:
+              "complete chart-derived period inventory retained for diagnosis because the external provider could not resolve this broker index; human verification is required",
+          }]
+        : rawInventoryPriceConflicts.map((conflict) => ({
+            ...conflict,
+            requiresReview: !marketInventoryVerified,
+            resolution: marketInventoryVerified
+              ? "verified deterministic candle retained; vision-estimated period price rejected"
+              : conflict.resolution,
+          }));
+      const fixedPeriodBias = inventoryUsable
         ? deriveVerifiedFixedPeriodBias({
             timeframe,
             periodInventory: selectedPeriodInventory,
@@ -29362,16 +29463,17 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           nullablePositiveNumber(chartDetection?.latestVisibleClose) ||
           nullablePositiveNumber(chartDetection?.latestVisiblePrice) ||
           nullablePositiveNumber(mergedChartNativeFallback?.currentPrice),
-        usable: marketInventoryVerified && Boolean(fallbackDirection),
+        usable: inventoryUsable && Boolean(fallbackDirection),
         periodInventory: selectedPeriodInventory,
         periodDayInventory: selectedPeriodInventory,
         frameworkInventorySource: inventoryAuthority,
         inventoryAuthority,
         focusedInventoryVerified,
+        chartOnlyInventoryVerified,
         focusedInventoryDateSequenceVerified,
         marketInventoryVerified,
         rejectedFocusedPeriodInventory:
-          marketInventoryVerified ? [] : focusedPeriodInventory,
+          inventoryUsable ? [] : focusedPeriodInventory,
         inventoryPriceConflicts,
         finalVisibleCandleAuthority: {
           high: nullablePositiveNumber(chartDetection?.latestVisibleHigh),
@@ -29384,30 +29486,36 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         fixedPeriodBias,
       };
 
-      if (fixedPeriodBias && marketInventoryVerified) {
+      if (fixedPeriodBias && inventoryUsable) {
         marketReference = {
           ...marketReference,
           directionalBias: {
             ...(marketReference?.directionalBias || {}),
             bias: fixedPeriodBias.direction === "bullish" ? "Bullish" : "Bearish",
             biasCode: fixedPeriodBias.direction,
-            confidence: "high",
-            traderBias:
-              fixedPeriodBias.direction === "bullish"
+            confidence: marketInventoryVerified ? "high" : "medium",
+            traderBias: marketInventoryVerified
+              ? fixedPeriodBias.direction === "bullish"
                 ? "The verified fixed-period structure is bullish, with any final bearish move treated as a pullback until controlling support fails."
-                : "The verified fixed-period structure is bearish, with any final bullish move treated as a recovery until controlling resistance breaks.",
-            reason:
-              "Direction was reconciled from the same verified fixed-period high/low inventory used by the benchmark and the exact final chart-header close.",
+                : "The verified fixed-period structure is bearish, with any final bullish move treated as a recovery until controlling resistance breaks."
+              : fixedPeriodBias.direction === "bullish"
+              ? "The complete chart-derived fixed-period structure reads bullish, pending human verification because provider data is unavailable."
+              : "The complete chart-derived fixed-period structure reads bearish, pending human verification because provider data is unavailable.",
+            reason: marketInventoryVerified
+              ? "Direction was reconciled from the same verified fixed-period high/low inventory used by the benchmark and the exact final chart-header close."
+              : "Direction was derived from a complete chart-only fixed-period inventory because the external provider could not resolve the broker index; human verification remains required.",
             cutoffPhase: {
               direction: fixedPeriodBias.direction,
               phase: fixedPeriodBias.phase,
-              source: "verified_fixed_period_inventory_and_final_chart_close",
+              source: marketInventoryVerified
+                ? "verified_fixed_period_inventory_and_final_chart_close"
+                : "chart_only_fixed_period_inventory_provider_unavailable",
             },
           },
         };
       }
 
-      const inventoryDerivedPeriodFrame = marketInventoryVerified
+      const inventoryDerivedPeriodFrame = inventoryUsable
         ? deriveVerifiedPeriodFrameFromInventory({
             timeframe,
             latestVisibleDate:
@@ -29427,6 +29535,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           };
       const verifiedPeriodFrame = marketInventoryVerified
         ? marketInventoryFrame
+        : chartOnlyInventoryVerified
+        ? focusedInventoryFrame
         : null;
 
       visualReview = {
@@ -29450,10 +29560,10 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             verifiedPeriodFrame?.currentWeekLow ??
             null,
           currentPeriodOpen:
-            (marketInventoryVerified ? selectedPeriodInventory[0]?.open : null) ??
+            (inventoryUsable ? selectedPeriodInventory[0]?.open : null) ??
             null,
           currentPeriodClose:
-            (marketInventoryVerified
+            (inventoryUsable
               ? chartDetection?.latestVisibleClose ??
                 selectedPeriodInventory[selectedPeriodInventory.length - 1]?.close
               : null) ??
@@ -30000,7 +30110,7 @@ ${(visualReview?.strategyMissingInformation || []).length
         occupancy:
           Number(chartDetection?.chartOccupancyPercent || 0),
       },
-      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, filteredCandleCount: marketReference.filteredCandleCount, frameworkCandleCount: marketReference.frameworkCandleCount, impulseCandleCount: marketReference.impulseCandleCount, weekRange: marketReference.weekRange, impulseRange: marketReference.impulseRange, dailyLevels: marketReference.dailyLevels, timeframeCandles: marketReference.timeframeCandles, impulseCandles: marketReference.impulseCandles, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
+      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, filteredCandleCount: marketReference.filteredCandleCount, frameworkCandleCount: marketReference.frameworkCandleCount, impulseCandleCount: marketReference.impulseCandleCount, weekRange: marketReference.weekRange, impulseRange: marketReference.impulseRange, dailyLevels: marketReference.dailyLevels, structuralLevels: marketReference.structuralLevels, currentFrameworkPeriodKey: marketReference.currentFrameworkPeriodKey, currentFrameworkPeriodLabel: marketReference.currentFrameworkPeriodLabel, currentFrameworkPeriodComplete: marketReference.currentFrameworkPeriodComplete, timeframeCandles: marketReference.timeframeCandles, impulseCandles: marketReference.impulseCandles, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
     };
 
     // Shape the complete response first. If this throws, nothing has yet

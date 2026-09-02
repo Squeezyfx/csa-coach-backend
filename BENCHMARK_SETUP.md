@@ -2,9 +2,9 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.51.1-completed-period-runtime-fix`, packaged as benchmark v2.68.
+The included analysis backend is CSA build `v4.52.0-d1-lifecycle-index-fallback`, packaged as benchmark v2.69.
 
-v2.68 corrects the fixed-period bias runtime regression in v2.67 and adds a regression guard for the affected execution path. It excludes the active unfinished framework period from structural support/resistance, supply/demand and Entry 1-3 selection. The partial period remains available only for the live Fibonacci frame, current price and current phase, and Export JSON records it separately as in progress.
+v2.69 applies the unfinished-period lifecycle rule to the provider-first D1 monthly branch as well as H4, and retains a complete chart-derived period inventory for human review when a broker index such as USA30 cannot be resolved by Twelve Data. The partial period remains available only for the live Fibonacci frame, current price and current phase; it cannot create structural support/resistance, supply/demand or Entry 1-3.
 
 ## Authoritative timeframe-candle rule
 

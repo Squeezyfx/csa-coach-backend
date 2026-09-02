@@ -59,9 +59,10 @@ test("complete deterministic inventory outranks vision-estimated period prices",
 test("date labels alone cannot verify vision-estimated highs and lows", () => {
   assert.match(serverSource, /focusedInventoryDateSequenceVerified/);
   assert.match(serverSource, /rawInventoryPriceConflicts\.length === 0/);
-  assert.match(serverSource, /usable: marketInventoryVerified && Boolean\(fallbackDirection\)/);
+  assert.match(serverSource, /focusedInventoryDateSequenceVerified &&\s*marketInventoryVerified/);
+  assert.match(serverSource, /usable: inventoryUsable && Boolean\(fallbackDirection\)/);
   assert.match(serverSource, /rejectedFocusedPeriodInventory/);
-  assert.match(serverSource, /requiresReview: !marketInventoryVerified/);
+  assert.match(serverSource, /chartOnlyInventoryVerified[\s\S]*?requiresReview: true/);
   assert.match(serverSource, /vision-estimated period price rejected/);
 });
 
@@ -102,10 +103,20 @@ test("unfinished framework periods are context only, never structural entries", 
   assert.match(serverSource, /const inProgressPeriods = normalizedPeriods\.filter/);
   assert.match(serverSource, /current framework period is still in progress and cannot supply structural S\/R, S\/D or an entry candidate/);
   assert.match(serverSource, /retainedFor: "current Fib frame, current price and phase only"/);
+  assert.match(serverSource, /D1\/W1\/MN use the provider-first branch/);
+  assert.match(serverSource, /String\(level\?\.key\) === String\(currentFrameworkPeriod\.key\)/);
+  assert.match(serverSource, /function applyCurrentFrameworkPeriodLifecycle/);
 });
 
 test("full period inventory remains available for current Fib-frame verification", () => {
   assert.match(serverSource, /periodInventory: selectedPeriodInventory/);
   assert.match(serverSource, /structuralPeriodInventory: authoritativeInventory\.periods/);
   assert.match(serverSource, /inProgressPeriodInventory: authoritativeInventory\.inProgressPeriods/);
+});
+
+test("provider-unavailable broker indices retain a complete chart inventory for review", () => {
+  assert.match(serverSource, /complete_chart_only_period_inventory_provider_unavailable_human_review/);
+  assert.match(serverSource, /const chartOnlyInventoryVerified =/);
+  assert.match(serverSource, /human verification is required/);
+  assert.match(serverSource, /chart_only_fixed_period_inventory_provider_unavailable/);
 });
