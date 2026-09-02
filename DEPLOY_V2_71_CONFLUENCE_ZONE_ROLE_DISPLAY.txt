@@ -1,0 +1,14 @@
+CSA Benchmark v2.71.0 — Confluence zone and period-role display
+
+Build: CSA-v4.54.0-confluence-zone-role-display
+Feedback engine: 10.49.0
+Selector: 4.36.0
+
+Fixes:
+- The compact batch summary displays a bounded entry as its complete price
+  range instead of replacing it with the mathematical centre.
+- USA30 D1 Entry 2 now displays 49754.00-49779.00.
+- The USA30 January high is labelled converted support in the period audit.
+- The USA30 June low is labelled demand in the period audit.
+- Entry selection, Fibonacci qualification and GBPUSD W1 handling are
+  unchanged from v2.70.

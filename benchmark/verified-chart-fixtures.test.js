@@ -62,8 +62,12 @@ test("USA30 D1 fixture replaces only human-reviewed monthly extremes", () => {
     ]
   );
   assert.equal(inventory[0].structures[0].price, 49754);
+  assert.equal(inventory[0].highRole, "converted support");
+  assert.equal(inventory[0].highOriginalRole, "resistance");
   assert.equal(inventory[3].structures[0].price, 49779);
   assert.equal(inventory[3].highVerified, true);
+  assert.equal(inventory[3].lowRole, "demand");
+  assert.equal(inventory[3].lowOriginalRole, "demand");
   assert.equal(fixture?.inventoryAuthority, "human_verified_chart_cursor_period_extremes");
   assert.equal(inventory[4].verifiedExtremeSource, undefined);
 });

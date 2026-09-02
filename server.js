@@ -10786,8 +10786,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.48.0";
-const CSA_BUILD_ID = "CSA-v4.53.0-verified-d1-period-authority";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.49.0";
+const CSA_BUILD_ID = "CSA-v4.54.0-confluence-zone-role-display";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -20427,12 +20427,12 @@ function rankChartNativeFallbackAreas({
         date: period.date || null,
         sourceUnit: period.sourceUnit || null,
         high: period.high,
-        highRole: highCandidate?.areaType || null,
-        highOriginalRole: highCandidate?.originalType || null,
+        highRole: highCandidate?.areaType || period?.highRole || null,
+        highOriginalRole: highCandidate?.originalType || period?.highOriginalRole || null,
         highVerified: inventoryDefaultVerified || period?.highVerified === true,
         low: period.low,
-        lowRole: lowCandidate?.areaType || null,
-        lowOriginalRole: lowCandidate?.originalType || null,
+        lowRole: lowCandidate?.areaType || period?.lowRole || null,
+        lowOriginalRole: lowCandidate?.originalType || period?.lowOriginalRole || null,
         lowVerified: inventoryDefaultVerified || period?.lowVerified === true,
         source: period?.source || fallback?.inventoryAuthority || "uploaded_chart_period_inventory",
       };

@@ -265,7 +265,13 @@ function renderBatchOverview(run) {
       ? entries.map((entry, index) => {
           const match = Array.isArray(entry.fibonacciMatches) ? entry.fibonacciMatches[0] : null;
           const fibText = match ? `; ${match.label || "Fib"} @ ${compactNumber(match.price, seed)}` : "";
-          return `E${index + 1} ${entry.sourceKind || entry.sourcePeriod || "—"} ${entry.areaType || "area"} ${compactNumber(entry.resolvedEntryPrice ?? entry.authoritativeCenter, seed)}${fibText}`;
+          const zoneLow = Number(entry.zoneLow);
+          const zoneHigh = Number(entry.zoneHigh);
+          const hasZoneRange = Number.isFinite(zoneLow) && Number.isFinite(zoneHigh) && zoneHigh > zoneLow;
+          const displayedPrice = hasZoneRange
+            ? `${compactNumber(zoneLow, seed)}–${compactNumber(zoneHigh, seed)}`
+            : compactNumber(entry.resolvedEntryPrice ?? entry.authoritativeCenter, seed);
+          return `E${index + 1} ${entry.sourceKind || entry.sourcePeriod || "—"} ${entry.areaType || "area"} ${displayedPrice}${fibText}`;
         }).join(" · ")
       : "No selected entry";
     const flags = [];

@@ -176,10 +176,21 @@ const VERIFIED_CHART_FIXTURES = Object.freeze({
     inventoryAuthority: "human_verified_chart_cursor_period_extremes",
     preferVerifiedCandidates: true,
     periodExtremeOverrides: Object.freeze([
-      Object.freeze({ periodLabel: "January", high: 49754 }),
+      Object.freeze({
+        periodLabel: "January",
+        high: 49754,
+        highRole: "converted support",
+        highOriginalRole: "resistance",
+      }),
       Object.freeze({ periodLabel: "February", high: 50575 }),
       Object.freeze({ periodLabel: "May", low: 48932 }),
-      Object.freeze({ periodLabel: "June", high: 54672.95, low: 49779 }),
+      Object.freeze({
+        periodLabel: "June",
+        high: 54672.95,
+        low: 49779,
+        lowRole: "demand",
+        lowOriginalRole: "demand",
+      }),
     ]),
     candidates: Object.freeze([
       Object.freeze({
@@ -301,6 +312,10 @@ export function applyVerifiedPeriodExtremeOverrides(periodInventory = [], fixtur
       ...period,
       ...(hasHigh ? { high: verifiedHigh, highVerified: true } : {}),
       ...(hasLow ? { low: verifiedLow, lowVerified: true } : {}),
+      ...(override?.highRole ? { highRole: override.highRole } : {}),
+      ...(override?.highOriginalRole ? { highOriginalRole: override.highOriginalRole } : {}),
+      ...(override?.lowRole ? { lowRole: override.lowRole } : {}),
+      ...(override?.lowOriginalRole ? { lowOriginalRole: override.lowOriginalRole } : {}),
       structures,
       verifiedExtremeSource: "human_verified_chart_cursor",
     };

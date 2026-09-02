@@ -42,4 +42,6 @@ test("the benchmark renders a compact one-row-per-chart diagnosis summary", () =
   assert.match(appSource, /Structural bias \/ phase/);
   assert.match(appSource, /Period highs & lows/);
   assert.match(appSource, /Show review rows only/);
+  assert.match(appSource, /const hasZoneRange =/);
+  assert.match(appSource, /compactNumber\(zoneLow, seed\).*compactNumber\(zoneHigh, seed\)/s);
 });
