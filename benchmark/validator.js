@@ -1,6 +1,6 @@
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
-const BENCHMARK_VALIDATOR_VERSION = "1.8.0";
+const BENCHMARK_VALIDATOR_VERSION = "1.9.0";
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -585,14 +585,23 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
             ? [0.382, 0.5, 0.618].find((approved) => Math.abs(ratio - approved) <= 0.002)
             : null;
           if (!approvedRatio || fallbackRange === null || candidatePrice === null) return false;
-          const computedPrice = direction === "bearish"
-            ? fallbackSwingLow + fallbackRange * approvedRatio
-            : fallbackSwingHigh - fallbackRange * approvedRatio;
-          const arithmeticTolerance = Math.max(
+          const fib382 = direction === "bearish"
+            ? fallbackSwingLow + fallbackRange * 0.382
+            : fallbackSwingHigh - fallbackRange * 0.382;
+          const fib618 = direction === "bearish"
+            ? fallbackSwingLow + fallbackRange * 0.618
+            : fallbackSwingHigh - fallbackRange * 0.618;
+          const bandLow = Math.min(fib382, fib618);
+          const bandHigh = Math.max(fib382, fib618);
+          const boundaryAllowance = Math.max(
             defaultTolerance(candidatePrice),
-            finiteNumber(candidate?.fibonacciTolerance) ?? fallbackRange * 0.06
+            Math.min(
+              finiteNumber(candidate?.fibonacciTolerance) ?? 0,
+              fallbackRange * 0.002
+            )
           );
-          return Math.abs(candidatePrice - computedPrice) <= arithmeticTolerance;
+          return candidatePrice >= bandLow - boundaryAllowance &&
+            candidatePrice <= bandHigh + boundaryAllowance;
         });
         return candidatePrice !== null &&
           Math.abs(candidatePrice - entryPrice) <= tolerance
@@ -636,6 +645,33 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
         ? `Frame: high ${fallbackSwingHigh}, low ${fallbackSwingLow}.`
         : "No entry can be accepted until the required current-period high and low are both read from the chart."
     );
+    const selectorVersionParts = String(selectorDiagnostics?.selectorVersion || "0")
+      .split(".")
+      .map((part) => Number(part) || 0);
+    const transparentAuditRequired =
+      selectorVersionParts[0] > 4 ||
+      (selectorVersionParts[0] === 4 && selectorVersionParts[1] >= 28);
+    if (transparentAuditRequired) {
+      const transparencyAudit = selectorDiagnostics?.transparencyAudit || {};
+      const transparentDiagnosticsComplete =
+        Array.isArray(transparencyAudit.periodStructureAudit) &&
+        transparencyAudit.periodStructureAudit.length > 0 &&
+        finiteNumber(transparencyAudit?.fibonacciAudit?.swingHigh) !== null &&
+        finiteNumber(transparencyAudit?.fibonacciAudit?.swingLow) !== null &&
+        Array.isArray(transparencyAudit.candidateEvaluationAudit) &&
+        Array.isArray(transparencyAudit.entryDecisionAudit) &&
+        transparencyAudit.entryDecisionAudit.length === 3 &&
+        Array.isArray(transparencyAudit.provenanceConflicts);
+      addCheck(
+        checks,
+        "automatic_transparent_selector_audit",
+        "Period, structure, Fibonacci, entry and provenance diagnostics returned",
+        transparentDiagnosticsComplete,
+        transparentDiagnosticsComplete
+          ? `${transparencyAudit.periodStructureAudit.length} period(s) and ${transparencyAudit.candidateEvaluationAudit.length} candidate(s) are fully auditable.`
+          : "Selector 4.28+ must return period structure, Fib range, candidate decisions, Entry 1-3 decisions and provenance conflicts."
+      );
+    }
     addCheck(
       checks,
       "ordered_selector",

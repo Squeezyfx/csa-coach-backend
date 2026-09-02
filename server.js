@@ -10709,7 +10709,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.42.0";
-const CSA_BUILD_ID = "CSA-v4.42.0-deterministic-h4-weekly-aggregation";
+const CSA_BUILD_ID = "CSA-v4.43.0-transparent-structure-fib-entry-audit";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -16037,7 +16037,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.27.0";
+const CSA_SELECTOR_VERSION = "4.28.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19383,7 +19383,7 @@ function normalizeChartNativeEntryFallback(value = {}) {
     usable:
       value?.usable === true &&
       ["bullish", "bearish"].includes(direction) &&
-      candidates.length > 0,
+      (candidates.length > 0 || rawPeriodInventory.length > 0),
     direction,
     currentPrice: nullablePositiveNumber(value?.currentPrice),
     // H1 CSA Fibonacci is anchored to the screenshot-visible current week.
@@ -19605,8 +19605,158 @@ async function extractVisibleCurrentWeekFrame({ imageBase64, mimeType, timeframe
   }
 }
 
+function buildPeriodInventoryStructuralCandidates({
+  periodInventory = [],
+  visualReview = {},
+  direction = "range",
+  currentPrice = null,
+  symbol = "",
+  timeframe = "H1",
+} = {}) {
+  const periods = (Array.isArray(periodInventory) ? periodInventory : [])
+    .map((period, index) => ({
+      ...period,
+      periodLabel: period?.periodLabel || `Period ${index + 1}`,
+      day: period?.periodLabel || `Period ${index + 1}`,
+      high: asPositiveNumber(period?.high),
+      low: asPositiveNumber(period?.low),
+    }))
+    .filter((period) =>
+      period.high !== null && period.low !== null && period.high >= period.low
+    );
+  const cleanBreakTolerance = getCleanBreakTolerance(symbol);
+  const frameworkAreas = buildCsaAreas(
+    periods,
+    symbol,
+    getSupportedCsaTimeframeProfile(timeframe)
+  );
+  const periodIndexByLabel = new Map(
+    periods.map((period, index) => [String(period.periodLabel), index])
+  );
+
+  const periodCandidates = frameworkAreas.map((area) => {
+    const price = asPositiveNumber(area?.price);
+    const originalType = String(area?.type || "").toLowerCase();
+    const periodLabel = String(area?.period || area?.day || "");
+    const periodIndex = periodIndexByLabel.get(periodLabel) ?? -1;
+    const laterPeriods = periodIndex >= 0 ? periods.slice(periodIndex + 1) : [];
+    const bearishSupportBroken =
+      direction === "bearish" &&
+      originalType === "support" &&
+      price !== null &&
+      Number(currentPrice) < price &&
+      laterPeriods.some((period) => period.low < price - cleanBreakTolerance);
+    const bullishResistanceBroken =
+      direction === "bullish" &&
+      originalType === "resistance" &&
+      price !== null &&
+      Number(currentPrice) > price &&
+      laterPeriods.some((period) => period.high > price + cleanBreakTolerance);
+    const areaType = bearishSupportBroken
+      ? "converted resistance"
+      : bullishResistanceBroken
+      ? "converted support"
+      : originalType;
+    const extreme = /high/.test(String(area?.hierarchyClassification || ""))
+      ? "high"
+      : /low/.test(String(area?.hierarchyClassification || ""))
+      ? "low"
+      : null;
+
+    return {
+      price,
+      zoneLow: price,
+      zoneHigh: price,
+      areaType,
+      originalType,
+      exactVisiblePrice: false,
+      conversionBreakConfirmed: bearishSupportBroken || bullishResistanceBroken,
+      structuralEvidence: `${periodLabel} ${extreme || "extreme"} from deterministic higher-timeframe candle inventory`,
+      independentEntryEvidence: true,
+      reclaimRequired: false,
+      sourceDate: area?.date || periods[periodIndex]?.date || null,
+      sourceDay: periodLabel,
+      sourceKind: `${periodLabel} ${extreme || originalType}`,
+      sourcePeriod: periodLabel,
+      sourceExtreme: extreme,
+      hierarchyClassification: area?.hierarchyClassification || null,
+      authoritativeFrameworkLevel: true,
+      provenanceVerified: true,
+      priceSource: "deterministic_period_high_low_inventory",
+    };
+  });
+
+  const independentlyReadPrices = (Array.isArray(visualReview?.visibleMarkedLevels)
+    ? visualReview.visibleMarkedLevels
+    : [])
+    .filter((level) =>
+      level?.extractionSource === "independent_horizontal_line_reader_exact"
+    )
+    .map((level) => asPositiveNumber(level?.displayedPrice))
+    .filter((price) => price !== null);
+  const visualCandidates = Array.isArray(
+    visualReview?.chartNativeEntryFallback?.candidates
+  )
+    ? visualReview.chartNativeEntryFallback.candidates
+    : [];
+  const rejectedVisualCandidates = [];
+  const admittedVisualCandidates = visualCandidates.filter((candidate) => {
+    const price = asPositiveNumber(candidate?.price);
+    const type = String(candidate?.areaType || "").toLowerCase().trim();
+    const isSupplyDemand = ["supply", "demand"].includes(type);
+    const independentZone =
+      isSupplyDemand &&
+      candidate?.independentEntryEvidence === true &&
+      Boolean(candidate?.structuralEvidence);
+    const exactIndependentLine =
+      price !== null &&
+      independentlyReadPrices.some(
+        (visiblePrice) =>
+          Math.abs(visiblePrice - price) <=
+          Math.max(cleanBreakTolerance, Number.EPSILON * 100)
+      );
+    const matchesPeriodExtreme =
+      price !== null &&
+      periodCandidates.some(
+        (periodCandidate) =>
+          Math.abs(Number(periodCandidate.price) - price) <=
+          Math.max(cleanBreakTolerance, Number.EPSILON * 100)
+      );
+    const admitted = independentZone || exactIndependentLine || matchesPeriodExtreme;
+    if (!admitted) {
+      rejectedVisualCandidates.push({
+        ...candidate,
+        provenanceVerified: false,
+        rejectionReason:
+          "price is not a deterministic period high/low, an independently read chart label, or a validated supply/demand zone",
+      });
+    }
+    return admitted;
+  }).map((candidate) => ({
+    ...candidate,
+    provenanceVerified: true,
+    authoritativeFrameworkLevel: true,
+    priceSource: candidate?.independentEntryEvidence === true
+      ? "independent_supply_demand_displacement"
+      : "independent_horizontal_line_reader_exact",
+  }));
+
+  const seen = new Set();
+  const candidates = [...periodCandidates, ...admittedVisualCandidates]
+    .filter((candidate) => candidate?.price !== null)
+    .filter((candidate) => {
+      const key = `${String(candidate.areaType)}:${Number(candidate.price)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+  return { candidates, rejectedVisualCandidates, periods };
+}
+
 function rankChartNativeFallbackAreas({
   visualReview = {},
+  marketReference = {},
   direction = "range",
   currentPrice = null,
   symbol = "",
@@ -19675,9 +19825,20 @@ function rankChartNativeFallbackAreas({
     ? swingHigh - swingLow
     : null;
 
-  const candidates = expandExactSupportResistanceBoundaries(
-    fallback.candidates || []
-  ).map((candidate) => {
+  const periodInventory = fallback.periodInventory || fallback.periodDayInventory || [];
+  const authoritativeInventory = buildPeriodInventoryStructuralCandidates({
+    periodInventory,
+    visualReview,
+    direction,
+    currentPrice: resolvedCurrentPrice,
+    symbol,
+    timeframe: frameTimeframe,
+  });
+  const structuralCandidateInventory = authoritativeInventory.candidates.length
+    ? authoritativeInventory.candidates
+    : expandExactSupportResistanceBoundaries(fallback.candidates || []);
+
+  const candidateEvaluations = structuralCandidateInventory.map((candidate) => {
     const price = asPositiveNumber(candidate?.price);
     const areaType = String(candidate?.areaType || "").toLowerCase().trim();
     // A structural level must be close to one actual 38.2/50/61.8 price;
@@ -19708,10 +19869,16 @@ function rankChartNativeFallbackAreas({
         : price > resolvedCurrentPrice
     );
     const isSupplyDemand = ["supply", "demand"].includes(areaType);
-    const structuralEvidenceValid = isSupplyDemand
+    const structuralEvidenceValid = candidate?.provenanceVerified === true || (isSupplyDemand
       ? candidate?.independentEntryEvidence === true &&
         Boolean(candidate?.structuralEvidence)
-      : candidate?.exactVisiblePrice === true;
+      : candidate?.exactVisiblePrice === true);
+
+    const rejectionReasons = [];
+    if (!allowedTypes.has(areaType)) rejectionReasons.push("structural role conflicts with bias");
+    if (!sideCompatible) rejectionReasons.push("level is on the wrong side of current price");
+    if (!fibMatch) rejectionReasons.push("outside the 38.2%-61.8% retracement band");
+    if (!structuralEvidenceValid) rejectionReasons.push("missing independent structural provenance");
 
     if (
       !allowedTypes.has(areaType) ||
@@ -19719,13 +19886,23 @@ function rankChartNativeFallbackAreas({
       !fibMatch ||
       !structuralEvidenceValid
     ) {
-      return null;
+      return {
+        candidate,
+        qualified: false,
+        rejectionReasons,
+        fibMatch,
+      };
     }
     const converted = ["converted support", "converted resistance"].includes(areaType);
     const fibRatio = fibMatch.ratio;
     const computedFibPrice = fibMatch.fibPrice;
 
     return {
+      candidate,
+      qualified: true,
+      rejectionReasons: [],
+      fibMatch,
+      selectedArea: {
       direction: direction === "bullish" ? "buy" : "sell",
       areaType,
       zoneLow,
@@ -19738,10 +19915,10 @@ function rankChartNativeFallbackAreas({
         : `around ${formatPrice(price, symbol)}`,
       state: reclaimRequired ? "reclaim required" : converted ? "potential conversion" : "active",
       priceStatus: reclaimRequired ? "reclaim and bullish hold required" : "not reached",
-      source: "chart_native_market_data_fallback",
-      priceSource: candidate.exactVisiblePrice
+      source: "deterministic_chart_inventory_fallback",
+      priceSource: candidate?.priceSource || (candidate.exactVisiblePrice
         ? "independent_horizontal_line_reader_exact"
-        : "uploaded_chart_supply_demand_zone",
+        : "uploaded_chart_supply_demand_zone"),
       authoritativeFrameworkLevel: true,
       chartReconciled: true,
       chartExactFrameworkConfirmed: candidate.exactVisiblePrice === true,
@@ -19765,6 +19942,11 @@ function rankChartNativeFallbackAreas({
       sourceDate: candidate.sourceDate || null,
       sourceDay: candidate.sourceDay || null,
       sourceKind: candidate.sourceKind || null,
+      sourcePeriod: candidate.sourcePeriod || candidate.sourceDay || null,
+      sourceExtreme: candidate.sourceExtreme || null,
+      originalType: candidate.originalType || areaType,
+      hierarchyClassification: candidate.hierarchyClassification || null,
+      provenanceVerified: candidate?.provenanceVerified === true,
       structuralScore: 60,
       fibonacciScore: 1,
       requiredFibConfluence: true,
@@ -19788,8 +19970,12 @@ function rankChartNativeFallbackAreas({
       fibonacciDistance: fibMatch.distance,
       fibonacciTolerance: fibTolerance,
       validated: true,
+      },
     };
-  }).filter(Boolean);
+  });
+  const candidates = candidateEvaluations
+    .filter((evaluation) => evaluation.qualified)
+    .map((evaluation) => evaluation.selectedArea);
 
   const selected = selectIndependentEntryAreas(candidates, direction)
     .map((area, index) => ({
@@ -19797,6 +19983,150 @@ function rankChartNativeFallbackAreas({
       executionOrder: index + 1,
       role: index === 0 ? "primary" : index === 1 ? "secondary" : "tertiary",
     }));
+
+  const fibLevels = impulseRange !== null
+    ? {
+        "38.2": direction === "bearish"
+          ? swingLow + impulseRange * 0.382
+          : swingHigh - impulseRange * 0.382,
+        "50.0": direction === "bearish"
+          ? swingLow + impulseRange * 0.5
+          : swingHigh - impulseRange * 0.5,
+        "61.8": direction === "bearish"
+          ? swingLow + impulseRange * 0.618
+          : swingHigh - impulseRange * 0.618,
+      }
+    : null;
+  const legacyFrameworkConflicts = (Array.isArray(marketReference?.csaAreas)
+    ? marketReference.csaAreas
+    : []).map((legacyArea) => {
+      const legacyPrice = asPositiveNumber(legacyArea?.price);
+      const legacyDate = String(legacyArea?.date || "");
+      const legacyType = String(legacyArea?.type || "").toLowerCase();
+      const deterministicMatch = structuralCandidateInventory.find((candidate) =>
+        String(candidate?.sourceDate || "") === legacyDate &&
+        String(candidate?.originalType || candidate?.areaType || "").toLowerCase() === legacyType
+      );
+      if (!deterministicMatch || legacyPrice === null) return null;
+      const deterministicPrice = Number(deterministicMatch.price);
+      const difference = Math.abs(deterministicPrice - legacyPrice);
+      if (difference <= Math.max(getCleanBreakTolerance(symbol), Number.EPSILON * 100)) return null;
+      return {
+        period: deterministicMatch.sourcePeriod || deterministicMatch.sourceDay || null,
+        structuralRole: legacyType,
+        deterministicInventoryPrice: deterministicPrice,
+        conflictingFrameworkPrice: legacyPrice,
+        difference,
+        resolution: "deterministic period high/low inventory retained",
+      };
+    }).filter(Boolean);
+  const transparencyAudit = {
+    auditVersion: "1.0.0",
+    bias: {
+      direction,
+      currentPrice: resolvedCurrentPrice,
+      source: "resolved_directional_bias",
+    },
+    periodStructureAudit: authoritativeInventory.periods.map((period) => {
+      const periodCandidates = structuralCandidateInventory.filter((candidate) =>
+        String(candidate?.sourcePeriod || candidate?.sourceDay || "") === String(period.periodLabel)
+      );
+      const highCandidate = periodCandidates.find((candidate) => candidate?.sourceExtreme === "high");
+      const lowCandidate = periodCandidates.find((candidate) => candidate?.sourceExtreme === "low");
+      return {
+        period: period.periodLabel,
+        date: period.date || null,
+        sourceUnit: period.sourceUnit || null,
+        high: period.high,
+        highRole: highCandidate?.areaType || null,
+        highOriginalRole: highCandidate?.originalType || null,
+        low: period.low,
+        lowRole: lowCandidate?.areaType || null,
+        lowOriginalRole: lowCandidate?.originalType || null,
+        source: "deterministic_visible_timeframe_candle_aggregation",
+      };
+    }),
+    fibonacciAudit: {
+      source: visibleWeekFrame
+        ? visibleWeekFrame.source
+        : "uploaded_chart_completed_impulse",
+      swingHigh,
+      swingLow,
+      direction,
+      levels: fibLevels,
+      acceptedBandLow: fibLevels
+        ? Math.min(fibLevels["38.2"], fibLevels["61.8"])
+        : null,
+      acceptedBandHigh: fibLevels
+        ? Math.max(fibLevels["38.2"], fibLevels["61.8"])
+        : null,
+      rule: "independently proven structure must intersect the 38.2%-61.8% retracement band",
+    },
+    candidateEvaluationAudit: candidateEvaluations.map((evaluation) => {
+      const candidatePrice = Number(evaluation.candidate?.price);
+      const nearestComputedFib = fibLevels && Number.isFinite(candidatePrice)
+        ? Object.entries(fibLevels)
+            .map(([label, fibPrice]) => ({
+              label,
+              ratio: label === "38.2" ? 0.382 : label === "50.0" ? 0.5 : 0.618,
+              fibPrice,
+              distance: Math.abs(candidatePrice - fibPrice),
+            }))
+            .sort((a, b) => a.distance - b.distance)[0]
+        : null;
+      const auditFib = evaluation.fibMatch || nearestComputedFib;
+      return ({
+      period: evaluation.candidate?.sourcePeriod || evaluation.candidate?.sourceDay || null,
+      extreme: evaluation.candidate?.sourceExtreme || null,
+      structuralRole: evaluation.candidate?.areaType || null,
+      originalRole: evaluation.candidate?.originalType || null,
+      price: evaluation.candidate?.price ?? null,
+      zoneLow: evaluation.candidate?.zoneLow ?? null,
+      zoneHigh: evaluation.candidate?.zoneHigh ?? null,
+      provenance: evaluation.candidate?.priceSource || null,
+      provenanceVerified: evaluation.candidate?.provenanceVerified === true,
+      nearestFibRatio: auditFib?.ratio ?? null,
+      nearestFibPrice: auditFib?.fibPrice ?? null,
+      fibDistance: auditFib?.distance ?? null,
+      insideAcceptedBand: evaluation.fibMatch?.withinRetracementBand === true,
+      qualified: evaluation.qualified === true,
+      rejectionReasons: evaluation.rejectionReasons || [],
+      });
+    }),
+    entryDecisionAudit: [0, 1, 2].map((index) => {
+      const entry = selected[index] || null;
+      return entry
+        ? {
+            entry: index + 1,
+            selected: true,
+            period: entry.sourcePeriod || entry.sourceDay || null,
+            extreme: entry.sourceExtreme || null,
+            structuralRole: entry.areaType || null,
+            originalRole: entry.originalType || null,
+            price: entry.authoritativeCenter ?? entry.resolvedEntryPrice ?? null,
+            zoneLow: entry.zoneLow ?? null,
+            zoneHigh: entry.zoneHigh ?? null,
+            nearestFibRatio: entry.fibonacciMatches?.[0]?.ratio ?? null,
+            nearestFibPrice: entry.fibonacciMatches?.[0]?.price ?? null,
+            confluenceRule: "inside 38.2%-61.8% retracement band",
+            provenance: entry.priceSource || null,
+          }
+        : {
+            entry: index + 1,
+            selected: false,
+            reason: "no additional independently proven structure passed every gate",
+          };
+    }),
+    provenanceConflicts: [
+      ...authoritativeInventory.rejectedVisualCandidates.map((candidate) => ({
+        claimedPrice: candidate?.price ?? null,
+        claimedRole: candidate?.areaType || null,
+        claimedSource: candidate?.sourceKind || null,
+        resolution: candidate?.rejectionReason || "rejected by provenance gate",
+      })),
+      ...legacyFrameworkConflicts,
+    ],
+  };
 
   // A readable current-period frame with no qualifying structure is a valid
   // no-entry conclusion, not a missing-frame error. Preserve the complete
@@ -19824,8 +20154,11 @@ function rankChartNativeFallbackAreas({
           swingHigh: swingHigh ?? null,
           visibleWeekFrame: visibleWeekFrame || null,
         },
-        structuralCandidates: fallback.candidates || [],
-        periodInventory: fallback.periodInventory || fallback.periodDayInventory || [],
+        structuralCandidates: structuralCandidateInventory,
+        rejectedStructuralCandidates: authoritativeInventory.rejectedVisualCandidates,
+        candidateEvaluations,
+        transparencyAudit,
+        periodInventory,
         periodDayInventory: fallback.periodDayInventory || fallback.periodInventory || [],
         fibonacciQualifiedCandidates: candidates,
         selectedEntries: [],
@@ -19857,8 +20190,11 @@ function rankChartNativeFallbackAreas({
         structureLedFrame: structureLedFrame || null,
         visibleWeekFrame: visibleWeekFrame || null,
       },
-      structuralCandidates: fallback.candidates || [],
-      periodInventory: fallback.periodInventory || fallback.periodDayInventory || [],
+      structuralCandidates: structuralCandidateInventory,
+      rejectedStructuralCandidates: authoritativeInventory.rejectedVisualCandidates,
+      candidateEvaluations,
+      transparencyAudit,
+      periodInventory,
       periodDayInventory: fallback.periodDayInventory || fallback.periodInventory || [],
       fibonacciQualifiedCandidates: candidates,
       selectedEntries: selected,
@@ -19902,6 +20238,7 @@ function rankRawEntryAreas({
   if (BENCHMARK_DRY_RUN_ENABLED) {
     const chartNativeFallback = rankChartNativeFallbackAreas({
       visualReview,
+      marketReference,
       direction,
       currentPrice,
       symbol,
@@ -20021,6 +20358,7 @@ function rankRawEntryAreas({
   ) {
     const chartNativeFallback = rankChartNativeFallbackAreas({
       visualReview,
+      marketReference,
       direction,
       currentPrice,
       symbol,

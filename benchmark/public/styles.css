@@ -47,4 +47,12 @@ th,td { border-bottom:1px solid var(--line); padding:12px 10px; vertical-align:t
 .period-inventory { min-width:0; margin-top:10px; }
 .period-inventory th,.period-inventory td { padding:7px 9px; }
 .period-inventory thead th { color:#8fb5c5; }
+.fib-audit,.entry-audit,.provenance-audit { margin:12px 0; padding:10px 12px; border:1px solid #294452; border-radius:8px; background:#091319; }
+.fib-audit summary,.entry-audit summary,.provenance-audit summary { cursor:pointer; color:#e7f6ff; font-weight:700; }
+.audit-table-wrap { width:100%; overflow-x:auto; }
+.audit-table-wrap table { width:100%; min-width:900px; border-collapse:collapse; margin-top:10px; }
+.audit-table-wrap th,.audit-table-wrap td { padding:7px 9px; border-bottom:1px solid #20333d; text-align:left; vertical-align:top; }
+.audit-table-wrap thead th { color:#8fb5c5; white-space:nowrap; }
+.audit-pass { color:#43e69d; font-weight:700; }
+.audit-fail { color:#ff7f86; }
 @media (max-width:800px) { header,.panel-heading,.upload-panel,.mode-panel { align-items:flex-start; flex-direction:column; }.key-box { width:100%; }.mode-options { width:100%; grid-template-columns:1fr; }.result-actions { width:100%; justify-content:flex-start; }.summary-grid,.auto-findings { grid-template-columns:repeat(2,1fr); } }

@@ -754,6 +754,9 @@ export function findNearestAllowedFibonacciMatch({
   const firstRetracementPrice = direction === "bearish"
     ? low + impulseRange * 0.382
     : high - impulseRange * 0.382;
+  const finalRetracementPrice = direction === "bearish"
+    ? low + impulseRange * 0.618
+    : high - impulseRange * 0.618;
   // Preserve a price printed to the chart's available precision. For example,
   // 53524.20 and a calculated 53524.1998 are the same visible 38.2% level;
   // an IEEE floating-point remainder must not make it look shallow.
@@ -762,14 +765,23 @@ export function findNearestAllowedFibonacciMatch({
     1e-10
   );
 
-  // A proximity allowance may absorb broker/zone-boundary variation, but it
-  // must never pull an entirely shallow candidate across the 38.2 threshold.
-  // Bearish candidates below 38.2 and bullish candidates above 38.2 remain
-  // structural references rather than entries.
-  if (
-    (direction === "bearish" && upperBoundary < firstRetracementPrice - boundaryRoundingEpsilon) ||
-    (direction === "bullish" && lowerBoundary > firstRetracementPrice + boundaryRoundingEpsilon)
-  ) {
+  const acceptedBandLow = Math.min(firstRetracementPrice, finalRetracementPrice);
+  const acceptedBandHigh = Math.max(firstRetracementPrice, finalRetracementPrice);
+
+  // Fibonacci qualifies independently proven structure anywhere inside the
+  // complete 38.2%-61.8% retracement band. It does not require the structural
+  // price to sit within a small arbitrary distance of one exact Fib line.
+  // Only a tightly capped boundary allowance may absorb broker/zone rounding;
+  // the caller's broader proximity tolerance cannot drag remote structure
+  // into the band.
+  const boundaryAllowance = Math.max(
+    boundaryRoundingEpsilon,
+    Math.min(allowedTolerance, impulseRange * 0.002)
+  );
+  const intersectsAcceptedBand =
+    upperBoundary >= acceptedBandLow - boundaryAllowance &&
+    lowerBoundary <= acceptedBandHigh + boundaryAllowance;
+  if (!intersectsAcceptedBand) {
     return null;
   }
 
@@ -788,7 +800,16 @@ export function findNearestAllowedFibonacciMatch({
     })
     .sort((a, b) => a.distance - b.distance || a.ratio - b.ratio);
 
-  return matches[0]?.distance <= allowedTolerance ? matches[0] : null;
+  return matches[0]
+    ? {
+        ...matches[0],
+        withinRetracementBand: true,
+        acceptedBandLow,
+        acceptedBandHigh,
+        boundaryAllowance,
+        tolerance: allowedTolerance,
+      }
+    : null;
 }
 
 export function mergeFocusedSupplyDemandInventory(

@@ -555,6 +555,46 @@ test("H4 automatic mode accepts a complete W1-W4 high-low inventory", () => {
   );
 });
 
+test("selector 4.28 requires the transparent period, Fib, entry and provenance audit", () => {
+  const automatic = structuredClone(baseResult);
+  automatic.chartDetection = {
+    detectedInstrument: "USDCAD",
+    detectedTimeframe: "H4",
+    latestVisibleDate: "2026-08-27",
+  };
+  automatic.analysisFacts.selectorDiagnostics = {
+    selectorVersion: "4.28.0",
+    fibonacci: { source: "uploaded_chart_visible_current_month_high_low", swingHigh: 1.40801, swingLow: 1.37329 },
+    structuralCandidates: [],
+    fibCandidates: [],
+    periodInventory: [
+      { periodLabel: "W1", sourceUnit: "W1", date: "2026-08-03", high: 1.40801, low: 1.39244 },
+      { periodLabel: "W2", sourceUnit: "W1", date: "2026-08-10", high: 1.39685, low: 1.38665 },
+      { periodLabel: "W3", sourceUnit: "W1", date: "2026-08-17", high: 1.39104, low: 1.37329 },
+      { periodLabel: "W4", sourceUnit: "W1", date: "2026-08-24", high: 1.38928, low: 1.37543 },
+    ],
+  };
+
+  let result = validateBenchmarkResult(automatic, { automaticMode: true });
+  assert.equal(
+    result.checks.find((check) => check.id === "automatic_transparent_selector_audit")?.passed,
+    false
+  );
+
+  automatic.analysisFacts.selectorDiagnostics.transparencyAudit = {
+    periodStructureAudit: [{ period: "W1", high: 1.40801, low: 1.39244 }],
+    fibonacciAudit: { swingHigh: 1.40801, swingLow: 1.37329 },
+    candidateEvaluationAudit: [],
+    entryDecisionAudit: [{ entry: 1 }, { entry: 2 }, { entry: 3 }],
+    provenanceConflicts: [],
+  };
+  result = validateBenchmarkResult(automatic, { automaticMode: true });
+  assert.equal(
+    result.checks.find((check) => check.id === "automatic_transparent_selector_audit")?.passed,
+    true
+  );
+});
+
 test("automatic mode rejects a selected entry that did not pass Fibonacci confluence", () => {
   const automatic = structuredClone(baseResult);
   automatic.chartDetection = {

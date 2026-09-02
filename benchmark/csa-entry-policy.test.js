@@ -828,10 +828,70 @@ test("selector reconciles exact chart/framework levels before choosing Fibonacci
   assert.match(serverSource, /selectStructureLedChartNativeImpulseFrame/);
 });
 
-test("Fibonacci qualification cannot use the whole 50%-61.8% interval as confluence", () => {
+test("Fibonacci qualification accepts independently proven structure across the 38.2%-61.8% band", () => {
   const serverSource = readFileSync(new URL("../server.js", import.meta.url), "utf8");
-  assert.equal(serverSource.includes('matchType: "inside_50_618_acceptance_band"'), false);
-  assert.match(serverSource, /const matches = exactLevelMatches;/);
+  const w3High = findNearestAllowedFibonacciMatch({
+    direction: "bearish",
+    swingHigh: 1.40801,
+    swingLow: 1.37329,
+    price: 1.39104,
+    zoneLow: 1.39104,
+    zoneHigh: 1.39104,
+    tolerance: 0.0002,
+  });
+  const w1Low = findNearestAllowedFibonacciMatch({
+    direction: "bearish",
+    swingHigh: 1.40801,
+    swingLow: 1.37329,
+    price: 1.39244,
+    zoneLow: 1.39244,
+    zoneHigh: 1.39244,
+    tolerance: 0.0002,
+  });
+  const outsideBand = findNearestAllowedFibonacciMatch({
+    direction: "bearish",
+    swingHigh: 1.40801,
+    swingLow: 1.37329,
+    price: 1.39685,
+    zoneLow: 1.39685,
+    zoneHigh: 1.39685,
+    tolerance: 0.01,
+  });
+  assert.equal(w3High?.withinRetracementBand, true);
+  assert.equal(w3High?.ratio, 0.5);
+  assert.equal(w1Low?.withinRetracementBand, true);
+  assert.equal(w1Low?.ratio, 0.5);
+  assert.equal(outsideBand, null);
+  assert.match(serverSource, /buildPeriodInventoryStructuralCandidates/);
+  assert.match(serverSource, /deterministic_period_high_low_inventory/);
+  assert.match(serverSource, /price is not a deterministic period high\/low/);
+});
+
+test("USDCAD H4 sequences W3 supply before converted W1 support", () => {
+  const selected = selectIndependentEntryAreas([
+    {
+      id: "W3-high",
+      areaType: "supply",
+      authoritativeCenter: 1.39104,
+      authoritativeFrameworkLevel: true,
+      requiredFibConfluence: true,
+      structuralScore: 60,
+      fibonacciScore: 1,
+      independentEntryEvidence: true,
+    },
+    {
+      id: "W1-low",
+      areaType: "converted resistance",
+      authoritativeCenter: 1.39244,
+      authoritativeFrameworkLevel: true,
+      requiredFibConfluence: true,
+      structuralScore: 60,
+      fibonacciScore: 1,
+      independentEntryEvidence: true,
+    },
+  ], "bearish");
+
+  assert.deepEqual(selected.map((area) => area.id), ["W3-high", "W1-low"]);
 });
 
 test("redundant same-stage Entry 2 is rejected without independent chart evidence", () => {
