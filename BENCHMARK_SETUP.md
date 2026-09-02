@@ -2,15 +2,15 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.50.0-structural-bias-direction-lock`, packaged as benchmark v2.66.
+The included analysis backend is CSA build `v4.51.0-completed-period-structure`, packaged as benchmark v2.67.
 
-v2.66 locks selector direction, Fibonacci orientation and entry-side selection to the verified fixed-period structural bias. A recent opposite move remains visible as a pullback/recovery phase instead of reversing the framework direction. Resolved or rejected price readings remain in Export JSON as audit evidence but no longer appear as unresolved review conflicts. It retains v2.65's summary-only display and reduced vision pipeline.
+v2.67 excludes the active unfinished framework period from structural support/resistance, supply/demand and Entry 1-3 selection. The partial period remains available only for the live Fibonacci frame, current price and current phase, and Export JSON records it separately as in progress. It retains v2.66's structural-bias direction lock, summary-only display and reduced vision pipeline.
 
 ## Authoritative timeframe-candle rule
 
 - For M1, M5, M15, M30 and H1, inventory every D1 candle high and low inside the current trading week, in chronological order up to the visible cutoff.
 - For H4, inventory every W1 candle high and low inside the current calendar month, in chronological order as W1, W2, W3, W4 and W5 when present.
-- Do not skip, merge or renumber periods. Complete this inventory before selecting S/R, S/D or entries.
+- Do not skip, merge or renumber periods while constructing the full current Fib-frame inventory. Before selecting S/R, S/D or entries, remove the active unfinished period from the structural inventory.
 - Every row must use the exact calculated period start date. A shifted date, an older wick moved into the current period, or an invented extra W5/month invalidates the chart inventory.
 - For H4, Monday 00:00 is the first candle, Monday 04:00 is the second and Monday 08:00 is the third. None may be assigned to the previous week; weekend candles are ignored.
 - The Fibonacci frame is separate: M1-H1 uses the complete current-week high/low, while H4 uses the complete current-month high/low. Fibonacci qualifies the individual D1/W1 structures but never replaces them or creates a level.

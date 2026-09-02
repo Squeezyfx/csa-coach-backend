@@ -2294,8 +2294,12 @@ function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimefr
    * Lower-timeframe pivots/bases may later CONFIRM or REINFORCE these areas,
    * but they cannot invent a separate framework supply/demand identity.
    */
+  // An active framework candle is useful for live price/Fibonacci context,
+  // but it is not a confirmed period high/low until that period closes.
+  const completedLevels = (Array.isArray(levels) ? levels : [])
+    .filter((period) => period?.partialPeriod !== true);
   const areas = [];
-  levels.forEach((period, index) => {
+  completedLevels.forEach((period, index) => {
     const label = period.periodLabel || period.day || period.key;
     if (index === 0) {
       areas.push({
@@ -2321,7 +2325,7 @@ function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimefr
       return;
     }
 
-    const previous = levels[index - 1];
+    const previous = completedLevels[index - 1];
     const highComparison = compareHighWithTolerance(period.high, previous.high, symbol);
     const lowComparison = compareLowWithTolerance(period.low, previous.low, symbol);
 
@@ -3668,6 +3672,9 @@ async function fetchTwelveDataStructureLevels({
   const sourceIntegrityWarnings = dailyLevels
     .filter((level) => level?.sourceIntegrityWarning === true)
     .map((level) => String(level.key));
+  const completedDailyLevels = dailyLevels.filter((level) =>
+    level?.partialPeriod !== true
+  );
 
   console.log("CSA AUTHORITATIVE FRAMEWORK PERIODS:", {
     source: ["daily-in-week", "weekly-in-month"].includes(profile?.structureMode)
@@ -3709,7 +3716,7 @@ async function fetchTwelveDataStructureLevels({
   });
   const csaAreas =
     buildCsaAreas(
-      dailyLevels,
+      completedDailyLevels,
       symbol,
       profile
     );
@@ -3782,7 +3789,7 @@ async function fetchTwelveDataStructureLevels({
             chartCutoff?.reason ||
             "Later same-day market data was excluded.",
         }
-      : calculateCsaDirectionalBias(dailyLevels, symbol, profile);
+      : calculateCsaDirectionalBias(completedDailyLevels, symbol, profile);
 
   const phaseForBias =
     deriveAuthoritativeCsaHistoricalPhase({
@@ -3853,6 +3860,10 @@ async function fetchTwelveDataStructureLevels({
         ? ""
         : `No usable ${profile.sourceUnitPlural} were returned before the chart cutoff.`,
     dailyLevels,
+    structuralLevels: completedDailyLevels,
+    currentFrameworkPeriodKey: currentFrameworkPeriod?.key || null,
+    currentFrameworkPeriodLabel: currentFrameworkPeriod?.label || null,
+    currentFrameworkPeriodComplete,
     timeframeCandles,
     impulseCandles,
     csaAreas,
@@ -10748,8 +10759,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.45.0";
-const CSA_BUILD_ID = "CSA-v4.50.0-structural-bias-direction-lock";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.46.0";
+const CSA_BUILD_ID = "CSA-v4.51.0-completed-period-structure";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -16077,7 +16088,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.33.0";
+const CSA_SELECTOR_VERSION = "4.34.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19683,7 +19694,7 @@ async function extractVisibleCurrentWeekFrame({ imageBase64, mimeType, timeframe
 function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", cutoffDate = "" } = {}) {
   const tf = comparableTimeframe(timeframe);
   if (tf === "H4") {
-    return aggregateH4CandlesIntoWeeklyInventory({
+    const periods = aggregateH4CandlesIntoWeeklyInventory({
       candles: marketReference?.timeframeCandles || [],
       cutoffDate:
         cutoffDate ||
@@ -19691,6 +19702,22 @@ function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", 
         marketReference?.chartCutoff?.latestVisibleDate ||
         "",
     });
+    // Preserve an unfinished final week for the live monthly Fib frame, but
+    // tag it so provisional W4/W5 wicks cannot become structural entries.
+    if (marketReference?.currentFrameworkPeriodComplete === false && periods.length) {
+      return periods.map((period, index) => ({
+        ...period,
+        partialPeriod:
+          period?.partialPeriod === true || index === periods.length - 1,
+        periodLifecycle:
+          index === periods.length - 1 ? "in_progress" : "completed",
+      }));
+    }
+    return periods.map((period) => ({
+      ...period,
+      partialPeriod: period?.partialPeriod === true,
+      periodLifecycle: period?.partialPeriod === true ? "in_progress" : "completed",
+    }));
   }
 
   if (["D1", "W1", "MN"].includes(tf)) {
@@ -19702,6 +19729,7 @@ function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", 
         sourceUnit: tf === "D1" ? "MN" : tf === "W1" ? "MN" : "MN",
         structures: Array.isArray(level?.structures) ? level.structures : [],
         source: level?.source || "market_reference_higher_timeframe_inventory",
+        periodLifecycle: level?.partialPeriod === true ? "in_progress" : "completed",
       }));
   }
   return [];
@@ -19752,7 +19780,7 @@ function deriveVerifiedFixedPeriodBias({
   currentPrice = null,
 } = {}) {
   const tf = comparableTimeframe(timeframe);
-  const periods = (Array.isArray(periodInventory) ? periodInventory : [])
+  const normalizedPeriods = (Array.isArray(periodInventory) ? periodInventory : [])
     .filter((period) => Number.isFinite(Number(period?.high)) && Number.isFinite(Number(period?.low)));
   if (!periods.length) return null;
   const high = Math.max(...periods.map((period) => Number(period.high)));
@@ -19838,7 +19866,7 @@ function buildPeriodInventoryStructuralCandidates({
   symbol = "",
   timeframe = "H1",
 } = {}) {
-  const periods = (Array.isArray(periodInventory) ? periodInventory : [])
+  const normalizedPeriods = (Array.isArray(periodInventory) ? periodInventory : [])
     .map((period, index) => ({
       ...period,
       periodLabel: period?.periodLabel || `Period ${index + 1}`,
@@ -19849,6 +19877,20 @@ function buildPeriodInventoryStructuralCandidates({
     .filter((period) =>
       period.high !== null && period.low !== null && period.high >= period.low
     );
+  const inProgressPeriods = normalizedPeriods.filter((period) =>
+    period?.partialPeriod === true || period?.periodLifecycle === "in_progress"
+  );
+  const periods = normalizedPeriods.filter((period) =>
+    period?.partialPeriod !== true && period?.periodLifecycle !== "in_progress"
+  );
+  const inProgressPeriodLabels = new Set(
+    inProgressPeriods.flatMap((period) => [
+      String(period?.periodLabel || "").trim(),
+      String(period?.day || "").trim(),
+      String(period?.date || "").trim(),
+      String(period?.key || "").trim(),
+    ]).filter(Boolean)
+  );
   const cleanBreakTolerance = getCleanBreakTolerance(symbol);
   const frameworkAreas = buildCsaAreas(
     periods,
@@ -19927,6 +19969,22 @@ function buildPeriodInventoryStructuralCandidates({
   const rejectedVisualCandidates = [];
   const admittedVisualCandidates = visualCandidates.filter((candidate) => {
     const price = asPositiveNumber(candidate?.price);
+    const candidatePeriodLabels = [
+      candidate?.sourcePeriod,
+      candidate?.sourceDay,
+      candidate?.period,
+      candidate?.date,
+    ].map((value) => String(value || "").trim()).filter(Boolean);
+    if (candidatePeriodLabels.some((label) => inProgressPeriodLabels.has(label))) {
+      rejectedVisualCandidates.push({
+        ...candidate,
+        provenanceVerified: false,
+        requiresReview: false,
+        rejectionReason:
+          "current framework period is still in progress and cannot supply structural S/R, S/D or an entry candidate",
+      });
+      return false;
+    }
     const type = String(candidate?.areaType || "").toLowerCase().trim();
     const isSupplyDemand = ["supply", "demand"].includes(type);
     const independentZone =
@@ -19977,7 +20035,7 @@ function buildPeriodInventoryStructuralCandidates({
       return true;
     });
 
-  return { candidates, rejectedVisualCandidates, periods };
+  return { candidates, rejectedVisualCandidates, periods, inProgressPeriods };
 }
 
 function rankChartNativeFallbackAreas({
@@ -20284,6 +20342,15 @@ function rankChartNativeFallbackAreas({
         source: period?.source || fallback?.inventoryAuthority || "uploaded_chart_period_inventory",
       };
     }),
+    inProgressPeriodAudit: authoritativeInventory.inProgressPeriods.map((period) => ({
+      period: period.periodLabel,
+      date: period.date || null,
+      high: period.high,
+      low: period.low,
+      lifecycle: "in_progress",
+      structuralUse: "excluded",
+      retainedFor: "current Fib frame, current price and phase only",
+    })),
     fibonacciAudit: {
       source: visibleWeekFrame
         ? visibleWeekFrame.source
@@ -20401,6 +20468,8 @@ function rankChartNativeFallbackAreas({
         candidateEvaluations,
         transparencyAudit,
         periodInventory,
+        structuralPeriodInventory: authoritativeInventory.periods,
+        inProgressPeriodInventory: authoritativeInventory.inProgressPeriods,
         periodDayInventory: fallback.periodDayInventory || fallback.periodInventory || [],
         fibonacciQualifiedCandidates: candidates,
         selectedEntries: [],
@@ -20437,6 +20506,8 @@ function rankChartNativeFallbackAreas({
       candidateEvaluations,
       transparencyAudit,
       periodInventory,
+      structuralPeriodInventory: authoritativeInventory.periods,
+      inProgressPeriodInventory: authoritativeInventory.inProgressPeriods,
       periodDayInventory: fallback.periodDayInventory || fallback.periodInventory || [],
       fibonacciQualifiedCandidates: candidates,
       selectedEntries: selected,

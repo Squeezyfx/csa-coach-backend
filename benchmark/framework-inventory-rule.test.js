@@ -89,3 +89,18 @@ test("final-visible price synchronization cannot rewind to an older similar clos
   assert.match(serverSource, /anchorDate: chartDetection\?\.latestVisibleDate/);
   assert.match(serverSource, /maximumDateDistanceDays: chartDetection\?\.latestVisibleDate \? 1 : null/);
 });
+
+test("unfinished framework periods are context only, never structural entries", () => {
+  assert.match(serverSource, /currentFrameworkPeriodComplete/);
+  assert.match(serverSource, /periodLifecycle:\s*index === periods\.length - 1 \? "in_progress" : "completed"/);
+  assert.match(serverSource, /const completedDailyLevels = dailyLevels\.filter/);
+  assert.match(serverSource, /const inProgressPeriods = normalizedPeriods\.filter/);
+  assert.match(serverSource, /current framework period is still in progress and cannot supply structural S\/R, S\/D or an entry candidate/);
+  assert.match(serverSource, /retainedFor: "current Fib frame, current price and phase only"/);
+});
+
+test("full period inventory remains available for current Fib-frame verification", () => {
+  assert.match(serverSource, /periodInventory: selectedPeriodInventory/);
+  assert.match(serverSource, /structuralPeriodInventory: authoritativeInventory\.periods/);
+  assert.match(serverSource, /inProgressPeriodInventory: authoritativeInventory\.inProgressPeriods/);
+});
