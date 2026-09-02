@@ -12,6 +12,7 @@ const exportButton = document.querySelector("#exportButton");
 const promoteButton = document.querySelector("#promoteButton");
 const runStatus = document.querySelector("#runStatus");
 const adminKey = document.querySelector("#adminKey");
+const batchOverview = document.querySelector("#batchOverview");
 let files = [];
 let lastRun = null;
 let benchmarkMode = "automatic";
@@ -221,6 +222,62 @@ function structuralCandidateKey(candidate) {
   return [type, Number.isFinite(low) ? low : "", Number.isFinite(high) ? high : "", Number.isFinite(center) ? center : ""].join(":");
 }
 
+function compactNumber(value, precisionSeed) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  const decimals = Math.min(6, Math.max(2, String(precisionSeed ?? value).split(".")[1]?.length || 2));
+  return number.toFixed(decimals);
+}
+
+function renderBatchOverview(run) {
+  const rows = run.results.map((item) => {
+    const analysis = item.analysis || {};
+    const facts = analysis.analysisFacts || {};
+    const diagnostics = facts.selectorDiagnostics || {};
+    const audit = diagnostics.transparencyAudit || {};
+    const periods = Array.isArray(audit.periodStructureAudit) ? audit.periodStructureAudit : [];
+    const entries = Array.isArray(diagnostics.selectedEntries) ? diagnostics.selectedEntries : [];
+    const fib = diagnostics.fibonacci || {};
+    const biasCode = String(analysis.csaDirectionalBias?.biasCode || "").toLowerCase();
+    const structuralBias = ["bullish", "bearish", "range"].includes(biasCode) ? biasCode : "unverified";
+    const headlineBias = String(facts.direction || item.validation?.direction || "unknown").toLowerCase();
+    const phase = analysis.csaDirectionalBias?.cutoffPhase?.phase || facts.historicalPhase?.phase || "not resolved";
+    const seed = entries[0]?.levelText || fib.swingHigh || facts.currentPrice;
+    const range = Number(fib.swingHigh) - Number(fib.swingLow);
+    const fibLevels = Number.isFinite(range) && range > 0
+      ? structuralBias === "bearish"
+        ? [Number(fib.swingLow) + range * .382, Number(fib.swingLow) + range * .5, Number(fib.swingLow) + range * .618]
+        : [Number(fib.swingHigh) - range * .382, Number(fib.swingHigh) - range * .5, Number(fib.swingHigh) - range * .618]
+      : [];
+    const periodText = periods.length
+      ? periods.map((period) => `${period.period}: H ${compactNumber(period.high, seed)} (${period.highRole || "—"}), L ${compactNumber(period.low, seed)} (${period.lowRole || "—"})`).join(" · ")
+      : "No verified period inventory";
+    const entryText = entries.length
+      ? entries.map((entry, index) => {
+          const match = Array.isArray(entry.fibonacciMatches) ? entry.fibonacciMatches[0] : null;
+          const fibText = match ? `; ${match.label || "Fib"} @ ${compactNumber(match.price, seed)}` : "";
+          return `E${index + 1} ${entry.sourceKind || entry.sourcePeriod || "—"} ${entry.areaType || "area"} ${compactNumber(entry.resolvedEntryPrice ?? entry.authoritativeCenter, seed)}${fibText}`;
+        }).join(" · ")
+      : "No selected entry";
+    const flags = [];
+    if (structuralBias === "unverified") flags.push("bias unverified");
+    if (structuralBias !== "unverified" && headlineBias !== structuralBias) flags.push(`headline says ${headlineBias}`);
+    if (!(Number(fib.swingHigh) > Number(fib.swingLow))) flags.push("Fib frame missing");
+    if (item.status !== "passed") flags.push("validation review");
+    const conflictCount = Array.isArray(audit.provenanceConflicts)
+      ? audit.provenanceConflicts.filter((conflict) => conflict?.requiresReview !== false).length
+      : 0;
+    if (conflictCount) flags.push(`${conflictCount} price conflict${conflictCount === 1 ? "" : "s"}`);
+    return `<tr class="${flags.length ? "overview-review" : "overview-clear"}"><th>${escapeHtml(`${facts.instrument || analysis.detectedPair || "Unknown"} ${facts.timeframe || analysis.detectedTimeframe || ""}`)}</th><td><b>${escapeHtml(structuralBias)}</b><small>${escapeHtml(String(phase).replaceAll("_", " "))}</small></td><td>${escapeHtml(compactNumber(facts.currentPrice, seed))}</td><td>${escapeHtml(Number(fib.swingHigh) > Number(fib.swingLow) ? `H ${compactNumber(fib.swingHigh, seed)} / L ${compactNumber(fib.swingLow, seed)}` : "Not verified")}<small>${escapeHtml(fibLevels.length ? `38.2 ${compactNumber(fibLevels[0], seed)} · 50 ${compactNumber(fibLevels[1], seed)} · 61.8 ${compactNumber(fibLevels[2], seed)}` : "")}</small></td><td class="overview-periods">${escapeHtml(periodText)}</td><td>${escapeHtml(entryText)}</td><td>${escapeHtml(flags.length ? flags.join("; ") : "clear")}</td></tr>`;
+  }).join("");
+  batchOverview.innerHTML = `<div class="overview-heading"><div><h3>Batch diagnosis summary</h3><p>Structural bias and current phase are separated. Expand a chart below only when a row needs investigation.</p></div><label><input id="reviewOnly" type="checkbox"> Show review rows only</label></div><div class="audit-table-wrap"><table class="overview-table"><thead><tr><th>Chart</th><th>Structural bias / phase</th><th>Current</th><th>Fib frame / levels</th><th>Period highs & lows</th><th>Entries</th><th>Review flags</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  batchOverview.querySelector("#reviewOnly")?.addEventListener("change", (event) => {
+    batchOverview.querySelectorAll("tbody tr").forEach((row) => {
+      row.hidden = event.target.checked && !row.classList.contains("overview-review");
+    });
+  });
+}
+
 function renderRun(run) {
   resultsPanel.hidden = false;
   const automatic = run.mode === "automatic" || run.results.every((item) => item.mode === "automatic");
@@ -232,6 +289,7 @@ function renderRun(run) {
     summaryCard("Total", run.summary.total), summaryCard(automatic ? "Accepted" : "Passed", run.summary.passed),
     summaryCard(automatic ? "Needs review" : "Failed", run.summary.failed), summaryCard("Errors", run.summary.errors),
   ].join("");
+  renderBatchOverview(run);
   document.querySelector("#resultCards").innerHTML = run.results.map((item) => {
     const checks = item.validation?.checks || [];
     const failures = checks.filter((check) => !check.passed);

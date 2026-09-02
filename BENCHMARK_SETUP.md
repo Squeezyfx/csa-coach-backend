@@ -2,9 +2,9 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.47.0-deterministic-period-price-authority`, packaged as benchmark v2.62.
+The included analysis backend is CSA build `v4.48.0-structural-bias-phase-separation`, packaged as benchmark v2.63.
 
-v2.62 makes verified D1/W1/MN candle data the numerical authority for period highs/lows, fixed-period bias and Fibonacci. The vision model may identify chart structure and provide an auditable comparison, but correct date labels alone can no longer verify its estimated prices. When deterministic period data is unavailable, the engine returns no verified period frame and cannot select an entry from guessed prices. It retains v2.61's Monday 00:00 boundaries and weekend exclusion.
+v2.63 keeps verified D1/W1/MN candle data as the numerical authority and now prevents recent opposite candles from overwriting fixed-period structural bias. Pullback/recovery is reported as a separate phase. The benchmark also adds a one-row-per-chart diagnosis summary, flags bias disagreements or missing data, and aligns its Fibonacci validation tolerance with the selector.
 
 ## Authoritative timeframe-candle rule
 

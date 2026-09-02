@@ -1,6 +1,6 @@
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
-const BENCHMARK_VALIDATOR_VERSION = "1.13.0";
+const BENCHMARK_VALIDATOR_VERSION = "1.14.0";
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -533,7 +533,11 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const fibEvidenceForEntry = (entry) => {
       const entryPrice = finiteNumber(entry.center);
       if (entryPrice === null) return [];
-      const tolerance = defaultTolerance(entryPrice);
+      const displayedDecimals = String(entry.levelText || "").split(".")[1]?.length;
+      const displayRoundingTolerance = Number.isInteger(displayedDecimals)
+        ? 0.5 * (10 ** -displayedDecimals) + Number.EPSILON
+        : 0;
+      const tolerance = Math.max(defaultTolerance(entryPrice), displayRoundingTolerance);
       const matchedEvaluatedCandidate = fibCandidates.some((candidate) => {
         if (candidate?.passed !== true) return false;
         const candidatePrice =
@@ -597,7 +601,7 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
             defaultTolerance(candidatePrice),
             Math.min(
               finiteNumber(candidate?.fibonacciTolerance) ?? 0,
-              fallbackRange * 0.002
+              fallbackRange * 0.01
             )
           );
           return candidatePrice >= bandLow - boundaryAllowance &&
@@ -612,6 +616,11 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     };
     const entryFibEvidence = entries.map((entry) => fibEvidenceForEntry(entry));
     const everyEntryHasFibConfluence = entryFibEvidence.every((evidence) => evidence.length > 0);
+    const structuralBias = normalizeDirection(
+      result?.csaDirectionalBias?.biasCode || result?.csaDirectionalBias?.bias || ""
+    );
+    const structuralBiasDeclared = Boolean(result?.csaDirectionalBias);
+    const structuralBiasAvailable = ["bullish", "bearish", "range"].includes(structuralBias);
 
     addCheck(
       checks,
@@ -626,6 +635,19 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       "Directional bias resolved",
       direction !== "unknown",
       `Resolved direction: ${direction}.`
+    );
+    addCheck(
+      checks,
+      "automatic_structural_bias_consistency",
+      "Headline bias agrees with verified period structure",
+      !structuralBiasDeclared || (structuralBiasAvailable && direction === structuralBias),
+      !structuralBiasDeclared
+        ? "No separate structural-bias field was supplied by this legacy fixture."
+        : !structuralBiasAvailable
+        ? "Verified period structure is unavailable; do not present a visual range estimate as an authoritative bias."
+        : direction === structuralBias
+        ? `Structural bias: ${structuralBias}.`
+        : `Headline bias ${direction} conflicts with verified period bias ${structuralBias}.`
     );
     addCheck(
       checks,

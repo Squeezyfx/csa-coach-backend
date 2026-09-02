@@ -35,3 +35,11 @@ test("the benchmark exposes entry decisions and price-source conflicts", () => {
   assert.match(appSource, /candidateEvaluationAudit/);
   assert.match(appSource, /Inside 38\.2–61\.8/);
 });
+
+test("the benchmark renders a compact one-row-per-chart diagnosis summary", () => {
+  assert.match(appSource, /function renderBatchOverview/);
+  assert.match(appSource, /Batch diagnosis summary/);
+  assert.match(appSource, /Structural bias \/ phase/);
+  assert.match(appSource, /Period highs & lows/);
+  assert.match(appSource, /Show review rows only/);
+});

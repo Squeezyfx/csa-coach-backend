@@ -10748,8 +10748,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.42.0";
-const CSA_BUILD_ID = "CSA-v4.47.0-deterministic-period-price-authority";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.43.0";
+const CSA_BUILD_ID = "CSA-v4.48.0-structural-bias-phase-separation";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -24738,6 +24738,34 @@ function buildValidatedAnalysisFacts({
   ) {
     direction =
       currentStructureRegime.direction;
+  }
+
+  // V4.48.0: the verified fixed-period inventory owns the structural bias.
+  // A recent opposite candle sequence is the current phase (pullback/recovery),
+  // not permission to silently reverse the monthly/weekly structural bias.
+  if (
+    finalVisibleMode &&
+    deterministicMarketStateAvailable &&
+    ["bullish", "bearish"].includes(historicalPhase.direction)
+  ) {
+    const recentDirection = ["bullish", "bearish"].includes(
+      currentStructureRegime.direction
+    )
+      ? currentStructureRegime.direction
+      : null;
+    const structuralDirection = historicalPhase.direction;
+    direction = structuralDirection;
+    currentStructureRegime.direction = structuralDirection;
+    if (recentDirection && recentDirection !== structuralDirection) {
+      currentStructureRegime.phase = structuralDirection === "bullish"
+        ? "bearish_pullback_after_bullish_structure"
+        : "bullish_recovery_after_bearish_structure";
+      currentStructureRegime.bullishRecoveryAfterBreakdown = structuralDirection === "bearish";
+      currentStructureRegime.bearishPullbackAfterBreakout = structuralDirection === "bullish";
+    }
+    currentStructureRegime.source = "verified_fixed_period_structure_with_recent_phase";
+    currentStructureRegime.bullishBreakout = structuralDirection === "bullish";
+    currentStructureRegime.bearishBreakdown = structuralDirection === "bearish";
   }
 
   // Reviewed benchmark charts are regression evidence, not model opinion.

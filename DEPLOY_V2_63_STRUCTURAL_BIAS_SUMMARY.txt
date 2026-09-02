@@ -1,0 +1,27 @@
+CSA Benchmark v2.63 deployment
+
+Build: CSA-v4.48.0-structural-bias-phase-separation
+Feedback engine: 10.43.0
+Selector: 4.32.0
+Validator: 1.14.0
+
+Changes
+- Verified monthly/weekly structure now owns the headline bias.
+- Recent opposite price action is shown as pullback/recovery phase, not a bias reversal.
+- Missing authoritative period data is explicitly flagged by the validator.
+- The batch report has a one-row-per-chart diagnosis table with bias, phase,
+  current price, Fib anchors and levels, period H/L roles, entries and review flags.
+- A review-only filter makes 10-20 chart batches easier to scan.
+- Fibonacci validation uses the selector's one-percent boundary allowance and
+  no longer fails an entry merely because its customer-facing price is rounded.
+
+Verification
+- npm run check
+- npm run test:benchmarks
+- 139 tests pass
+
+Retest notes
+- USA30 D1 still requires a valid provider symbol/alias before its monthly
+  inventory, Fibonacci frame or bias can be treated as verified.
+- Exact broker-chart highs/lows can differ from an external feed. Any such
+  difference must be exposed as a price-source conflict rather than hidden.
