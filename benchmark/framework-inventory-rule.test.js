@@ -62,7 +62,8 @@ test("date labels alone cannot verify vision-estimated highs and lows", () => {
   assert.match(serverSource, /focusedInventoryDateSequenceVerified &&\s*marketInventoryVerified/);
   assert.match(serverSource, /usable: inventoryUsable && Boolean\(fallbackDirection\)/);
   assert.match(serverSource, /rejectedFocusedPeriodInventory/);
-  assert.match(serverSource, /chartOnlyInventoryVerified[\s\S]*?requiresReview: true/);
+  assert.match(serverSource, /providerFailure: marketReference\?\.ok \? null/);
+  assert.match(serverSource, /currentPeriodFrameVerified: false/);
   assert.match(serverSource, /vision-estimated period price rejected/);
 });
 
@@ -117,6 +118,6 @@ test("full period inventory remains available for current Fib-frame verification
 test("provider-unavailable broker indices retain a complete chart inventory for review", () => {
   assert.match(serverSource, /complete_chart_only_period_inventory_provider_unavailable_human_review/);
   assert.match(serverSource, /const chartOnlyInventoryVerified =/);
-  assert.match(serverSource, /human verification is required/);
+  assert.match(serverSource, /Human verification remains required/);
   assert.match(serverSource, /chart_only_fixed_period_inventory_provider_unavailable/);
 });

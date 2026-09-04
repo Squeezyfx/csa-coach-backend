@@ -363,7 +363,7 @@ function refreshValidation(validation = {}) {
 export function applyBatchFeedbackDiversityChecks(results = []) {
   const eligible = results
     .map((item, index) => ({ item, index, templates: feedbackItems(item?.analysis) }))
-    .filter(({ item, templates }) => item?.status !== "error" && templates.length > 0);
+    .filter(({ item, templates }) => item?.status !== "error" && item?.analysis?.benchmarkDiagnosticOnly !== true && templates.length > 0);
 
   const collisions = new Map();
   for (let left = 0; left < eligible.length; left += 1) {
@@ -724,13 +724,15 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
               Number.isFinite(Number(conflict?.chartCount))
             ))
           );
+        const authorityMissing = Boolean(transparencyAudit.inventoryAuthority?.providerFailure);
         addCheck(
           checks,
           "automatic_period_price_authority",
-          "Chart and external period prices agree",
-          inventoryConflicts.length === 0,
+          "Period price authority is available without unresolved conflicts",
+          !authorityMissing && inventoryConflicts.length === 0,
           inventoryConflicts.length
             ? `${inventoryConflicts.length} period high/low conflict(s) were exposed. Review the chart values before saving this result.`
+            : authorityMissing ? "External price authority is unavailable or alignment is uncertain; this is not a confirmed price conflict."
             : "No unresolved chart-versus-market period high/low conflict was found."
         );
       }

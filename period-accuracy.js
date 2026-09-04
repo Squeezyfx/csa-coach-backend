@@ -7,6 +7,42 @@ export function isUnverifiedPeriodCandidate(candidate = {}) {
 const positive = (value) => value !== null && value !== undefined && value !== "" &&
   Number.isFinite(Number(value)) && Number(value) > 0;
 
+// Read-only reference inventory. This never supplies selector authority or Fib.
+export function buildCompletedPeriodReferences({ periods = [], candles = [], timeframe = "D1", visibleDateFloor = "", providerAvailable = false, tolerance = 0 } = {}) {
+  const output = { status: "unavailable", source: "Twelve Data", chartVerified: false,
+    brokerVerified: false, entryEligible: false, visibleDateFloor, periods: [], rejected: [] };
+  const floor = new Date(`${visibleDateFloor}T00:00:00Z`);
+  if (!providerAvailable || !/^\d{4}-\d{2}-\d{2}$/.test(visibleDateFloor) ||
+      !Number.isFinite(floor.getTime()) || floor.toISOString().slice(0,10) !== visibleDateFloor) return output;
+  if (!["D1", "H4", "H1", "M30", "M15", "M5", "M1"].includes(timeframe)) return output;
+  const counts = new Map();
+  for (const p of periods) counts.set(p.date, (counts.get(p.date) || 0) + 1);
+  for (const period of periods) {
+    const date = String(period.date || "");
+    const start = new Date(`${date}T00:00:00Z`);
+    const reject = reason => output.rejected.push({ date, reason });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(start.getTime()) || start.toISOString().slice(0,10) !== date || counts.get(period.date) !== 1) { reject("invalid_or_duplicate_date"); continue; }
+    const end = new Date(start);
+    if (timeframe === "D1") {
+      if (start.getUTCDate() !== 1) { reject("not_month_start"); continue; }
+      end.setUTCMonth(end.getUTCMonth() + 1);
+    } else end.setUTCDate(end.getUTCDate() + (timeframe === "H4" ? 7 : 1));
+    // Strictly before an actually printed date; never extrapolate a final day.
+    if (end >= floor || period.partialPeriod === true || period.periodLifecycle === "in_progress") { reject("completion_not_established"); continue; }
+    const endDate = end.toISOString().slice(0,10);
+    const owned = candles.filter(c => String(c.datetime || c.date || "").slice(0,10) >= date && String(c.datetime || c.date || "").slice(0,10) < endDate);
+    const audit = auditPeriodInventory({periods:[period], candles:owned, tolerance, cutoffDate:visibleDateFloor});
+    if (!audit.passed) { reject("period_integrity_failed"); continue; }
+    output.periods.push({ date, endDateExclusive:endDate, period:period.periodLabel || period.day || date,
+      high:Number(period.high), low:Number(period.low), source:"provider_reference",
+      integrityChecked:true, chartVerified:false, brokerVerified:false, entryEligible:false,
+      evidence:audit.evidence[0] });
+  }
+  output.periods.sort((a,b) => a.date.localeCompare(b.date));
+  output.status = output.periods.length ? "completed_provider_reference" : "no_completed_reference";
+  return output;
+}
+
 export function auditPeriodInventory({ periods = [], candles = [], tolerance = 0, cutoffDate = "" } = {}) {
   const issues = [];
   const seen = new Set();

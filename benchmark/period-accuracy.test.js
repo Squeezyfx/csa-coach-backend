@@ -2,9 +2,51 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
-import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate } from "../period-accuracy.js";
+import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences } from "../period-accuracy.js";
 import * as policy from "../csa-entry-policy.js";
-import { validateBenchmarkResult } from "./validator.js";
+import { validateBenchmarkResult, applyBatchFeedbackDiversityChecks } from "./validator.js";
+
+// Synthetic dated OHLC fixtures, not asserted broker history or screenshot prices.
+const datedPeriods = [
+  {date:"2026-01-01",periodLabel:"January",open:100,high:130,low:90,close:120},
+  {date:"2026-02-01",periodLabel:"February",open:120,high:140,low:110,close:135},
+  {date:"2026-03-01",periodLabel:"March",open:135,high:150,low:125,close:145,partialPeriod:true},
+];
+const referenceArgs = {periods:datedPeriods, timeframe:"D1",visibleDateFloor:"2026-03-16",providerAvailable:true};
+test("completed provider months survive unknown final day, with no entry authority", () => {
+  const reference = buildCompletedPeriodReferences(referenceArgs);
+  assert.deepEqual(reference.periods.map(p=>[p.date,p.high,p.low]),[["2026-01-01",130,90],["2026-02-01",140,110]]);
+  assert.equal(reference.entryEligible,false);
+  assert.ok(reference.periods.every(p=>!p.chartVerified && !p.brokerVerified && !p.entryEligible));
+});
+test("each period is audited independently: a bad month does not remove a good month", () => {
+  const reference = buildCompletedPeriodReferences({...referenceArgs,periods:[datedPeriods[0],{...datedPeriods[1],low:160}]});
+  assert.equal(reference.periods.length,1);
+  assert.equal(reference.rejected[0].reason,"period_integrity_failed");
+});
+test("missing middle month cannot extend ownership into the following month", () => {
+  const reference = buildCompletedPeriodReferences({...referenceArgs, periods:[datedPeriods[0]],candles:[{datetime:"2026-02-20",high:500,low:1}]});
+  assert.equal(reference.periods.length,1);
+  assert.equal(reference.periods[0].evidence.checkedCandleCount,0);
+});
+test("dated candles exceeding a completed range reject only that period", () => {
+  const reference = buildCompletedPeriodReferences({...referenceArgs,candles:[{datetime:"2026-01-15",high:131,low:95}]});
+  assert.deepEqual(reference.periods.map(p=>p.date),["2026-02-01"]);
+});
+test("no source, no printed date, invalid dates and duplicate periods cannot be certified", () => {
+  for (const args of [{providerAvailable:false},{visibleDateFloor:""},{visibleDateFloor:"2026-02-30"},{periods:[datedPeriods[0],datedPeriods[0]]}]) {
+    assert.equal(buildCompletedPeriodReferences({...referenceArgs,...args}).periods.length,0);
+  }
+});
+test("weekly and daily period references use independent calendar ends", () => {
+  const periods = [{date:"2026-08-03",high:20,low:10},{date:"2026-08-10",high:22,low:11}];
+  assert.equal(buildCompletedPeriodReferences({...referenceArgs,periods,timeframe:"H4",visibleDateFloor:"2026-08-12"}).periods.length,1);
+  assert.equal(buildCompletedPeriodReferences({...referenceArgs,periods,timeframe:"H1",visibleDateFloor:"2026-08-12"}).periods.length,2);
+});
+test("diagnostic-only repeated safety text is not a coaching diversity failure", () => {
+  const item = {status:"failed",analysis:{benchmarkDiagnosticOnly:true,strengths:["This identical safety explanation is intentionally shared by diagnostics."],weaknesses:["Another identical safety explanation is intentionally shared by diagnostics."]},validation:{checks:[]}};
+  assert.ok(applyBatchFeedbackDiversityChecks([item,item]).every(r=>r.validation.checks.length===0));
+});
 
 const server = readFileSync(new URL("../server.js", import.meta.url), "utf8");
 // Exercise the actual server selector without starting Express or provider calls.

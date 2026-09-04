@@ -1,6 +1,6 @@
 import express from "express";
 import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData } from "./market-data-matching.js";
-import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate } from "./period-accuracy.js";
+import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences } from "./period-accuracy.js";
 import cors from "cors";
 import multer from "multer";
 import OpenAI from "openai";
@@ -10802,8 +10802,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.52.0";
-const CSA_BUILD_ID = "CSA-v4.57.0-cutoff-provisional-results";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.53.0";
+const CSA_BUILD_ID = "CSA-v4.58.0-completed-period-references";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -20395,6 +20395,7 @@ function rankChartNativeFallbackAreas({
     inventoryAuthority: {
       selectedSource: fallback?.inventoryAuthority || fallback?.frameworkInventorySource || "uploaded_chart",
       sourceCandleAudit: fallback?.marketPeriodIntegrity || null,
+      completedPeriodReferences: fallback?.completedPeriodReferences || null,
       dataMatch: fallback?.dataMatch || null,
       providerFailure: fallback?.providerFailure || null,
       focusedInventoryVerified: fallback?.focusedInventoryVerified === true,
@@ -29122,6 +29123,17 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       chartCutoff = initialFinalVisibleSync.chartCutoff;
     }
 
+    const completedPeriodReferences = buildCompletedPeriodReferences({
+      periods: ["D1", "H4"].includes(timeframe)
+        ? marketReferencePeriodInventory({ marketReference, timeframe, cutoffDate: chartCutoff.resolvedDate })
+        : marketReference.dailyLevels || [],
+      candles: marketReference.timeframeCandles || [],
+      timeframe,
+      visibleDateFloor: chartDetection?.latestPrintedAxisDate && chartDetection.latestPrintedAxisDate <= chartCutoff.resolvedDate
+        ? chartDetection.latestPrintedAxisDate : "",
+      providerAvailable: marketReference.ok === true,
+      tolerance: getCleanBreakTolerance(normalizedSymbol),
+    });
     if (marketReference.ok) {
       const chartDataMatch = assessChartDataMatch({
         candles: marketReference.impulseCandles?.length ? marketReference.impulseCandles : marketReference.timeframeCandles,
@@ -29131,6 +29143,10 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         tolerance: getCleanBreakTolerance(normalizedSymbol),
       });
       marketReference.chartDataMatch = chartDataMatch;
+      if (chartDataMatch.status === "mismatch") {
+        completedPeriodReferences.status = "chart_mismatch";
+        completedPeriodReferences.periods = [];
+      }
       if (chartDataMatch.status !== "matched_reference") {
         // Do not pass mismatched prices to downstream AI or deterministic selection.
         marketReference = clearRejectedProviderData({ ...marketReference, error: chartDataMatch.reason,
@@ -29461,15 +29477,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         ? "complete_chart_only_period_inventory_provider_unavailable_human_review"
         : "unverified_period_inventory";
       const inventoryPriceConflicts = chartOnlyInventoryVerified
-        ? [{
-            period: "inventory",
-            extreme: "provider_authority",
-            chartCount: focusedPeriodInventory.length,
-            marketCount: 0,
-            requiresReview: true,
-            resolution:
-              "complete chart-derived period inventory retained for diagnosis because the external provider could not resolve this broker index; human verification is required",
-          }]
+        ? [] // Missing authority is reported separately; it is not a price conflict.
         : rawInventoryPriceConflicts.map((conflict) => ({
             ...conflict,
             requiresReview: !marketInventoryVerified,
@@ -29532,6 +29540,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           inventoryUsable ? [] : focusedPeriodInventory,
         inventoryPriceConflicts,
         marketPeriodIntegrity,
+        completedPeriodReferences,
         finalVisibleCandleAuthority: {
           high: nullablePositiveNumber(chartDetection?.latestVisibleHigh),
           low: nullablePositiveNumber(chartDetection?.latestVisibleLow),
@@ -29561,7 +29570,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
               : "The complete chart-derived fixed-period structure reads bearish, pending human verification because provider data is unavailable.",
             reason: marketInventoryVerified
               ? "Direction was reconciled from the same verified fixed-period high/low inventory used by the benchmark and the exact final chart-header close."
-              : "Direction was derived from a complete chart-only fixed-period inventory because the external provider could not resolve the broker index; human verification remains required.",
+              : "Direction is a provisional chart-only interpretation; external price authority is unavailable or not aligned. Human verification remains required.",
             cutoffPhase: {
               direction: fixedPeriodBias.direction,
               phase: fixedPeriodBias.phase,

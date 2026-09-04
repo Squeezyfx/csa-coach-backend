@@ -257,12 +257,14 @@ function renderBatchOverview(run) {
         ? [Number(fib.swingLow) + range * .382, Number(fib.swingLow) + range * .5, Number(fib.swingLow) + range * .618]
         : [Number(fib.swingHigh) - range * .382, Number(fib.swingHigh) - range * .5, Number(fib.swingHigh) - range * .618]
       : [];
+    const referencePeriods = audit.inventoryAuthority?.completedPeriodReferences?.periods || [];
     const periodText = periods.length
       ? periods.map((period) => {
           const highStatus = period.highVerified === false ? "estimate—not selectable" : period.highRole || "verified extreme";
           const lowStatus = period.lowVerified === false ? "estimate—not selectable" : period.lowRole || "verified extreme";
           return `${period.period}: H ${compactNumber(period.high, seed)} (${highStatus}), L ${compactNumber(period.low, seed)} (${lowStatus})`;
         }).join(" · ")
+      : referencePeriods.length ? `Provider reference only—not chart-verified: ${referencePeriods.map(p => `${p.period}: H ${compactNumber(p.high, seed)}, L ${compactNumber(p.low, seed)}`).join(" · ")}`
       : allPeriods.length ? "Period prices unverified — estimates retained in Export JSON" : "No verified period inventory";
     const entryText = entries.length
       ? entries.map((entry, index) => {
