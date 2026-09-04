@@ -40,6 +40,14 @@ export function buildVisiblePeriodFibonacciFrame({ candles = [], direction = "ra
 
   const finalDate = new Date(ordered.at(-1).datetime);
   const start = period === "visible_range" ? new Date(ordered[0].datetime) : startOfPeriodUtc(finalDate, period);
+
+  // A calendar Fib is valid only when the supplied candles visibly include
+  // the beginning of that week/month/year. Never turn partial coverage into
+  // a smaller local impulse.
+  if (period !== "visible_range") {
+    const earliestVisibleDate = new Date(ordered[0].datetime);
+    if (earliestVisibleDate > start) return null;
+  }
   const periodCandles = ordered.filter((candle) => {
     const timestamp = new Date(candle.datetime);
     return timestamp >= start && timestamp <= finalDate;
@@ -54,10 +62,23 @@ export function buildVisiblePeriodFibonacciFrame({ candles = [], direction = "ra
   const swingLow = Number(lowCandle.low);
   if (!(swingHigh > swingLow)) return null;
 
+  // The calendar-period candle owns direction. The supplied direction is only
+  // an eligibility hint and must not reverse a readable week/month/year bar.
+  const periodCandleDirection =
+    Number.isFinite(periodOpen) && Number.isFinite(periodClose)
+      ? periodClose > periodOpen
+        ? "bullish"
+        : periodClose < periodOpen
+        ? "bearish"
+        : "range"
+      : "range";
+  if (!["bullish", "bearish"].includes(periodCandleDirection)) return null;
+  const effectiveDirection = periodCandleDirection;
+
   const range = swingHigh - swingLow;
   const source = `visible_current_${period}_high_low`;
   return {
-    direction,
+    direction: effectiveDirection,
     period,
     swingHigh,
     swingLow,
@@ -65,14 +86,7 @@ export function buildVisiblePeriodFibonacciFrame({ candles = [], direction = "ra
     periodClose: Number.isFinite(periodClose) ? periodClose : null,
     // This is deliberately separate from the immediate H1 leg. A current
     // week can be bullish overall while the final H1 candles are pulling back.
-    periodCandleDirection:
-      Number.isFinite(periodOpen) && Number.isFinite(periodClose)
-        ? periodClose > periodOpen
-          ? "bullish"
-          : periodClose < periodOpen
-          ? "bearish"
-          : "range"
-        : "range",
+    periodCandleDirection,
     swingHighTime: highCandle.datetime,
     swingLowTime: lowCandle.datetime,
     impulseRange: range,
@@ -86,8 +100,27 @@ export function buildVisiblePeriodFibonacciFrame({ candles = [], direction = "ra
     levels: RATIOS.map((ratio) => ({
       ratio,
       label: ratio === 0.5 ? "50%" : `${(ratio * 100).toFixed(1)}%`,
-      price: direction === "bearish" ? swingLow + range * ratio : swingHigh - range * ratio,
+      price: effectiveDirection === "bearish" ? swingLow + range * ratio : swingHigh - range * ratio,
     })),
+  };
+}
+
+export function resolveCalendarPeriodDirection({
+  frameVerified = false,
+  periodDirection = "",
+  recentDirection = "",
+} = {}) {
+  const direction = String(periodDirection || "").toLowerCase();
+  const recent = String(recentDirection || "").toLowerCase();
+  if (frameVerified !== true || !["bullish", "bearish"].includes(direction)) return null;
+  return {
+    direction,
+    phase:
+      ["bullish", "bearish"].includes(recent) && recent !== direction
+        ? direction === "bullish"
+          ? "bearish_pullback_after_bullish_structure"
+          : "bullish_recovery_after_bearish_structure"
+        : `${direction}_current_period_structure`,
   };
 }
 
