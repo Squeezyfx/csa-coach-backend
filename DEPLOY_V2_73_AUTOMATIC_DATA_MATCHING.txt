@@ -1,0 +1,32 @@
+CSA benchmark v2.73 -- upload to the BENCHMARK repository only.
+No deployment has been performed. No broker field or MT4 export is required.
+
+Include both root modules: period-accuracy.js and market-data-matching.js.
+Keep the benchmark directory layout. Existing environment settings remain.
+
+Changes:
+- Provider formatting now handles variable-length crypto pairs (DOGE/USD),
+  metals (XPT/USD), and leaves non-pair symbols intact.
+- Provider metadata must match the requested symbol and interval.
+- Execution and framework requests cannot silently switch symbols.
+- Permission and credit errors stop alias retries and have specific diagnostics.
+- Provider candle date and visible endpoint price are checked before use;
+  D1 also checks readable final-candle OHLC. Mismatches are withheld.
+- Summary/JSON disclose provider-reference status and provider failure reasons.
+- v2.72 period accuracy and unverified-entry safeguards are preserved.
+
+Limitations:
+Endpoint agreement does NOT prove all historical prices match the broker.
+No new commodity/futures proxy has been invented for Cocoa or broker CFDs.
+Coverage, subscription and historical mismatches can still produce Needs review.
+No paid AI/provider calls were made during development; live coverage not tested.
+No exact historical chart values or intended entries are hardcoded.
+
+Checks:
+npm run check
+npm run test:benchmarks
+node --check market-data-matching.js
+node --test benchmark/market-data-matching.test.js
+
+After deploying, test DOGEUSD and Platinum first. Send summary plus Export JSON.
+Do not save disputed output as an accuracy benchmark just because it passes.

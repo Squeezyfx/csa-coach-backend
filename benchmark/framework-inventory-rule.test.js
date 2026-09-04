@@ -52,7 +52,7 @@ test("complete deterministic inventory outranks vision-estimated period prices",
   assert.match(serverSource, /aggregateH4CandlesIntoWeeklyInventory/);
   assert.match(serverSource, /focusedInventoryVerified/);
   assert.match(serverSource, /const selectedPeriodInventory = marketInventoryVerified/);
-  assert.match(serverSource, /cutoff_safe_market_period_inventory_chart_endpoint_reconciled/);
+  assert.match(serverSource, /chart_aligned_provider_reference_not_broker_verified/);
   assert.match(serverSource, /inventoryPriceConflicts/);
 });
 

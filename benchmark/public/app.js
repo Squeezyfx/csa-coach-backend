@@ -276,6 +276,10 @@ function renderBatchOverview(run) {
         }).join(" · ")
       : "No selected entry";
     const flags = [];
+    const dataMatch = audit.inventoryAuthority?.dataMatch;
+    const providerFailure = audit.inventoryAuthority?.providerFailure;
+    if (dataMatch?.status === "matched_reference") flags.push("Provider reference; not broker-exact");
+    if (providerFailure) flags.push(`Data: ${providerFailure.category} — ${providerFailure.reason}`);
     if (audit.fibonacciAudit?.verified === false) flags.push("Fib frame unverified—no entries permitted");
     if (structuralBias === "unverified") flags.push("bias unverified");
     if (structuralBias !== "unverified" && headlineBias !== structuralBias) flags.push(`headline says ${headlineBias}`);

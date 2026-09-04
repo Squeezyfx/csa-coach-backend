@@ -1,4 +1,5 @@
 import express from "express";
+import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch } from "./market-data-matching.js";
 import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate } from "./period-accuracy.js";
 import cors from "cors";
 import multer from "multer";
@@ -3083,7 +3084,7 @@ async function fetchTwelveDataStructureLevels({
 
   const providerCandidates = [...new Set(
     getMarketDataSymbolCandidates(symbol)
-      .map((candidate) => normalizeSymbol(candidate))
+      .map((candidate) => providerSymbol(candidate))
       .filter(Boolean)
   )];
   let resolvedProviderSymbol = providerCandidates[0] || normalizeSymbol(symbol);
@@ -3112,7 +3113,7 @@ async function fetchTwelveDataStructureLevels({
   }) => {
     const orderedCandidates = [...new Set([
       preferredProviderSymbol,
-      ...providerCandidates,
+      ...(preferredProviderSymbol ? [] : providerCandidates),
     ].filter(Boolean))];
     let lastError = null;
 
@@ -3123,7 +3124,9 @@ async function fetchTwelveDataStructureLevels({
       );
       const data = await response.json();
 
-      if (response.ok && data.status !== "error" && Array.isArray(data.values)) {
+      if (response.ok && data.status !== "error" && Array.isArray(data.values) && data.values.length) {
+        const metadataError = validateProviderMetadata(data.meta, providerSymbol, interval);
+        if (metadataError) throw new Error(metadataError);
         resolvedProviderSymbol = providerSymbol;
         return { values: data.values || [], providerSymbol };
       }
@@ -3133,9 +3136,10 @@ async function fetchTwelveDataStructureLevels({
         data.error ||
         `Twelve Data ${purpose} request failed with status ${response.status}.`;
       lastError = new Error(message);
+      lastError.category = classifyProviderError(message, response.status);
       lastError.twelveDataStatus = data.status || "unknown";
 
-      const invalidSymbol = /symbol|figi|invalid|not found/i.test(String(message));
+      const invalidSymbol = lastError.category === "symbol_unavailable";
       if (!invalidSymbol) throw lastError;
     }
 
@@ -3203,6 +3207,7 @@ async function fetchTwelveDataStructureLevels({
   } catch (error) {
     return {
       ...empty(error.message, structureRange),
+      failureCategory: error.category || "provider_error",
       twelveDataStatus: error.twelveDataStatus || "unknown",
     };
   }
@@ -3910,6 +3915,7 @@ async function fetchTwelveDataStructureLevels({
     impulseRange,
     symbol,
     providerSymbol: resolvedProviderSymbol,
+    priceAuthority: "provider_reference_not_broker_verified",
     timezone,
     interval: profile.interval,
     profile,
@@ -10787,8 +10793,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.50.0";
-const CSA_BUILD_ID = "CSA-v4.55.0-period-accuracy-guards";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.51.0";
+const CSA_BUILD_ID = "CSA-v4.56.0-automatic-data-matching";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -20380,6 +20386,8 @@ function rankChartNativeFallbackAreas({
     inventoryAuthority: {
       selectedSource: fallback?.inventoryAuthority || fallback?.frameworkInventorySource || "uploaded_chart",
       sourceCandleAudit: fallback?.marketPeriodIntegrity || null,
+      dataMatch: fallback?.dataMatch || null,
+      providerFailure: fallback?.providerFailure || null,
       focusedInventoryVerified: fallback?.focusedInventoryVerified === true,
       focusedInventoryDateSequenceVerified:
         fallback?.focusedInventoryDateSequenceVerified === true,
@@ -29105,6 +29113,23 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       chartCutoff = initialFinalVisibleSync.chartCutoff;
     }
 
+    if (marketReference.ok) {
+      const chartDataMatch = assessChartDataMatch({
+        candles: marketReference.impulseCandles?.length ? marketReference.impulseCandles : marketReference.timeframeCandles,
+        detection: chartDetection,
+        cutoff: chartCutoff.endDateTime,
+        timeframe,
+        tolerance: getCleanBreakTolerance(normalizedSymbol),
+      });
+      marketReference.chartDataMatch = chartDataMatch;
+      if (chartDataMatch.status !== "matched_reference") {
+        // Do not pass mismatched prices to downstream AI or deterministic selection.
+        marketReference = { ...marketReference, ok: false, error: chartDataMatch.reason,
+          failureCategory: "chart_data_mismatch", dailyLevels: [], structuralLevels: [],
+          timeframeCandles: [], impulseCandles: [], csaAreas: [], approvedAreas: [] };
+      }
+    }
+
     csaTimingLog(
       "final_visible_sync_initial",
       initialSyncStartedAt,
@@ -29200,6 +29225,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       );
 
     if (
+      !marketReference.chartDataMatch &&
       normalizedRequestedCutoffMode === "final_visible" &&
       visualVisiblePrice &&
       (!detectedVisiblePrice ||
@@ -29391,7 +29417,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         tolerance: getCleanBreakTolerance(normalizedSymbol || submittedInstrument),
       });
       const marketInventoryVerified =
-        marketReference?.ok === true && marketPeriodIntegrity.passed &&
+        marketReference?.ok === true && marketReference?.chartDataMatch?.status === "matched_reference" && marketPeriodIntegrity.passed &&
         marketInventoryFrame?.currentPeriodFrameVerified === true;
       const rawInventoryPriceConflicts = comparePeriodInventories(
         focusedPeriodInventory,
@@ -29421,7 +29447,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         ? focusedPeriodInventory
         : [];
       const inventoryAuthority = marketInventoryVerified
-        ? "cutoff_safe_market_period_inventory_chart_endpoint_reconciled"
+        ? "chart_aligned_provider_reference_not_broker_verified"
         : chartOnlyInventoryVerified
         ? "complete_chart_only_period_inventory_provider_unavailable_human_review"
         : "unverified_period_inventory";
@@ -29491,6 +29517,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         chartOnlyInventoryVerified,
         focusedInventoryDateSequenceVerified,
         marketInventoryVerified,
+        dataMatch: marketReference?.chartDataMatch || null,
+        providerFailure: marketReference?.ok ? null : { category: marketReference?.failureCategory || "unavailable", reason: marketReference?.error || "Provider unavailable" },
         rejectedFocusedPeriodInventory:
           inventoryUsable ? [] : focusedPeriodInventory,
         inventoryPriceConflicts,
