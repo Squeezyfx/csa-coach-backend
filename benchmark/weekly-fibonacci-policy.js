@@ -40,6 +40,18 @@ export function buildVisiblePeriodFibonacciFrame({ candles = [], direction = "ra
 
   const finalDate = new Date(ordered.at(-1).datetime);
   const start = period === "visible_range" ? new Date(ordered[0].datetime) : startOfPeriodUtc(finalDate, period);
+
+  // P0-2 FIX: the reader must be able to SEE the beginning of the required
+  // period. If the earliest visible candle is already after that period's
+  // start (e.g. a D1 chart whose history starts in June, but the required
+  // frame is the full calendar year from January 1), return null so the
+  // caller treats this as "Needs review" instead of silently building a
+  // partial-coverage high/low.
+  if (period !== "visible_range") {
+    const earliestVisibleDate = new Date(ordered[0].datetime);
+    if (earliestVisibleDate > start) return null;
+  }
+
   const periodCandles = ordered.filter((candle) => {
     const timestamp = new Date(candle.datetime);
     return timestamp >= start && timestamp <= finalDate;
