@@ -1,5 +1,5 @@
 import express from "express";
-import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch } from "./market-data-matching.js";
+import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData } from "./market-data-matching.js";
 import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate } from "./period-accuracy.js";
 import cors from "cors";
 import multer from "multer";
@@ -1499,6 +1499,8 @@ Important:
 - If latestVisibleDate and the bottom-axis year disagree, use the bottom-axis year for latestVisibleDate because the time axis defines the chart's visible history.
 - Inspect the far-right side of the time axis and the latest visible candle. A printed bottom-axis date is a tick label, not automatically the final candle date. If candles continue to its right, count those candles using the detected timeframe (one trading day per D1 candle; four hours per H4 candle, skipping closed weekends) before returning latestVisibleDate. Never copy the last printed tick as latestVisibleDate while later candles are visibly present.
 - Return latestPrintedAxisDate and visibleCandlesAfterLastPrintedDate so this endpoint-date calculation can be audited.
+- A date calculated from axis labels or candle counts is an estimate, not an exact timestamp. Set latestVisibleDateEvidence="inferred_axis" for such dates. Use "explicit_final_candle_timestamp" only when a readable date is explicitly attached to the final candle (for example its data window). Otherwise use "unknown".
+- Set latestVisibleCandleComplete=true only if visible evidence confirms the final candle has closed. Never infer completion from a bearish/bullish body or a calendar date alone; use null when unknown.
 - When readable, return the latest visible candle time in 24-hour HH:mm format.
 - latestVisibleTime must describe where the uploaded screenshot stops, not the current time and not a later market time.
 - Read the final visible candle OPEN, HIGH, LOW and CLOSE from the top-left chart header when printed. Return all four exact values. latestVisiblePrice must equal latestVisibleClose. Prefer the exact header values over visual wick estimates.
@@ -1580,6 +1582,8 @@ Return exactly this JSON shape:
   "latestVisibleClose": 1.23456,
   "latestVisiblePriceConfidence": "high or medium or low",
   "dateConfidence": "high or medium or low",
+  "latestVisibleDateEvidence": "explicit_final_candle_timestamp or inferred_axis or unknown",
+  "latestVisibleCandleComplete": null,
   "visibleTrigger": "brief trigger description or null",
   "triggerDirection": "bullish or bearish or neutral or null",
   "triggerConfidence": "high or medium or low",
@@ -4049,6 +4053,9 @@ async function synchronizeFinalVisibleMarketReference({
   if (normalizedMode !== "final_visible") {
     return unchanged("not_final_visible_mode");
   }
+  if (chartDetection?.latestVisibleDateEvidence !== "explicit_final_candle_timestamp") {
+    return unchanged("date_unverified_no_price_based_date_shift");
+  }
 
   if (!visiblePrice || !["high", "medium"].includes(priceConfidence)) {
     return unchanged("no_reliable_final_visible_price");
@@ -5010,6 +5017,8 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
           ? String(parsed?.latestVisiblePriceConfidence || "low").toLowerCase()
           : "low",
       dateConfidence: isTradingChart ? parsed?.dateConfidence || "low" : "low",
+      latestVisibleDateEvidence: isTradingChart && ["explicit_final_candle_timestamp", "inferred_axis"].includes(parsed?.latestVisibleDateEvidence) ? parsed.latestVisibleDateEvidence : "unknown",
+      latestVisibleCandleComplete: isTradingChart && parsed?.latestVisibleCandleComplete === true ? true : null,
       visibleTrigger: isTradingChart ? cleanTrigger : null,
       rejectedTriggerContext: isTradingChart && rawTrigger && !cleanTrigger ? rawTrigger : null,
       triggerDirection: isTradingChart && cleanTrigger ? parsed?.triggerDirection || null : null,
@@ -10793,8 +10802,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.51.0";
-const CSA_BUILD_ID = "CSA-v4.56.0-automatic-data-matching";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.52.0";
+const CSA_BUILD_ID = "CSA-v4.57.0-cutoff-provisional-results";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -29124,11 +29133,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       marketReference.chartDataMatch = chartDataMatch;
       if (chartDataMatch.status !== "matched_reference") {
         // Do not pass mismatched prices to downstream AI or deterministic selection.
-        marketReference = { ...marketReference, ok: false, error: chartDataMatch.reason,
-          failureCategory: "chart_data_mismatch", dailyLevels: [], structuralLevels: [],
-          timeframeCandles: [], impulseCandles: [], csaAreas: [], approvedAreas: [] };
+        marketReference = clearRejectedProviderData({ ...marketReference, error: chartDataMatch.reason,
+          failureCategory: chartDataMatch.status === "mismatch" ? "chart_data_mismatch" : chartDataMatch.status });
       }
     }
+    if (!marketReference.ok) marketReference = clearRejectedProviderData(marketReference);
 
     csaTimingLog(
       "final_visible_sync_initial",
@@ -29538,10 +29547,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         marketReference = {
           ...marketReference,
           directionalBias: {
-            ...(marketReference?.directionalBias || {}),
+            ...(marketInventoryVerified ? marketReference?.directionalBias || {} : clearRejectedProviderData(marketReference).directionalBias),
+            provisional: !marketInventoryVerified,
             bias: fixedPeriodBias.direction === "bullish" ? "Bullish" : "Bearish",
             biasCode: fixedPeriodBias.direction,
-            confidence: marketInventoryVerified ? "high" : "medium",
+            confidence: marketInventoryVerified ? "high" : "low",
             traderBias: marketInventoryVerified
               ? fixedPeriodBias.direction === "bullish"
                 ? "The verified fixed-period structure is bullish, with any final bearish move treated as a pullback until controlling support fails."

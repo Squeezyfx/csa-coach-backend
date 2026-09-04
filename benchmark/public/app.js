@@ -241,17 +241,19 @@ function renderBatchOverview(run) {
     const facts = analysis.analysisFacts || {};
     const diagnostics = facts.selectorDiagnostics || {};
     const audit = diagnostics.transparencyAudit || {};
-    const periods = Array.isArray(audit.periodStructureAudit) ? audit.periodStructureAudit : [];
+    const allPeriods = Array.isArray(audit.periodStructureAudit) ? audit.periodStructureAudit : [];
+    const periods = allPeriods.filter(period => period.highVerified === true && period.lowVerified === true);
     const entries = Array.isArray(diagnostics.selectedEntries) ? diagnostics.selectedEntries : [];
     const fib = diagnostics.fibonacci || {};
     const biasCode = String(analysis.csaDirectionalBias?.biasCode || "").toLowerCase();
-    const structuralBias = ["bullish", "bearish", "range"].includes(biasCode) ? biasCode : "unverified";
+    const provisional = analysis.csaDirectionalBias?.provisional === true || audit.fibonacciAudit?.verified === false;
+    const structuralBias = ["bullish", "bearish", "range"].includes(biasCode) ? `${biasCode}${provisional ? " (provisional)" : ""}` : "unverified";
     const headlineBias = String(facts.direction || item.validation?.direction || "unknown").toLowerCase();
     const phase = analysis.csaDirectionalBias?.cutoffPhase?.phase || facts.historicalPhase?.phase || "not resolved";
     const seed = entries[0]?.levelText || fib.swingHigh || facts.currentPrice;
     const range = Number(fib.swingHigh) - Number(fib.swingLow);
     const fibLevels = Number.isFinite(range) && range > 0
-      ? structuralBias === "bearish"
+      ? biasCode === "bearish"
         ? [Number(fib.swingLow) + range * .382, Number(fib.swingLow) + range * .5, Number(fib.swingLow) + range * .618]
         : [Number(fib.swingHigh) - range * .382, Number(fib.swingHigh) - range * .5, Number(fib.swingHigh) - range * .618]
       : [];
@@ -261,7 +263,7 @@ function renderBatchOverview(run) {
           const lowStatus = period.lowVerified === false ? "estimate—not selectable" : period.lowRole || "verified extreme";
           return `${period.period}: H ${compactNumber(period.high, seed)} (${highStatus}), L ${compactNumber(period.low, seed)} (${lowStatus})`;
         }).join(" · ")
-      : "No verified period inventory";
+      : allPeriods.length ? "Period prices unverified — estimates retained in Export JSON" : "No verified period inventory";
     const entryText = entries.length
       ? entries.map((entry, index) => {
           const match = Array.isArray(entry.fibonacciMatches) ? entry.fibonacciMatches[0] : null;
@@ -282,7 +284,7 @@ function renderBatchOverview(run) {
     if (providerFailure) flags.push(`Data: ${providerFailure.category} — ${providerFailure.reason}`);
     if (audit.fibonacciAudit?.verified === false) flags.push("Fib frame unverified—no entries permitted");
     if (structuralBias === "unverified") flags.push("bias unverified");
-    if (structuralBias !== "unverified" && headlineBias !== structuralBias) flags.push(`headline says ${headlineBias}`);
+    if (structuralBias !== "unverified" && headlineBias !== biasCode) flags.push(`headline says ${headlineBias}`);
     if (!(Number(fib.swingHigh) > Number(fib.swingLow))) flags.push("Fib frame missing");
     if (item.status !== "passed") flags.push("validation review");
     const conflictCount = Array.isArray(audit.provenanceConflicts)
