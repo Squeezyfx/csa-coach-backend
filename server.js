@@ -1,6 +1,6 @@
 import express from "express";
 import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData } from "./market-data-matching.js";
-import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences } from "./period-accuracy.js";
+import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences, reconcilePeriodMapping } from "./period-accuracy.js";
 import cors from "cors";
 import multer from "multer";
 import OpenAI from "openai";
@@ -10802,8 +10802,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.53.0";
-const CSA_BUILD_ID = "CSA-v4.58.0-completed-period-references";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.54.0";
+const CSA_BUILD_ID = "CSA-v4.59.0-period-mapping";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -19504,6 +19504,8 @@ function normalizeChartNativeEntryFallback(value = {}) {
         date: /^\d{4}-\d{2}-\d{2}$/.test(String(period?.date || "")) ? String(period.date) : null,
         high: nullablePositiveNumber(period?.high),
         low: nullablePositiveNumber(period?.low),
+        highDate: /^\d{4}-\d{2}-\d{2}$/.test(String(period?.highDate || "")) ? period.highDate : null,
+        lowDate: /^\d{4}-\d{2}-\d{2}$/.test(String(period?.lowDate || "")) ? period.lowDate : null,
         open: nullablePositiveNumber(period?.open),
         close: nullablePositiveNumber(period?.close),
         structures: (Array.isArray(period?.structures) ? period.structures : []).slice(0, 12).map((item) => ({
@@ -19512,7 +19514,7 @@ function normalizeChartNativeEntryFallback(value = {}) {
           note: safeUserText(item?.note || ""),
         })).filter((item) => item.price !== null),
       }))
-      .filter((period) => period.date && period.high !== null && period.low !== null && period.high >= period.low),
+      .filter((period) => period.date),
     // Backward-compatible alias retained for reviewed H1 fixtures and older
     // benchmark consumers. New code must use periodInventory.
     periodDayInventory: rawPeriodInventory
@@ -19623,6 +19625,7 @@ Hard rules:
 - Reconcile the final inventory period with the exact final-candle header OHLC supplied in context: its high may not be below latestVisibleHigh and its low may not be above latestVisibleLow. Do not alter earlier periods with final-candle prices.
 - Do not skip, merge or renumber inventory periods. For H4, W1/W2/W3/W4/W5 are chronological W1 candles inside the calendar month, not arbitrary groups of H4 candles.
 - A period high is the highest candle wick only between that row's start date and the next row's start date. A period low is the lowest wick inside the same interval. Price-axis tick labels are scale references, not period extremes. Do not copy a convenient printed axis price unless a wick actually reaches it.
+- First locate each calendar boundary on the time axis, then inspect only candles belonging to that interval. Return highDate and lowDate when individually readable; otherwise null. Never place a January wick in February to fill a missing value. Keep rows with unknown extremes as null, not guessed prices. Identify the entire current-period range separately from its final candle.
 - For H4, every completed week begins with Monday 00:00 and ends with Friday 20:00 on this six-candle-per-day chart. The next Monday 00:00 candle belongs only to the next W1 period. Saturday and Sunday never contribute a period high or low.
 - Do not mention Fibonacci in customer-facing wording; this result is internal.
 - Set usable=false rather than guessing any unreadable direction, price, impulse, or role.
@@ -19642,7 +19645,7 @@ Return exactly:
   "currentPeriodDirection": "bullish | bearish | range",
   "currentPeriodFrameVerified": false,
   "periodInventory": [
-    {"periodLabel":"Monday | Tuesday | Wednesday | Thursday | Friday | W1 | W2 | W3 | W4 | W5 | January | February | March","sourceUnit":"D1 | W1 | MN","date":"YYYY-MM-DD","open":null,"high":null,"low":null,"close":null,"structures":[{"price":null,"type":"support | resistance | demand | supply | converted support | converted resistance","note":"short structural reason"}]}
+    {"periodLabel":"Monday | Tuesday | Wednesday | Thursday | Friday | W1 | W2 | W3 | W4 | W5 | January | February | March","sourceUnit":"D1 | W1 | MN","date":"YYYY-MM-DD","highDate":null,"lowDate":null,"open":null,"high":null,"low":null,"close":null,"structures":[{"price":null,"type":"support | resistance | demand | supply | converted support | converted resistance","note":"short structural reason"}]}
   ],
   "swingHigh": null,
   "swingLow": null,
@@ -19834,7 +19837,7 @@ function deriveVerifiedFixedPeriodBias({
 } = {}) {
   const tf = comparableTimeframe(timeframe);
   const periods = (Array.isArray(periodInventory) ? periodInventory : [])
-    .filter((period) => Number.isFinite(Number(period?.high)) && Number.isFinite(Number(period?.low)));
+    .filter((period) => nullablePositiveNumber(period?.high) !== null && nullablePositiveNumber(period?.low) !== null);
   if (!periods.length) return null;
   const high = Math.max(...periods.map((period) => Number(period.high)));
   const low = Math.min(...periods.map((period) => Number(period.low)));
@@ -20396,6 +20399,7 @@ function rankChartNativeFallbackAreas({
       selectedSource: fallback?.inventoryAuthority || fallback?.frameworkInventorySource || "uploaded_chart",
       sourceCandleAudit: fallback?.marketPeriodIntegrity || null,
       completedPeriodReferences: fallback?.completedPeriodReferences || null,
+      periodMappingAudit: fallback?.periodMappingAudit || null,
       dataMatch: fallback?.dataMatch || null,
       providerFailure: fallback?.providerFailure || null,
       focusedInventoryVerified: fallback?.focusedInventoryVerified === true,
@@ -29389,13 +29393,16 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         visibleClose:
           chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
       };
+      const periodMappingAudit = reconcilePeriodMapping({
+        periods: mergedChartNativeFallback?.periodInventory || mergedChartNativeFallback?.periodDayInventory || [],
+        references: completedPeriodReferences.periods,
+        tolerance: getCleanBreakTolerance(normalizedSymbol) * 2,
+      });
       const focusedReconciledPeriodInventory = reconcileFinalPeriodWithVisibleCandle({
         timeframe,
         visibleDate: chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "",
         periodInventory:
-          mergedChartNativeFallback?.periodInventory ||
-          mergedChartNativeFallback?.periodDayInventory ||
-          [],
+          periodMappingAudit.periods,
         ...finalVisibleCandle,
       });
       // Do not mix chart/broker OHLC into provider extrema and then call the
@@ -29541,6 +29548,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         inventoryPriceConflicts,
         marketPeriodIntegrity,
         completedPeriodReferences,
+        periodMappingAudit,
         finalVisibleCandleAuthority: {
           high: nullablePositiveNumber(chartDetection?.latestVisibleHigh),
           low: nullablePositiveNumber(chartDetection?.latestVisibleLow),

@@ -7,6 +7,46 @@ export function isUnverifiedPeriodCandidate(candidate = {}) {
 const positive = (value) => value !== null && value !== undefined && value !== "" &&
   Number.isFinite(Number(value)) && Number(value) > 0;
 
+// Calendar identity is authoritative; never move a price to another month to fit it.
+export function reconcilePeriodMapping({ periods = [], references = [], tolerance = 0 } = {}) {
+  const referenceByDate = new Map(references.map(p => [p.date, p]));
+  const counts = new Map();
+  for (const p of periods) counts.set(p.date, (counts.get(p.date) || 0) + 1);
+  const rejected = [];
+  const mapped = periods.map(period => {
+    const p = { ...period };
+    const date = String(p.date || "");
+    const start = new Date(`${date}T00:00:00Z`);
+    const validDate = /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(start.getTime()) && start.toISOString().slice(0,10) === date;
+    if (!validDate || counts.get(p.date) !== 1) {
+      rejected.push({date, reason:"invalid_or_duplicate_period_date"});
+      return {...p, high:null, low:null, open:null, close:null, structures:[], mappingUnverified:true};
+    }
+    const monthly = p.sourceUnit === "MN";
+    const end = new Date(start);
+    if (monthly) {
+      end.setUTCMonth(end.getUTCMonth()+1);
+      p.periodLabel = start.toLocaleString("en-US", {month:"long",timeZone:"UTC"});
+    } else end.setUTCDate(end.getUTCDate()+(p.sourceUnit === "W1" ? 7 : 1));
+    const next = end.toISOString().slice(0,10);
+    const reference = referenceByDate.get(date);
+    for (const extreme of ["high","low"]) {
+      const evidenceDate = p[`${extreme}Date`];
+      const wrongDate = monthly && start.getUTCDate() !== 1 || evidenceDate && (!/^\d{4}-\d{2}-\d{2}$/.test(evidenceDate) || evidenceDate < date || evidenceDate >= next);
+      const disagrees = reference && positive(reference[extreme]) && positive(p[extreme]) && Math.abs(Number(reference[extreme])-Number(p[extreme])) > Math.max(0,Number(tolerance)||0);
+      if (wrongDate || disagrees) {
+        rejected.push({date, extreme, chartEstimate:p[extreme], providerReference:reference?.[extreme] ?? null,
+          reason:wrongDate ? "extreme_outside_its_period" : "historical_alignment_unverified"});
+        p[extreme] = null;
+        p.mappingUnverified = true;
+      }
+    }
+    if (p.mappingUnverified) { p.open=null; p.close=null; p.structures=[]; }
+    return p;
+  });
+  return { periods:mapped, rejected, verified:false };
+}
+
 // Read-only reference inventory. This never supplies selector authority or Fib.
 export function buildCompletedPeriodReferences({ periods = [], candles = [], timeframe = "D1", visibleDateFloor = "", providerAvailable = false, tolerance = 0 } = {}) {
   const output = { status: "unavailable", source: "Twelve Data", chartVerified: false,

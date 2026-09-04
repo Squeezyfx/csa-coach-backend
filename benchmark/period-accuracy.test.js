@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
-import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences } from "../period-accuracy.js";
+import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences, reconcilePeriodMapping } from "../period-accuracy.js";
 import * as policy from "../csa-entry-policy.js";
 import { validateBenchmarkResult, applyBatchFeedbackDiversityChecks } from "./validator.js";
 
@@ -13,6 +13,30 @@ const datedPeriods = [
   {date:"2026-03-01",periodLabel:"March",open:135,high:150,low:125,close:145,partialPeriod:true},
 ];
 const referenceArgs = {periods:datedPeriods, timeframe:"D1",visibleDateFloor:"2026-03-16",providerAvailable:true};
+test("DOGE historical alignment rejects wrong January/February estimates without swapping prices", () => {
+  const result = reconcilePeriodMapping({periods:[{date:"2026-01-01",sourceUnit:"MN",periodLabel:"February",high:.128,low:.092},{date:"2026-02-01",sourceUnit:"MN",high:.152,low:.086}],references:[{date:"2026-01-01",high:.15656,low:.09461},{date:"2026-02-01",high:.11757,low:.08001}],tolerance:.0004});
+  assert.equal(result.periods[0].periodLabel,"January");
+  assert.equal(result.periods[0].high,null);
+  assert.equal(result.periods[1].high,null);
+  assert.equal(result.rejected.length,4);
+  assert.equal(result.verified,false);
+});
+test("wrong-month wick evidence is rejected while unknown rows keep their calendar position", () => {
+  const result = reconcilePeriodMapping({periods:[{date:"2026-01-01",sourceUnit:"MN",high:130,low:90,highDate:"2026-02-01"},{date:"2026-02-01",sourceUnit:"MN",high:null,low:null},{date:"2026-03-01",sourceUnit:"MN",high:140,low:100}]});
+  assert.equal(result.periods[0].high,null);
+  assert.equal(result.periods[1].date,"2026-02-01");
+  assert.equal(result.periods[2].high,140);
+});
+test("same-month matching reference remains a reference, not automatic verification", () => {
+  const period={date:"2026-01-01",sourceUnit:"MN",high:130,low:90};
+  const result=reconcilePeriodMapping({periods:[period],references:[period]});
+  assert.equal(result.periods[0].high,130);
+  assert.equal(result.verified,false);
+});
+test("duplicate calendar records cannot override one another", () => {
+  const period={date:"2026-01-01",sourceUnit:"MN",high:130,low:90};
+  assert.ok(reconcilePeriodMapping({periods:[period,period]}).periods.every(p=>p.high===null));
+});
 test("completed provider months survive unknown final day, with no entry authority", () => {
   const reference = buildCompletedPeriodReferences(referenceArgs);
   assert.deepEqual(reference.periods.map(p=>[p.date,p.high,p.low]),[["2026-01-01",130,90],["2026-02-01",140,110]]);

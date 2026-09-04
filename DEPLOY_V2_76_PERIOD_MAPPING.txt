@@ -1,0 +1,23 @@
+CSA benchmark v2.76 / engine 10.54.0
+Upload to BENCHMARK repository only. Not deployed by this update.
+Include server.js, period-accuracy.js, market-data-matching.js and benchmark/.
+No new environment variables or subscriptions required.
+
+Fixes
+- Month labels are derived from dates; row order cannot rename a period.
+- Reject duplicate dates and wick dates outside their claimed period.
+- Compare estimated historical extremes against same-date provider references.
+  Disagreement is withheld, never repaired by swapping months or copying prices.
+- Preserve unknown period rows as null to prevent gaps collapsing the calendar.
+- Null extrema cannot become zero in the fixed-period bias calculation.
+- Reader requests per-extreme date evidence and calendar-boundary-first reading.
+- JSON retains rejected estimates and reasons; summary exposes mapping issues.
+
+No disputed price is hardcoded in production. DOGE values appear only in an
+offline regression test reproducing the reported January/February issue.
+Provider references remain separate from verified chart prices. This update
+does not reconstruct exact unreadable screenshot data or unlock Platinum access.
+Unverified Fib/entries remain withheld; live AI extraction is not validated by
+the offline tests. No paid API calls used.
+
+Test: node --test benchmark/*.test.js

@@ -280,6 +280,8 @@ function renderBatchOverview(run) {
         }).join(" · ")
       : "No selected entry";
     const flags = [];
+    const mappingIssues = audit.inventoryAuthority?.periodMappingAudit?.rejected || [];
+    if (mappingIssues.length) flags.push(`${mappingIssues.length} period mapping/alignment checks unresolved`);
     const dataMatch = audit.inventoryAuthority?.dataMatch;
     const providerFailure = audit.inventoryAuthority?.providerFailure;
     if (dataMatch?.status === "matched_reference") flags.push("Provider reference; not broker-exact");
