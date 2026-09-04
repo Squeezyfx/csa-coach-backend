@@ -11470,6 +11470,32 @@ function buildLatestImpulseFibonacci({
   const visiblePeriodFrame = finalVisibleEndpointAuthority?.enabled === true
     ? buildVisiblePeriodFibonacciFrame({ candles: ordered, direction, timeframe })
     : null;
+
+  // HARD GUARD (P0-1/P0-2 fix): H4/D1/W1 must NEVER fall through to the
+  // local-impulse/terminal-override path below. If the calendar-period frame
+  // could not be built (e.g. the chart doesn't visibly cover the start of the
+  // required week/month/year), that is a "Needs review" condition, not a
+  // silent permission to use local/recent structure for the calendar bias.
+  const requiresCalendarPeriodFrame = ["H4", "D1", "W1"].includes(
+    String(timeframe || "").toUpperCase()
+  );
+  if (
+    requiresCalendarPeriodFrame &&
+    finalVisibleEndpointAuthority?.enabled === true &&
+    !visiblePeriodFrame
+  ) {
+    return {
+      enabled: false,
+      needsReview: true,
+      direction,
+      reason:
+        "calendar_period_frame_unavailable_insufficient_visible_coverage",
+      source: "calendar_period_frame_missing_needs_review",
+      fibOriginModel: "calendar_period_frame_missing_needs_review",
+      levels: [],
+    };
+  }
+
   if (visiblePeriodFrame) {
     return {
       ...visiblePeriodFrame,
