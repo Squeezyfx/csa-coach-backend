@@ -1,4 +1,5 @@
 import express from "express";
+import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate } from "./period-accuracy.js";
 import cors from "cors";
 import multer from "multer";
 import OpenAI from "openai";
@@ -10786,8 +10787,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.49.0";
-const CSA_BUILD_ID = "CSA-v4.54.0-confluence-zone-role-display";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.50.0";
+const CSA_BUILD_ID = "CSA-v4.55.0-period-accuracy-guards";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -16115,7 +16116,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.36.0";
+const CSA_SELECTOR_VERSION = "4.37.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19602,6 +19603,8 @@ Hard rules:
 - The screenshot is authoritative when its visible extremes or printed levels conflict with external OHLC data.
 - Return currentPeriodHigh and currentPeriodLow for the required Fibonacci period. Also copy them into currentWeekHigh/currentWeekLow for backward compatibility. If either is unreadable, set both pairs to null rather than borrowing an older or smaller swing.
 - Set currentPeriodFrameVerified=true only when every required D1/W1/MN period from the start of the current week/month/year through the final visible candle is present in periodInventory. Otherwise set it false.
+- The chart header contains only the FINAL CANDLE OHLC, not the full current month/week OHLC. Never copy header high/low/open into the full period unless the entire period consists of that single candle. Retain the highest/lowest wick across all visible candles in each dated period.
+- Never infer exact monthly dates by counting uniform pixel spacing or assume a daily bar is always one calendar day. If a month boundary or wick price cannot be established, return null for that period extreme. A guessed period label or an axis tick is not verified price evidence.
 - Reconcile the final inventory period with the exact final-candle header OHLC supplied in context: its high may not be below latestVisibleHigh and its low may not be above latestVisibleLow. Do not alter earlier periods with final-candle prices.
 - Do not skip, merge or renumber inventory periods. For H4, W1/W2/W3/W4/W5 are chronological W1 candles inside the calendar month, not arbitrary groups of H4 candles.
 - A period high is the highest candle wick only between that row's start date and the next row's start date. A period low is the lowest wick inside the same interval. Price-axis tick labels are scale references, not period extremes. Do not copy a convenient printed axis price unless a wick actually reaches it.
@@ -19803,40 +19806,9 @@ function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", 
 
 function comparePeriodInventories(primary = [], secondary = [], symbol = "") {
   const tolerance = Math.max(getCleanBreakTolerance(symbol) * 2, Number.EPSILON * 100);
-  const conflicts = [];
-  const count = Math.min(primary.length, secondary.length);
-  for (let index = 0; index < count; index += 1) {
-    const chartPeriod = primary[index];
-    const marketPeriod = secondary[index];
-    for (const extreme of ["high", "low"]) {
-      const chartPrice = Number(chartPeriod?.[extreme]);
-      const marketPrice = Number(marketPeriod?.[extreme]);
-      if (!Number.isFinite(chartPrice) || !Number.isFinite(marketPrice)) continue;
-      const difference = Math.abs(chartPrice - marketPrice);
-      if (difference > tolerance) {
-        conflicts.push({
-          period: chartPeriod?.periodLabel || marketPeriod?.periodLabel || `Period ${index + 1}`,
-          extreme,
-          chartPrice,
-          marketPrice,
-          difference,
-          tolerance,
-          resolution: "uploaded chart inventory retained; external value exposed for review",
-        });
-      }
-    }
-  }
-  if (primary.length !== secondary.length) {
-    conflicts.push({
-      period: "inventory",
-      extreme: "count",
-      chartCount: primary.length,
-      marketCount: secondary.length,
-      resolution: "inventory count disagreement exposed for review",
-    });
-  }
-  return conflicts;
+  return compareDatedPeriodInventories(primary, secondary, tolerance);
 }
+
 
 function deriveVerifiedFixedPeriodBias({
   timeframe = "",
@@ -20008,7 +19980,7 @@ function buildPeriodInventoryStructuralCandidates({
       structuralEvidence: inventoryProvenanceVerified
         ? `${periodLabel} ${extreme || "extreme"} from deterministic higher-timeframe candle inventory`
         : `${periodLabel} ${extreme || "extreme"} from unverified chart-estimated candle inventory`,
-      independentEntryEvidence: true,
+      independentEntryEvidence: inventoryProvenanceVerified,
       reclaimRequired: false,
       sourceDate: area?.date || periods[periodIndex]?.date || null,
       sourceDay: periodLabel,
@@ -20060,6 +20032,8 @@ function buildPeriodInventoryStructuralCandidates({
     const isSupplyDemand = ["supply", "demand"].includes(type);
     const independentZone =
       isSupplyDemand &&
+      candidate?.provenanceVerified === true &&
+      !isUnverifiedPeriodCandidate(candidate) &&
       candidate?.independentEntryEvidence === true &&
       Boolean(candidate?.structuralEvidence);
     const exactIndependentLine =
@@ -20069,14 +20043,10 @@ function buildPeriodInventoryStructuralCandidates({
           Math.abs(visiblePrice - price) <=
           Math.max(cleanBreakTolerance, Number.EPSILON * 100)
       );
-    const matchesPeriodExtreme =
-      price !== null &&
-      periodCandidates.some(
-        (periodCandidate) =>
-          Math.abs(Number(periodCandidate.price) - price) <=
-          Math.max(cleanBreakTolerance, Number.EPSILON * 100)
-      );
-    const admitted = independentZone || exactIndependentLine || matchesPeriodExtreme;
+    // Canonical periodCandidates already contain each verified high/low with
+    // its actual owning date and role. A visual price match cannot supply a
+    // second, differently labelled period or change that structural role.
+    const admitted = independentZone || exactIndependentLine;
     if (!admitted) {
       rejectedVisualCandidates.push({
         ...candidate,
@@ -20091,9 +20061,12 @@ function buildPeriodInventoryStructuralCandidates({
     ...candidate,
     provenanceVerified: true,
     authoritativeFrameworkLevel: true,
-    priceSource: candidate?.independentEntryEvidence === true
+    priceSource: independentlyReadPrices.some(price =>
+      Math.abs(price - Number(candidate.price)) <= Math.max(cleanBreakTolerance, Number.EPSILON * 100))
+      ? "independent_horizontal_line_reader_exact"
+      : candidate?.provenanceVerified === true && candidate?.independentEntryEvidence === true
       ? "independent_supply_demand_displacement"
-      : "independent_horizontal_line_reader_exact",
+      : "deterministic_period_high_low_inventory",
   }));
 
   const seen = new Set();
@@ -20247,21 +20220,24 @@ function rankChartNativeFallbackAreas({
         : price > resolvedCurrentPrice
     );
     const isSupplyDemand = ["supply", "demand"].includes(areaType);
-    const structuralEvidenceValid = candidate?.provenanceVerified === true || (isSupplyDemand
+    const structuralEvidenceValid = !isUnverifiedPeriodCandidate(candidate) && (candidate?.provenanceVerified === true || (isSupplyDemand
       ? candidate?.independentEntryEvidence === true &&
         Boolean(candidate?.structuralEvidence)
-      : candidate?.exactVisiblePrice === true);
+      : candidate?.exactVisiblePrice === true));
+    const verifiedFrame = currentPeriodFrameVerified && !chartOnlyInventoryUnverified;
 
     const rejectionReasons = [];
     if (!allowedTypes.has(areaType)) rejectionReasons.push("structural role conflicts with bias");
     if (!sideCompatible) rejectionReasons.push("level is on the wrong side of current price");
     if (!fibMatch) rejectionReasons.push("outside the 38.2%-61.8% retracement band");
     if (!structuralEvidenceValid) rejectionReasons.push("missing independent structural provenance");
+    if (!verifiedFrame) rejectionReasons.push("fixed-period Fibonacci frame is unverified; estimates are diagnostic only");
 
     if (
       !allowedTypes.has(areaType) ||
       !sideCompatible ||
       !fibMatch ||
+      !verifiedFrame ||
       !structuralEvidenceValid
     ) {
       return {
@@ -20403,6 +20379,7 @@ function rankChartNativeFallbackAreas({
     auditVersion: "1.1.0",
     inventoryAuthority: {
       selectedSource: fallback?.inventoryAuthority || fallback?.frameworkInventorySource || "uploaded_chart",
+      sourceCandleAudit: fallback?.marketPeriodIntegrity || null,
       focusedInventoryVerified: fallback?.focusedInventoryVerified === true,
       focusedInventoryDateSequenceVerified:
         fallback?.focusedInventoryDateSequenceVerified === true,
@@ -20447,6 +20424,7 @@ function rankChartNativeFallbackAreas({
       retainedFor: "current Fib frame, current price and phase only",
     })),
     fibonacciAudit: {
+      verified: currentPeriodFrameVerified && !chartOnlyInventoryUnverified,
       source: visibleWeekFrame
         ? visibleWeekFrame.source
         : "uploaded_chart_completed_impulse",
@@ -29361,20 +29339,21 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
       };
       const focusedReconciledPeriodInventory = reconcileFinalPeriodWithVisibleCandle({
+        timeframe,
+        visibleDate: chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "",
         periodInventory:
           mergedChartNativeFallback?.periodInventory ||
           mergedChartNativeFallback?.periodDayInventory ||
           [],
         ...finalVisibleCandle,
       });
-      const marketReconciledPeriodInventory = reconcileFinalPeriodWithVisibleCandle({
-        periodInventory: marketReferencePeriodInventory({
+      // Do not mix chart/broker OHLC into provider extrema and then call the
+      // mixed result verified. The chart's current close remains separate.
+      const marketReconciledPeriodInventory = marketReferencePeriodInventory({
           marketReference,
           timeframe,
           cutoffDate:
             chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "",
-        }),
-        ...finalVisibleCandle,
       });
       const lifecycleCutoffDateTime =
         chartCutoff?.endDateTime ||
@@ -29405,7 +29384,14 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       });
       const focusedInventoryDateSequenceVerified =
         focusedInventoryFrame?.currentPeriodFrameVerified === true;
+      const marketPeriodIntegrity = auditPeriodInventory({
+        cutoffDate: inventoryDate,
+        periods: marketPeriodInventory,
+        candles: timeframe === "D1" ? marketReference?.timeframeCandles || [] : [],
+        tolerance: getCleanBreakTolerance(normalizedSymbol || submittedInstrument),
+      });
       const marketInventoryVerified =
+        marketReference?.ok === true && marketPeriodIntegrity.passed &&
         marketInventoryFrame?.currentPeriodFrameVerified === true;
       const rawInventoryPriceConflicts = comparePeriodInventories(
         focusedPeriodInventory,
@@ -29456,6 +29442,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
               ? "verified deterministic candle retained; vision-estimated period price rejected"
               : conflict.resolution,
           }));
+      inventoryPriceConflicts.push(...marketPeriodIntegrity.issues);
       const fixedPeriodBias = inventoryUsable
         ? deriveVerifiedFixedPeriodBias({
             timeframe,
@@ -29507,6 +29494,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         rejectedFocusedPeriodInventory:
           inventoryUsable ? [] : focusedPeriodInventory,
         inventoryPriceConflicts,
+        marketPeriodIntegrity,
         finalVisibleCandleAuthority: {
           high: nullablePositiveNumber(chartDetection?.latestVisibleHigh),
           low: nullablePositiveNumber(chartDetection?.latestVisibleLow),
@@ -29568,7 +29556,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       const verifiedPeriodFrame = marketInventoryVerified
         ? marketInventoryFrame
         : chartOnlyInventoryVerified
-        ? focusedInventoryFrame
+        ? { ...focusedInventoryFrame, currentPeriodFrameVerified: false }
         : null;
 
       visualReview = {

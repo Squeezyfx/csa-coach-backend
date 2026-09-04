@@ -981,6 +981,8 @@ export function expectedFrameworkPeriodDates(timeframe = "", latestVisibleDate =
 
 export function reconcileFinalPeriodWithVisibleCandle({
   periodInventory = [],
+  timeframe = "",
+  visibleDate = "",
   visibleOpen = null,
   visibleHigh = null,
   visibleLow = null,
@@ -990,11 +992,16 @@ export function reconcileFinalPeriodWithVisibleCandle({
     .map((period) => ({ ...period }));
   if (!periods.length) return periods;
 
+  if (visibleDate && timeframe) {
+    const expected = expectedFrameworkPeriodDates(timeframe, String(visibleDate).slice(0, 10));
+    if (!expected.length || periods.at(-1)?.date !== expected.at(-1)) return periods;
+  }
+
   const high = Number(visibleHigh);
   const low = Number(visibleLow);
   const open = Number(visibleOpen);
   const close = Number(visibleClose);
-  if (!Number.isFinite(high) || !Number.isFinite(low) || high < low) {
+  if (!Number.isFinite(high) || !Number.isFinite(low) || high <= 0 || low <= 0 || high < low) {
     return periods;
   }
 
@@ -1004,14 +1011,13 @@ export function reconcileFinalPeriodWithVisibleCandle({
   const periodLow = Number(finalPeriod?.low);
   periods[index] = {
     ...finalPeriod,
-    high: Number.isFinite(periodHigh) ? Math.max(periodHigh, high) : high,
-    low: Number.isFinite(periodLow) ? Math.min(periodLow, low) : low,
-    open: Number.isFinite(Number(finalPeriod?.open))
+    // A final candle cannot establish missing full-period extremes or its open.
+    high: Number.isFinite(periodHigh) && periodHigh > 0 ? Math.max(periodHigh, high) : null,
+    low: Number.isFinite(periodLow) && periodLow > 0 ? Math.min(periodLow, low) : null,
+    open: Number.isFinite(Number(finalPeriod?.open)) && Number(finalPeriod.open) > 0
       ? Number(finalPeriod.open)
-      : Number.isFinite(open)
-      ? open
       : null,
-    close: Number.isFinite(close) ? close : finalPeriod?.close ?? null,
+    close: Number.isFinite(close) && close > 0 ? close : finalPeriod?.close ?? null,
     finalVisibleCandleReconciled: true,
     finalVisibleCandleHigh: high,
     finalVisibleCandleLow: low,
@@ -1037,6 +1043,7 @@ export function deriveVerifiedPeriodFrameFromInventory({
     .filter((period) =>
       Number.isFinite(period.high) &&
       Number.isFinite(period.low) &&
+      period.low > 0 &&
       period.high > period.low
     );
 
@@ -1215,6 +1222,8 @@ export function selectIndependentEntryAreas(candidates = [], direction = "range"
   // qualification or rely on a candidate-local Fibonacci calculation.
   const qualified = sequenceFibQualifiedAreas(candidates, direction)
     .filter((candidate) =>
+      candidate?.provenanceVerified !== false &&
+      !/unverified|estimated_period/.test(String(candidate?.priceSource || "")) &&
       candidate?.authoritativeFrameworkLevel === true &&
       candidate?.requiredFibConfluence === true &&
       Number(candidate?.structuralScore || 0) > 0 &&

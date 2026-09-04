@@ -1,6 +1,6 @@
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
-const BENCHMARK_VALIDATOR_VERSION = "1.14.0";
+const BENCHMARK_VALIDATOR_VERSION = "1.15.0";
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -437,6 +437,12 @@ function expectedFrameworkInventory(timeframe = "", latestVisibleDate = "") {
     };
   }
 
+  if (tf === "D1") {
+    return { sourceUnit: "MN", expectedCount: date.getUTCMonth() + 1,
+      expectedDates: Array.from({ length: date.getUTCMonth() + 1 }, (_, index) =>
+        `${date.getUTCFullYear()}-${String(index + 1).padStart(2, "0")}-01`),
+      label: "Calendar-month inventory through cutoff; current month context-only" };
+  }
   return null;
 }
 
@@ -457,6 +463,19 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   const promotedEntries = allPromotedEntries(result);
   const references = referenceEntries(result);
   const feedbackText = String(result?.analysis || result?.summary || result?.finalFeedback?.analysis || "");
+  const priceDiagnostics = result?.analysisFacts?.selectorDiagnostics;
+  if (priceDiagnostics) {
+    const unverifiedEntries = (priceDiagnostics.selectedEntries || []).filter(entry =>
+      entry?.provenanceVerified === false || /unverified|estimated_period/.test(String(entry?.priceSource || "")));
+    addCheck(checks, "automatic_selected_price_provenance", "Selected prices have verified provenance",
+      unverifiedEntries.length === 0, unverifiedEntries.length
+        ? "Unverified period estimates were selected as entries; do not save this result."
+        : "No explicitly unverified period estimate was selected.");
+    if (priceDiagnostics.transparencyAudit?.fibonacciAudit?.verified === false) {
+      addCheck(checks, "verified_fibonacci_frame", "Fixed-period frame has verified price authority", false,
+        "The frame is unverified. A saved expected result cannot override missing price authority.");
+    }
+  }
 
   if (expectation.automaticMode === true) {
     const detectedInstrument = String(
@@ -481,7 +500,10 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       return high !== null && low !== null && high > low;
     });
     const frameworkInventoryComplete = !inventoryRequirement || (
-      frameworkInventory.length >= inventoryRequirement.expectedCount && inventoryPeriodsValid
+      frameworkInventory.length >= inventoryRequirement.expectedCount && inventoryPeriodsValid &&
+      (!inventoryRequirement.expectedDates || (
+        frameworkInventory.length === inventoryRequirement.expectedDates.length &&
+        inventoryRequirement.expectedDates.every((date, index) => frameworkInventory[index]?.date === date)))
     );
     const fibCandidates = Array.isArray(selectorDiagnostics?.fibCandidates)
       ? selectorDiagnostics.fibCandidates
@@ -662,7 +684,7 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       checks,
       "automatic_fibonacci_period_frame",
       "Current-period Fibonacci high and low were read",
-      currentPeriodFrameAvailable,
+      currentPeriodFrameAvailable && selectorDiagnostics?.transparencyAudit?.fibonacciAudit?.verified !== false,
       currentPeriodFrameAvailable
         ? `Frame: high ${fallbackSwingHigh}, low ${fallbackSwingLow}.`
         : "No entry can be accepted until the required current-period high and low are both read from the chart."
@@ -697,10 +719,10 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
         const inventoryConflicts = (Array.isArray(transparencyAudit.provenanceConflicts)
           ? transparencyAudit.provenanceConflicts
           : []).filter((conflict) =>
-            conflict?.requiresReview !== false && (
+            conflict?.requiresReview === true || (conflict?.requiresReview !== false && (
               Number.isFinite(Number(conflict?.chartPrice)) ||
               Number.isFinite(Number(conflict?.chartCount))
-            )
+            ))
           );
         addCheck(
           checks,

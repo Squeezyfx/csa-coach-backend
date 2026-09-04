@@ -228,6 +228,7 @@ function structuralCandidateKey(candidate) {
 }
 
 function compactNumber(value, precisionSeed) {
+  if (value === null || value === undefined || value === "") return "—";
   const number = Number(value);
   if (!Number.isFinite(number)) return "—";
   const decimals = Math.min(6, Math.max(2, String(precisionSeed ?? value).split(".")[1]?.length || 2));
@@ -275,6 +276,7 @@ function renderBatchOverview(run) {
         }).join(" · ")
       : "No selected entry";
     const flags = [];
+    if (audit.fibonacciAudit?.verified === false) flags.push("Fib frame unverified—no entries permitted");
     if (structuralBias === "unverified") flags.push("bias unverified");
     if (structuralBias !== "unverified" && headlineBias !== structuralBias) flags.push(`headline says ${headlineBias}`);
     if (!(Number(fib.swingHigh) > Number(fib.swingLow))) flags.push("Fib frame missing");
