@@ -1,0 +1,19 @@
+CSA Benchmark v2.67.0 — completed-period structure
+
+Build: CSA-v4.51.0-completed-period-structure
+Feedback engine: 10.46.0
+Selector: 4.34.0
+
+Rule:
+- Only completed framework periods may create structural support/resistance,
+  supply/demand, or Entry 1-3 candidates.
+- The active unfinished period remains in the full diagnostic inventory and
+  may be used only for the current Fibonacci frame, current price, and phase.
+- Export JSON separates completed structuralPeriodInventory from
+  inProgressPeriodInventory for troubleshooting.
+
+Expected examples at an unfinished cutoff:
+- D1: the current month (for example August) is omitted from period structure.
+- H4: the current week (for example W4) is omitted from period structure.
+- H1: the current trading day is omitted from period structure until its
+  framework period closes.

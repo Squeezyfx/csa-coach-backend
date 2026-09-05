@@ -1,0 +1,25 @@
+CSA BENCHMARK v2.59 — CHART PERIOD PRICE AUTHORITY
+
+Build: CSA-v4.44.0-chart-period-price-authority
+Selector: 4.29.0
+Validator: 1.10.0
+
+WHAT THIS FIXES
+
+1. The focused chart reader now explicitly returns the verification flag required by the selector.
+2. H4 charts inventory each visible W1 candle in the current month.
+3. D1 charts inventory each visible MN candle in the current year.
+4. The exact final chart-header OHLC is reconciled into the final week/month so the final selloff or rally cannot be omitted.
+5. A complete uploaded-chart inventory is no longer silently overwritten by external selected-timeframe aggregation.
+6. Chart-versus-market high/low disagreements are displayed by period and extreme and force Needs review instead of silently producing an entry.
+7. The benchmark displays inventory authority, final-candle authority, period roles, Fibonacci high/low and prices, Entry 1–3 decisions, and price-source conflicts.
+
+DEPLOY
+
+Upload all files in this package to the benchmark-testing branch, preserving the benchmark/ folder structure. Commit the files, then redeploy/restart both the backend and benchmark service as you did for v2.58.
+
+FIRST RETEST
+
+Run the same five charts together. Do not save the batch if any chart reports a price-source conflict or Needs review. Compare each chart's period table and final-candle header line before judging the entries.
+
+The benchmark is expected to expose unresolved differences; that is intentional. A conflicting price must be reviewed rather than silently accepted.

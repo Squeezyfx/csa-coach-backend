@@ -3,11 +3,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   annotateFrameworkPeriodPriority,
+  aggregateH4CandlesIntoWeeklyInventory,
   buildFinalVisibleTerminalImpulse,
   canonicalInstrumentCode,
   classifyCsaStructuralStage,
   compareStructureLedCompletedImpulseCandidates,
   consolidateQualifiedSupplyDemandClusters,
+  deriveVerifiedPeriodFrameFromInventory,
+  expectedFrameworkPeriodDates,
   expandExactSupportResistanceBoundaries,
   findNearestAllowedFibonacciMatch,
   getMarketDataSymbolCandidates,
@@ -22,6 +25,7 @@ import {
   orderStructuralCandidatesForFib,
   parseChartHeaderText,
   promoteConfirmedBreakPassedExactLevels,
+  reconcileFinalPeriodWithVisibleCandle,
   reconcileLatestVisibleDateWithAxisYear,
   replaceMisclassifiedZoneWithExactConvertedLines,
   selectIndependentEntryAreas,
@@ -32,6 +36,93 @@ import {
   shouldMergeQualifiedSupplyDemandCluster,
   shouldApplyFinalVisibleTerminalImpulse,
 } from "../csa-entry-policy.js";
+
+test("exact final candle expands only the final weekly period", () => {
+  const inventory = reconcileFinalPeriodWithVisibleCandle({
+    periodInventory: [
+      { periodLabel: "W1", high: 1.36, low: 1.34 },
+      { periodLabel: "W2", high: 1.365, low: 1.357 },
+    ],
+    visibleOpen: 1.3536,
+    visibleHigh: 1.35395,
+    visibleLow: 1.3526,
+    visibleClose: 1.35301,
+  });
+  assert.deepEqual([inventory[0].high, inventory[0].low], [1.36, 1.34]);
+  assert.equal(inventory[1].high, 1.365);
+  assert.equal(inventory[1].low, 1.3526);
+  assert.equal(inventory[1].close, 1.35301);
+  assert.equal(inventory[1].finalVisibleCandleReconciled, true);
+});
+
+test("D1 year frame requires every month through the visible month", () => {
+  const months = Array.from({ length: 8 }, (_, index) => ({
+    periodLabel: `M${index + 1}`,
+    date: `2026-${String(index + 1).padStart(2, "0")}-01`,
+    high: 4500 + index * 10,
+    low: 4000 + index * 5,
+  }));
+  const complete = deriveVerifiedPeriodFrameFromInventory({
+    timeframe: "D1",
+    latestVisibleDate: "2026-08-28",
+    periodInventory: months,
+  });
+  assert.equal(complete.currentPeriodFrameVerified, true);
+  assert.equal(complete.expectedCount, 8);
+  const incomplete = deriveVerifiedPeriodFrameFromInventory({
+    timeframe: "D1",
+    latestVisibleDate: "2026-08-28",
+    periodInventory: months.slice(0, 7),
+  });
+  assert.equal(incomplete.currentPeriodFrameVerified, false);
+});
+
+test("fixed-period verification requires the exact calendar sequence", () => {
+  assert.deepEqual(
+    expectedFrameworkPeriodDates("H4", "2026-08-27"),
+    ["2026-08-03", "2026-08-10", "2026-08-17", "2026-08-24"]
+  );
+  const misplaced = deriveVerifiedPeriodFrameFromInventory({
+    timeframe: "H4",
+    latestVisibleDate: "2026-08-27",
+    periodInventory: [
+      { date: "2026-07-27", high: 1.1, low: 1.0 },
+      { date: "2026-08-03", high: 1.2, low: 1.1 },
+      { date: "2026-08-10", high: 1.3, low: 1.2 },
+      { date: "2026-08-17", high: 1.4, low: 1.3 },
+      { date: "2026-08-24", high: 1.5, low: 1.4 },
+    ],
+  });
+  assert.equal(misplaced.currentPeriodFrameVerified, false);
+});
+
+test("fixed-period verification rejects an extra invented period", () => {
+  const frame = deriveVerifiedPeriodFrameFromInventory({
+    timeframe: "H4",
+    latestVisibleDate: "2026-08-27",
+    periodInventory: [
+      { date: "2026-08-03", high: 1.16, low: 1.15 },
+      { date: "2026-08-10", high: 1.17, low: 1.15 },
+      { date: "2026-08-17", high: 1.18, low: 1.16 },
+      { date: "2026-08-24", high: 1.17, low: 1.15 },
+      { date: "2026-08-31", high: 1.16, low: 1.14 },
+    ],
+  });
+  assert.equal(frame.currentPeriodFrameVerified, false);
+});
+
+test("XAUUSD final-week demand just above 38.2 passes the one-percent boundary allowance", () => {
+  const match = findNearestAllowedFibonacciMatch({
+    direction: "bullish",
+    swingHigh: 4696.744902,
+    swingLow: 4030.093054,
+    price: 4445.24,
+    zoneLow: 4445.24,
+    zoneHigh: 4445.24,
+    tolerance: (4696.744902 - 4030.093054) * 0.01,
+  });
+  assert.equal(match?.ratio, 0.382);
+});
 
 test("framework inventory checks the immediate previous period before older periods", () => {
   const ordered = orderStructuralCandidatesForFib(
@@ -358,6 +449,108 @@ test("focused inventory merges only independent supply or demand candidates", ()
   assert.equal(merged.swingLow, 1.37575);
 });
 
+test("focused framework inventory survives even when it has no entry candidates", () => {
+  const primary = {
+    usable: true,
+    direction: "bearish",
+    candidates: [{ price: 1.394, areaType: "converted resistance" }],
+  };
+  const focused = {
+    usable: false,
+    direction: "bearish",
+    candidates: [],
+    periodInventory: [
+      { periodLabel: "W1", sourceUnit: "W1", date: "2026-08-03", high: 1.40801, low: 1.39244 },
+      { periodLabel: "W2", sourceUnit: "W1", date: "2026-08-10", high: 1.39643, low: 1.38637 },
+      { periodLabel: "W3", sourceUnit: "W1", date: "2026-08-17", high: 1.39091, low: 1.37308 },
+      { periodLabel: "W4", sourceUnit: "W1", date: "2026-08-24", high: 1.39088, low: 1.37507 },
+    ],
+  };
+
+  const merged = mergeFocusedSupplyDemandInventory(primary, focused);
+  assert.equal(merged.periodInventory.length, 4);
+  assert.equal(merged.periodInventory[1].low, 1.38637);
+  assert.deepEqual(merged.candidates, primary.candidates);
+});
+
+test("complete H4 weekly inventory verifies the calendar-month Fibonacci frame", () => {
+  const frame = deriveVerifiedPeriodFrameFromInventory({
+    timeframe: "H4",
+    latestVisibleDate: "2026-08-27",
+    periodInventory: [
+      { date: "2026-08-03", high: 1.40801, low: 1.39244 },
+      { date: "2026-08-10", high: 1.39643, low: 1.38637 },
+      { date: "2026-08-17", high: 1.39091, low: 1.37308 },
+      { date: "2026-08-24", high: 1.39088, low: 1.37507 },
+    ],
+  });
+
+  assert.equal(frame.currentPeriodFrameVerified, true);
+  assert.equal(frame.expectedCount, 4);
+  assert.equal(frame.currentPeriodHigh, 1.40801);
+  assert.equal(frame.currentPeriodLow, 1.37308);
+});
+
+test("incomplete H4 weekly inventory cannot verify the month frame", () => {
+  const frame = deriveVerifiedPeriodFrameFromInventory({
+    timeframe: "H4",
+    latestVisibleDate: "2026-08-27",
+    periodInventory: [
+      { date: "2026-08-03", high: 1.40801, low: 1.39244 },
+      { date: "2026-08-10", high: 1.39643, low: 1.38637 },
+      { date: "2026-08-17", high: 1.39091, low: 1.37308 },
+    ],
+  });
+
+  assert.equal(frame.currentPeriodFrameVerified, false);
+  assert.equal(frame.expectedCount, 4);
+});
+
+test("H4 candles are aggregated into Monday-Friday W1 periods without counting an opening weekend", () => {
+  const candles = [
+    { datetime: "2026-08-01 01:00:00", open: 1.401, high: 1.402, low: 1.400, close: 1.4015 },
+    { datetime: "2026-08-03 00:00:00", open: 1.4015, high: 1.40801, low: 1.399, close: 1.405 },
+    { datetime: "2026-08-07 20:00:00", open: 1.405, high: 1.406, low: 1.39244, close: 1.394 },
+    { datetime: "2026-08-10 00:00:00", open: 1.394, high: 1.39643, low: 1.393, close: 1.395 },
+    { datetime: "2026-08-14 20:00:00", open: 1.395, high: 1.3955, low: 1.38637, close: 1.388 },
+    { datetime: "2026-08-17 00:00:00", open: 1.388, high: 1.39091, low: 1.37308, close: 1.379 },
+    { datetime: "2026-08-24 00:00:00", open: 1.379, high: 1.39088, low: 1.37507, close: 1.38988 },
+  ];
+
+  const inventory = aggregateH4CandlesIntoWeeklyInventory({
+    candles,
+    cutoffDate: "2026-08-27",
+  });
+
+  assert.deepEqual(inventory.map((period) => period.periodLabel), ["W1", "W2", "W3", "W4"]);
+  assert.equal(inventory[0].date, "2026-08-03");
+  assert.equal(inventory[0].high, 1.40801);
+  assert.equal(inventory[0].low, 1.39244);
+  assert.equal(inventory[0].candleCount, 2);
+  assert.equal(inventory[1].low, 1.38637);
+  assert.equal(inventory[3].low, 1.37507);
+});
+
+test("EURUSD W2 stops before W3 Monday 00:00 and excludes weekend candles", () => {
+  const inventory = aggregateH4CandlesIntoWeeklyInventory({
+    cutoffDate: "2026-08-27",
+    candles: [
+      { datetime: "2026-08-10 00:00:00", open: 1.1558, high: 1.1578, low: 1.1549, close: 1.1564 },
+      { datetime: "2026-08-14 20:00:00", open: 1.1575, high: 1.15839, low: 1.1512, close: 1.1579 },
+      { datetime: "2026-08-16 20:00:00", open: 1.1580, high: 1.1608, low: 1.1577, close: 1.1595 },
+      { datetime: "2026-08-17 00:00:00", open: 1.1595, high: 1.1602, low: 1.15655, close: 1.1598 },
+      { datetime: "2026-08-17 04:00:00", open: 1.1598, high: 1.1607, low: 1.1588, close: 1.1604 },
+      { datetime: "2026-08-17 08:00:00", open: 1.1604, high: 1.16133, low: 1.1599, close: 1.1611 },
+    ],
+  });
+  assert.equal(inventory[0].date, "2026-08-10");
+  assert.equal(inventory[0].high, 1.15839);
+  assert.equal(inventory[0].candleCount, 2);
+  assert.equal(inventory[1].date, "2026-08-17");
+  assert.equal(inventory[1].high, 1.16133);
+  assert.equal(inventory[1].candleCount, 3);
+});
+
 test("USDCAD excludes the below-38.2 supply and retains converted resistance only", () => {
   const swingHigh = 1.39091;
   const swingLow = 1.37575;
@@ -579,6 +772,19 @@ test("after Fib qualification bearish entries follow nearest-to-deeper price pat
   assert.deepEqual(sequenced.map((item) => item.id), ["near-resistance", "deep-supply"]);
 });
 
+test("GBPUSD H4 W1 high remains structural context outside the Fib boundary", () => {
+  const match = findNearestAllowedFibonacciMatch({
+    direction: "bullish",
+    swingHigh: 1.36752,
+    swingLow: 1.34183,
+    price: 1.35093,
+    zoneLow: 1.35093,
+    zoneHigh: 1.35093,
+    tolerance: 0.0006,
+  });
+  assert.equal(match, null);
+});
+
 test("Entry 2 may come from the next CSA structural stage when local framework Fib independently qualifies it", () => {
   const selected = selectIndependentEntryAreas(
     [
@@ -745,10 +951,70 @@ test("selector reconciles exact chart/framework levels before choosing Fibonacci
   assert.match(serverSource, /selectStructureLedChartNativeImpulseFrame/);
 });
 
-test("Fibonacci qualification cannot use the whole 50%-61.8% interval as confluence", () => {
+test("Fibonacci qualification accepts independently proven structure across the 38.2%-61.8% band", () => {
   const serverSource = readFileSync(new URL("../server.js", import.meta.url), "utf8");
-  assert.equal(serverSource.includes('matchType: "inside_50_618_acceptance_band"'), false);
-  assert.match(serverSource, /const matches = exactLevelMatches;/);
+  const w3High = findNearestAllowedFibonacciMatch({
+    direction: "bearish",
+    swingHigh: 1.40801,
+    swingLow: 1.37329,
+    price: 1.39104,
+    zoneLow: 1.39104,
+    zoneHigh: 1.39104,
+    tolerance: 0.0002,
+  });
+  const w1Low = findNearestAllowedFibonacciMatch({
+    direction: "bearish",
+    swingHigh: 1.40801,
+    swingLow: 1.37329,
+    price: 1.39244,
+    zoneLow: 1.39244,
+    zoneHigh: 1.39244,
+    tolerance: 0.0002,
+  });
+  const outsideBand = findNearestAllowedFibonacciMatch({
+    direction: "bearish",
+    swingHigh: 1.40801,
+    swingLow: 1.37329,
+    price: 1.39685,
+    zoneLow: 1.39685,
+    zoneHigh: 1.39685,
+    tolerance: 0.01,
+  });
+  assert.equal(w3High?.withinRetracementBand, true);
+  assert.equal(w3High?.ratio, 0.5);
+  assert.equal(w1Low?.withinRetracementBand, true);
+  assert.equal(w1Low?.ratio, 0.5);
+  assert.equal(outsideBand, null);
+  assert.match(serverSource, /buildPeriodInventoryStructuralCandidates/);
+  assert.match(serverSource, /deterministic_period_high_low_inventory/);
+  assert.match(serverSource, /price is not a deterministic period high\/low/);
+});
+
+test("USDCAD H4 sequences W3 supply before converted W1 support", () => {
+  const selected = selectIndependentEntryAreas([
+    {
+      id: "W3-high",
+      areaType: "supply",
+      authoritativeCenter: 1.39104,
+      authoritativeFrameworkLevel: true,
+      requiredFibConfluence: true,
+      structuralScore: 60,
+      fibonacciScore: 1,
+      independentEntryEvidence: true,
+    },
+    {
+      id: "W1-low",
+      areaType: "converted resistance",
+      authoritativeCenter: 1.39244,
+      authoritativeFrameworkLevel: true,
+      requiredFibConfluence: true,
+      structuralScore: 60,
+      fibonacciScore: 1,
+      independentEntryEvidence: true,
+    },
+  ], "bearish");
+
+  assert.deepEqual(selected.map((area) => area.id), ["W3-high", "W1-low"]);
 });
 
 test("redundant same-stage Entry 2 is rejected without independent chart evidence", () => {

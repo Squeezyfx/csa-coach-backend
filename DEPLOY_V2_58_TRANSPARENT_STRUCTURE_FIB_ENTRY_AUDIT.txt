@@ -1,0 +1,41 @@
+CSA BENCHMARK v2.58 — TRANSPARENT STRUCTURE, FIB AND ENTRY AUDIT
+
+Build: CSA-v4.43.0-transparent-structure-fib-entry-audit
+Selector: 4.28.0
+
+WHAT CHANGED
+
+1. The benchmark now displays every D1/W1 period high and low with its structural role.
+2. It displays the exact Fibonacci high and low, 38.2%, 50% and 61.8% prices, and the accepted band.
+3. It displays Entry 1, Entry 2 and Entry 3 with period, extreme, role, price, Fib confluence and provenance.
+4. Every structural candidate has a visible pass/fail decision and rejection reason.
+5. Unverified or conflicting prices are displayed in a price-source conflict panel instead of silently entering selection.
+6. A chart-model price must match deterministic period inventory, an independently read chart label, or a validated supply/demand zone.
+7. Independently proven structure qualifies anywhere inside the full 38.2%-61.8% retracement band.
+
+USDCAD H4 EXPECTED RETEST
+
+- Fib range: high 1.40801, low 1.37329.
+- 38.2%: 1.38655304.
+- 50.0%: 1.39065000.
+- 61.8%: 1.39474696.
+- Entry 1: W3 high 1.39104, supply.
+- Entry 2: W1 low 1.39244, converted resistance after the breakdown.
+- Entry 3: none.
+- W2 low 1.38665 remains support/downside reference, not a bearish entry.
+- Unverified 1.39400 must appear only as rejected provenance, never as an entry.
+
+DEPLOYMENT
+
+Upload every file and folder in this package to the benchmark-testing branch, replacing the corresponding files. Commit the changes, then redeploy both the staging analysis service and benchmark runner. Do not deploy this benchmark build to the production customer service until the USDCAD H4 result and broader regression batch have been reviewed.
+
+RECOMMENDED TEST ORDER
+
+1. Run the USDCAD H4 chart by itself first.
+2. Verify the period inventory, structural roles, Fib range, Entry 1/2 and rejected 1.39400 provenance.
+3. Only after that chart passes, run a mixed batch of up to five charts.
+
+VERIFICATION COMPLETED
+
+- JavaScript syntax checks passed.
+- 123 automated benchmark/regression tests passed.

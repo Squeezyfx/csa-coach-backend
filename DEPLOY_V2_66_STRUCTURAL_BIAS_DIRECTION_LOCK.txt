@@ -1,0 +1,10 @@
+CSA Benchmark v2.66
+
+Fixes the four shared false failures in the September 2 diagnostic batch:
+- verified fixed-period structural bias now controls selector direction;
+- the opposite recent move remains pullback/recovery phase context;
+- Fibonacci orientation and entry-side selection follow structural bias;
+- only price conflicts explicitly requiring review appear in the summary.
+
+Resolved and rejected alternate readings remain available in Export JSON.
+Credit-saving summary-only mode and normal production isolation remain unchanged.

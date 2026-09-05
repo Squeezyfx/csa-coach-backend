@@ -1,0 +1,43 @@
+CSA benchmark v2.75 / engine 10.53.0
+Deploy to the BENCHMARK repository only; this archive has not been deployed.
+Preserve benchmark/ and include both period-accuracy.js and market-data-matching.js.
+No new dependencies, environment settings, broker fields or subscription changes.
+
+What changed
+Completed provider periods are assessed separately BEFORE endpoint rejection
+clears the active dataset. Their high/low and source-candle integrity checks run
+per period: one invalid period cannot erase valid neighbouring periods.
+Only periods whose calendar end is strictly earlier than the last printed chart
+date are retained. Missing/invalid boundary dates, duplicate periods, unfinished
+periods, invalid ranges and source-candle range violations are rejected.
+Supported reference units: D1 -> months, H4 -> weeks, M1-H1 -> days.
+Other timeframe reference units remain withheld rather than guessed.
+
+The summary shows completed provider references separately from chart-verified
+periods. JSON inventoryAuthority.completedPeriodReferences preserves per-period
+evidence and rejection reasons. Missing current Fib authority still blocks entries.
+References are NOT fed into the selector, bias calculation or current Fib frame.
+A confirmed endpoint mismatch suppresses the reference display too.
+
+Unavailable authority is no longer manufactured as a price conflict. It remains
+a critical validation failure with its actual reason. Diagnostic-only runs skip
+coaching diversity checks; full coaching runs retain those checks.
+
+What this does NOT prove
+Provider-reference prices are not broker-exact or screenshot-confirmed prices.
+Range containment checks do not prove every historical candle was supplied.
+The last printed chart date is still image-read evidence, not an exact endpoint.
+This change does not resolve Platinum subscription access or infer missing dates.
+The fixed-date OHLC tests are explicitly SYNTHETIC, not historical broker data.
+No user-proposed prices or desired entries have been hardcoded.
+
+Validation
+npm run check
+npm run test:benchmarks
+183 offline tests pass. No paid model/provider calls used. Live coverage untested.
+
+Next
+After deployment, one DOGE diagnostic run can verify that available completed
+provider months are shown while the uncertain endpoint/Fib remains separate.
+Send summary and Export JSON. Do not rerun Platinum until its access issue changes.
+Do not save these provider-only results as exact-price chart benchmarks.

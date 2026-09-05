@@ -1,6 +1,6 @@
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
-const BENCHMARK_VALIDATOR_VERSION = "1.8.0";
+const BENCHMARK_VALIDATOR_VERSION = "1.15.0";
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -363,7 +363,7 @@ function refreshValidation(validation = {}) {
 export function applyBatchFeedbackDiversityChecks(results = []) {
   const eligible = results
     .map((item, index) => ({ item, index, templates: feedbackItems(item?.analysis) }))
-    .filter(({ item, templates }) => item?.status !== "error" && templates.length > 0);
+    .filter(({ item, templates }) => item?.status !== "error" && item?.analysis?.benchmarkDiagnosticOnly !== true && templates.length > 0);
 
   const collisions = new Map();
   for (let left = 0; left < eligible.length; left += 1) {
@@ -437,6 +437,12 @@ function expectedFrameworkInventory(timeframe = "", latestVisibleDate = "") {
     };
   }
 
+  if (tf === "D1") {
+    return { sourceUnit: "MN", expectedCount: date.getUTCMonth() + 1,
+      expectedDates: Array.from({ length: date.getUTCMonth() + 1 }, (_, index) =>
+        `${date.getUTCFullYear()}-${String(index + 1).padStart(2, "0")}-01`),
+      label: "Calendar-month inventory through cutoff; current month context-only" };
+  }
   return null;
 }
 
@@ -457,6 +463,19 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   const promotedEntries = allPromotedEntries(result);
   const references = referenceEntries(result);
   const feedbackText = String(result?.analysis || result?.summary || result?.finalFeedback?.analysis || "");
+  const priceDiagnostics = result?.analysisFacts?.selectorDiagnostics;
+  if (priceDiagnostics) {
+    const unverifiedEntries = (priceDiagnostics.selectedEntries || []).filter(entry =>
+      entry?.provenanceVerified === false || /unverified|estimated_period/.test(String(entry?.priceSource || "")));
+    addCheck(checks, "automatic_selected_price_provenance", "Selected prices have verified provenance",
+      unverifiedEntries.length === 0, unverifiedEntries.length
+        ? "Unverified period estimates were selected as entries; do not save this result."
+        : "No explicitly unverified period estimate was selected.");
+    if (priceDiagnostics.transparencyAudit?.fibonacciAudit?.verified === false) {
+      addCheck(checks, "verified_fibonacci_frame", "Fixed-period frame has verified price authority", false,
+        "The frame is unverified. A saved expected result cannot override missing price authority.");
+    }
+  }
 
   if (expectation.automaticMode === true) {
     const detectedInstrument = String(
@@ -481,7 +500,10 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       return high !== null && low !== null && high > low;
     });
     const frameworkInventoryComplete = !inventoryRequirement || (
-      frameworkInventory.length >= inventoryRequirement.expectedCount && inventoryPeriodsValid
+      frameworkInventory.length >= inventoryRequirement.expectedCount && inventoryPeriodsValid &&
+      (!inventoryRequirement.expectedDates || (
+        frameworkInventory.length === inventoryRequirement.expectedDates.length &&
+        inventoryRequirement.expectedDates.every((date, index) => frameworkInventory[index]?.date === date)))
     );
     const fibCandidates = Array.isArray(selectorDiagnostics?.fibCandidates)
       ? selectorDiagnostics.fibCandidates
@@ -533,7 +555,11 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const fibEvidenceForEntry = (entry) => {
       const entryPrice = finiteNumber(entry.center);
       if (entryPrice === null) return [];
-      const tolerance = defaultTolerance(entryPrice);
+      const displayedDecimals = String(entry.levelText || "").split(".")[1]?.length;
+      const displayRoundingTolerance = Number.isInteger(displayedDecimals)
+        ? 0.5 * (10 ** -displayedDecimals) + Number.EPSILON
+        : 0;
+      const tolerance = Math.max(defaultTolerance(entryPrice), displayRoundingTolerance);
       const matchedEvaluatedCandidate = fibCandidates.some((candidate) => {
         if (candidate?.passed !== true) return false;
         const candidatePrice =
@@ -585,14 +611,23 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
             ? [0.382, 0.5, 0.618].find((approved) => Math.abs(ratio - approved) <= 0.002)
             : null;
           if (!approvedRatio || fallbackRange === null || candidatePrice === null) return false;
-          const computedPrice = direction === "bearish"
-            ? fallbackSwingLow + fallbackRange * approvedRatio
-            : fallbackSwingHigh - fallbackRange * approvedRatio;
-          const arithmeticTolerance = Math.max(
+          const fib382 = direction === "bearish"
+            ? fallbackSwingLow + fallbackRange * 0.382
+            : fallbackSwingHigh - fallbackRange * 0.382;
+          const fib618 = direction === "bearish"
+            ? fallbackSwingLow + fallbackRange * 0.618
+            : fallbackSwingHigh - fallbackRange * 0.618;
+          const bandLow = Math.min(fib382, fib618);
+          const bandHigh = Math.max(fib382, fib618);
+          const boundaryAllowance = Math.max(
             defaultTolerance(candidatePrice),
-            finiteNumber(candidate?.fibonacciTolerance) ?? fallbackRange * 0.06
+            Math.min(
+              finiteNumber(candidate?.fibonacciTolerance) ?? 0,
+              fallbackRange * 0.01
+            )
           );
-          return Math.abs(candidatePrice - computedPrice) <= arithmeticTolerance;
+          return candidatePrice >= bandLow - boundaryAllowance &&
+            candidatePrice <= bandHigh + boundaryAllowance;
         });
         return candidatePrice !== null &&
           Math.abs(candidatePrice - entryPrice) <= tolerance
@@ -603,6 +638,11 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     };
     const entryFibEvidence = entries.map((entry) => fibEvidenceForEntry(entry));
     const everyEntryHasFibConfluence = entryFibEvidence.every((evidence) => evidence.length > 0);
+    const structuralBias = normalizeDirection(
+      result?.csaDirectionalBias?.biasCode || result?.csaDirectionalBias?.bias || ""
+    );
+    const structuralBiasDeclared = Boolean(result?.csaDirectionalBias);
+    const structuralBiasAvailable = ["bullish", "bearish", "range"].includes(structuralBias);
 
     addCheck(
       checks,
@@ -620,6 +660,19 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     );
     addCheck(
       checks,
+      "automatic_structural_bias_consistency",
+      "Headline bias agrees with verified period structure",
+      !structuralBiasDeclared || (structuralBiasAvailable && direction === structuralBias),
+      !structuralBiasDeclared
+        ? "No separate structural-bias field was supplied by this legacy fixture."
+        : !structuralBiasAvailable
+        ? "Verified period structure is unavailable; do not present a visual range estimate as an authoritative bias."
+        : direction === structuralBias
+        ? `Structural bias: ${structuralBias}.`
+        : `Headline bias ${direction} conflicts with verified period bias ${structuralBias}.`
+    );
+    addCheck(
+      checks,
       "automatic_framework_period_inventory",
       "Timeframe-specific D1/W1 candle highs and lows were inventoried",
       frameworkInventoryComplete,
@@ -631,11 +684,59 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       checks,
       "automatic_fibonacci_period_frame",
       "Current-period Fibonacci high and low were read",
-      currentPeriodFrameAvailable,
+      currentPeriodFrameAvailable && selectorDiagnostics?.transparencyAudit?.fibonacciAudit?.verified !== false,
       currentPeriodFrameAvailable
         ? `Frame: high ${fallbackSwingHigh}, low ${fallbackSwingLow}.`
         : "No entry can be accepted until the required current-period high and low are both read from the chart."
     );
+    const selectorVersionParts = String(selectorDiagnostics?.selectorVersion || "0")
+      .split(".")
+      .map((part) => Number(part) || 0);
+    const transparentAuditRequired =
+      selectorVersionParts[0] > 4 ||
+      (selectorVersionParts[0] === 4 && selectorVersionParts[1] >= 28);
+    if (transparentAuditRequired) {
+      const transparencyAudit = selectorDiagnostics?.transparencyAudit || {};
+      const transparentDiagnosticsComplete =
+        Array.isArray(transparencyAudit.periodStructureAudit) &&
+        transparencyAudit.periodStructureAudit.length > 0 &&
+        finiteNumber(transparencyAudit?.fibonacciAudit?.swingHigh) !== null &&
+        finiteNumber(transparencyAudit?.fibonacciAudit?.swingLow) !== null &&
+        Array.isArray(transparencyAudit.candidateEvaluationAudit) &&
+        Array.isArray(transparencyAudit.entryDecisionAudit) &&
+        transparencyAudit.entryDecisionAudit.length === 3 &&
+        Array.isArray(transparencyAudit.provenanceConflicts);
+      addCheck(
+        checks,
+        "automatic_transparent_selector_audit",
+        "Period, structure, Fibonacci, entry and provenance diagnostics returned",
+        transparentDiagnosticsComplete,
+        transparentDiagnosticsComplete
+          ? `${transparencyAudit.periodStructureAudit.length} period(s) and ${transparencyAudit.candidateEvaluationAudit.length} candidate(s) are fully auditable.`
+          : "Selector 4.28+ must return period structure, Fib range, candidate decisions, Entry 1-3 decisions and provenance conflicts."
+      );
+      if (String(transparencyAudit?.auditVersion || "").startsWith("1.1")) {
+        const inventoryConflicts = (Array.isArray(transparencyAudit.provenanceConflicts)
+          ? transparencyAudit.provenanceConflicts
+          : []).filter((conflict) =>
+            conflict?.requiresReview === true || (conflict?.requiresReview !== false && (
+              Number.isFinite(Number(conflict?.chartPrice)) ||
+              Number.isFinite(Number(conflict?.chartCount))
+            ))
+          );
+        const authorityMissing = Boolean(transparencyAudit.inventoryAuthority?.providerFailure);
+        addCheck(
+          checks,
+          "automatic_period_price_authority",
+          "Period price authority is available without unresolved conflicts",
+          !authorityMissing && inventoryConflicts.length === 0,
+          inventoryConflicts.length
+            ? `${inventoryConflicts.length} period high/low conflict(s) were exposed. Review the chart values before saving this result.`
+            : authorityMissing ? "External price authority is unavailable or alignment is uncertain; this is not a confirmed price conflict."
+            : "No unresolved chart-versus-market period high/low conflict was found."
+        );
+      }
+    }
     addCheck(
       checks,
       "ordered_selector",

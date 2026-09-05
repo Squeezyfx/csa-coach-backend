@@ -2,13 +2,17 @@
 
 This package adds a private regression-testing interface and a tightly gated dry-run path to the test backend. The GoHighLevel customer dashboard is unchanged.
 
-The included analysis backend is CSA build `v4.40.0-timeframe-candle-inventory-enforcement`, packaged as benchmark v2.55.
+The included analysis backend is CSA build `v4.52.0-d1-lifecycle-index-fallback`, packaged as benchmark v2.69.
+
+v2.69 applies the unfinished-period lifecycle rule to the provider-first D1 monthly branch as well as H4, and retains a complete chart-derived period inventory for human review when a broker index such as USA30 cannot be resolved by Twelve Data. The partial period remains available only for the live Fibonacci frame, current price and current phase; it cannot create structural support/resistance, supply/demand or Entry 1-3.
 
 ## Authoritative timeframe-candle rule
 
 - For M1, M5, M15, M30 and H1, inventory every D1 candle high and low inside the current trading week, in chronological order up to the visible cutoff.
 - For H4, inventory every W1 candle high and low inside the current calendar month, in chronological order as W1, W2, W3, W4 and W5 when present.
-- Do not skip, merge or renumber periods. Complete this inventory before selecting S/R, S/D or entries.
+- Do not skip, merge or renumber periods while constructing the full current Fib-frame inventory. Before selecting S/R, S/D or entries, remove the active unfinished period from the structural inventory.
+- Every row must use the exact calculated period start date. A shifted date, an older wick moved into the current period, or an invented extra W5/month invalidates the chart inventory.
+- For H4, Monday 00:00 is the first candle, Monday 04:00 is the second and Monday 08:00 is the third. None may be assigned to the previous week; weekend candles are ignored.
 - The Fibonacci frame is separate: M1-H1 uses the complete current-week high/low, while H4 uses the complete current-month high/low. Fibonacci qualifies the individual D1/W1 structures but never replaces them or creates a level.
 - A dated automatic H1/H4 result is rejected for review when the required D1/W1 inventory is incomplete.
 
@@ -16,7 +20,7 @@ The engine inventories the immediately previous completed framework period first
 
 After every chart in an automatic batch is marked **Consistent**, use **Save all as strict benchmarks** to populate and retain the verified direction, entry prices, structural roles and supply/demand zone boundaries in the current browser. Review those populated values once, then run Strict Regression without retyping the fixtures.
 
-This build uses one fixed internal sequence: (1) inventory the immediately previous completed period's S/R and lifecycle conversions, (2) inventory that same period's independent S/D, (3) repeat both checks for the second previous completed period, (4) continue outward only when necessary, (5) calculate hidden 38.2%/50%/61.8% prices from the completed impulse and test every surviving candidate, and (6) order up to three independently qualified entries by the price path. Entry 2 and Entry 3 are alternatives after a fresh trigger; they are never instructions to add to a losing position. A proximity allowance cannot pull an entirely shallow candidate across the 38.2 threshold. When several unmarked candles describe one overlapping or near-touching S/D zone, bullish demand keeps the lower protective launch-base boundary and bearish supply keeps the upper protective boundary. Separately printed S/R lines remain separate internally, even when customer-facing feedback describes one close structural region. Fibonacci never creates an area. Automatic feedback names the detected direction and selected structural areas so different charts do not receive identical generic strengths and weaknesses. The rules are symmetrical and selected-day/exact historical cutoffs remain isolated.
+This build uses one fixed internal sequence: (1) inventory the immediately previous completed period's S/R and lifecycle conversions, (2) inventory that same period's independent S/D, (3) repeat both checks for the second previous completed period, (4) continue outward only when necessary, (5) calculate hidden 38.2%/50%/61.8% prices from the completed impulse and test every surviving candidate, and (6) order up to three independently qualified entries by the price path. Entry 2 and Entry 3 are alternatives after a fresh trigger; they are never instructions to add to a losing position. Independently proven structure qualifies anywhere inside the complete 38.2%-61.8% retracement band; a tightly capped boundary allowance only absorbs chart/broker rounding. When several unmarked candles describe one overlapping or near-touching S/D zone, bullish demand keeps the lower protective launch-base boundary and bearish supply keeps the upper protective boundary. Separately printed S/R lines remain separate internally, even when customer-facing feedback describes one close structural region. Fibonacci never creates an area. Automatic feedback names the detected direction and selected structural areas so different charts do not receive identical generic strengths and weaknesses. The rules are symmetrical and selected-day/exact historical cutoffs remain isolated.
 
 ## Isolation model
 
@@ -65,7 +69,7 @@ Automatic mode checks every chart independently and enforces the same sequence:
 3. Hidden Fibonacci confluence at 38.2%, 50% or 61.8%.
 4. Entry 1, Entry 2 and optional Entry 3 sequencing.
 
-For a final-visible chart, the engine identifies authoritative chart structure first, then compares eligible completed directional impulses and deterministically chooses the one that best explains those exact structural prices at 38.2%, 50% or 61.8%. The terminal leg is used only when it explains more exact structure, so a small final pullback cannot displace a valid completed impulse. All entry candidates then share the selected frame; candidate-local Fibonacci calculations remain disabled. Fibonacci confirms structure but never invents an entry. A candidate must be close to an actual 38.2%, 50% or 61.8% retracement; merely falling somewhere inside the broad 50%-61.8% interval does not qualify. Entry 2 is kept only when it independently passes the complete structure and shared-Fibonacci gates; it may be a separate converted S/R level or a supply/demand area, but it cannot inherit Entry 1's qualification merely because it is deeper. If the main detector misses a readable header, automatic mode performs focused header-only reads and parses compact labels such as `USA30,H1`. Common index aliases such as `USA30`, `US30`, `DJ30`, `US500`, `NAS100` and `USTEC` are normalized for comparison without changing the visible broker ticker in the report.
+For a final-visible chart, the engine identifies authoritative chart structure first, then compares eligible completed directional impulses and deterministically chooses the one that best explains those structural prices within the 38.2%-61.8% retracement band. The terminal leg is used only when it explains more exact structure, so a small final pullback cannot displace a valid completed impulse. All entry candidates then share the selected frame; candidate-local Fibonacci calculations remain disabled. Fibonacci confirms structure but never invents an entry. Entry 2 is kept only when it independently passes the complete structure, provenance and shared-Fibonacci gates; it may be a separate converted S/R level or a supply/demand area, but it cannot inherit Entry 1's qualification merely because it is deeper. If the main detector misses a readable header, automatic mode performs focused header-only reads and parses compact labels such as `USA30,H1`. Common index aliases such as `USA30`, `US30`, `DJ30`, `US500`, `NAS100` and `USTEC` are normalized for comparison without changing the visible broker ticker in the report.
 
 If cutoff-filtered market candles are unavailable, the uploaded chart may be used alone only when the screenshot reader can identify the instrument, timeframe, final price, direction, completed impulse, exact printed S/R price or independently evidenced S/D zone, and hidden Fibonacci confluence. The same S/R → S/D → Fibonacci → entry-order sequence still applies. In benchmark mode, the focused recovery pass may add only supply/demand zones with their own visible displacement evidence; it preserves the main read's direction and impulse and cannot add extra S/R lines. The server checks each point against all three allowed retracements and checks a genuine zone by its full boundaries rather than trusting an AI-supplied Fibonacci label. An unreadable or incomplete chart returns no fallback entry rather than guessing. This fallback is internal to the staging analysis path and does not weaken the strict-regression expectations.
 
@@ -98,8 +102,12 @@ Supply/demand zones are evaluated as areas because the base candle and broker
 feed can expose different actionable anchors inside the same structure. Zone
 matching never changes the fixed analysis order: S/R first, S/D second, hidden
 Fibonacci confluence third, then sequencing of up to three entries. A zone must still
-be structurally valid, on the correct side of price and close to the relevant
-38.2%, 50% or 61.8% retracement before it can be selected.
+be structurally valid, on the correct side of price and inside the shared
+38.2%-61.8% retracement band before it can be selected.
+
+## Transparent benchmark diagnostics
+
+Every automatic result displays the complete higher-timeframe period inventory, each period high and low, its support/resistance or supply/demand classification, the exact Fibonacci swing high and low, calculated 38.2%/50%/61.8% prices, and the accepted retracement band. A candidate table records its period, extreme, structural role, provenance, nearest Fib line, pass/fail result and rejection reason. A separate Entry 1-3 table records the selected period price and confluence, while the price-source conflict panel exposes model-generated or stale framework prices that were rejected instead of silently using them.
 
 ## Release rule
 

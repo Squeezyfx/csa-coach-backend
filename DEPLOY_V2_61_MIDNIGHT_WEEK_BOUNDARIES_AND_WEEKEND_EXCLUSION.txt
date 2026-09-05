@@ -1,0 +1,29 @@
+CSA Benchmark v2.61 deployment
+
+Build: CSA-v4.46.0-midnight-week-boundaries-and-weekend-exclusion
+Selector: 4.31.0
+Validator: 1.12.0
+
+Critical correction
+- H4 W1 periods begin at Monday 00:00 in chart time.
+- A Monday 04:00 label is the second candle; Monday 08:00 is the third.
+- Each completed week ends at Friday 20:00 on a 00/04/08/12/16/20 chart.
+- Saturday and Sunday candles are discarded. They are no longer shifted into the following Monday.
+- EURUSD 1.16133 is locked to W3 and cannot be used as the W2 high.
+
+Expected EURUSD audit
+- W2: 2026-08-10 00:00 inclusive through the last 2026-08-14 candle.
+- W2 high: approximately 1.15839 from the screenshot/broker chart.
+- W3 begins: 2026-08-17 00:00.
+- The early W3 1.16133 high must remain in W3.
+
+Deploy and test
+1. Upload all files while preserving benchmark/.
+2. Commit to benchmark-testing.
+3. Redeploy staging analysis and the benchmark runner.
+4. Confirm the health/build output shows CSA-v4.46.0-midnight-week-boundaries-and-weekend-exclusion.
+5. Retest EURUSD H4 alone first and inspect W2/W3 high-low inventory before running the remaining four charts.
+
+Validation
+- npm run check
+- npm run test:benchmarks

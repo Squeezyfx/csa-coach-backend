@@ -1,0 +1,57 @@
+CSA benchmark v2.72.0 — period accuracy guards
+Build: CSA-v4.55.0-period-accuracy-guards
+Feedback engine: 10.50.0 | Selector: 4.37.0 | Validator: 1.15.0
+
+DEPLOY ONLY TO THE SEPARATE BENCHMARK SERVICE
+Extract this ZIP and upload its contents to the benchmark GitHub repository,
+preserving the benchmark/ folder. Do not upload the ZIP itself as source code.
+Include the NEW root file period-accuracy.js. Keep your existing environment
+settings and saved benchmark data. No database migration or new API key is needed.
+This package has NOT been deployed automatically.
+
+CHANGES
+- Unverified monthly estimates cannot become entries, even when supply/demand
+  flags or a repeated visual price claim say they are independent evidence.
+- A model matching a period price cannot invent a different owning month or
+  gain exact-horizontal-line authority from that match.
+- Chart-only Fib estimates remain unverified and block entry approval.
+- Month comparisons use dates, not row positions. D1 validation requires the
+  exact January-through-cutoff date sequence.
+- Provider inventory is checked for invalid ranges, integrity warnings, and
+  dated source candles outside the declared monthly high/low. Source-extreme
+  candle dates are included when available in the JSON sourceCandleAudit.
+- Broker chart-header OHLC is no longer injected into provider period extrema.
+- The final chart candle cannot fill missing full-period extrema/open, shrink
+  a known month, insert zero prices, or modify July when August is missing.
+- The reader is explicitly told that header OHLC describes ONE candle, not
+  the whole month, and not to infer exact dates from image spacing.
+- Existing completed-period exclusion, shared Fib-band limits and summary-only
+  diagnostic mode are retained. No disputed instrument prices are hardcoded.
+- Explicitly unverified entry/frame evidence also fails strict regression checks.
+
+WHAT THIS DOES NOT CLAIM
+This is an accuracy/verification fix, not a replacement broker feed. Provider
+symbol coverage and broker-versus-provider price equivalence remain unresolved
+where the existing feed cannot supply matching data. Missing authoritative data
+will produce Needs review and no selected entries, not fabricated correct prices.
+Source-candle containment is an integrity check, not proof of complete broker
+history. Screenshots alone cannot certify exact historical OHLC.
+No live model/provider run was performed and no paid AI calls were used here.
+
+USA500 EXPECTATION
+Re-evaluate June low and April high near 38.2, January high near 50, and March
+high near 61.8 using verified candle prices. July low must independently pass
+the existing capped boundary allowance; it must not be merged into a invented
+zone to rescue it. The expected sequence is not hardcoded into the selector.
+
+TEST
+npm run check
+npm run test:benchmarks
+The package adds behavioral tests for provenance, date ownership, range
+integrity, current-period isolation and the discussed Fib-boundary cases.
+
+NEXT CHECK
+After Render deploys, verify the build ID above in Export JSON. Re-run the same
+five charts in credit-saving automatic mode and send the batch summary + JSON.
+Do not save disputed rows as strict benchmarks. Exact missing monthly values
+need a matching broker OHLC feed/export or independently verified cursor data.

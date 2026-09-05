@@ -12,6 +12,9 @@ const exportButton = document.querySelector("#exportButton");
 const promoteButton = document.querySelector("#promoteButton");
 const runStatus = document.querySelector("#runStatus");
 const adminKey = document.querySelector("#adminKey");
+const batchOverview = document.querySelector("#batchOverview");
+const diagnosticSummaryOnly = document.querySelector("#diagnosticSummaryOnly");
+const diagnosticOption = document.querySelector("#diagnosticOption");
 let files = [];
 let lastRun = null;
 let benchmarkMode = "automatic";
@@ -100,6 +103,7 @@ function setMode(mode) {
     : "Run strict benchmarks";
   saveButton.hidden = benchmarkMode !== "strict";
   promoteButton.hidden = true;
+  diagnosticOption.hidden = benchmarkMode !== "automatic";
   resultsPanel.hidden = true;
 }
 
@@ -151,6 +155,8 @@ function collectCases() {
   return Array.from(rows.querySelectorAll("tr")).map((row, index) => ({
     mode: benchmarkMode,
     autoDetectContext: benchmarkMode === "automatic",
+    diagnosticSummaryOnly:
+      benchmarkMode === "automatic" && diagnosticSummaryOnly.checked,
     fileIndex: index,
     label: field(row, "label").value,
     instrument: field(row, "instrument").value,
@@ -221,18 +227,100 @@ function structuralCandidateKey(candidate) {
   return [type, Number.isFinite(low) ? low : "", Number.isFinite(high) ? high : "", Number.isFinite(center) ? center : ""].join(":");
 }
 
+function compactNumber(value, precisionSeed) {
+  if (value === null || value === undefined || value === "") return "—";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  const decimals = Math.min(6, Math.max(2, String(precisionSeed ?? value).split(".")[1]?.length || 2));
+  return number.toFixed(decimals);
+}
+
+function renderBatchOverview(run) {
+  const rows = run.results.map((item) => {
+    const analysis = item.analysis || {};
+    const facts = analysis.analysisFacts || {};
+    const diagnostics = facts.selectorDiagnostics || {};
+    const audit = diagnostics.transparencyAudit || {};
+    const allPeriods = Array.isArray(audit.periodStructureAudit) ? audit.periodStructureAudit : [];
+    const periods = allPeriods.filter(period => period.highVerified === true && period.lowVerified === true);
+    const entries = Array.isArray(diagnostics.selectedEntries) ? diagnostics.selectedEntries : [];
+    const fib = diagnostics.fibonacci || {};
+    const biasCode = String(analysis.csaDirectionalBias?.biasCode || "").toLowerCase();
+    const provisional = analysis.csaDirectionalBias?.provisional === true || audit.fibonacciAudit?.verified === false;
+    const structuralBias = ["bullish", "bearish", "range"].includes(biasCode) ? `${biasCode}${provisional ? " (provisional)" : ""}` : "unverified";
+    const headlineBias = String(facts.direction || item.validation?.direction || "unknown").toLowerCase();
+    const phase = analysis.csaDirectionalBias?.cutoffPhase?.phase || facts.historicalPhase?.phase || "not resolved";
+    const seed = entries[0]?.levelText || fib.swingHigh || facts.currentPrice;
+    const range = Number(fib.swingHigh) - Number(fib.swingLow);
+    const fibLevels = Number.isFinite(range) && range > 0
+      ? biasCode === "bearish"
+        ? [Number(fib.swingLow) + range * .382, Number(fib.swingLow) + range * .5, Number(fib.swingLow) + range * .618]
+        : [Number(fib.swingHigh) - range * .382, Number(fib.swingHigh) - range * .5, Number(fib.swingHigh) - range * .618]
+      : [];
+    const referencePeriods = audit.inventoryAuthority?.completedPeriodReferences?.periods || [];
+    const periodText = periods.length
+      ? periods.map((period) => {
+          const highStatus = period.highVerified === false ? "estimate—not selectable" : period.highRole || "verified extreme";
+          const lowStatus = period.lowVerified === false ? "estimate—not selectable" : period.lowRole || "verified extreme";
+          return `${period.period}: H ${compactNumber(period.high, seed)} (${highStatus}), L ${compactNumber(period.low, seed)} (${lowStatus})`;
+        }).join(" · ")
+      : referencePeriods.length ? `Provider reference only—not chart-verified: ${referencePeriods.map(p => `${p.period}: H ${compactNumber(p.high, seed)}, L ${compactNumber(p.low, seed)}`).join(" · ")}`
+      : allPeriods.length ? "Period prices unverified — estimates retained in Export JSON" : "No verified period inventory";
+    const entryText = entries.length
+      ? entries.map((entry, index) => {
+          const match = Array.isArray(entry.fibonacciMatches) ? entry.fibonacciMatches[0] : null;
+          const fibText = match ? `; ${match.label || "Fib"} @ ${compactNumber(match.price, seed)}` : "";
+          const zoneLow = Number(entry.zoneLow);
+          const zoneHigh = Number(entry.zoneHigh);
+          const hasZoneRange = Number.isFinite(zoneLow) && Number.isFinite(zoneHigh) && zoneHigh > zoneLow;
+          const displayedPrice = hasZoneRange
+            ? `${compactNumber(zoneLow, seed)}–${compactNumber(zoneHigh, seed)}`
+            : compactNumber(entry.resolvedEntryPrice ?? entry.authoritativeCenter, seed);
+          return `E${index + 1} ${entry.sourceKind || entry.sourcePeriod || "—"} ${entry.areaType || "area"} ${displayedPrice}${fibText}`;
+        }).join(" · ")
+      : "No selected entry";
+    const flags = [];
+    const mappingIssues = audit.inventoryAuthority?.periodMappingAudit?.rejected || [];
+    if (mappingIssues.length) flags.push(`${mappingIssues.length} period mapping/alignment checks unresolved`);
+    const dataMatch = audit.inventoryAuthority?.dataMatch;
+    const providerFailure = audit.inventoryAuthority?.providerFailure;
+    if (dataMatch?.status === "matched_reference") flags.push("Provider reference; not broker-exact");
+    if (providerFailure) flags.push(`Data: ${providerFailure.category} — ${providerFailure.reason}`);
+    if (audit.fibonacciAudit?.verified === false) flags.push("Fib frame unverified—no entries permitted");
+    if (structuralBias === "unverified") flags.push("bias unverified");
+    if (structuralBias !== "unverified" && headlineBias !== biasCode) flags.push(`headline says ${headlineBias}`);
+    if (!(Number(fib.swingHigh) > Number(fib.swingLow))) flags.push("Fib frame missing");
+    if (item.status !== "passed") flags.push("validation review");
+    const conflictCount = Array.isArray(audit.provenanceConflicts)
+      ? audit.provenanceConflicts.filter((conflict) => conflict?.requiresReview === true).length
+      : 0;
+    if (conflictCount) flags.push(`${conflictCount} price conflict${conflictCount === 1 ? "" : "s"}`);
+    return `<tr class="${flags.length ? "overview-review" : "overview-clear"}"><th>${escapeHtml(`${facts.instrument || analysis.detectedPair || "Unknown"} ${facts.timeframe || analysis.detectedTimeframe || ""}`)}</th><td><b>${escapeHtml(structuralBias)}</b><small>${escapeHtml(String(phase).replaceAll("_", " "))}</small></td><td>${escapeHtml(compactNumber(facts.currentPrice, seed))}</td><td>${escapeHtml(Number(fib.swingHigh) > Number(fib.swingLow) ? `H ${compactNumber(fib.swingHigh, seed)} / L ${compactNumber(fib.swingLow, seed)}` : "Not verified")}<small>${escapeHtml(fibLevels.length ? `38.2 ${compactNumber(fibLevels[0], seed)} · 50 ${compactNumber(fibLevels[1], seed)} · 61.8 ${compactNumber(fibLevels[2], seed)}` : "")}</small></td><td class="overview-periods">${escapeHtml(periodText)}</td><td>${escapeHtml(entryText)}</td><td>${escapeHtml(flags.length ? flags.join("; ") : "clear")}</td></tr>`;
+  }).join("");
+  const guidance = run.diagnosticSummaryOnly
+    ? "Credit-saving view: complete troubleshooting data remains available through Export JSON."
+    : "Structural bias and current phase are separated. Expand a chart below only when a row needs investigation.";
+  batchOverview.innerHTML = `<div class="overview-heading"><div><h3>Batch diagnosis summary</h3><p>${escapeHtml(guidance)}</p></div><label><input id="reviewOnly" type="checkbox"> Show review rows only</label></div><div class="audit-table-wrap"><table class="overview-table"><thead><tr><th>Chart</th><th>Structural bias / phase</th><th>Current</th><th>Fib frame / levels</th><th>Period highs & lows</th><th>Entries</th><th>Review flags</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  batchOverview.querySelector("#reviewOnly")?.addEventListener("change", (event) => {
+    batchOverview.querySelectorAll("tbody tr").forEach((row) => {
+      row.hidden = event.target.checked && !row.classList.contains("overview-review");
+    });
+  });
+}
+
 function renderRun(run) {
   resultsPanel.hidden = false;
   const automatic = run.mode === "automatic" || run.results.every((item) => item.mode === "automatic");
   document.querySelector("#resultsHeading").textContent = automatic ? "3. Automatic batch report" : "3. Regression report";
   document.querySelector("#summaryText").textContent = automatic
-    ? `Analysed ${run.summary.total} chart${run.summary.total === 1 ? "" : "s"} independently in ${(run.summary.durationMs / 1000).toFixed(1)} seconds. Verified charts are compared with their saved accuracy baselines; new charts are labelled rule-valid only and still require human review.`
+    ? `Analysed ${run.summary.total} chart${run.summary.total === 1 ? "" : "s"} independently in ${(run.summary.durationMs / 1000).toFixed(1)} seconds. ${run.diagnosticSummaryOnly ? "Credit-saving diagnostic mode skipped full AI coaching and retained the structural audit." : "Full feedback mode generated the customer-facing review."} Verified charts are compared with saved accuracy baselines; new charts still require human review.`
     : `Completed ${new Date(run.runAt).toLocaleString()} in ${(run.summary.durationMs / 1000).toFixed(1)} seconds.`;
   document.querySelector("#summaryCards").innerHTML = [
     summaryCard("Total", run.summary.total), summaryCard(automatic ? "Accepted" : "Passed", run.summary.passed),
     summaryCard(automatic ? "Needs review" : "Failed", run.summary.failed), summaryCard("Errors", run.summary.errors),
   ].join("");
-  document.querySelector("#resultCards").innerHTML = run.results.map((item) => {
+  renderBatchOverview(run);
+  document.querySelector("#resultCards").innerHTML = run.diagnosticSummaryOnly ? "" : run.results.map((item) => {
     const checks = item.validation?.checks || [];
     const failures = checks.filter((check) => !check.passed);
     const headline = item.status === "error"
@@ -245,6 +333,7 @@ function renderRun(run) {
     const selectorDiagnostics = item.analysis?.analysisFacts?.selectorDiagnostics || {};
     const diagnosticEntries = selectorDiagnostics.selectedEntries || [];
     const fibonacci = selectorDiagnostics.fibonacci || {};
+    const transparencyAudit = selectorDiagnostics.transparencyAudit || {};
     const structuralCandidates = (() => {
       const candidates = Array.isArray(selectorDiagnostics.structuralCandidates)
         ? selectorDiagnostics.structuralCandidates
@@ -295,8 +384,29 @@ function renderRun(run) {
       }
       const seed = periodInventory.find((period) => Number.isFinite(Number(period?.high)));
       const precision = Math.min(6, Math.max(2, String(seed?.high || "").split(".")[1]?.length || 2));
-      const rows = periodInventory.map((period, index) => `<tr><th>${escapeHtml(period.periodLabel || `Period ${index + 1}`)}</th><td>${escapeHtml(period.sourceUnit || "")}</td><td>${Number(period.high).toFixed(precision)}</td><td>${Number(period.low).toFixed(precision)}</td></tr>`).join("");
-      return `<details class="period-audit" open><summary>D1/W1 candle high-low inventory — ${periodInventory.length} period${periodInventory.length === 1 ? "" : "s"}</summary><table class="period-inventory"><thead><tr><th>Period</th><th>Source</th><th>High</th><th>Low</th></tr></thead><tbody>${rows}</tbody></table></details>`;
+      const auditedRows = Array.isArray(transparencyAudit.periodStructureAudit)
+        ? transparencyAudit.periodStructureAudit
+        : [];
+      const authority = transparencyAudit.inventoryAuthority || {};
+      const endpoint = authority.finalVisibleCandle || {};
+      const authorityText = authority.selectedSource || "not reported";
+      const endpointText = [endpoint.high, endpoint.low, endpoint.close].every((value) => Number.isFinite(Number(value)))
+        ? `Final candle header: high ${Number(endpoint.high).toFixed(precision)}, low ${Number(endpoint.low).toFixed(precision)}, close ${Number(endpoint.close).toFixed(precision)}.`
+        : "Final candle header OHLC was not fully readable.";
+      const rows = periodInventory.map((period, index) => {
+        const label = period.periodLabel || `Period ${index + 1}`;
+        const audit = auditedRows.find((row) => String(row?.period) === String(label)) || {};
+        const highRole = audit.highOriginalRole && audit.highRole && audit.highOriginalRole !== audit.highRole
+          ? `${audit.highOriginalRole} → ${audit.highRole}`
+          : audit.highRole || "not classified";
+        const lowRole = audit.lowOriginalRole && audit.lowRole && audit.lowOriginalRole !== audit.lowRole
+          ? `${audit.lowOriginalRole} → ${audit.lowRole}`
+          : audit.lowRole || "not classified";
+        const auditedHighRole = audit.highVerified === false ? "estimate—not selectable" : highRole;
+        const auditedLowRole = audit.lowVerified === false ? "estimate—not selectable" : lowRole;
+        return `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(period.date || "")}</td><td>${Number(period.high).toFixed(precision)}</td><td>${escapeHtml(auditedHighRole)}</td><td>${Number(period.low).toFixed(precision)}</td><td>${escapeHtml(auditedLowRole)}</td><td>${escapeHtml(audit.source || period.source || period.sourceUnit || "")}</td></tr>`;
+      }).join("");
+      return `<details class="period-audit" open><summary>D1/W1/MN candle high-low and structure inventory — ${periodInventory.length} period${periodInventory.length === 1 ? "" : "s"}</summary><p>Each high and low remains tied to its own higher-timeframe candle and structural classification.</p><p><b>Inventory authority:</b> ${escapeHtml(authorityText)} · chart verified: ${authority.focusedInventoryVerified === true ? "yes" : "no"} · market verified: ${authority.marketInventoryVerified === true ? "yes" : "no"}. ${escapeHtml(endpointText)}</p><div class="audit-table-wrap"><table class="period-inventory"><thead><tr><th>Period</th><th>Date</th><th>High</th><th>High role</th><th>Low</th><th>Low role</th><th>Price source</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
     })();
     const fibLabelForEntry = (entry, index) => {
       const diagnostic = diagnosticEntries.find((candidate) => Number(candidate?.executionOrder) === index + 1) || {};
@@ -331,17 +441,66 @@ function renderRun(run) {
         ? [["38.2%", low + range * 0.382], ["50%", low + range * 0.5], ["61.8%", low + range * 0.618]]
         : [["38.2%", high - range * 0.382], ["50%", high - range * 0.5], ["61.8%", high - range * 0.618]];
       const precision = Math.min(6, Math.max(2, String(entries[0]?.levelText || high).split(".")[1]?.length || 2));
-      const candidates = structuralCandidates;
-      const selectedPrices = new Set(diagnosticEntries.map((candidate) => Number(candidate?.authoritativeCenter ?? candidate?.resolvedEntryPrice)).filter(Number.isFinite));
-      const candidateRows = candidates.length
-        ? candidates.map((candidate) => {
-            const price = Number(candidate?.price ?? candidate?.authoritativeCenter);
-            const state = selectedPrices.has(price) ? "selected" : "not selected";
-            const source = [candidate?.sourceDay, candidate?.sourceKind, candidate?.sourceDate].filter(Boolean).join(" · ");
-            return `<li>${escapeHtml(source || "source not read")} — ${escapeHtml(String(candidate?.areaType || "structure"))} ${Number.isFinite(price) ? price.toFixed(precision) : "unreadable"} — ${state}</li>`;
+      const auditedCandidates = Array.isArray(transparencyAudit.candidateEvaluationAudit)
+        ? transparencyAudit.candidateEvaluationAudit
+        : [];
+      const candidateRows = auditedCandidates.length
+        ? auditedCandidates.map((candidate) => {
+            const price = Number(candidate?.price);
+            const fibPrice = Number(candidate?.nearestFibPrice);
+            const fibRatio = Number(candidate?.nearestFibRatio);
+            const nearestFib = Number.isFinite(fibRatio) && Number.isFinite(fibPrice)
+              ? `${fibRatio === 0.5 ? "50.0" : (fibRatio * 100).toFixed(1)}% @ ${fibPrice.toFixed(precision)}`
+              : "none";
+            const result = candidate?.qualified === true
+              ? "QUALIFIED"
+              : `REJECTED: ${(candidate?.rejectionReasons || []).join("; ") || "failed selection gate"}`;
+            return `<tr><td>${escapeHtml(candidate?.period || "—")}</td><td>${escapeHtml(candidate?.extreme || "—")}</td><td>${escapeHtml(candidate?.structuralRole || "structure")}</td><td>${Number.isFinite(price) ? price.toFixed(precision) : "unreadable"}</td><td>${escapeHtml(nearestFib)}</td><td>${candidate?.insideAcceptedBand === true ? "yes" : "no"}</td><td>${escapeHtml(candidate?.provenance || "not verified")}</td><td class="${candidate?.qualified === true ? "audit-pass" : "audit-fail"}">${escapeHtml(result)}</td></tr>`;
           }).join("")
-        : "<li>No structural candidates were returned.</li>";
-      return `<details class="fib-audit"><summary>Fibonacci selection audit</summary><p>Frame: ${escapeHtml(String(fibonacci.source || "current period"))}; high ${high.toFixed(precision)}, low ${low.toFixed(precision)}.</p><p>Fib: ${levels.map(([label, price]) => `${label} ${price.toFixed(precision)}`).join(" · ")}</p><p><b>Every structural candidate</b></p><ul>${candidateRows}</ul></details>`;
+        : `<tr><td colspan="8">No evaluated structural candidates were returned.</td></tr>`;
+      const fibFrame = transparencyAudit.fibonacciAudit || {};
+      const bandLow = Number(fibFrame.acceptedBandLow);
+      const bandHigh = Number(fibFrame.acceptedBandHigh);
+      const bandText = Number.isFinite(bandLow) && Number.isFinite(bandHigh)
+        ? `${bandLow.toFixed(precision)}–${bandHigh.toFixed(precision)}`
+        : "not available";
+      return `<details class="fib-audit" open><summary>Fibonacci range and candidate selection audit</summary><p><b>Fib prices used:</b> high ${high.toFixed(precision)}, low ${low.toFixed(precision)} · source: ${escapeHtml(String(fibonacci.source || "current period"))}</p><p><b>Calculated retracement:</b> ${levels.map(([label, price]) => `${label} ${price.toFixed(precision)}`).join(" · ")} · accepted structure band ${escapeHtml(bandText)}</p><div class="audit-table-wrap"><table class="candidate-audit"><thead><tr><th>Period</th><th>Extreme</th><th>S/R or S/D</th><th>Price</th><th>Nearest Fib</th><th>Inside 38.2–61.8</th><th>Provenance</th><th>Decision</th></tr></thead><tbody>${candidateRows}</tbody></table></div></details>`;
+    })();
+    const entryDecisionAuditHtml = (() => {
+      const decisions = Array.isArray(transparencyAudit.entryDecisionAudit)
+        ? transparencyAudit.entryDecisionAudit
+        : [];
+      if (!decisions.length) return "";
+      const seed = decisions.find((decision) => Number.isFinite(Number(decision?.price)));
+      const precision = Math.min(6, Math.max(2, String(seed?.price || "").split(".")[1]?.length || 2));
+      const rows = decisions.map((decision) => {
+        if (decision?.selected !== true) {
+          return `<tr><th>Entry ${Number(decision?.entry || 0)}</th><td colspan="7">Not selected — ${escapeHtml(decision?.reason || "no qualifying area")}</td></tr>`;
+        }
+        const price = Number(decision.price);
+        const fibRatio = Number(decision.nearestFibRatio);
+        const fibPrice = Number(decision.nearestFibPrice);
+        const fibText = Number.isFinite(fibRatio) && Number.isFinite(fibPrice)
+          ? `${fibRatio === 0.5 ? "50.0" : (fibRatio * 100).toFixed(1)}% @ ${fibPrice.toFixed(precision)}`
+          : decision.confluenceRule || "inside accepted band";
+        return `<tr><th>Entry ${Number(decision.entry)}</th><td>${escapeHtml(decision.period || "—")}</td><td>${escapeHtml(decision.extreme || "—")}</td><td>${escapeHtml(decision.structuralRole || "—")}</td><td>${Number.isFinite(price) ? price.toFixed(precision) : "—"}</td><td>${escapeHtml(fibText)}</td><td>${escapeHtml(decision.confluenceRule || "")}</td><td>${escapeHtml(decision.provenance || "")}</td></tr>`;
+      }).join("");
+      return `<details class="entry-audit" open><summary>Entry 1–3 decision audit</summary><div class="audit-table-wrap"><table><thead><tr><th>Entry</th><th>Period</th><th>Extreme</th><th>Structural role</th><th>Price</th><th>Nearest Fib</th><th>Confluence rule</th><th>Price source</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+    })();
+    const provenanceConflictHtml = (() => {
+      const conflicts = Array.isArray(transparencyAudit.provenanceConflicts)
+        ? transparencyAudit.provenanceConflicts
+        : [];
+      if (!conflicts.length) return `<details class="provenance-audit"><summary>Price-source conflicts — none</summary><p>No conflicting or unverified structural price was found.</p></details>`;
+      const rows = conflicts.map((conflict) => {
+        const values = conflict.extreme === "count"
+          ? `chart ${conflict.chartCount}, market ${conflict.marketCount}`
+          : Number.isFinite(Number(conflict.chartPrice)) && Number.isFinite(Number(conflict.marketPrice))
+          ? `${conflict.extreme}: chart ${conflict.chartPrice}, market ${conflict.marketPrice}`
+          : String(conflict.claimedPrice ?? conflict.conflictingFrameworkPrice ?? "unknown price");
+        return `<li><b>${escapeHtml(conflict.period || conflict.claimedSource || "Unverified source")}</b> — ${escapeHtml(values)} — ${escapeHtml(conflict.resolution || "rejected")}</li>`;
+      }).join("");
+      return `<details class="provenance-audit" open><summary>Price-source conflicts — ${conflicts.length}</summary><p>These values were exposed instead of silently entering the selector.</p><ul>${rows}</ul></details>`;
     })();
     const fibFrameSummary = (() => {
       const high = Number(fibonacci.swingHigh);
@@ -364,7 +523,7 @@ function renderRun(run) {
     const baselineHtml = item.verifiedBaselineId
       ? `<p class="baseline-note">Compared with verified baseline ${escapeHtml(item.verifiedBaselineId)}.</p>`
       : `<p class="baseline-note">Rule checks only; accuracy has not yet been verified.</p>`;
-    return `<article class="result ${item.status}"><div class="result-top"><div><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.fileName)} · ${(item.durationMs / 1000).toFixed(1)}s</p></div><span class="badge">${escapeHtml(statusLabel)}</span></div><p>${headline}</p>${baselineHtml}${findingsHtml}${periodInventoryAuditHtml}${structureAuditHtml}${fibAuditHtml}${checkHtml ? `<ul class="checks">${checkHtml}</ul>` : ""}<details><summary>Full analysis response</summary><pre>${escapeHtml(JSON.stringify(item.analysis, null, 2))}</pre></details></article>`;
+    return `<article class="result ${item.status}"><div class="result-top"><div><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.fileName)} · ${(item.durationMs / 1000).toFixed(1)}s</p></div><span class="badge">${escapeHtml(statusLabel)}</span></div><p>${headline}</p>${baselineHtml}${findingsHtml}${periodInventoryAuditHtml}${structureAuditHtml}${fibAuditHtml}${entryDecisionAuditHtml}${provenanceConflictHtml}${checkHtml ? `<ul class="checks">${checkHtml}</ul>` : ""}<details><summary>Full analysis response</summary><pre>${escapeHtml(JSON.stringify(item.analysis, null, 2))}</pre></details></article>`;
   }).join("");
   promoteButton.hidden = !(
     automatic &&

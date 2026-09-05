@@ -1,0 +1,7 @@
+CSA Benchmark v2.65
+
+Automatic credit-saving diagnostic runs now display only the compact batch diagnosis summary.
+Full troubleshooting data remains available through Export JSON.
+Untick Credit-saving diagnostic only when full per-chart customer-facing reviews are required.
+
+The reduced backend vision pipeline introduced in v2.64 remains active and production analysis is unchanged.

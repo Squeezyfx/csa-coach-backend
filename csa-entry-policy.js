@@ -754,6 +754,9 @@ export function findNearestAllowedFibonacciMatch({
   const firstRetracementPrice = direction === "bearish"
     ? low + impulseRange * 0.382
     : high - impulseRange * 0.382;
+  const finalRetracementPrice = direction === "bearish"
+    ? low + impulseRange * 0.618
+    : high - impulseRange * 0.618;
   // Preserve a price printed to the chart's available precision. For example,
   // 53524.20 and a calculated 53524.1998 are the same visible 38.2% level;
   // an IEEE floating-point remainder must not make it look shallow.
@@ -762,14 +765,23 @@ export function findNearestAllowedFibonacciMatch({
     1e-10
   );
 
-  // A proximity allowance may absorb broker/zone-boundary variation, but it
-  // must never pull an entirely shallow candidate across the 38.2 threshold.
-  // Bearish candidates below 38.2 and bullish candidates above 38.2 remain
-  // structural references rather than entries.
-  if (
-    (direction === "bearish" && upperBoundary < firstRetracementPrice - boundaryRoundingEpsilon) ||
-    (direction === "bullish" && lowerBoundary > firstRetracementPrice + boundaryRoundingEpsilon)
-  ) {
+  const acceptedBandLow = Math.min(firstRetracementPrice, finalRetracementPrice);
+  const acceptedBandHigh = Math.max(firstRetracementPrice, finalRetracementPrice);
+
+  // Fibonacci qualifies independently proven structure anywhere inside the
+  // complete 38.2%-61.8% retracement band. It does not require the structural
+  // price to sit within a small arbitrary distance of one exact Fib line.
+  // Only a tightly capped boundary allowance may absorb broker/zone rounding;
+  // the caller's broader proximity tolerance cannot drag remote structure
+  // into the band.
+  const boundaryAllowance = Math.max(
+    boundaryRoundingEpsilon,
+    Math.min(allowedTolerance, impulseRange * 0.01)
+  );
+  const intersectsAcceptedBand =
+    upperBoundary >= acceptedBandLow - boundaryAllowance &&
+    lowerBoundary <= acceptedBandHigh + boundaryAllowance;
+  if (!intersectsAcceptedBand) {
     return null;
   }
 
@@ -788,19 +800,69 @@ export function findNearestAllowedFibonacciMatch({
     })
     .sort((a, b) => a.distance - b.distance || a.ratio - b.ratio);
 
-  return matches[0]?.distance <= allowedTolerance ? matches[0] : null;
+  return matches[0]
+    ? {
+        ...matches[0],
+        withinRetracementBand: true,
+        acceptedBandLow,
+        acceptedBandHigh,
+        boundaryAllowance,
+        tolerance: allowedTolerance,
+      }
+    : null;
 }
 
 export function mergeFocusedSupplyDemandInventory(
   primaryFallback = {},
   focusedFallback = {}
 ) {
-  if (primaryFallback?.usable !== true) return focusedFallback;
+  const focusedPeriodInventory = Array.isArray(focusedFallback?.periodInventory)
+    ? focusedFallback.periodInventory
+    : Array.isArray(focusedFallback?.periodDayInventory)
+    ? focusedFallback.periodDayInventory
+    : [];
+  const primaryPeriodInventory = Array.isArray(primaryFallback?.periodInventory)
+    ? primaryFallback.periodInventory
+    : Array.isArray(primaryFallback?.periodDayInventory)
+    ? primaryFallback.periodDayInventory
+    : [];
+  const authoritativePeriodInventory = focusedPeriodInventory.length
+    ? focusedPeriodInventory
+    : primaryPeriodInventory;
+  const focusedFrameMetadata = {
+    periodInventory: authoritativePeriodInventory,
+    periodDayInventory: authoritativePeriodInventory,
+    currentPeriodHigh:
+      focusedFallback?.currentPeriodHigh ?? focusedFallback?.currentWeekHigh ??
+      primaryFallback?.currentPeriodHigh ?? primaryFallback?.currentWeekHigh ?? null,
+    currentPeriodLow:
+      focusedFallback?.currentPeriodLow ?? focusedFallback?.currentWeekLow ??
+      primaryFallback?.currentPeriodLow ?? primaryFallback?.currentWeekLow ?? null,
+    currentWeekHigh:
+      focusedFallback?.currentPeriodHigh ?? focusedFallback?.currentWeekHigh ??
+      primaryFallback?.currentPeriodHigh ?? primaryFallback?.currentWeekHigh ?? null,
+    currentWeekLow:
+      focusedFallback?.currentPeriodLow ?? focusedFallback?.currentWeekLow ??
+      primaryFallback?.currentPeriodLow ?? primaryFallback?.currentWeekLow ?? null,
+    currentPeriodOpen:
+      focusedFallback?.currentPeriodOpen ?? primaryFallback?.currentPeriodOpen ?? null,
+    currentPeriodClose:
+      focusedFallback?.currentPeriodClose ?? primaryFallback?.currentPeriodClose ?? null,
+    currentPeriodDirection:
+      focusedFallback?.currentPeriodDirection ?? primaryFallback?.currentPeriodDirection ?? null,
+    currentPeriodFrameVerified:
+      focusedFallback?.currentPeriodFrameVerified === true ||
+      primaryFallback?.currentPeriodFrameVerified === true,
+  };
+
+  if (primaryFallback?.usable !== true) {
+    return { ...focusedFallback, ...focusedFrameMetadata };
+  }
   if (
     focusedFallback?.usable !== true ||
     focusedFallback?.direction !== primaryFallback?.direction
   ) {
-    return primaryFallback;
+    return { ...primaryFallback, ...focusedFrameMetadata };
   }
 
   const primaryCandidates = Array.isArray(primaryFallback?.candidates)
@@ -833,9 +895,272 @@ export function mergeFocusedSupplyDemandInventory(
 
   return {
     ...primaryFallback,
+    ...focusedFrameMetadata,
     candidates: merged,
     focusedSupplyDemandInventoryMerged: merged.length > primaryCandidates.length,
   };
+}
+
+function expectedFrameworkInventoryCount(timeframe = "", latestVisibleDate = "") {
+  const tf = String(timeframe || "").toUpperCase();
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(latestVisibleDate || ""))
+    ? new Date(`${latestVisibleDate}T00:00:00.000Z`)
+    : null;
+  if (!date || Number.isNaN(date.getTime())) return null;
+
+  if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) {
+    const weekday = date.getUTCDay();
+    return weekday >= 1 && weekday <= 5 ? weekday : 5;
+  }
+
+  if (tf === "H4") {
+    const mondayWeeks = new Set();
+    for (let day = 1; day <= date.getUTCDate(); day += 1) {
+      const cursor = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), day));
+      const weekday = cursor.getUTCDay();
+      if (weekday === 0 || weekday === 6) continue;
+      const monday = new Date(cursor);
+      monday.setUTCDate(cursor.getUTCDate() - (weekday - 1));
+      mondayWeeks.add(monday.toISOString().slice(0, 10));
+    }
+    return mondayWeeks.size;
+  }
+
+  if (tf === "D1") {
+    return date.getUTCMonth() + 1;
+  }
+
+  if (tf === "W1") {
+    return Math.floor(date.getUTCMonth() / 3) + 1;
+  }
+
+  return null;
+}
+
+export function expectedFrameworkPeriodDates(timeframe = "", latestVisibleDate = "") {
+  const tf = String(timeframe || "").toUpperCase();
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(latestVisibleDate || ""))
+    ? new Date(`${latestVisibleDate}T00:00:00.000Z`)
+    : null;
+  if (!date || Number.isNaN(date.getTime())) return [];
+
+  if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) {
+    const weekday = date.getUTCDay();
+    const monday = new Date(date);
+    monday.setUTCDate(date.getUTCDate() - Math.max(0, weekday - 1));
+    const count = weekday >= 1 && weekday <= 5 ? weekday : 5;
+    return Array.from({ length: count }, (_, index) => {
+      const cursor = new Date(monday);
+      cursor.setUTCDate(monday.getUTCDate() + index);
+      return cursor.toISOString().slice(0, 10);
+    });
+  }
+
+  if (tf === "H4") {
+    const dates = [];
+    for (let day = 1; day <= date.getUTCDate(); day += 1) {
+      const cursor = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), day));
+      if (cursor.getUTCDay() === 1) dates.push(cursor.toISOString().slice(0, 10));
+    }
+    return dates;
+  }
+
+  if (tf === "D1") {
+    return Array.from({ length: date.getUTCMonth() + 1 }, (_, month) =>
+      new Date(Date.UTC(date.getUTCFullYear(), month, 1)).toISOString().slice(0, 10)
+    );
+  }
+
+  if (tf === "W1") {
+    return Array.from({ length: Math.floor(date.getUTCMonth() / 3) + 1 }, (_, quarter) =>
+      new Date(Date.UTC(date.getUTCFullYear(), quarter * 3, 1)).toISOString().slice(0, 10)
+    );
+  }
+  return [];
+}
+
+export function reconcileFinalPeriodWithVisibleCandle({
+  periodInventory = [],
+  timeframe = "",
+  visibleDate = "",
+  visibleOpen = null,
+  visibleHigh = null,
+  visibleLow = null,
+  visibleClose = null,
+} = {}) {
+  const periods = (Array.isArray(periodInventory) ? periodInventory : [])
+    .map((period) => ({ ...period }));
+  if (!periods.length) return periods;
+
+  if (visibleDate && timeframe) {
+    const expected = expectedFrameworkPeriodDates(timeframe, String(visibleDate).slice(0, 10));
+    if (!expected.length || periods.at(-1)?.date !== expected.at(-1)) return periods;
+  }
+
+  const high = Number(visibleHigh);
+  const low = Number(visibleLow);
+  const open = Number(visibleOpen);
+  const close = Number(visibleClose);
+  if (!Number.isFinite(high) || !Number.isFinite(low) || high <= 0 || low <= 0 || high < low) {
+    return periods;
+  }
+
+  const index = periods.length - 1;
+  const finalPeriod = periods[index];
+  const periodHigh = Number(finalPeriod?.high);
+  const periodLow = Number(finalPeriod?.low);
+  periods[index] = {
+    ...finalPeriod,
+    // A final candle cannot establish missing full-period extremes or its open.
+    high: Number.isFinite(periodHigh) && periodHigh > 0 ? Math.max(periodHigh, high) : null,
+    low: Number.isFinite(periodLow) && periodLow > 0 ? Math.min(periodLow, low) : null,
+    open: Number.isFinite(Number(finalPeriod?.open)) && Number(finalPeriod.open) > 0
+      ? Number(finalPeriod.open)
+      : null,
+    close: Number.isFinite(close) && close > 0 ? close : finalPeriod?.close ?? null,
+    finalVisibleCandleReconciled: true,
+    finalVisibleCandleHigh: high,
+    finalVisibleCandleLow: low,
+    finalVisibleCandleClose: Number.isFinite(close) ? close : null,
+    source: `${String(finalPeriod?.source || "period_inventory")}+exact_visible_final_candle`,
+  };
+  return periods;
+}
+
+export function deriveVerifiedPeriodFrameFromInventory({
+  timeframe = "",
+  latestVisibleDate = "",
+  periodInventory = [],
+} = {}) {
+  const expectedCount = expectedFrameworkInventoryCount(timeframe, latestVisibleDate);
+  const expectedDates = expectedFrameworkPeriodDates(timeframe, latestVisibleDate);
+  const validPeriods = (Array.isArray(periodInventory) ? periodInventory : [])
+    .map((period) => ({
+      ...period,
+      high: Number(period?.high),
+      low: Number(period?.low),
+    }))
+    .filter((period) =>
+      Number.isFinite(period.high) &&
+      Number.isFinite(period.low) &&
+      period.low > 0 &&
+      period.high > period.low
+    );
+
+  const returnedDates = validPeriods.slice(0, expectedCount || 0).map((period) => period?.date || null);
+  const periodDateSequenceVerified =
+    expectedDates.length > 0 &&
+    returnedDates.length === expectedDates.length &&
+    expectedDates.every((date, index) => returnedDates[index] === date);
+
+  if (!expectedCount || validPeriods.length !== expectedCount || !periodDateSequenceVerified) {
+    return {
+      currentPeriodFrameVerified: false,
+      currentPeriodHigh: null,
+      currentPeriodLow: null,
+      expectedCount,
+      returnedCount: validPeriods.length,
+      expectedDates,
+      returnedDates,
+      periodDateSequenceVerified,
+    };
+  }
+
+  const authoritativePeriods = validPeriods.slice(0, expectedCount);
+  return {
+    currentPeriodFrameVerified: true,
+    currentPeriodHigh: Math.max(...authoritativePeriods.map((period) => period.high)),
+    currentPeriodLow: Math.min(...authoritativePeriods.map((period) => period.low)),
+    expectedCount,
+    returnedCount: validPeriods.length,
+    expectedDates,
+    returnedDates,
+    periodDateSequenceVerified,
+    source: "complete_framework_candle_inventory",
+  };
+}
+
+function dateOnlyFromCandle(value = "") {
+  const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : null;
+}
+
+function mondayForTradingCandle(date) {
+  const normalized = new Date(date);
+  if (Number.isNaN(normalized.getTime())) return null;
+  const weekday = normalized.getUTCDay();
+  // CSA weekly inventory is Monday-Friday only. Weekend candles must never be
+  // shifted into the following Monday because that contaminates the new week.
+  if (weekday === 0 || weekday === 6) return null;
+  const offset = 1 - weekday;
+  normalized.setUTCDate(normalized.getUTCDate() + offset);
+  return normalized;
+}
+
+export function aggregateH4CandlesIntoWeeklyInventory({
+  candles = [],
+  cutoffDate = "",
+} = {}) {
+  const cutoff = /^\d{4}-\d{2}-\d{2}$/.test(String(cutoffDate || ""))
+    ? new Date(`${cutoffDate}T23:59:59.999Z`)
+    : null;
+  if (!cutoff || Number.isNaN(cutoff.getTime())) return [];
+
+  const cutoffYear = cutoff.getUTCFullYear();
+  const cutoffMonth = cutoff.getUTCMonth();
+  const grouped = new Map();
+
+  for (const candle of Array.isArray(candles) ? candles : []) {
+    const dateOnly = dateOnlyFromCandle(candle?.datetime);
+    if (!dateOnly) continue;
+    const candleDate = new Date(`${dateOnly}T00:00:00.000Z`);
+    const high = Number(candle?.high);
+    const low = Number(candle?.low);
+    const open = Number(candle?.open);
+    const close = Number(candle?.close);
+    if (
+      Number.isNaN(candleDate.getTime()) ||
+      candleDate > cutoff ||
+      candleDate.getUTCFullYear() !== cutoffYear ||
+      candleDate.getUTCMonth() !== cutoffMonth ||
+      !Number.isFinite(high) ||
+      !Number.isFinite(low) ||
+      high <= low
+    ) {
+      continue;
+    }
+
+    const monday = mondayForTradingCandle(candleDate);
+    if (!monday || monday > cutoff) continue;
+    const key = monday.toISOString().slice(0, 10);
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, {
+        date: key,
+        high,
+        low,
+        open: Number.isFinite(open) ? open : null,
+        close: Number.isFinite(close) ? close : null,
+        candleCount: 1,
+      });
+      continue;
+    }
+
+    existing.high = Math.max(existing.high, high);
+    existing.low = Math.min(existing.low, low);
+    if (Number.isFinite(close)) existing.close = close;
+    existing.candleCount += 1;
+  }
+
+  return [...grouped.values()]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((period, index) => ({
+      ...period,
+      periodLabel: `W${index + 1}`,
+      sourceUnit: "W1",
+      structures: [],
+      source: "deterministic_visible_H4_candle_aggregation",
+    }));
 }
 
 export function expandExactSupportResistanceBoundaries(candidates = []) {
@@ -897,6 +1222,8 @@ export function selectIndependentEntryAreas(candidates = [], direction = "range"
   // qualification or rely on a candidate-local Fibonacci calculation.
   const qualified = sequenceFibQualifiedAreas(candidates, direction)
     .filter((candidate) =>
+      candidate?.provenanceVerified !== false &&
+      !/unverified|estimated_period/.test(String(candidate?.priceSource || "")) &&
       candidate?.authoritativeFrameworkLevel === true &&
       candidate?.requiredFibConfluence === true &&
       Number(candidate?.structuralScore || 0) > 0 &&

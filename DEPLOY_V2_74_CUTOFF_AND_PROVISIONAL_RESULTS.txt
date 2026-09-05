@@ -1,0 +1,34 @@
+CSA benchmark v2.74 / engine 10.52.0
+Upload these files to the benchmark repository only. No deployment performed.
+Include market-data-matching.js and period-accuracy.js; preserve benchmark/.
+No environment or subscription changes required.
+
+Corrections:
+- Chart reader distinguishes an explicitly printed final-candle timestamp from
+  dates inferred from sparse axis labels and candle counting.
+- Date matching requires explicit high-confidence evidence for the cutoff date.
+- Inferred dates cannot trigger price-based date shifts or extra sync searches.
+- Price disagreement with an uncertain date is date_unverified, not proof of a
+  different broker feed. Comparisons remain in JSON for troubleshooting.
+- On a known date, uncertain candle completion and session alignment are
+  distinguished from confirmed OHLC mismatch. No wider tolerance was introduced.
+- Rejected provider references are rebuilt from a metadata allowlist, removing
+  old bias descriptions, prices, ranges and approved areas before further use.
+- Chart-only bias is low-confidence/provisional. Summary hides unverified period
+  estimates; the original diagnostic inventory remains in exported JSON.
+
+Limitations:
+This is a diagnostic/safety correction, not a new market-data source.
+It does not establish an exact timestamp when none is readable. It does not
+reconstruct intraday history or verify unknown broker session boundaries.
+A matched provider reference is still not broker-exact historical validation.
+Platinum subscription access remains blocked by the configured provider plan.
+DOGE may still need review; the fix does not force it to pass.
+No broker field was added. No paid AI/provider requests used in development.
+
+Validation: npm run check; npm run test:benchmarks.
+Tests include DOGE OHLC values from the supplied 2026-09-04 diagnostic export.
+
+Next: deploy to benchmark only. No need to rerun Platinum while access remains
+unchanged. One DOGE run can confirm provisional/uncertain-date reporting; save
+the summary and JSON. Do not save unverified outputs as strict price benchmarks.
