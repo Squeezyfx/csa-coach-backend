@@ -1,0 +1,16 @@
+CSA Benchmark v2.79.0
+Build: CSA-v4.62.0-chart-native-period-fallback
+
+When provider data is unavailable or does not align with the screenshot, a
+complete calendar-mapped chart inventory remains usable for provisional bias,
+current-period Fibonacci and Entry 1-3 analysis.
+
+Safety rules retained:
+- provider-verified inventory remains highest authority;
+- chart-derived prices remain provisional and require review;
+- incomplete or invalid calendar mapping is blocked;
+- the unfinished current framework period is excluded from structural entries;
+- provider disagreements remain visible in diagnostics;
+- H4/D1/W1 cannot fall through to a smaller local Fibonacci impulse.
+
+Verification: npm run check and all 191 benchmark tests passed.

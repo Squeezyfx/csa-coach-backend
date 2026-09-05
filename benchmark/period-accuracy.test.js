@@ -131,6 +131,24 @@ test("supply derived from an unverified period cannot bypass the selector", () =
   assert.equal(feb.qualified, false);
 });
 
+test("complete chart-only inventory can produce provisional Fib-qualified entries", () => {
+  const result = context.rankChartNativeFallbackAreas({
+    timeframe: "D1", direction: "bearish", currentPrice: 125,
+    visualReview: { chartNativeEntryFallback: {
+      usable: true, direction: "bearish", currentWeekHigh: 200, currentWeekLow: 100,
+      currentPeriodFrameVerified: false, currentPeriodFrameChartUsable: true,
+      inventoryAuthority: "complete_chart_only_period_inventory_provider_unavailable_or_unaligned_provisional",
+      periodInventory: periods,
+    } },
+  });
+  assert.ok(result.areas.some(item => item.sourcePeriod === "February"));
+  assert.ok(result.areas.every(item => item.provisional === true && item.requiresReview === true));
+  assert.ok(result.areas.every(item => item.provenanceVerified === false));
+  assert.equal(result.regressionDiagnostics.transparencyAudit.fibonacciAudit.verified, false);
+  assert.equal(result.regressionDiagnostics.transparencyAudit.fibonacciAudit.chartDerivedUsable, true);
+  assert.ok(result.areas.every(item => item.sourcePeriod !== "March"));
+});
+
 test("matching an estimated extreme cannot manufacture exact-line authority (Cocoa regression)", () => {
   const result = context.buildPeriodInventoryStructuralCandidates({ periodInventory: periods,
     inventoryProvenanceVerified: false, direction: "bullish", currentPrice: 190,

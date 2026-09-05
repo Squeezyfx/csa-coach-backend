@@ -115,9 +115,11 @@ test("full period inventory remains available for current Fib-frame verification
   assert.match(serverSource, /inProgressPeriodInventory: authoritativeInventory\.inProgressPeriods/);
 });
 
-test("provider-unavailable broker indices retain a complete chart inventory for review", () => {
-  assert.match(serverSource, /complete_chart_only_period_inventory_provider_unavailable_human_review/);
+test("provider-unavailable charts retain a complete provisional chart inventory", () => {
+  assert.match(serverSource, /complete_chart_only_period_inventory_provider_unavailable_or_unaligned_provisional/);
   assert.match(serverSource, /const chartOnlyInventoryVerified =/);
+  assert.match(serverSource, /const chartOnlyInventoryUsable =/);
+  assert.match(serverSource, /currentPeriodFrameChartUsable/);
   assert.match(serverSource, /Human verification remains required/);
   assert.match(serverSource, /chart_only_fixed_period_inventory_provider_unavailable/);
 });

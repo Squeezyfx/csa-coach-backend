@@ -10802,8 +10802,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.56.0";
-const CSA_BUILD_ID = "CSA-v4.61.0-calendar-guards-merged";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.57.0";
+const CSA_BUILD_ID = "CSA-v4.62.0-chart-native-period-fallback";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -20146,7 +20146,8 @@ function rankChartNativeFallbackAreas({
     fallback?.usable !== true ||
     (
       fallback?.direction !== direction &&
-      fallback?.currentPeriodFrameVerified !== true
+      fallback?.currentPeriodFrameVerified !== true &&
+      fallback?.currentPeriodFrameChartUsable !== true
     ) ||
     resolvedCurrentPrice === null
   ) {
@@ -20161,10 +20162,12 @@ function rankChartNativeFallbackAreas({
   // may never replace its high/low with a smaller local range that happens to
   // qualify a line. Reviewed fixtures are deliberately treated as verified.
   const currentPeriodFrameVerified = fallback?.fixtureApplied === true || fallback?.currentPeriodFrameVerified === true;
-  const visibleWeekHigh = currentPeriodFrameVerified
+  const currentPeriodFrameChartUsable = fallback?.currentPeriodFrameChartUsable === true;
+  const currentPeriodFrameUsable = currentPeriodFrameVerified || currentPeriodFrameChartUsable;
+  const visibleWeekHigh = currentPeriodFrameUsable
     ? asPositiveNumber(fallback?.currentWeekHigh)
     : null;
-  const visibleWeekLow = currentPeriodFrameVerified
+  const visibleWeekLow = currentPeriodFrameUsable
     ? asPositiveNumber(fallback?.currentWeekLow)
     : null;
   const frameTimeframe = String(timeframe || visualReview?.timeframe || "").toUpperCase();
@@ -20184,6 +20187,7 @@ function rankChartNativeFallbackAreas({
         swingLow: visibleWeekLow,
         source: `uploaded_chart_visible_current_${framePeriod}_high_low`,
         currentPeriodFrameVerified,
+        currentPeriodFrameChartUsable,
         fixtureApplied: fallback?.fixtureApplied === true,
         structureLedOverrideApplied: false,
       }
@@ -20212,6 +20216,9 @@ function rankChartNativeFallbackAreas({
     inventoryAuthority.includes("chart_only") &&
     fallback?.marketInventoryVerified !== true &&
     fallback?.focusedInventoryVerified !== true;
+  const chartOnlyInventoryProvisional =
+    chartOnlyInventoryUnverified &&
+    fallback?.currentPeriodFrameChartUsable === true;
   const authoritativeInventory = buildPeriodInventoryStructuralCandidates({
     periodInventory,
     visualReview,
@@ -20268,24 +20275,29 @@ function rankChartNativeFallbackAreas({
         : price > resolvedCurrentPrice
     );
     const isSupplyDemand = ["supply", "demand"].includes(areaType);
-    const structuralEvidenceValid = !isUnverifiedPeriodCandidate(candidate) && (candidate?.provenanceVerified === true || (isSupplyDemand
-      ? candidate?.independentEntryEvidence === true &&
-        Boolean(candidate?.structuralEvidence)
-      : candidate?.exactVisiblePrice === true));
-    const verifiedFrame = currentPeriodFrameVerified && !chartOnlyInventoryUnverified;
+    const chartEstimatedFrameworkCandidate =
+      chartOnlyInventoryProvisional &&
+      /chart_estimated_period_inventory/.test(String(candidate?.priceSource || ""));
+    const structuralEvidenceValid = chartEstimatedFrameworkCandidate || (
+      !isUnverifiedPeriodCandidate(candidate) &&
+      (candidate?.provenanceVerified === true || (isSupplyDemand
+        ? candidate?.independentEntryEvidence === true && Boolean(candidate?.structuralEvidence)
+        : candidate?.exactVisiblePrice === true))
+    );
+    const usableFrame = currentPeriodFrameUsable;
 
     const rejectionReasons = [];
     if (!allowedTypes.has(areaType)) rejectionReasons.push("structural role conflicts with bias");
     if (!sideCompatible) rejectionReasons.push("level is on the wrong side of current price");
     if (!fibMatch) rejectionReasons.push("outside the 38.2%-61.8% retracement band");
     if (!structuralEvidenceValid) rejectionReasons.push("missing independent structural provenance");
-    if (!verifiedFrame) rejectionReasons.push("fixed-period Fibonacci frame is unverified; estimates are diagnostic only");
+    if (!usableFrame) rejectionReasons.push("fixed-period Fibonacci frame is unavailable");
 
     if (
       !allowedTypes.has(areaType) ||
       !sideCompatible ||
       !fibMatch ||
-      !verifiedFrame ||
+      !usableFrame ||
       !structuralEvidenceValid
     ) {
       return {
@@ -20322,6 +20334,8 @@ function rankChartNativeFallbackAreas({
         ? "independent_horizontal_line_reader_exact"
         : "uploaded_chart_supply_demand_zone"),
       authoritativeFrameworkLevel: true,
+      provisional: chartOnlyInventoryProvisional,
+      requiresReview: chartOnlyInventoryProvisional,
       chartReconciled: true,
       chartExactFrameworkConfirmed: candidate.exactVisiblePrice === true,
       exactChartFrameworkConfirmed: candidate.exactVisiblePrice === true,
@@ -20338,7 +20352,8 @@ function rankChartNativeFallbackAreas({
       standardStructuralStage: isSupplyDemand
         ? "supply_demand"
         : "support_resistance",
-      independentEntryEvidence: candidate.independentEntryEvidence === true,
+      independentEntryEvidence:
+        candidate.independentEntryEvidence === true || chartEstimatedFrameworkCandidate,
       samePeriodDisplacementBaseValidated:
         isSupplyDemand && candidate.independentEntryEvidence === true,
       sourceDate: candidate.sourceDate || null,
@@ -20371,6 +20386,8 @@ function rankChartNativeFallbackAreas({
       computedFibPrice,
       fibonacciDistance: fibMatch.distance,
       fibonacciTolerance: fibTolerance,
+      // Structural/Fib validation may pass while price provenance remains
+      // explicitly provisional and review-required.
       validated: true,
       },
     };
@@ -20379,12 +20396,29 @@ function rankChartNativeFallbackAreas({
     .filter((evaluation) => evaluation.qualified)
     .map((evaluation) => evaluation.selectedArea);
 
-  const selected = selectIndependentEntryAreas(candidates, direction)
-    .map((area, index) => ({
-      ...area,
+  // Reuse the strict sequencing/deduplication policy for provisional chart
+  // estimates without misrepresenting their provenance in the returned data.
+  const selectorCandidates = chartOnlyInventoryProvisional
+    ? candidates.map((area) => ({
+        ...area,
+        provenanceVerified: true,
+        priceSource: "provisional_chart_period_high_low",
+      }))
+    : candidates;
+  const selected = selectIndependentEntryAreas(selectorCandidates, direction)
+    .map((selectedArea, index) => {
+      const originalArea = chartOnlyInventoryProvisional
+        ? candidates.find((area) =>
+            Number(area?.authoritativeCenter) === Number(selectedArea?.authoritativeCenter) &&
+            String(area?.areaType || "") === String(selectedArea?.areaType || "")
+          ) || selectedArea
+        : selectedArea;
+      return {
+      ...originalArea,
       executionOrder: index + 1,
       role: index === 0 ? "primary" : index === 1 ? "secondary" : "tertiary",
-    }));
+      };
+    });
 
   const fibLevels = impulseRange !== null
     ? {
@@ -20477,6 +20511,7 @@ function rankChartNativeFallbackAreas({
     })),
     fibonacciAudit: {
       verified: currentPeriodFrameVerified && !chartOnlyInventoryUnverified,
+      chartDerivedUsable: currentPeriodFrameChartUsable,
       source: visibleWeekFrame
         ? visibleWeekFrame.source
         : "uploaded_chart_completed_impulse",
@@ -25006,8 +25041,10 @@ function buildValidatedAnalysisFacts({
   // live timeframes too, not only saved benchmark fixtures. A recent opposite
   // move is the phase/pullback; it cannot reverse the calendar bias.
   const calendarPeriodAuthority = finalVisibleMode
-    ? resolveCalendarPeriodDirection({
-        frameVerified: visualReview?.chartNativeEntryFallback?.currentPeriodFrameVerified === true,
+      ? resolveCalendarPeriodDirection({
+        frameVerified:
+          visualReview?.chartNativeEntryFallback?.currentPeriodFrameVerified === true ||
+          visualReview?.chartNativeEntryFallback?.currentPeriodFrameChartUsable === true,
         periodDirection: visualReview?.chartNativeEntryFallback?.currentPeriodDirection,
         recentDirection: currentStructureRegime.direction,
       })
@@ -25019,7 +25056,10 @@ function buildValidatedAnalysisFacts({
     direction = calendarPeriodDirection;
     currentStructureRegime.direction = calendarPeriodDirection;
     currentStructureRegime.phase = calendarPeriodAuthority.phase;
-    currentStructureRegime.source = "verified_calendar_period_ohlc_direction";
+    currentStructureRegime.source =
+      visualReview?.chartNativeEntryFallback?.currentPeriodFrameVerified === true
+        ? "verified_calendar_period_ohlc_direction"
+        : "provisional_chart_calendar_period_ohlc_direction";
     currentStructureRegime.bullishBreakout = calendarPeriodDirection === "bullish";
     currentStructureRegime.bearishBreakdown = calendarPeriodDirection === "bearish";
     currentStructureRegime.bullishRecoveryAfterBreakdown = calendarPeriodDirection === "bearish" && recentDirection === "bullish";
@@ -29453,8 +29493,19 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         visibleClose:
           chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
       };
+      const rawFocusedPeriodInventory =
+        mergedChartNativeFallback?.periodInventory ||
+        mergedChartNativeFallback?.periodDayInventory || [];
+      // Validate the screenshot's own calendar mapping independently. A
+      // provider disagreement must remain visible without erasing an otherwise
+      // complete chart-derived inventory.
+      const chartPeriodMappingAudit = reconcilePeriodMapping({
+        periods: rawFocusedPeriodInventory,
+        references: [],
+        tolerance: getCleanBreakTolerance(normalizedSymbol) * 2,
+      });
       const periodMappingAudit = reconcilePeriodMapping({
-        periods: mergedChartNativeFallback?.periodInventory || mergedChartNativeFallback?.periodDayInventory || [],
+        periods: rawFocusedPeriodInventory,
         references: completedPeriodReferences.periods,
         tolerance: getCleanBreakTolerance(normalizedSymbol) * 2,
       });
@@ -29463,6 +29514,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         visibleDate: chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "",
         periodInventory:
           periodMappingAudit.periods,
+        ...finalVisibleCandle,
+      });
+      const chartReconciledPeriodInventory = reconcileFinalPeriodWithVisibleCandle({
+        timeframe,
+        visibleDate: chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "",
+        periodInventory: chartPeriodMappingAudit.periods,
         ...finalVisibleCandle,
       });
       // Do not mix chart/broker OHLC into provider extrema and then call the
@@ -29482,6 +29539,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         cutoffDateTime: lifecycleCutoffDateTime,
         explicitlyComplete: marketReference?.currentFrameworkPeriodComplete,
       });
+      const chartPeriodInventory = applyCurrentFrameworkPeriodLifecycle({
+        periods: chartReconciledPeriodInventory,
+        timeframe,
+        cutoffDateTime: lifecycleCutoffDateTime,
+        explicitlyComplete: marketReference?.currentFrameworkPeriodComplete,
+      });
       const marketPeriodInventory = applyCurrentFrameworkPeriodLifecycle({
         periods: marketReconciledPeriodInventory,
         timeframe,
@@ -29494,6 +29557,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         timeframe,
         latestVisibleDate: inventoryDate,
         periodInventory: focusedPeriodInventory,
+      });
+      const chartInventoryFrame = deriveVerifiedPeriodFrameFromInventory({
+        timeframe,
+        latestVisibleDate: inventoryDate,
+        periodInventory: chartPeriodInventory,
       });
       const marketInventoryFrame = deriveVerifiedPeriodFrameFromInventory({
         timeframe,
@@ -29528,30 +29596,29 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       // even when Twelve Data has no matching CFD symbol. In that narrow case,
       // retain a complete focused inventory for diagnosis instead of returning
       // no bias/period data at all. It remains explicitly human-review-only.
-      const chartOnlyInventoryVerified =
-        marketReference?.ok !== true &&
-        focusedInventoryDateSequenceVerified &&
-        focusedPeriodInventory.length > 0;
-      const inventoryUsable = marketInventoryVerified || chartOnlyInventoryVerified;
+      const chartOnlyInventoryUsable =
+        marketInventoryVerified !== true &&
+        chartInventoryFrame?.currentPeriodFrameVerified === true &&
+        chartPeriodInventory.length > 0;
+      const chartOnlyInventoryVerified = false;
+      const inventoryUsable = marketInventoryVerified || chartOnlyInventoryUsable;
       const selectedPeriodInventory = marketInventoryVerified
         ? marketPeriodInventory
-        : chartOnlyInventoryVerified
-        ? focusedPeriodInventory
+        : chartOnlyInventoryUsable
+        ? chartPeriodInventory
         : [];
       const inventoryAuthority = marketInventoryVerified
         ? "chart_aligned_provider_reference_not_broker_verified"
-        : chartOnlyInventoryVerified
-        ? "complete_chart_only_period_inventory_provider_unavailable_human_review"
+        : chartOnlyInventoryUsable
+        ? "complete_chart_only_period_inventory_provider_unavailable_or_unaligned_provisional"
         : "unverified_period_inventory";
-      const inventoryPriceConflicts = chartOnlyInventoryVerified
-        ? [] // Missing authority is reported separately; it is not a price conflict.
-        : rawInventoryPriceConflicts.map((conflict) => ({
-            ...conflict,
-            requiresReview: !marketInventoryVerified,
-            resolution: marketInventoryVerified
-              ? "verified deterministic candle retained; vision-estimated period price rejected"
-              : conflict.resolution,
-          }));
+      const inventoryPriceConflicts = rawInventoryPriceConflicts.map((conflict) => ({
+        ...conflict,
+        requiresReview: !marketInventoryVerified,
+        resolution: marketInventoryVerified
+          ? "verified deterministic candle retained; vision-estimated period price rejected"
+          : conflict.resolution,
+      }));
       inventoryPriceConflicts.push(...marketPeriodIntegrity.issues);
       const fixedPeriodBias = inventoryUsable
         ? deriveVerifiedFixedPeriodBias({
@@ -29599,6 +29666,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         inventoryAuthority,
         focusedInventoryVerified,
         chartOnlyInventoryVerified,
+        chartOnlyInventoryUsable,
         focusedInventoryDateSequenceVerified,
         marketInventoryVerified,
         dataMatch: marketReference?.chartDataMatch || null,
@@ -29609,6 +29677,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         marketPeriodIntegrity,
         completedPeriodReferences,
         periodMappingAudit,
+        chartPeriodMappingAudit,
         finalVisibleCandleAuthority: {
           high: nullablePositiveNumber(chartDetection?.latestVisibleHigh),
           low: nullablePositiveNumber(chartDetection?.latestVisibleLow),
@@ -29668,10 +29737,10 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             currentPeriodLow: null,
             source: "deterministic_period_inventory_unavailable",
           };
-      const verifiedPeriodFrame = marketInventoryVerified
+      const selectedPeriodFrame = marketInventoryVerified
         ? marketInventoryFrame
-        : chartOnlyInventoryVerified
-        ? { ...focusedInventoryFrame, currentPeriodFrameVerified: false }
+        : chartOnlyInventoryUsable
+        ? chartInventoryFrame
         : null;
 
       visualReview = {
@@ -29679,20 +29748,20 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         chartNativeEntryFallback: {
           ...authoritativeMergedFallback,
           currentPeriodHigh:
-            verifiedPeriodFrame?.currentPeriodHigh ??
-            verifiedPeriodFrame?.currentWeekHigh ??
+            selectedPeriodFrame?.currentPeriodHigh ??
+            selectedPeriodFrame?.currentWeekHigh ??
             null,
           currentPeriodLow:
-            verifiedPeriodFrame?.currentPeriodLow ??
-            verifiedPeriodFrame?.currentWeekLow ??
+            selectedPeriodFrame?.currentPeriodLow ??
+            selectedPeriodFrame?.currentWeekLow ??
             null,
           currentWeekHigh:
-            verifiedPeriodFrame?.currentPeriodHigh ??
-            verifiedPeriodFrame?.currentWeekHigh ??
+            selectedPeriodFrame?.currentPeriodHigh ??
+            selectedPeriodFrame?.currentWeekHigh ??
             null,
           currentWeekLow:
-            verifiedPeriodFrame?.currentPeriodLow ??
-            verifiedPeriodFrame?.currentWeekLow ??
+            selectedPeriodFrame?.currentPeriodLow ??
+            selectedPeriodFrame?.currentWeekLow ??
             null,
           currentPeriodOpen:
             (inventoryUsable ? selectedPeriodInventory[0]?.open : null) ??
@@ -29707,7 +29776,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             fixedPeriodBias?.direction ??
             null,
           currentPeriodFrameVerified:
-            verifiedPeriodFrame?.currentPeriodFrameVerified === true,
+            marketInventoryVerified && selectedPeriodFrame?.currentPeriodFrameVerified === true,
+          currentPeriodFrameChartUsable:
+            chartOnlyInventoryUsable && selectedPeriodFrame?.currentPeriodFrameVerified === true,
           currentWeekFrameConfidence:
             visibleCurrentWeekFrame?.confidence ||
             (inventoryDerivedPeriodFrame?.currentPeriodFrameVerified === true
