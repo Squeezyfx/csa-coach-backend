@@ -1,0 +1,12 @@
+CSA Benchmark v2.80.0
+Build: CSA-v4.63.0-chart-native-period-audit
+Engine: 10.58.0
+
+Changes:
+- Runs chart-native fallback whenever provider candles fail chart alignment, not only when the provider request fails.
+- Displays the chart-derived monthly inventory used by the selector instead of unrelated provider-reference periods.
+- Separates provider-comparison diagnostics from the active chart mapping audit.
+- Labels broad Fibonacci-band qualification separately from an exact/near Fibonacci match.
+- Strengthens monthly calendar-boundary, wick-extreme, precision, and full-frame self-audits in the focused chart reader.
+
+Chart-only prices and entries remain provisional and require human review.

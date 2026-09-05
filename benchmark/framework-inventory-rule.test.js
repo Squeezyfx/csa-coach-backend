@@ -122,4 +122,7 @@ test("provider-unavailable charts retain a complete provisional chart inventory"
   assert.match(serverSource, /currentPeriodFrameChartUsable/);
   assert.match(serverSource, /Human verification remains required/);
   assert.match(serverSource, /chart_only_fixed_period_inventory_provider_unavailable/);
+  assert.match(serverSource, /const providerInventoryAligned =/);
+  assert.match(serverSource, /providerComparisonPeriodMappingAudit/);
+  assert.match(serverSource, /provider comparison rejected; chart-derived estimate retained provisionally/);
 });

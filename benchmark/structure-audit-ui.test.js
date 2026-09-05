@@ -44,4 +44,7 @@ test("the benchmark renders a compact one-row-per-chart diagnosis summary", () =
   assert.match(appSource, /Show review rows only/);
   assert.match(appSource, /const hasZoneRange =/);
   assert.match(appSource, /compactNumber\(zoneLow, seed\).*compactNumber\(zoneHigh, seed\)/s);
+  assert.match(appSource, /inside 38\.2–61\.8 band/);
+  assert.match(appSource, /Chart-derived Fib frame—provisional entries require review/);
+  assert.match(appSource, /const displayedPeriods = periods\.length \? periods : chartDerivedInventory \? allPeriods : \[\]/);
 });

@@ -258,8 +258,10 @@ function renderBatchOverview(run) {
         : [Number(fib.swingHigh) - range * .382, Number(fib.swingHigh) - range * .5, Number(fib.swingHigh) - range * .618]
       : [];
     const referencePeriods = audit.inventoryAuthority?.completedPeriodReferences?.periods || [];
-    const periodText = periods.length
-      ? periods.map((period) => {
+    const chartDerivedInventory = audit.fibonacciAudit?.chartDerivedUsable === true;
+    const displayedPeriods = periods.length ? periods : chartDerivedInventory ? allPeriods : [];
+    const periodText = displayedPeriods.length
+      ? displayedPeriods.map((period) => {
           const highStatus = period.highVerified === false ? "estimate—not selectable" : period.highRole || "verified extreme";
           const lowStatus = period.lowVerified === false ? "estimate—not selectable" : period.lowRole || "verified extreme";
           return `${period.period}: H ${compactNumber(period.high, seed)} (${highStatus}), L ${compactNumber(period.low, seed)} (${lowStatus})`;
@@ -269,7 +271,16 @@ function renderBatchOverview(run) {
     const entryText = entries.length
       ? entries.map((entry, index) => {
           const match = Array.isArray(entry.fibonacciMatches) ? entry.fibonacciMatches[0] : null;
-          const fibText = match ? `; ${match.label || "Fib"} @ ${compactNumber(match.price, seed)}` : "";
+          const exactFibMatch = entry.withinExactFibTolerance === true || (
+            Number.isFinite(Number(entry.fibonacciDistance)) &&
+            Number.isFinite(Number(entry.fibonacciTolerance)) &&
+            Number(entry.fibonacciDistance) <= Number(entry.fibonacciTolerance)
+          );
+          const fibText = match
+            ? exactFibMatch
+              ? `; near ${match.label || "Fib"} @ ${compactNumber(match.price, seed)}`
+              : "; inside 38.2–61.8 band"
+            : "";
           const zoneLow = Number(entry.zoneLow);
           const zoneHigh = Number(entry.zoneHigh);
           const hasZoneRange = Number.isFinite(zoneLow) && Number.isFinite(zoneHigh) && zoneHigh > zoneLow;
@@ -286,7 +297,11 @@ function renderBatchOverview(run) {
     const providerFailure = audit.inventoryAuthority?.providerFailure;
     if (dataMatch?.status === "matched_reference") flags.push("Provider reference; not broker-exact");
     if (providerFailure) flags.push(`Data: ${providerFailure.category} — ${providerFailure.reason}`);
-    if (audit.fibonacciAudit?.verified === false) flags.push("Fib frame unverified—no entries permitted");
+    if (audit.fibonacciAudit?.verified === false) {
+      flags.push(audit.fibonacciAudit?.chartDerivedUsable === true
+        ? "Chart-derived Fib frame—provisional entries require review"
+        : "Fib frame unverified—no entries permitted");
+    }
     if (structuralBias === "unverified") flags.push("bias unverified");
     if (structuralBias !== "unverified" && headlineBias !== biasCode) flags.push(`headline says ${headlineBias}`);
     if (!(Number(fib.swingHigh) > Number(fib.swingLow))) flags.push("Fib frame missing");

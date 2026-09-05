@@ -10802,8 +10802,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.57.0";
-const CSA_BUILD_ID = "CSA-v4.62.0-chart-native-period-fallback";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.58.0";
+const CSA_BUILD_ID = "CSA-v4.63.0-chart-native-period-audit";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -19591,7 +19591,7 @@ async function extractFocusedChartNativeEntryFallback({
     : focusedTimeframe === "H4"
     ? "For H4, treat each W1 candle inside the visible current calendar month as one authoritative framework period. Return W1, W2, W3, W4 and W5 when present, up to the final visible candle. Read each W1 candle's own high and low; do not move a Friday candle into the next week or a Monday candle into the previous week."
     : focusedTimeframe === "D1"
-    ? "For D1, treat each MN candle inside the visible current calendar year as one authoritative framework period. Return January through the final visible month separately. Read each monthly candle's own high and low; do not replace them with smaller D1 swings."
+    ? "For D1, treat each MN candle inside the visible current calendar year as one authoritative framework period. Return January through the final visible month separately. Read each monthly candle's own high and low; do not replace them with smaller D1 swings. For every month, locate both calendar boundaries on the x-axis first, then scan every wick between them. An isolated tall wick is still the monthly extreme and must not be replaced by the denser candle cluster."
     : focusedTimeframe === "W1"
     ? "For W1, group the visible current calendar year's MN candles into Q1, Q2, Q3 and Q4 up to the final visible candle. Return each quarter separately with its complete high and low."
     : `Use the authoritative higher-timeframe candle inventory required for ${focusedTimeframe || "the detected timeframe"}.`;
@@ -19656,6 +19656,9 @@ Hard rules:
 - Do not skip, merge or renumber inventory periods. For H4, W1/W2/W3/W4/W5 are chronological W1 candles inside the calendar month, not arbitrary groups of H4 candles.
 - A period high is the highest candle wick only between that row's start date and the next row's start date. A period low is the lowest wick inside the same interval. Price-axis tick labels are scale references, not period extremes. Do not copy a convenient printed axis price unless a wick actually reaches it.
 - First locate each calendar boundary on the time axis, then inspect only candles belonging to that interval. Return highDate and lowDate when individually readable; otherwise null. Never place a January wick in February to fill a missing value. Keep rows with unknown extremes as null, not guessed prices. Identify the entire current-period range separately from its final candle.
+- Preserve the chart's displayed precision. Interpolate wick prices from the right-hand linear price scale; do not round an extreme to a convenient axis tick or a large round number. If the exact wick price is not reliably readable, return the closest chart-scale estimate but leave highDate/lowDate null rather than inventing a date.
+- Before returning, audit every inventory row a second time: the reported high must be the visually highest wick and the reported low the visually lowest wick inside that row's exact calendar boundaries. Pay special attention to single-candle spike wicks, which are easy to miss.
+- Cross-check the full Fibonacci frame against the inventory. currentPeriodHigh must equal the maximum high across every completed row plus the in-progress final row, and currentPeriodLow must equal the corresponding minimum low. If they disagree, correct the erroneous inventory extreme before returning.
 - For H4, every completed week begins with Monday 00:00 and ends with Friday 20:00 on this six-candle-per-day chart. The next Monday 00:00 candle belongs only to the next W1 period. Saturday and Sunday never contribute a period high or low.
 - Do not mention Fibonacci in customer-facing wording; this result is internal.
 - Set usable=false rather than guessing any unreadable direction, price, impulse, or role.
@@ -20386,6 +20389,7 @@ function rankChartNativeFallbackAreas({
       computedFibPrice,
       fibonacciDistance: fibMatch.distance,
       fibonacciTolerance: fibTolerance,
+      withinExactFibTolerance: fibMatch.distance <= fibTolerance,
       // Structural/Fib validation may pass while price provenance remains
       // explicitly provisional and review-required.
       validated: true,
@@ -29453,8 +29457,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // broker index alias), do one small, focused vision pass instead of
     // relying on the full prose review to also fit the internal fallback into
     // its token budget. Supported instruments do not pay for this extra call.
+    const providerInventoryAligned =
+      marketReference?.ok === true &&
+      marketReference?.chartDataMatch?.status === "matched_reference";
     if (BENCHMARK_DRY_RUN_ENABLED || (
-      marketReference?.ok !== true &&
+      providerInventoryAligned !== true &&
       visualReview?.chartNativeEntryFallback?.usable !== true
     )) {
       const focusedFallbackStartedAt = csaNowMs();
@@ -29614,9 +29621,15 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         : "unverified_period_inventory";
       const inventoryPriceConflicts = rawInventoryPriceConflicts.map((conflict) => ({
         ...conflict,
-        requiresReview: !marketInventoryVerified,
+        // Once the provider has failed chart alignment it is a rejected
+        // comparison source, not a second authority. Keep the disagreement in
+        // diagnostics without multiplying one provider mismatch into a review
+        // flag for every monthly high and low.
+        requiresReview: !chartOnlyInventoryUsable && !marketInventoryVerified,
         resolution: marketInventoryVerified
           ? "verified deterministic candle retained; vision-estimated period price rejected"
+          : chartOnlyInventoryUsable
+          ? "provider comparison rejected; chart-derived estimate retained provisionally"
           : conflict.resolution,
       }));
       inventoryPriceConflicts.push(...marketPeriodIntegrity.issues);
@@ -29676,7 +29689,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         inventoryPriceConflicts,
         marketPeriodIntegrity,
         completedPeriodReferences,
-        periodMappingAudit,
+        // The primary mapping audit must describe the inventory actually used.
+        // Preserve the provider comparison separately for troubleshooting.
+        periodMappingAudit: chartOnlyInventoryUsable
+          ? chartPeriodMappingAudit
+          : periodMappingAudit,
+        providerComparisonPeriodMappingAudit: periodMappingAudit,
         chartPeriodMappingAudit,
         finalVisibleCandleAuthority: {
           high: nullablePositiveNumber(chartDetection?.latestVisibleHigh),
