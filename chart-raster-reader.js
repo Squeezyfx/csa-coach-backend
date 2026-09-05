@@ -133,6 +133,53 @@ function interpolateX(timestamp, anchors) {
   return left.x + (timestamp - left.timestamp) / span * (right.x - left.x);
 }
 
+function weekdayDistance(leftTimestamp, rightTimestamp) {
+  if (!Number.isFinite(leftTimestamp) || !Number.isFinite(rightTimestamp) || leftTimestamp === rightTimestamp) return 0;
+  const direction = rightTimestamp > leftTimestamp ? 1 : -1;
+  let cursor = leftTimestamp;
+  let count = 0;
+  while ((direction > 0 && cursor < rightTimestamp) || (direction < 0 && cursor > rightTimestamp)) {
+    cursor += direction * 86400000;
+    const day = new Date(cursor).getUTCDay();
+    if (day !== 0 && day !== 6) count += direction;
+  }
+  return count;
+}
+
+function moveWeekendForward(timestamp) {
+  let resolved = timestamp;
+  while ([0, 6].includes(new Date(resolved).getUTCDay())) resolved += 86400000;
+  return resolved;
+}
+
+function interpolateDailySessionX(timestamp, anchors, candleStep) {
+  if (!Number.isFinite(timestamp) || anchors.length < 2 || !(candleStep > 0)) return null;
+  let left = anchors[0];
+  let right = anchors[1];
+  if (timestamp <= left.timestamp) {
+    left = anchors[0]; right = anchors[1];
+  } else if (timestamp >= anchors.at(-1).timestamp) {
+    left = anchors.at(-2); right = anchors.at(-1);
+  } else {
+    for (let index = 0; index < anchors.length - 1; index += 1) {
+      if (timestamp >= anchors[index].timestamp && timestamp <= anchors[index + 1].timestamp) {
+        left = anchors[index]; right = anchors[index + 1]; break;
+      }
+    }
+  }
+  const calendarSpan = Math.round((right.timestamp - left.timestamp) / 86400000);
+  const weekdaySpan = weekdayDistance(left.timestamp, right.timestamp);
+  const observedSteps = (right.x - left.x) / candleStep;
+  const useWeekdays = Math.abs(observedSteps - weekdaySpan) + 0.75 < Math.abs(observedSteps - calendarSpan);
+  const resolvedTimestamp = useWeekdays ? moveWeekendForward(timestamp) : timestamp;
+  const totalUnits = useWeekdays ? weekdaySpan : calendarSpan;
+  const elapsedUnits = useWeekdays
+    ? weekdayDistance(left.timestamp, resolvedTimestamp)
+    : (resolvedTimestamp - left.timestamp) / 86400000;
+  if (!(totalUnits > 0)) return interpolateX(timestamp, anchors);
+  return left.x + elapsedUnits / totalUnits * (right.x - left.x);
+}
+
 function precisionFor({ latestVisibleClose, priceTicks }) {
   const values = [latestVisibleClose, ...(priceTicks || [])].filter(Number.isFinite);
   const magnitude = Math.max(...values.map(Math.abs), 0);
@@ -258,7 +305,7 @@ export function extractMt4PngMonthlyInventory({
   const firstPrice = prices[0];
   const lastPrice = prices.at(-1);
   if (!(lastY > firstY) || !(firstPrice > lastPrice)) return null;
-  const priceAtY = (y) => firstPrice + (y - firstY) / (lastY - firstY) * (lastPrice - firstPrice);
+  const axisPriceAtY = (y) => firstPrice + (y - firstY) / (lastY - firstY) * (lastPrice - firstPrice);
 
   const excludedRows = new Set();
   for (let y = 20; y < plotBottom; y += 1) {
@@ -282,14 +329,52 @@ export function extractMt4PngMonthlyInventory({
   }
   if (candles.length < candleCenters.length * 0.75) return null;
 
+  // Price-axis labels are transcribed before this deterministic raster pass.
+  // A single OCR error (for example Cocoa's 2921 bottom tick read as 2018)
+  // otherwise stretches every monthly price while leaving the wick geometry
+  // apparently valid. Cross-check the scale against the exact final-candle
+  // header OHLC. When that candle spans enough pixels, its high/low provide a
+  // second independent affine calibration and override a conflicting axis.
+  const finalCandle = candles.reduce((best, candle) =>
+    !best || Math.abs(candle.x - lastCandleX) < Math.abs(best.x - lastCandleX)
+      ? candle
+      : best, null);
+  const headerHigh = Number(latestVisibleHigh);
+  const headerLow = Number(latestVisibleLow);
+  const headerPixelSpan = finalCandle ? finalCandle.lowY - finalCandle.highY : 0;
+  const axisPricePerPixel = Math.abs((lastPrice - firstPrice) / (lastY - firstY));
+  const headerRange = headerHigh - headerLow;
+  const headerValuesUsable =
+    Number.isFinite(headerHigh) && Number.isFinite(headerLow) && headerRange > 0 &&
+    finalCandle && headerPixelSpan > 0;
+  const headerTolerance = headerValuesUsable
+    ? Math.max(axisPricePerPixel * 4, headerRange * 0.35, (firstPrice - lastPrice) * 0.003)
+    : Infinity;
+  const axisMatchesHeader = headerValuesUsable &&
+    Math.abs(axisPriceAtY(finalCandle.highY) - headerHigh) <= headerTolerance &&
+    Math.abs(axisPriceAtY(finalCandle.lowY) - headerLow) <= headerTolerance;
+  const useHeaderCalibration = headerValuesUsable && !axisMatchesHeader && headerPixelSpan >= 12;
+  const headerPricePerPixel = useHeaderCalibration
+    ? (headerLow - headerHigh) / headerPixelSpan
+    : null;
+  const priceAtY = useHeaderCalibration
+    ? (y) => headerHigh + (y - finalCandle.highY) * headerPricePerPixel
+    : axisPriceAtY;
+  const chartPriceScaleVerified = axisMatchesHeader || useHeaderCalibration;
+  const priceCalibrationSource = useHeaderCalibration
+    ? "exact_final_candle_header_ohlc"
+    : axisMatchesHeader
+    ? "price_axis_cross_checked_by_final_candle_header"
+    : "unverified_price_axis";
+
   const starts = (Array.isArray(periodDates) ? periodDates : []).map((date) => ({ date, timestamp: parseDate(date) })).filter((item) => Number.isFinite(item.timestamp));
   if (!starts.length) return null;
   const decimals = precisionFor({ latestVisibleClose: Number(latestVisibleClose), priceTicks: prices });
   const round = (value) => Number(Number(value).toFixed(decimals));
   const inventory = starts.map((start, index) => {
     const endTimestamp = starts[index + 1]?.timestamp ?? dateAnchors.at(-1).timestamp + 45 * 86400000;
-    const startX = interpolateX(start.timestamp, dateAnchors);
-    const endX = interpolateX(endTimestamp, dateAnchors);
+    const startX = interpolateDailySessionX(start.timestamp, dateAnchors, candleStep);
+    const endX = interpolateDailySessionX(endTimestamp, dateAnchors, candleStep);
     if (!Number.isFinite(startX) || !Number.isFinite(endX)) return null;
     const owned = candles.filter((candle) => candle.x >= startX - candleStep * 0.5 && candle.x < endX - candleStep * 0.5);
     if (!owned.length) return null;
@@ -310,7 +395,13 @@ export function extractMt4PngMonthlyInventory({
   return {
     inventory,
     source: "deterministic_mt4_png_wick_raster",
-    chartPriceScaleVerified: true,
+    chartPriceScaleVerified,
+    priceCalibrationSource,
+    priceCalibrationAudit: {
+      axisMatchesFinalCandleHeader: axisMatchesHeader,
+      finalCandlePixelSpan: headerPixelSpan,
+      usedFinalCandleHeaderOverride: useHeaderCalibration,
+    },
     candleStep,
     firstCandleX,
     lastCandleX,

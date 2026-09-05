@@ -295,8 +295,9 @@ function renderBatchOverview(run) {
     if (mappingIssues.length) flags.push(`${mappingIssues.length} period mapping/alignment checks unresolved`);
     const dataMatch = audit.inventoryAuthority?.dataMatch;
     const providerFailure = audit.inventoryAuthority?.providerFailure;
+    const chartRasterAuthorityVerified = audit.inventoryAuthority?.chartOnlyInventoryVerified === true;
     if (dataMatch?.status === "matched_reference") flags.push("Provider reference; not broker-exact");
-    if (providerFailure) flags.push(`Data: ${providerFailure.category} — ${providerFailure.reason}`);
+    if (providerFailure && !chartRasterAuthorityVerified) flags.push(`Data: ${providerFailure.category} — ${providerFailure.reason}`);
     if (audit.fibonacciAudit?.verified === false) {
       flags.push(audit.fibonacciAudit?.chartDerivedUsable === true
         ? "Chart-derived Fib frame—provisional entries require review"

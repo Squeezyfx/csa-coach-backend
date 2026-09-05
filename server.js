@@ -10803,8 +10803,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.59.0";
-const CSA_BUILD_ID = "CSA-v4.64.0-deterministic-png-wick-reader";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.60.0";
+const CSA_BUILD_ID = "CSA-v4.65.0-chart-raster-price-authority";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -16162,7 +16162,7 @@ function reconcileFrameworkLevelWithVisibleChart({
 }
 
 
-const CSA_SELECTOR_VERSION = "4.37.0";
+const CSA_SELECTOR_VERSION = "4.38.0";
 
 function resolveCsaEntryPrice({
   frameworkPrice = null,
@@ -19917,6 +19917,36 @@ function deriveVerifiedFixedPeriodBias({
         rangePosition: position,
       };
     }
+    // A mid-range close does not erase an established calendar structure.
+    // Compare the first and latest completed monthly extremes so instruments
+    // such as BTC can remain structurally bearish during a bullish recovery.
+    const completedPeriods = periods.filter((period) => period?.partialPeriod !== true && period?.periodLifecycle !== "in_progress");
+    const firstCompleted = completedPeriods[0];
+    const latestCompleted = completedPeriods.at(-1);
+    const firstHigh = nullablePositiveNumber(firstCompleted?.high);
+    const firstLow = nullablePositiveNumber(firstCompleted?.low);
+    const latestHigh = nullablePositiveNumber(latestCompleted?.high);
+    const latestLow = nullablePositiveNumber(latestCompleted?.low);
+    if (completedPeriods.length >= 2 && firstHigh !== null && firstLow !== null && latestHigh !== null && latestLow !== null) {
+      const direction = latestHigh < firstHigh && latestLow < firstLow
+        ? "bearish"
+        : latestHigh > firstHigh && latestLow > firstLow
+        ? "bullish"
+        : null;
+      if (direction) {
+        return {
+          direction,
+          phase: direction === "bearish"
+            ? "bullish_recovery_after_bearish_structure"
+            : "bearish_pullback_after_bullish_structure",
+          high,
+          low,
+          close,
+          rangePosition: position,
+          structureSource: "completed_calendar_period_extreme_progression",
+        };
+      }
+    }
     return null;
   }
 
@@ -20228,7 +20258,8 @@ function rankChartNativeFallbackAreas({
   const chartOnlyInventoryUnverified =
     inventoryAuthority.includes("chart_only") &&
     fallback?.marketInventoryVerified !== true &&
-    fallback?.focusedInventoryVerified !== true;
+    fallback?.focusedInventoryVerified !== true &&
+    fallback?.chartOnlyInventoryVerified !== true;
   const chartOnlyInventoryProvisional =
     chartOnlyInventoryUnverified &&
     fallback?.currentPeriodFrameChartUsable === true;
@@ -20484,6 +20515,7 @@ function rankChartNativeFallbackAreas({
       focusedInventoryDateSequenceVerified:
         fallback?.focusedInventoryDateSequenceVerified === true,
       marketInventoryVerified: fallback?.marketInventoryVerified === true,
+      chartOnlyInventoryVerified: fallback?.chartOnlyInventoryVerified === true,
       finalVisibleCandle: fallback?.finalVisibleCandleAuthority || null,
     },
     bias: {
@@ -29647,7 +29679,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         marketInventoryVerified !== true &&
         chartInventoryFrame?.currentPeriodFrameVerified === true &&
         chartPeriodInventory.length > 0;
-      const chartOnlyInventoryVerified = false;
+      const chartOnlyInventoryVerified =
+        chartOnlyInventoryUsable &&
+        rasterInventory?.chartPriceScaleVerified === true &&
+        rasterByDate.size === rawFocusedPeriodInventory.length &&
+        chartPeriodInventory.length === rawFocusedPeriodInventory.length &&
+        chartPeriodInventory.every((period) => period?.rasterPriceScaleVerified === true);
       const inventoryUsable = marketInventoryVerified || chartOnlyInventoryUsable;
       const selectedPeriodInventory = marketInventoryVerified
         ? marketPeriodInventory
@@ -29656,6 +29693,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         : [];
       const inventoryAuthority = marketInventoryVerified
         ? "chart_aligned_provider_reference_not_broker_verified"
+        : chartOnlyInventoryVerified
+        ? "complete_chart_only_period_inventory_deterministic_raster_verified"
         : chartOnlyInventoryUsable
         ? "complete_chart_only_period_inventory_provider_unavailable_or_unaligned_provisional"
         : "unverified_period_inventory";
@@ -29668,6 +29707,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         requiresReview: !chartOnlyInventoryUsable && !marketInventoryVerified,
         resolution: marketInventoryVerified
           ? "verified deterministic candle retained; vision-estimated period price rejected"
+          : chartOnlyInventoryVerified
+          ? "provider comparison rejected; deterministic chart-raster price retained"
           : chartOnlyInventoryUsable
           ? "provider comparison rejected; chart-derived estimate retained provisionally"
           : conflict.resolution,
@@ -29749,28 +29790,29 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       };
 
       if (fixedPeriodBias && inventoryUsable) {
+        const chartPriceAuthorityVerified = marketInventoryVerified || chartOnlyInventoryVerified;
         marketReference = {
           ...marketReference,
           directionalBias: {
             ...(marketInventoryVerified ? marketReference?.directionalBias || {} : clearRejectedProviderData(marketReference).directionalBias),
-            provisional: !marketInventoryVerified,
+            provisional: !chartPriceAuthorityVerified,
             bias: fixedPeriodBias.direction === "bullish" ? "Bullish" : "Bearish",
             biasCode: fixedPeriodBias.direction,
-            confidence: marketInventoryVerified ? "high" : "low",
-            traderBias: marketInventoryVerified
+            confidence: chartPriceAuthorityVerified ? "high" : "low",
+            traderBias: chartPriceAuthorityVerified
               ? fixedPeriodBias.direction === "bullish"
                 ? "The verified fixed-period structure is bullish, with any final bearish move treated as a pullback until controlling support fails."
                 : "The verified fixed-period structure is bearish, with any final bullish move treated as a recovery until controlling resistance breaks."
               : fixedPeriodBias.direction === "bullish"
               ? "The complete chart-derived fixed-period structure reads bullish, pending human verification because provider data is unavailable."
               : "The complete chart-derived fixed-period structure reads bearish, pending human verification because provider data is unavailable.",
-            reason: marketInventoryVerified
-              ? "Direction was reconciled from the same verified fixed-period high/low inventory used by the benchmark and the exact final chart-header close."
+            reason: chartPriceAuthorityVerified
+              ? "Direction was reconciled from the same chart-verified fixed-period high/low inventory used by the benchmark and the exact final chart-header close. Broker-feed equivalence remains a separate status."
               : "Direction is a provisional chart-only interpretation; external price authority is unavailable or not aligned. Human verification remains required.",
             cutoffPhase: {
               direction: fixedPeriodBias.direction,
               phase: fixedPeriodBias.phase,
-              source: marketInventoryVerified
+              source: chartPriceAuthorityVerified
                 ? "verified_fixed_period_inventory_and_final_chart_close"
                 : "chart_only_fixed_period_inventory_provider_unavailable",
             },
@@ -29835,9 +29877,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             fixedPeriodBias?.direction ??
             null,
           currentPeriodFrameVerified:
-            marketInventoryVerified && selectedPeriodFrame?.currentPeriodFrameVerified === true,
+            (marketInventoryVerified || chartOnlyInventoryVerified) &&
+            selectedPeriodFrame?.currentPeriodFrameVerified === true,
           currentPeriodFrameChartUsable:
-            chartOnlyInventoryUsable && selectedPeriodFrame?.currentPeriodFrameVerified === true,
+            chartOnlyInventoryUsable && !chartOnlyInventoryVerified &&
+            selectedPeriodFrame?.currentPeriodFrameVerified === true,
           currentWeekFrameConfidence:
             visibleCurrentWeekFrame?.confidence ||
             (inventoryDerivedPeriodFrame?.currentPeriodFrameVerified === true

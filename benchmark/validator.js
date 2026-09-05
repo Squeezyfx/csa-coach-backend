@@ -724,7 +724,11 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
               Number.isFinite(Number(conflict?.chartCount))
             ))
           );
-        const authorityMissing = Boolean(transparencyAudit.inventoryAuthority?.providerFailure);
+        const chartRasterAuthorityVerified =
+          transparencyAudit.inventoryAuthority?.chartOnlyInventoryVerified === true;
+        const authorityMissing =
+          Boolean(transparencyAudit.inventoryAuthority?.providerFailure) &&
+          !chartRasterAuthorityVerified;
         addCheck(
           checks,
           "automatic_period_price_authority",
@@ -732,7 +736,8 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
           !authorityMissing && inventoryConflicts.length === 0,
           inventoryConflicts.length
             ? `${inventoryConflicts.length} period high/low conflict(s) were exposed. Review the chart values before saving this result.`
-            : authorityMissing ? "External price authority is unavailable or alignment is uncertain; this is not a confirmed price conflict."
+            : authorityMissing ? "Neither provider nor calibrated chart-raster price authority is available."
+            : chartRasterAuthorityVerified ? "Calibrated chart-raster prices are verified against the visible final-candle header; broker-feed equivalence is not claimed."
             : "No unresolved chart-versus-market period high/low conflict was found."
         );
       }
