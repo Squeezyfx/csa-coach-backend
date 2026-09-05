@@ -125,4 +125,8 @@ test("provider-unavailable charts retain a complete provisional chart inventory"
   assert.match(serverSource, /const providerInventoryAligned =/);
   assert.match(serverSource, /providerComparisonPeriodMappingAudit/);
   assert.match(serverSource, /provider comparison rejected; chart-derived estimate retained provisionally/);
+  assert.match(serverSource, /extractMt4PngMonthlyInventory/);
+  assert.match(serverSource, /rasterCorrectedPeriodInventory/);
+  assert.match(serverSource, /priceAxisTicks/);
+  assert.match(serverSource, /timeAxisDates/);
 });

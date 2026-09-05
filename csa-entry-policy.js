@@ -853,6 +853,12 @@ export function mergeFocusedSupplyDemandInventory(
     currentPeriodFrameVerified:
       focusedFallback?.currentPeriodFrameVerified === true ||
       primaryFallback?.currentPeriodFrameVerified === true,
+    timeAxisDates: Array.isArray(focusedFallback?.timeAxisDates)
+      ? focusedFallback.timeAxisDates
+      : primaryFallback?.timeAxisDates || [],
+    priceAxisTicks: Array.isArray(focusedFallback?.priceAxisTicks)
+      ? focusedFallback.priceAxisTicks
+      : primaryFallback?.priceAxisTicks || [],
   };
 
   if (primaryFallback?.usable !== true) {

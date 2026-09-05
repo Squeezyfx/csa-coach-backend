@@ -1,14 +1,14 @@
 {
   "name": "csa-coach-backend",
-  "version": "2.80.0",
+  "version": "2.81.0",
   "description": "CSA Coach backend with isolated multi-chart benchmark regression runner",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "start:benchmark": "node benchmark-server.js",
-    "check": "node --check server.js && node --check csa-entry-policy.js && node --check benchmark-server.js && node --check benchmark/target-client.js && node --check benchmark/validator.js && node --check benchmark/public/app.js && node --check period-accuracy.js && node --check market-data-matching.js",
-    "test:benchmarks": "node --test benchmark/validator.test.js benchmark/csa-entry-policy.test.js benchmark/fixture-promotion.test.js benchmark/target-client.test.js benchmark/five-chart-regression.test.js benchmark/verified-baselines.test.js benchmark/verified-chart-fixtures.test.js benchmark/weekly-fibonacci-policy.test.js benchmark/structure-audit-ui.test.js benchmark/framework-inventory-rule.test.js benchmark/credit-saving-diagnostic.test.js benchmark/period-accuracy.test.js benchmark/market-data-matching.test.js"
+    "check": "node --check server.js && node --check csa-entry-policy.js && node --check chart-raster-reader.js && node --check benchmark-server.js && node --check benchmark/target-client.js && node --check benchmark/validator.js && node --check benchmark/public/app.js && node --check period-accuracy.js && node --check market-data-matching.js",
+    "test:benchmarks": "node --test benchmark/validator.test.js benchmark/csa-entry-policy.test.js benchmark/fixture-promotion.test.js benchmark/target-client.test.js benchmark/five-chart-regression.test.js benchmark/verified-baselines.test.js benchmark/verified-chart-fixtures.test.js benchmark/weekly-fibonacci-policy.test.js benchmark/structure-audit-ui.test.js benchmark/framework-inventory-rule.test.js benchmark/credit-saving-diagnostic.test.js benchmark/period-accuracy.test.js benchmark/market-data-matching.test.js benchmark/chart-raster-reader.test.js"
   },
   "engines": {
     "node": ">=20"

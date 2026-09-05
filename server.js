@@ -44,6 +44,7 @@ import {
   getVerifiedChartFixture,
 } from "./benchmark/verified-chart-fixtures.js";
 import { buildVisiblePeriodFibonacciFrame, resolveCalendarPeriodDirection } from "./benchmark/weekly-fibonacci-policy.js";
+import { extractMt4PngMonthlyInventory } from "./chart-raster-reader.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -10802,8 +10803,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.58.0";
-const CSA_BUILD_ID = "CSA-v4.63.0-chart-native-period-audit";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.59.0";
+const CSA_BUILD_ID = "CSA-v4.64.0-deterministic-png-wick-reader";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -19524,6 +19525,12 @@ function normalizeChartNativeEntryFallback(value = {}) {
     // A fixed calendar-period Fib is usable only when the reader could see
     // the beginning of that actual period (Monday, month start, or Jan 1).
     currentPeriodFrameVerified: value?.currentPeriodFrameVerified === true,
+    timeAxisDates: (Array.isArray(value?.timeAxisDates) ? value.timeAxisDates : [])
+      .map((date) => /^\d{4}-\d{2}-\d{2}$/.test(String(date || "")) ? String(date) : null)
+      .filter(Boolean),
+    priceAxisTicks: (Array.isArray(value?.priceAxisTicks) ? value.priceAxisTicks : [])
+      .map(nullablePositiveNumber)
+      .filter((price) => price !== null),
     periodInventory: rawPeriodInventory
       .slice(0, 12)
       .map((period, index) => ({
@@ -19637,6 +19644,7 @@ Apply this order exactly:
 3. Identify independent supply/demand bases inside each inventory period only when their own displacement is visibly clear.
 4. ${frameRule} This Fibonacci frame qualifies structure but does not replace the individual D1/W1 inventory.
 5. Inventory every visible structural candidate before filtering, up to twelve. Every candidate must name its sourceDate and sourceKind (for example ${sourceExamples}). The deterministic selector will test each candidate against the same current-period Fibonacci frame and return no more than three final entries.
+6. Transcribe the chart axes for deterministic pixel calibration. timeAxisDates must contain every printed bottom-axis date from left to right in ISO format. priceAxisTicks must contain every ordinary right-axis scale label from top to bottom. Exclude the boxed current-price label and any horizontal-line label.
 
 Hard rules:
 - Fibonacci may qualify visible structure but may never create a price or area.
@@ -19677,6 +19685,8 @@ Return exactly:
   "currentPeriodClose": null,
   "currentPeriodDirection": "bullish | bearish | range",
   "currentPeriodFrameVerified": false,
+  "timeAxisDates": ["YYYY-MM-DD"],
+  "priceAxisTicks": [null],
   "periodInventory": [
     {"periodLabel":"Monday | Tuesday | Wednesday | Thursday | Friday | W1 | W2 | W3 | W4 | W5 | January | February | March","sourceUnit":"D1 | W1 | MN","date":"YYYY-MM-DD","highDate":null,"lowDate":null,"open":null,"high":null,"low":null,"close":null,"structures":[{"price":null,"type":"support | resistance | demand | supply | converted support | converted resistance","note":"short structural reason"}]}
   ],
@@ -29503,16 +29513,46 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       const rawFocusedPeriodInventory =
         mergedChartNativeFallback?.periodInventory ||
         mergedChartNativeFallback?.periodDayInventory || [];
+      const rasterInventory = extractMt4PngMonthlyInventory({
+        imageBase64,
+        mimeType,
+        timeframe,
+        periodDates: rawFocusedPeriodInventory.map((period) => period?.date).filter(Boolean),
+        timeAxisDates: mergedChartNativeFallback?.timeAxisDates || [],
+        priceAxisTicks: mergedChartNativeFallback?.priceAxisTicks || [],
+        latestVisibleHigh: chartDetection?.latestVisibleHigh,
+        latestVisibleLow: chartDetection?.latestVisibleLow,
+        latestVisibleClose: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
+      });
+      const rasterByDate = new Map(
+        (rasterInventory?.inventory || []).map((period) => [String(period.date), period])
+      );
+      const rasterCorrectedPeriodInventory = rasterByDate.size === rawFocusedPeriodInventory.length
+        ? rawFocusedPeriodInventory.map((period) => {
+            const rasterPeriod = rasterByDate.get(String(period?.date));
+            return rasterPeriod
+              ? {
+                  ...period,
+                  high: rasterPeriod.high,
+                  low: rasterPeriod.low,
+                  highDate: null,
+                  lowDate: null,
+                  source: rasterInventory.source,
+                  rasterPriceScaleVerified: true,
+                }
+              : period;
+          })
+        : rawFocusedPeriodInventory;
       // Validate the screenshot's own calendar mapping independently. A
       // provider disagreement must remain visible without erasing an otherwise
       // complete chart-derived inventory.
       const chartPeriodMappingAudit = reconcilePeriodMapping({
-        periods: rawFocusedPeriodInventory,
+        periods: rasterCorrectedPeriodInventory,
         references: [],
         tolerance: getCleanBreakTolerance(normalizedSymbol) * 2,
       });
       const periodMappingAudit = reconcilePeriodMapping({
-        periods: rawFocusedPeriodInventory,
+        periods: rasterCorrectedPeriodInventory,
         references: completedPeriodReferences.periods,
         tolerance: getCleanBreakTolerance(normalizedSymbol) * 2,
       });
@@ -29705,6 +29745,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           source: "exact_visible_chart_header_ohlc",
         },
         fixedPeriodBias,
+        rasterInventoryAudit: rasterInventory,
       };
 
       if (fixedPeriodBias && inventoryUsable) {
