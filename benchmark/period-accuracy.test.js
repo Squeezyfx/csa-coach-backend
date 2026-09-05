@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
-import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences, reconcilePeriodMapping } from "../period-accuracy.js";
+import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences, reconcilePeriodMapping, buildNoEntryTransparencyAudit } from "../period-accuracy.js";
 import * as policy from "../csa-entry-policy.js";
 import { validateBenchmarkResult, applyBatchFeedbackDiversityChecks } from "./validator.js";
 
@@ -73,6 +73,22 @@ test("diagnostic-only repeated safety text is not a coaching diversity failure",
 });
 
 const server = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+test("actual unresolved-direction return retains references and failure diagnostics", () => {
+  const start = server.indexOf("function rankRawEntryAreas(");
+  const source = server.slice(start,server.indexOf("\n}\n",start)+2);
+  const ctx = vm.createContext({buildNoEntryTransparencyAudit,CSA_SELECTOR_VERSION:"test",BENCHMARK_DRY_RUN_ENABLED:true,rankChartNativeFallbackAreas:()=>null});
+  vm.runInContext(source,ctx);
+  const fallback={usable:false,completedPeriodReferences:{periods:[{date:"2026-01-01",high:.15656,low:.09461}]},providerFailure:{category:"date_unverified"},periodMappingAudit:{rejected:[{date:"2026-02-01"}]}};
+  for (const direction of ["range","bullish"]) {
+    const result=ctx.rankRawEntryAreas({direction,timeframe:"D1",visualReview:{chartNativeEntryFallback:fallback}});
+    const audit=result.regressionDiagnostics.transparencyAudit;
+    assert.equal(audit.inventoryAuthority.completedPeriodReferences.periods.length,1);
+    assert.equal(audit.inventoryAuthority.providerFailure.category,"date_unverified");
+    assert.equal(audit.inventoryAuthority.periodMappingAudit.rejected.length,1);
+    assert.equal(audit.fibonacciAudit.verified,false);
+    assert.equal(result.regressionDiagnostics.selectedEntries.length,0);
+  }
+});
 // Exercise the actual server selector without starting Express or provider calls.
 const functionSource = name => {
   const start = server.indexOf(`function ${name}(`);

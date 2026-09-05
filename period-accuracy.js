@@ -1,4 +1,22 @@
 // Price authority is separate from a model supplying plausible calendar labels.
+export function buildNoEntryTransparencyAudit(fallback = {}) {
+  return {
+    auditVersion:"1.2.0", selectionStatus:"blocked",
+    inventoryAuthority:{
+      selectedSource:fallback.inventoryAuthority || "unverified_period_inventory",
+      completedPeriodReferences:fallback.completedPeriodReferences || null,
+      periodMappingAudit:fallback.periodMappingAudit || null,
+      dataMatch:fallback.dataMatch || null,
+      providerFailure:fallback.providerFailure || null,
+      sourceCandleAudit:fallback.marketPeriodIntegrity || null,
+      marketInventoryVerified:fallback.marketInventoryVerified === true,
+    },
+    periodStructureAudit:[], candidateEvaluationAudit:[], entryDecisionAudit:[],
+    fibonacciAudit:{verified:false,source:"not_available",swingHigh:null,swingLow:null,levels:null},
+    provenanceConflicts:Array.isArray(fallback.inventoryPriceConflicts) ? fallback.inventoryPriceConflicts : [],
+  };
+}
+
 export function isUnverifiedPeriodCandidate(candidate = {}) {
   return candidate.provenanceVerified === false ||
     /unverified|estimated_period/.test(String(candidate.priceSource || ""));

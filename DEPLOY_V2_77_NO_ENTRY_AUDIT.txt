@@ -1,0 +1,15 @@
+CSA benchmark v2.77 / engine 10.55.0
+Upload to benchmark repository only. No deployment performed.
+
+Fixes v2.76 regression: unresolved direction and missing-frame early returns
+now retain completed-period references, mapping audit and provider failure
+diagnostics. The final response also attaches a blocked-selection audit if a
+selector path omitted it. References cannot turn into selected entries.
+
+188 offline tests passed, including execution of both actual early-return paths.
+No paid model or provider calls. Exact chart prices and Fib remain unverified
+where evidence is missing. This patch restores lost diagnostics; it does not
+change data coverage, subscription access, or price-authority requirements.
+
+Keep both root modules period-accuracy.js and market-data-matching.js and the
+benchmark/ folder. No environment changes required.
