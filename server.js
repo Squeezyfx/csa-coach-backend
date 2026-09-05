@@ -1,6 +1,6 @@
 import express from "express";
 import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData } from "./market-data-matching.js";
-import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences, reconcilePeriodMapping } from "./period-accuracy.js";
+import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences, reconcilePeriodMapping, buildNoEntryTransparencyAudit } from "./period-accuracy.js";
 import cors from "cors";
 import multer from "multer";
 import OpenAI from "openai";
@@ -43,7 +43,7 @@ import {
   applyVerifiedPeriodExtremeOverrides,
   getVerifiedChartFixture,
 } from "./benchmark/verified-chart-fixtures.js";
-import { buildVisiblePeriodFibonacciFrame } from "./benchmark/weekly-fibonacci-policy.js";
+import { buildVisiblePeriodFibonacciFrame, resolveCalendarPeriodDirection } from "./benchmark/weekly-fibonacci-policy.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -10802,8 +10802,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.54.0";
-const CSA_BUILD_ID = "CSA-v4.59.0-period-mapping";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.56.0";
+const CSA_BUILD_ID = "CSA-v4.61.0-calendar-guards-merged";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -11441,12 +11441,28 @@ function buildLatestImpulseFibonacci({
   structuralLevelHints = [],
   suppressImpulseLog = false,
 }) {
+  const requiresCalendarPeriodFrame = ["H4", "D1", "W1"].includes(
+    String(timeframe || "").toUpperCase()
+  );
+  const unavailableCalendarFrame = (reason) => ({
+    enabled: false,
+    needsReview: true,
+    direction,
+    reason,
+    source: "calendar_period_frame_missing_needs_review",
+    fibOriginModel: "calendar_period_frame_missing_needs_review",
+    levels: [],
+  });
   if (!Array.isArray(candles) || candles.length < 10) {
-    return null;
+    return requiresCalendarPeriodFrame && finalVisibleEndpointAuthority?.enabled === true
+      ? unavailableCalendarFrame("calendar_period_frame_unavailable_insufficient_candles")
+      : null;
   }
 
   if (!["bullish", "bearish"].includes(direction)) {
-    return null;
+    return requiresCalendarPeriodFrame && finalVisibleEndpointAuthority?.enabled === true
+      ? unavailableCalendarFrame("calendar_period_direction_unavailable")
+      : null;
   }
 
   const ordered = candles
@@ -11462,7 +11478,11 @@ function buildLatestImpulseFibonacci({
       String(a.datetime).localeCompare(String(b.datetime))
     );
 
-  if (ordered.length < 10) return null;
+  if (ordered.length < 10) {
+    return requiresCalendarPeriodFrame && finalVisibleEndpointAuthority?.enabled === true
+      ? unavailableCalendarFrame("calendar_period_frame_unavailable_insufficient_valid_candles")
+      : null;
+  }
 
   // One deterministic current-period Fib frame applies to every candidate:
   // M1-H1=current week, H4=current month, D1/W1=current year. Do not let a
@@ -11471,31 +11491,15 @@ function buildLatestImpulseFibonacci({
     ? buildVisiblePeriodFibonacciFrame({ candles: ordered, direction, timeframe })
     : null;
 
-  // HARD GUARD (P0-1/P0-2 fix): H4/D1/W1 must NEVER fall through to the
-  // local-impulse/terminal-override path below. If the calendar-period frame
-  // could not be built (e.g. the chart doesn't visibly cover the start of the
-  // required week/month/year), that is a "Needs review" condition, not a
-  // silent permission to use local/recent structure for the calendar bias.
-  const requiresCalendarPeriodFrame = ["H4", "D1", "W1"].includes(
-    String(timeframe || "").toUpperCase()
-  );
+  // H4/D1/W1 cannot fall through to a local impulse when their required
+  // calendar month/year frame is unavailable.
   if (
     requiresCalendarPeriodFrame &&
     finalVisibleEndpointAuthority?.enabled === true &&
     !visiblePeriodFrame
   ) {
-    return {
-      enabled: false,
-      needsReview: true,
-      direction,
-      reason:
-        "calendar_period_frame_unavailable_insufficient_visible_coverage",
-      source: "calendar_period_frame_missing_needs_review",
-      fibOriginModel: "calendar_period_frame_missing_needs_review",
-      levels: [],
-    };
+    return unavailableCalendarFrame("calendar_period_frame_unavailable_insufficient_visible_coverage");
   }
-
   if (visiblePeriodFrame) {
     return {
       ...visiblePeriodFrame,
@@ -20654,6 +20658,7 @@ function rankRawEntryAreas({
         selectorVersion: CSA_SELECTOR_VERSION,
         direction,
         fallbackSource: "no_entry_direction_unresolved",
+        transparencyAudit: buildNoEntryTransparencyAudit(visualReview?.chartNativeEntryFallback),
         fibonacci: {
           source: "not_available",
           swingLow: null,
@@ -20699,6 +20704,7 @@ function rankRawEntryAreas({
           selectorVersion: CSA_SELECTOR_VERSION,
           direction,
           fallbackSource: `no_entry_missing_visible_current_${requiredFramePeriod}_frame`,
+          transparencyAudit: buildNoEntryTransparencyAudit(visualReview?.chartNativeEntryFallback),
           fibonacci: {
             source: `uploaded_chart_visible_current_${requiredFramePeriod}_high_low_required`,
             swingLow: null,
@@ -24996,6 +25002,30 @@ function buildValidatedAnalysisFacts({
     currentStructureRegime.bearishPullbackAfterBreakout = false;
   }
 
+  // The readable complete calendar-period OHLC controls direction across all
+  // live timeframes too, not only saved benchmark fixtures. A recent opposite
+  // move is the phase/pullback; it cannot reverse the calendar bias.
+  const calendarPeriodAuthority = finalVisibleMode
+    ? resolveCalendarPeriodDirection({
+        frameVerified: visualReview?.chartNativeEntryFallback?.currentPeriodFrameVerified === true,
+        periodDirection: visualReview?.chartNativeEntryFallback?.currentPeriodDirection,
+        recentDirection: currentStructureRegime.direction,
+      })
+    : null;
+  if (calendarPeriodAuthority) {
+    const calendarPeriodDirection = calendarPeriodAuthority.direction;
+    const recentDirection = ["bullish", "bearish"].includes(currentStructureRegime.direction)
+      ? currentStructureRegime.direction : null;
+    direction = calendarPeriodDirection;
+    currentStructureRegime.direction = calendarPeriodDirection;
+    currentStructureRegime.phase = calendarPeriodAuthority.phase;
+    currentStructureRegime.source = "verified_calendar_period_ohlc_direction";
+    currentStructureRegime.bullishBreakout = calendarPeriodDirection === "bullish";
+    currentStructureRegime.bearishBreakdown = calendarPeriodDirection === "bearish";
+    currentStructureRegime.bullishRecoveryAfterBreakdown = calendarPeriodDirection === "bearish" && recentDirection === "bullish";
+    currentStructureRegime.bearishPullbackAfterBreakout = calendarPeriodDirection === "bullish" && recentDirection === "bearish";
+  }
+
   /*
    * V4.6.4:
    * Direction alone is not enough. The old historical phase/breakout state
@@ -25551,7 +25581,11 @@ function buildValidatedAnalysisFacts({
       conversionConfirmed: candidate.conversionConfirmed === true,
     })),
     selectorDiagnostics:
-      rankedAreaResult?.regressionDiagnostics || null,
+      rankedAreaResult?.regressionDiagnostics ? {
+        ...rankedAreaResult.regressionDiagnostics,
+        transparencyAudit: rankedAreaResult.regressionDiagnostics.transparencyAudit ||
+          buildNoEntryTransparencyAudit(visualReview?.chartNativeEntryFallback),
+      } : null,
     entryAreaValidation: {
       ...entryAreaValidation,
       frameworkMode:
