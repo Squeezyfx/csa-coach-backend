@@ -4659,9 +4659,35 @@ async function runChartValidationRescue({ imageBase64, mimeType }) {
   }
 }
 
+async function readChartDetectionResponse(options) {
+  const decode = (response) => {
+    if (response?.raw?.status === "incomplete" ||
+        response?.raw?.stop_reason === "max_tokens") return null;
+    const value = extractJsonObject(response?.text || "");
+    return value && typeof value === "object" && !Array.isArray(value) &&
+      typeof value.isTradingChart === "boolean" ? value : null;
+  };
+  let response = await runVisionModel({ ...options, maxTokens: 1800 });
+  let parsed = decode(response);
+  let recovered = false;
+  if (!parsed) {
+    // One retry only, on a malformed/incomplete response. Never turn a
+    // transport or JSON failure into a judgment about the uploaded image.
+    response = await runVisionModel({
+      ...options,
+      maxTokens: 2400,
+      userText: options.userText + "\nReturn a complete compact JSON object. Keep notes brief. The previous response was incomplete or malformed.",
+    });
+    parsed = decode(response);
+    recovered = Boolean(parsed);
+  }
+  return { response, parsed, recovered };
+}
+
 async function detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument = "", selectedTimeframe = "", selectedDateText = "", analysisType = "post-trade" }) {
   const fallback = (reason) => ({
     ok: false,
+    readError: true,
     isTradingChart: false,
     chartValidityReason: reason,
     validationConfidence: "low",
@@ -4707,20 +4733,19 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
   if (!isAiProviderConfigured()) return fallback(getAiConfigurationError());
 
   try {
-    const response = await runVisionModel({
+    const detectionRead = await readChartDetectionResponse({
       systemPrompt: CHART_DETECTION_PROMPT,
       userText: `Inspect this uploaded chart image.\nSelected instrument: ${submittedInstrument || "not provided"}\nSelected timeframe: ${selectedTimeframe || "not provided"}\nSelected chart/trade date: ${selectedDateText || "not provided"}\nAnalysis type: ${analysisType || "post-trade"}\nReturn only JSON.`,
       imageBase64,
       mimeType,
-      maxTokens: 850,
       openaiModel: "gpt-4.1",
       claudeModel: CLAUDE_MODEL,
       temperature: 0,
       imageDetail: "high",
     });
 
-    let parsed =
-      extractJsonObject(response.text || "");
+    const { response } = detectionRead;
+    let parsed = detectionRead.parsed;
 
     if (!parsed) {
       return fallback(
@@ -4920,6 +4945,8 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
 
     return {
       ok: true,
+      readError: false,
+      validationJsonRecoveryUsed: detectionRead.recovered,
       isTradingChart,
       chartValidityReason:
         isTradingChart &&
@@ -10821,8 +10848,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.61.0";
-const CSA_BUILD_ID = "CSA-v4.66.0-d1-raster-inventory-rescue";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.62.0";
+const CSA_BUILD_ID = "CSA-v4.67.0-chart-validation-recovery";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -29017,6 +29044,15 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           chartDetection?.validationEvidenceScore ?? null,
       }
     );
+
+    if (chartDetection.readError === true) {
+      return stoppedResponse({
+        res, errorType: "chart_read_failed",
+        error: "Chart reading failed before validation. Retry this chart; it has not been classified as invalid.",
+        analysis: buildInvalidChartAnalysis({ submittedInstrument, timeframe, chartDetection }),
+        submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile,
+      });
+    }
 
     if (!chartDetection.isTradingChart) {
       const analysis = buildInvalidChartAnalysis({ submittedInstrument, timeframe, chartDetection });
