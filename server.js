@@ -1500,6 +1500,8 @@ Important:
 - If latestVisibleDate and the bottom-axis year disagree, use the bottom-axis year for latestVisibleDate because the time axis defines the chart's visible history.
 - Inspect the far-right side of the time axis and the latest visible candle. A printed bottom-axis date is a tick label, not automatically the final candle date. If candles continue to its right, count those candles using the detected timeframe (one trading day per D1 candle; four hours per H4 candle, skipping closed weekends) before returning latestVisibleDate. Never copy the last printed tick as latestVisibleDate while later candles are visibly present.
 - Return latestPrintedAxisDate and visibleCandlesAfterLastPrintedDate so this endpoint-date calculation can be audited.
+- Transcribe every clearly printed bottom-axis date from left to right into timeAxisDates using YYYY-MM-DD. This is a calibration backup for deterministic candle-to-month mapping; do not include inferred month boundaries.
+- Transcribe every ordinary right-axis price tick from top to bottom into priceAxisTicks. Exclude the boxed current-price label and labels belonging to drawn horizontal lines.
 - A date calculated from axis labels or candle counts is an estimate, not an exact timestamp. Set latestVisibleDateEvidence="inferred_axis" for such dates. Use "explicit_final_candle_timestamp" only when a readable date is explicitly attached to the final candle (for example its data window). Otherwise use "unknown".
 - Set latestVisibleCandleComplete=true only if visible evidence confirms the final candle has closed. Never infer completion from a bearish/bullish body or a calendar date alone; use null when unknown.
 - When readable, return the latest visible candle time in 24-hour HH:mm format.
@@ -1573,6 +1575,8 @@ Return exactly this JSON shape:
   "latestVisibleDate": "YYYY-MM-DD or null",
   "latestPrintedAxisDate": "YYYY-MM-DD or null",
   "visibleCandlesAfterLastPrintedDate": 0,
+  "timeAxisDates": ["YYYY-MM-DD"],
+  "priceAxisTicks": [1.23456],
   "visibleTimeAxisYear": 2026,
   "latestVisibleTime": "HH:mm in 24-hour time or null",
   "latestVisibleTimeConfidence": "high or medium or low",
@@ -4679,6 +4683,8 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
     latestVisibleDate: null,
     latestPrintedAxisDate: null,
     visibleCandlesAfterLastPrintedDate: null,
+    timeAxisDates: [],
+    priceAxisTicks: [],
     latestVisibleTime: null,
     latestVisibleTimeConfidence: "low",
     latestVisiblePrice: null,
@@ -4706,7 +4712,7 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
       userText: `Inspect this uploaded chart image.\nSelected instrument: ${submittedInstrument || "not provided"}\nSelected timeframe: ${selectedTimeframe || "not provided"}\nSelected chart/trade date: ${selectedDateText || "not provided"}\nAnalysis type: ${analysisType || "post-trade"}\nReturn only JSON.`,
       imageBase64,
       mimeType,
-      maxTokens: 700,
+      maxTokens: 850,
       openaiModel: "gpt-4.1",
       claudeModel: CLAUDE_MODEL,
       temperature: 0,
@@ -4981,6 +4987,18 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
         isTradingChart && Number.isInteger(Number(parsed?.visibleCandlesAfterLastPrintedDate))
           ? Math.max(0, Number(parsed.visibleCandlesAfterLastPrintedDate))
           : null,
+      timeAxisDates:
+        isTradingChart && Array.isArray(parsed?.timeAxisDates)
+          ? parsed.timeAxisDates
+              .map((date) => /^\d{4}-\d{2}-\d{2}$/.test(String(date || "")) ? String(date) : null)
+              .filter(Boolean)
+          : [],
+      priceAxisTicks:
+        isTradingChart && Array.isArray(parsed?.priceAxisTicks)
+          ? parsed.priceAxisTicks
+              .map(nullablePositiveNumber)
+              .filter((price) => price !== null)
+          : [],
       visibleTimeAxisYear:
         isTradingChart && Number.isInteger(Number(parsed?.visibleTimeAxisYear))
           ? Number(parsed.visibleTimeAxisYear)
@@ -10803,8 +10821,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.60.0";
-const CSA_BUILD_ID = "CSA-v4.65.0-chart-raster-price-authority";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.61.0";
+const CSA_BUILD_ID = "CSA-v4.66.0-d1-raster-inventory-rescue";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -29542,19 +29560,44 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         visibleClose:
           chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
       };
-      const rawFocusedPeriodInventory =
+      const focusedOutputPeriodInventory =
         mergedChartNativeFallback?.periodInventory ||
         mergedChartNativeFallback?.periodDayInventory || [];
+      const deterministicPeriodDates = expectedFrameworkPeriodDates(
+        timeframe,
+        chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || ""
+      );
+      // The raster path must not disappear merely because the focused vision
+      // response was malformed or marked unusable. D1 month dates are known
+      // from the calendar, so seed empty rows and let the image supply prices.
+      const rawFocusedPeriodInventory = focusedOutputPeriodInventory.length
+        ? focusedOutputPeriodInventory
+        : String(timeframe).toUpperCase() === "D1"
+        ? deterministicPeriodDates.map((date, index) => ({
+            periodLabel: new Date(`${date}T00:00:00Z`).toLocaleString("en", { month: "long", timeZone: "UTC" }),
+            sourceUnit: "MN",
+            date,
+            high: null,
+            low: null,
+            structures: [],
+          }))
+        : [];
       const rasterInventory = extractMt4PngMonthlyInventory({
         imageBase64,
         mimeType,
         timeframe,
         periodDates: rawFocusedPeriodInventory.map((period) => period?.date).filter(Boolean),
-        timeAxisDates: mergedChartNativeFallback?.timeAxisDates || [],
-        priceAxisTicks: mergedChartNativeFallback?.priceAxisTicks || [],
+        timeAxisDates: mergedChartNativeFallback?.timeAxisDates?.length
+          ? mergedChartNativeFallback.timeAxisDates
+          : chartDetection?.timeAxisDates || [],
+        priceAxisTicks: mergedChartNativeFallback?.priceAxisTicks?.length
+          ? mergedChartNativeFallback.priceAxisTicks
+          : chartDetection?.priceAxisTicks || [],
         latestVisibleHigh: chartDetection?.latestVisibleHigh,
         latestVisibleLow: chartDetection?.latestVisibleLow,
         latestVisibleClose: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
+        latestVisibleDate: chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "",
+        instrument: normalizedSymbol || submittedInstrument,
       });
       const rasterByDate = new Map(
         (rasterInventory?.inventory || []).map((period) => [String(period.date), period])

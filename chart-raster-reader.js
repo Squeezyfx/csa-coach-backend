@@ -152,6 +152,13 @@ function moveWeekendForward(timestamp) {
   return resolved;
 }
 
+function previousDailySession(timestamp, includesWeekends) {
+  let resolved = timestamp - 86400000;
+  if (includesWeekends) return resolved;
+  while ([0, 6].includes(new Date(resolved).getUTCDay())) resolved -= 86400000;
+  return resolved;
+}
+
 function interpolateDailySessionX(timestamp, anchors, candleStep) {
   if (!Number.isFinite(timestamp) || anchors.length < 2 || !(candleStep > 0)) return null;
   let left = anchors[0];
@@ -217,11 +224,13 @@ export function extractMt4PngMonthlyInventory({
   latestVisibleHigh = null,
   latestVisibleLow = null,
   latestVisibleClose = null,
+  latestVisibleDate = "",
+  instrument = "",
 } = {}) {
   if (String(timeframe).toUpperCase() !== "D1" || !/png/i.test(String(mimeType))) return null;
   const dates = (Array.isArray(timeAxisDates) ? timeAxisDates : []).map(parseDate).filter(Number.isFinite);
   const prices = (Array.isArray(priceAxisTicks) ? priceAxisTicks : []).map(Number).filter(Number.isFinite);
-  if (dates.length < 3 || prices.length < 3 || prices[0] <= prices.at(-1)) return null;
+  if (prices.length >= 3 && prices[0] <= prices.at(-1)) return null;
   let image;
   try {
     image = decodePng8(Buffer.from(String(imageBase64 || ""), "base64"));
@@ -263,49 +272,63 @@ export function extractMt4PngMonthlyInventory({
   const firstCandleX = candleCenters[0];
   const lastCandleX = candleCenters.at(-1);
 
-  const rawXAxisTicks = [];
-  for (let x = 1; x < Math.min(plotRight, lastCandleX + candleStep); x += 1) {
-    let count = 0;
-    for (let y = plotBottom; y < Math.min(height, plotBottom + 6); y += 1) if (dark(pixel(image, x, y))) count += 1;
-    if (count >= 4) rawXAxisTicks.push(x);
-  }
-  let xAxisPositions = regularAxisPositions(groupConsecutive(rawXAxisTicks).map((group) => group[0]), candleStep * 24, 3, 0);
-  if (xAxisPositions.length < dates.length) {
-    const phase = ((firstCandleX % (candleStep * 24)) + candleStep * 24) % (candleStep * 24);
-    xAxisPositions = [];
-    for (let x = phase || candleStep * 24; x <= lastCandleX; x += candleStep * 24) xAxisPositions.push(x);
-  }
-  if (xAxisPositions.length !== dates.length) {
+  let dateAnchors = [];
+  if (dates.length >= 3) {
+    const rawXAxisTicks = [];
+    for (let x = 1; x < Math.min(plotRight, lastCandleX + candleStep); x += 1) {
+      let count = 0;
+      for (let y = plotBottom; y < Math.min(height, plotBottom + 6); y += 1) if (dark(pixel(image, x, y))) count += 1;
+      if (count >= 4) rawXAxisTicks.push(x);
+    }
+    let xAxisPositions = regularAxisPositions(groupConsecutive(rawXAxisTicks).map((group) => group[0]), candleStep * 24, 3, 0);
+    if (xAxisPositions.length < dates.length) {
+      const phase = ((firstCandleX % (candleStep * 24)) + candleStep * 24) % (candleStep * 24);
+      xAxisPositions = [];
+      for (let x = phase || candleStep * 24; x <= lastCandleX; x += candleStep * 24) xAxisPositions.push(x);
+    }
     if (xAxisPositions.length > dates.length) xAxisPositions = xAxisPositions.slice(0, dates.length);
-    else return null;
-  }
-  const dateAnchors = dates.map((timestamp, index) => ({ timestamp, x: xAxisPositions[index] }));
-  if (!dateAnchors.every((item, index) => index === 0 || item.timestamp > dateAnchors[index - 1].timestamp)) return null;
-
-  const rawYAxisTicks = [];
-  for (let y = 12; y < plotBottom; y += 1) {
-    let count = 0;
-    for (let x = plotRight; x < Math.min(width, plotRight + 7); x += 1) if (dark(pixel(image, x, y))) count += 1;
-    if (count >= 3) rawYAxisTicks.push(y);
-  }
-  const yTickGroups = groupConsecutive(rawYAxisTicks).filter((group) => group.length <= 2);
-  const yStep = modePositive(yTickGroups.slice(1).map((group, index) => group[0] - yTickGroups[index][0]), 20, 100) || 49;
-  let yAxisPositions = regularAxisPositions(yTickGroups.map((group) => group[0]), yStep, 3);
-  if (yAxisPositions.length !== prices.length) {
-    if (yAxisPositions.length > prices.length) yAxisPositions = yAxisPositions.slice(0, prices.length);
-    else {
-      const firstDetectedY = yTickGroups[0]?.[0];
-      if (!Number.isFinite(firstDetectedY)) return null;
-      yAxisPositions = Array.from({ length: prices.length }, (_, index) => firstDetectedY + index * yStep);
-      if (yAxisPositions.at(-1) >= plotBottom + 2) return null;
+    if (xAxisPositions.length === dates.length) {
+      dateAnchors = dates.map((timestamp, index) => ({ timestamp, x: xAxisPositions[index] }));
+      if (!dateAnchors.every((item, index) => index === 0 || item.timestamp > dateAnchors[index - 1].timestamp)) dateAnchors = [];
     }
   }
-  const firstY = yAxisPositions[0];
-  const lastY = yAxisPositions.at(-1);
-  const firstPrice = prices[0];
-  const lastPrice = prices.at(-1);
-  if (!(lastY > firstY) || !(firstPrice > lastPrice)) return null;
-  const axisPriceAtY = (y) => firstPrice + (y - firstY) / (lastY - firstY) * (lastPrice - firstPrice);
+
+  let firstY = 20;
+  let firstPrice = null;
+  let lastPrice = null;
+  let axisPriceAtY = null;
+  let axisPricePerPixel = null;
+  if (prices.length >= 3) {
+    const rawYAxisTicks = [];
+    for (let y = 12; y < plotBottom; y += 1) {
+      let count = 0;
+      for (let x = plotRight; x < Math.min(width, plotRight + 7); x += 1) if (dark(pixel(image, x, y))) count += 1;
+      if (count >= 3) rawYAxisTicks.push(y);
+    }
+    const yTickGroups = groupConsecutive(rawYAxisTicks).filter((group) => group.length <= 2);
+    const yStep = modePositive(yTickGroups.slice(1).map((group, index) => group[0] - yTickGroups[index][0]), 20, 100) || 49;
+    let yAxisPositions = regularAxisPositions(yTickGroups.map((group) => group[0]), yStep, 3);
+    if (yAxisPositions.length !== prices.length) {
+      if (yAxisPositions.length > prices.length) yAxisPositions = yAxisPositions.slice(0, prices.length);
+      else {
+        const firstDetectedY = yTickGroups[0]?.[0];
+        if (Number.isFinite(firstDetectedY)) {
+          yAxisPositions = Array.from({ length: prices.length }, (_, index) => firstDetectedY + index * yStep);
+          if (yAxisPositions.at(-1) >= plotBottom + 2) yAxisPositions = [];
+        }
+      }
+    }
+    if (yAxisPositions.length === prices.length) {
+      firstY = yAxisPositions[0];
+      const lastY = yAxisPositions.at(-1);
+      firstPrice = prices[0];
+      lastPrice = prices.at(-1);
+      if (lastY > firstY && firstPrice > lastPrice) {
+        axisPricePerPixel = Math.abs((lastPrice - firstPrice) / (lastY - firstY));
+        axisPriceAtY = (y) => firstPrice + (y - firstY) / (lastY - firstY) * (lastPrice - firstPrice);
+      }
+    }
+  }
 
   const excludedRows = new Set();
   for (let y = 20; y < plotBottom; y += 1) {
@@ -342,15 +365,14 @@ export function extractMt4PngMonthlyInventory({
   const headerHigh = Number(latestVisibleHigh);
   const headerLow = Number(latestVisibleLow);
   const headerPixelSpan = finalCandle ? finalCandle.lowY - finalCandle.highY : 0;
-  const axisPricePerPixel = Math.abs((lastPrice - firstPrice) / (lastY - firstY));
   const headerRange = headerHigh - headerLow;
   const headerValuesUsable =
     Number.isFinite(headerHigh) && Number.isFinite(headerLow) && headerRange > 0 &&
     finalCandle && headerPixelSpan > 0;
   const headerTolerance = headerValuesUsable
-    ? Math.max(axisPricePerPixel * 4, headerRange * 0.35, (firstPrice - lastPrice) * 0.003)
+    ? Math.max((axisPricePerPixel || headerRange / headerPixelSpan) * 4, headerRange * 0.35, ((firstPrice || headerHigh) - (lastPrice || headerLow)) * 0.003)
     : Infinity;
-  const axisMatchesHeader = headerValuesUsable &&
+  const axisMatchesHeader = headerValuesUsable && typeof axisPriceAtY === "function" &&
     Math.abs(axisPriceAtY(finalCandle.highY) - headerHigh) <= headerTolerance &&
     Math.abs(axisPriceAtY(finalCandle.lowY) - headerLow) <= headerTolerance;
   const useHeaderCalibration = headerValuesUsable && !axisMatchesHeader && headerPixelSpan >= 12;
@@ -360,6 +382,7 @@ export function extractMt4PngMonthlyInventory({
   const priceAtY = useHeaderCalibration
     ? (y) => headerHigh + (y - finalCandle.highY) * headerPricePerPixel
     : axisPriceAtY;
+  if (typeof priceAtY !== "function") return null;
   const chartPriceScaleVerified = axisMatchesHeader || useHeaderCalibration;
   const priceCalibrationSource = useHeaderCalibration
     ? "exact_final_candle_header_ohlc"
@@ -369,14 +392,26 @@ export function extractMt4PngMonthlyInventory({
 
   const starts = (Array.isArray(periodDates) ? periodDates : []).map((date) => ({ date, timestamp: parseDate(date) })).filter((item) => Number.isFinite(item.timestamp));
   if (!starts.length) return null;
+  const finalTimestamp = parseDate(latestVisibleDate);
+  const includesWeekends = /(?:BTC|DOGE|ETH|SOL|XRP|ADA|LTC|BCH|CRYPTO)/i.test(String(instrument));
+  const datedCandles = [];
+  if (dateAnchors.length < 2 && Number.isFinite(finalTimestamp)) {
+    let candleTimestamp = finalTimestamp;
+    for (let index = candles.length - 1; index >= 0; index -= 1) {
+      datedCandles[index] = { ...candles[index], timestamp: candleTimestamp };
+      candleTimestamp = previousDailySession(candleTimestamp, includesWeekends);
+    }
+  }
   const decimals = precisionFor({ latestVisibleClose: Number(latestVisibleClose), priceTicks: prices });
   const round = (value) => Number(Number(value).toFixed(decimals));
   const inventory = starts.map((start, index) => {
-    const endTimestamp = starts[index + 1]?.timestamp ?? dateAnchors.at(-1).timestamp + 45 * 86400000;
-    const startX = interpolateDailySessionX(start.timestamp, dateAnchors, candleStep);
-    const endX = interpolateDailySessionX(endTimestamp, dateAnchors, candleStep);
-    if (!Number.isFinite(startX) || !Number.isFinite(endX)) return null;
-    const owned = candles.filter((candle) => candle.x >= startX - candleStep * 0.5 && candle.x < endX - candleStep * 0.5);
+    const endTimestamp = starts[index + 1]?.timestamp ??
+      (dateAnchors.at(-1)?.timestamp ?? finalTimestamp ?? start.timestamp) + 45 * 86400000;
+    const startX = dateAnchors.length >= 2 ? interpolateDailySessionX(start.timestamp, dateAnchors, candleStep) : null;
+    const endX = dateAnchors.length >= 2 ? interpolateDailySessionX(endTimestamp, dateAnchors, candleStep) : null;
+    const owned = Number.isFinite(startX) && Number.isFinite(endX)
+      ? candles.filter((candle) => candle.x >= startX - candleStep * 0.5 && candle.x < endX - candleStep * 0.5)
+      : datedCandles.filter((candle) => candle.timestamp >= start.timestamp && candle.timestamp < endTimestamp);
     if (!owned.length) return null;
     const highCandle = owned.reduce((best, candle) => candle.highY < best.highY ? candle : best);
     const lowCandle = owned.reduce((best, candle) => candle.lowY > best.lowY ? candle : best);
