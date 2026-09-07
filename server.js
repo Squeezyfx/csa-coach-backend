@@ -10848,8 +10848,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.62.0";
-const CSA_BUILD_ID = "CSA-v4.67.0-chart-validation-recovery";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.63.0";
+const CSA_BUILD_ID = "CSA-v4.68.0-h1-calendar-evidence-preservation";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -19995,7 +19995,7 @@ function deriveVerifiedFixedPeriodBias({
     return null;
   }
 
-  if (tf === "H4") {
+  if (["M1", "M5", "M15", "M30", "H1", "H4"].includes(tf)) {
     const open = nullablePositiveNumber(periodOpen) || nullablePositiveNumber(periods[0]?.open);
     if (open === null) return null;
     const normalizedMove = (close - open) / range;
@@ -29797,7 +29797,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         ? deriveVerifiedFixedPeriodBias({
             timeframe,
             periodInventory: selectedPeriodInventory,
-            periodOpen: selectedPeriodInventory[0]?.open,
+            periodOpen: selectedPeriodInventory[0]?.open ?? mergedChartNativeFallback?.currentPeriodOpen,
             periodClose:
               chartDetection?.latestVisibleClose ??
               selectedPeriodInventory[selectedPeriodInventory.length - 1]?.close,
@@ -29945,6 +29945,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             null,
           currentPeriodOpen:
             (inventoryUsable ? selectedPeriodInventory[0]?.open : null) ??
+            (inventoryUsable ? mergedChartNativeFallback?.currentPeriodOpen : null) ??
             null,
           currentPeriodClose:
             (inventoryUsable
@@ -30084,6 +30085,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       visualReview = {
         ...visualReview,
         chartNativeEntryFallback: {
+          ...visualReview?.chartNativeEntryFallback,
           usable: true,
           ...verifiedChartFixture,
           // Keep the live day-by-day inventory unless the reviewed baseline
