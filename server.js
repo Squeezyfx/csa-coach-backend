@@ -1,3 +1,4 @@
+import { fetchOandaSeries, oandaInstrument, forexComparisonTolerance } from "./oanda-data.js";
 import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
@@ -3035,6 +3036,8 @@ async function fetchTwelveDataStructureLevels({
   analysisType = "post-trade",
   chartCutoff = null,
 }) {
+  const useOanda = Boolean(oandaInstrument(symbol)) && String(process.env.FOREX_DATA_PROVIDER || "oanda").toLowerCase() === "oanda";
+  const dataProvider = useOanda ? "OANDA" : "Twelve Data";
   const apiKey = process.env.TWELVE_DATA_API_KEY;
   const profile = getSupportedCsaTimeframeProfile(timeframe);
 
@@ -3058,7 +3061,8 @@ async function fetchTwelveDataStructureLevels({
     chartCutoff: chartCutoff || null,
   });
 
-  if (!apiKey) return empty("TWELVE_DATA_API_KEY is missing on the server.");
+  if (useOanda && !process.env.OANDA_API_TOKEN) return {...empty("OANDA_API_TOKEN is missing on the server."), dataProvider, failureCategory:"authentication"};
+  if (!useOanda && !apiKey) return empty("TWELVE_DATA_API_KEY is missing on the server.");
   if (!symbol) return empty("Instrument/pair is missing or unsupported.");
   if (!chartDate) return empty("Final visible chart date is missing.");
 
@@ -3118,6 +3122,11 @@ async function fetchTwelveDataStructureLevels({
     purpose,
     preferredProviderSymbol = "",
   }) => {
+    if (useOanda) {
+      const result = await fetchOandaSeries({symbol,interval,startDate,endDateTime,timezone,token:process.env.OANDA_API_TOKEN,environment:process.env.OANDA_ENVIRONMENT || "practice",price:process.env.OANDA_PRICE_COMPONENT || "B"});
+      resolvedProviderSymbol = result.providerSymbol;
+      return result;
+    }
     const orderedCandidates = [...new Set([
       preferredProviderSymbol,
       ...(preferredProviderSymbol ? [] : providerCandidates),
@@ -3214,6 +3223,7 @@ async function fetchTwelveDataStructureLevels({
   } catch (error) {
     return {
       ...empty(error.message, structureRange),
+      dataProvider,
       failureCategory: error.category || "provider_error",
       twelveDataStatus: error.twelveDataStatus || "unknown",
     };
@@ -3921,6 +3931,8 @@ async function fetchTwelveDataStructureLevels({
       structureRange,
     impulseRange,
     symbol,
+    dataProvider,
+    providerPriceComponent: useOanda ? process.env.OANDA_PRICE_COMPONENT || "B" : null,
     providerSymbol: resolvedProviderSymbol,
     priceAuthority: "provider_reference_not_broker_verified",
     timezone,
@@ -4053,6 +4065,7 @@ async function synchronizeFinalVisibleMarketReference({
     },
   });
 
+  if (marketReference?.dataProvider === "OANDA") return unchanged("oanda_timestamp_locked_no_price_based_date_shift");
   if (normalizedMode !== "final_visible") {
     return unchanged("not_final_visible_mode");
   }
@@ -10846,8 +10859,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.64.0";
-const CSA_BUILD_ID = "CSA-v4.69.0-shared-framework-engine";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
+const CSA_BUILD_ID = "CSA-v4.70.0-oanda-forex-reference";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -29141,12 +29154,15 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       providerAvailable: marketReference.ok === true,
       tolerance: getCleanBreakTolerance(normalizedSymbol),
     });
+    completedPeriodReferences.source = marketReference.dataProvider || "Twelve Data";
     if (marketReference.ok) {
       const chartDataMatch = assessChartDataMatch({
         candles: marketReference.impulseCandles?.length ? marketReference.impulseCandles : marketReference.timeframeCandles,
         detection: chartDetection,
         cutoff: chartCutoff.endDateTime,
         timeframe,
+        symbol: normalizedSymbol,
+        source: marketReference.dataProvider || "Twelve Data",
         tolerance: getCleanBreakTolerance(normalizedSymbol),
       });
       marketReference.chartDataMatch = chartDataMatch;
@@ -29359,13 +29375,14 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const providerInventoryAligned =
       marketReference?.ok === true &&
       marketReference?.chartDataMatch?.status === "matched_reference";
+    const providerOnlyForex = marketReference?.dataProvider === "OANDA";
     { // Every supported timeframe reconciles its evidence through the shared engine.
       const focusedFallbackStartedAt = csaNowMs();
       const [
         focusedChartNativeFallback,
         visibleCurrentWeekFrame,
       ] = await Promise.all([
-        (providerInventoryAligned && !BENCHMARK_DRY_RUN_ENABLED)
+        (providerOnlyForex || (providerInventoryAligned && !BENCHMARK_DRY_RUN_ENABLED))
           ? Promise.resolve(visualReview?.chartNativeEntryFallback || null)
           : extractFocusedChartNativeEntryFallback({
           imageBase64,
@@ -29418,7 +29435,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             structures: [],
           }))
         : [];
-      const rasterInventory = extractMt4PngMonthlyInventory({
+      const rasterInventory = providerOnlyForex ? null : extractMt4PngMonthlyInventory({
         imageBase64,
         mimeType,
         timeframe,
@@ -29555,6 +29572,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       // retain a complete focused inventory for diagnosis instead of returning
       // no bias/period data at all. It remains explicitly human-review-only.
       const chartOnlyInventoryUsable =
+        !providerOnlyForex &&
         marketInventoryVerified !== true &&
         chartInventoryFrame?.currentPeriodFrameVerified === true &&
         chartPeriodInventory.length > 0;
