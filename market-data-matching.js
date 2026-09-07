@@ -25,15 +25,16 @@ export function classifyProviderError(message = "", status = 0) {
   return "provider_error";
 }
 
-export function assessChartDataMatch({ candles = [], detection = {}, cutoff = "", tolerance = 0, timeframe = "D1", symbol = "", source = "Twelve Data" }) {
+export function assessChartDataMatch({ candles = [], detection = {}, cutoff = "", tolerance = 0, timeframe = "D1", symbol = "", source = "Twelve Data", alignmentCandle = null }) {
   const result = (status, reason, extra = {}) => ({ status, reason, brokerVerified: false, source, alignmentScope: "final_visible_candle_only", ...extra });
-  const dateVerified = detection.latestVisibleDateEvidence === "explicit_final_candle_timestamp" && detection.dateConfidence === "high" && detection.latestVisibleDate === cutoff.slice(0, 10);
+  const dateVerified = ["explicit_final_candle_timestamp", "verified_axis_bar_count"].includes(detection.latestVisibleDateEvidence) && detection.dateConfidence === "high" && detection.latestVisibleDate === cutoff.slice(0, 10);
   const price = Number(detection.latestVisiblePrice ?? detection.latestVisibleClose);
   if (!(price > 0) || !["high", "medium"].includes(String(detection.latestVisiblePriceConfidence).toLowerCase())) {
     return result("unverified", "Readable chart price required to check provider alignment");
   }
   const rows = candles.filter(c => String(c.datetime || "").slice(0, 19) <= cutoff).sort((a,b) => String(a.datetime).localeCompare(String(b.datetime)));
-  const last = rows.at(-1);
+  const last = source === "OANDA" && alignmentCandle && String(alignmentCandle.datetime) <= cutoff
+    ? alignmentCandle : rows.at(-1);
   if (!last || !(Number(last.close) > 0)) return result("unverified", "No provider candles at the chart cutoff");
   if (String(last.datetime).slice(0,10) !== cutoff.slice(0,10)) return result("mismatch", "Provider history does not reach the chart date");
   const forexLimit = forexComparisonTolerance(symbol);

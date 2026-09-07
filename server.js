@@ -1,3 +1,4 @@
+import { readMt4ForexTimestamp } from "./chart-time-reader.js";
 import { fetchOandaSeries, oandaInstrument, forexComparisonTolerance } from "./oanda-data.js";
 import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
@@ -1499,6 +1500,7 @@ Important:
 - If latestVisibleDate and the bottom-axis year disagree, use the bottom-axis year for latestVisibleDate because the time axis defines the chart's visible history.
 - Inspect the far-right side of the time axis and the latest visible candle. A printed bottom-axis date is a tick label, not automatically the final candle date. If candles continue to its right, count those candles using the detected timeframe (one trading day per D1 candle; four hours per H4 candle, skipping closed weekends) before returning latestVisibleDate. Never copy the last printed tick as latestVisibleDate while later candles are visibly present.
 - Return latestPrintedAxisDate and visibleCandlesAfterLastPrintedDate so this endpoint-date calculation can be audited.
+- Transcribe timeAxisTimestamps in left-to-right order, one element per printed bottom-axis tick. Use YYYY-MM-DD HH:mm:00 when BOTH date and time are printed; use null when time is not printed. Never copy the final axis label time into latestVisibleTime. A label is not necessarily the final candle.
 - Transcribe every clearly printed bottom-axis date from left to right into timeAxisDates using YYYY-MM-DD. This is a calibration backup for deterministic candle-to-month mapping; do not include inferred month boundaries.
 - Transcribe every ordinary right-axis price tick from top to bottom into priceAxisTicks. Exclude the boxed current-price label and labels belonging to drawn horizontal lines.
 - A date calculated from axis labels or candle counts is an estimate, not an exact timestamp. Set latestVisibleDateEvidence="inferred_axis" for such dates. Use "explicit_final_candle_timestamp" only when a readable date is explicitly attached to the final candle (for example its data window). Otherwise use "unknown".
@@ -1575,6 +1577,7 @@ Return exactly this JSON shape:
   "latestPrintedAxisDate": "YYYY-MM-DD or null",
   "visibleCandlesAfterLastPrintedDate": 0,
   "timeAxisDates": ["YYYY-MM-DD"],
+  "timeAxisTimestamps": [null, "YYYY-MM-DD HH:mm:00"],
   "priceAxisTicks": [1.23456],
   "visibleTimeAxisYear": 2026,
   "latestVisibleTime": "HH:mm in 24-hour time or null",
@@ -3098,6 +3101,7 @@ async function fetchTwelveDataStructureLevels({
       .map((candidate) => providerSymbol(candidate))
       .filter(Boolean)
   )];
+  let oandaAlignmentCandle = null;
   let resolvedProviderSymbol = providerCandidates[0] || normalizeSymbol(symbol);
 
   const buildTwelveParams = ({
@@ -3124,6 +3128,7 @@ async function fetchTwelveDataStructureLevels({
   }) => {
     if (useOanda) {
       const result = await fetchOandaSeries({symbol,interval,startDate,endDateTime,timezone,token:process.env.OANDA_API_TOKEN,environment:process.env.OANDA_ENVIRONMENT || "practice",price:process.env.OANDA_PRICE_COMPONENT || "B"});
+      if (interval === profile.interval) oandaAlignmentCandle = result.alignmentCandle || null;
       resolvedProviderSymbol = result.providerSymbol;
       return result;
     }
@@ -3932,6 +3937,7 @@ async function fetchTwelveDataStructureLevels({
     impulseRange,
     symbol,
     dataProvider,
+    oandaAlignmentCandle,
     providerPriceComponent: useOanda ? process.env.OANDA_PRICE_COMPONENT || "B" : null,
     providerSymbol: resolvedProviderSymbol,
     priceAuthority: "provider_reference_not_broker_verified",
@@ -5025,6 +5031,7 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
         isTradingChart && Number.isInteger(Number(parsed?.visibleCandlesAfterLastPrintedDate))
           ? Math.max(0, Number(parsed.visibleCandlesAfterLastPrintedDate))
           : null,
+      timeAxisTimestamps: isTradingChart && Array.isArray(parsed?.timeAxisTimestamps) ? parsed.timeAxisTimestamps : [],
       timeAxisDates:
         isTradingChart && Array.isArray(parsed?.timeAxisDates)
           ? parsed.timeAxisDates
@@ -10860,7 +10867,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
-const CSA_BUILD_ID = "CSA-v4.70.1-oanda-auth-diagnostics";
+const CSA_BUILD_ID = "CSA-v4.70.2-oanda-chart-time";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -29057,6 +29064,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       return stoppedResponse({ res, errorType: "timeframe_mismatch", error: "Selected timeframe does not match uploaded chart timeframe.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
 
+    if (oandaInstrument(normalizedSymbol || submittedInstrument) && chartDetection?.latestVisibleDateEvidence !== "explicit_final_candle_timestamp") {
+      const axisTime = readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps:chartDetection?.timeAxisTimestamps || []});
+      if (axisTime) chartDetection = {...chartDetection, latestVisibleDate:axisTime.timestamp.slice(0,10), latestVisibleTime:axisTime.timestamp.slice(11,16), dateConfidence:"high", latestVisibleTimeConfidence:"high", latestVisibleDateEvidence:"verified_axis_bar_count", timestampAudit:axisTime};
+    }
+
     const dateDecision = chooseFinalChartDate({
       selectedDate,
       detection: chartDetection,
@@ -29163,9 +29175,20 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         timeframe,
         symbol: normalizedSymbol,
         source: marketReference.dataProvider || "Twelve Data",
+        alignmentCandle: marketReference.oandaAlignmentCandle || null,
         tolerance: getCleanBreakTolerance(normalizedSymbol),
       });
       marketReference.chartDataMatch = chartDataMatch;
+      if (marketReference.dataProvider === "OANDA" && chartDataMatch.status === "matched_reference" && marketReference.oandaAlignmentCandle) {
+        const snapshot = {datetime:marketReference.oandaAlignmentCandle.datetime,
+          open:Number(chartDetection.latestVisibleOpen),high:Number(chartDetection.latestVisibleHigh),low:Number(chartDetection.latestVisibleLow),close:Number(chartDetection.latestVisibleClose),source:"printed_chart_header_snapshot"};
+        if ([snapshot.open,snapshot.high,snapshot.low,snapshot.close].every(n=>Number.isFinite(n)&&n>0) && snapshot.high>=Math.max(snapshot.open,snapshot.close) && snapshot.low<=Math.min(snapshot.open,snapshot.close)) {
+          marketReference.timeframeCandles = [...marketReference.timeframeCandles.filter(c=>c.datetime!==snapshot.datetime),snapshot];
+          const lastPeriod = marketReference.dailyLevels?.at(-1);
+          if(lastPeriod){lastPeriod.high=Math.max(Number(lastPeriod.high),snapshot.high);lastPeriod.low=Math.min(Number(lastPeriod.low),snapshot.low);lastPeriod.partialPeriod=true;lastPeriod.source="OANDA_completed_candles+printed_chart_header_snapshot";}
+        }
+      }
+
       if (chartDataMatch.status === "mismatch") {
         completedPeriodReferences.status = "chart_mismatch";
         completedPeriodReferences.periods = [];
