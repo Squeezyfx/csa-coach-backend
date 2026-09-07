@@ -67,17 +67,9 @@ test("date labels alone cannot verify vision-estimated highs and lows", () => {
   assert.match(serverSource, /vision-estimated period price rejected/);
 });
 
-test("verified fixed-period structure outranks the final pullback direction", () => {
-  assert.match(serverSource, /deriveVerifiedFixedPeriodBias/);
-  const fixedBiasFunction = serverSource.match(
-    /function deriveVerifiedFixedPeriodBias\([\s\S]*?\n}\n\nfunction buildPeriodInventoryStructuralCandidates/
-  )?.[0] || "";
-  assert.match(fixedBiasFunction, /const periods =/);
-  assert.doesNotMatch(fixedBiasFunction, /const normalizedPeriods =/);
-  assert.match(serverSource, /verified fixed-period structure is bullish/);
-  assert.match(serverSource, /final bearish move treated as a pullback/);
-  assert.match(serverSource, /latestClose < latestOpen/);
-  assert.match(serverSource, /latestClose > latestOpen/);
+test("fixed-period bias routes to the shared engine", () => {
+  assert.ok(serverSource.includes("const fixedPeriodBias = sharedFramework.bias"));
+  assert.ok(serverSource.includes("const fallbackDirection = fixedPeriodBias?.direction || null"));
 });
 
 test("focused reader uses the full vision model once for exact period prices", () => {
@@ -129,4 +121,9 @@ test("provider-unavailable charts retain a complete provisional chart inventory"
   assert.match(serverSource, /rasterCorrectedPeriodInventory/);
   assert.match(serverSource, /priceAxisTicks/);
   assert.match(serverSource, /timeAxisDates/);
+  assert.match(serverSource, /chartDetection\?\.timeAxisDates/);
+  assert.match(serverSource, /chartDetection\?\.priceAxisTicks/);
+  assert.match(serverSource, /deterministicPeriodDates\.map/);
+  assert.match(serverSource, /complete_chart_only_period_inventory_deterministic_raster_verified/);
+  assert.match(serverSource, /rasterInventory\?\.chartPriceScaleVerified === true/);
 });

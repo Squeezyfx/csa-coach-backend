@@ -1,3 +1,4 @@
+import { evaluateFrameworkCandidate, selectFrameworkEntries } from "../shared-analysis-engine.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -95,7 +96,7 @@ const functionSource = name => {
   assert.ok(start >= 0, name);
   return server.slice(start, server.indexOf("\n}\n", start) + 2);
 };
-const context = vm.createContext({ ...policy, isUnverifiedPeriodCandidate,
+const context = vm.createContext({ ...policy, evaluateFrameworkCandidate, selectFrameworkEntries, isUnverifiedPeriodCandidate,
   asPositiveNumber: value => Number(value) > 0 ? Number(value) : null,
   getCleanBreakTolerance: () => 0.00001,
   getApprovedPriceTolerance: () => 0.00001,

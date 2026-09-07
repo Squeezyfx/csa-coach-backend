@@ -1,3 +1,5 @@
+import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
+import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
 import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData } from "./market-data-matching.js";
 import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences, reconcilePeriodMapping, buildNoEntryTransparencyAudit } from "./period-accuracy.js";
@@ -39,10 +41,6 @@ import {
   sequenceFibQualifiedAreas,
   shouldMergeQualifiedSupplyDemandCluster,
 } from "./csa-entry-policy.js";
-import {
-  applyVerifiedPeriodExtremeOverrides,
-  getVerifiedChartFixture,
-} from "./benchmark/verified-chart-fixtures.js";
 import { buildVisiblePeriodFibonacciFrame, resolveCalendarPeriodDirection } from "./benchmark/weekly-fibonacci-policy.js";
 import { extractMt4PngMonthlyInventory } from "./chart-raster-reader.js";
 import crypto from "crypto";
@@ -10848,8 +10846,8 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 
-const CSA_FEEDBACK_ENGINE_VERSION = "10.63.0";
-const CSA_BUILD_ID = "CSA-v4.68.0-h1-calendar-evidence-preservation";
+const CSA_FEEDBACK_ENGINE_VERSION = "10.64.0";
+const CSA_BUILD_ID = "CSA-v4.69.0-shared-framework-engine";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -15460,7 +15458,7 @@ function validateAndSequenceEntryAreas({
   // CSA exposes at most three independently qualified alternatives. Every
   // candidate is audited before sequencing; a later entry is never an
   // instruction to add to a losing earlier position.
-  const independentlyQualified = selectIndependentEntryAreas(filtered, direction);
+  const independentlyQualified = selectFrameworkEntries(filtered, direction);
   const sequenced = independentlyQualified.map((area, index) => ({
     ...area,
     executionOrder: index + 1,
@@ -19579,6 +19577,7 @@ function normalizeChartNativeEntryFallback(value = {}) {
     periodInventory: rawPeriodInventory
       .slice(0, 12)
       .map((period, index) => ({
+        coverageStart: /^\d{4}-\d{2}-\d{2}$/.test(period?.coverageStart || "") ? period.coverageStart : null,
         periodLabel: safeUserText(period?.periodLabel || period?.label || `Period ${index + 1}`),
         sourceUnit: ["D1", "W1", "MN"].includes(String(period?.sourceUnit || "").toUpperCase())
           ? String(period.sourceUnit).toUpperCase()
@@ -19633,6 +19632,7 @@ async function extractFocusedChartNativeEntryFallback({
     focusedTimeframe,
     chartDetection?.latestVisibleDate || ""
   );
+  const frameMapping = calendarMapping(focusedTimeframe, chartDetection?.latestVisibleDate);
   const exactPeriodBoundaryRule = expectedPeriodDates.length
     ? focusedTimeframe === "H4"
       ? `The required H4 weekly boundaries are ${expectedPeriodDates.map((date, index) => `W${index + 1} starts ${date} 00:00 inclusive${expectedPeriodDates[index + 1] ? ` and ends immediately before ${expectedPeriodDates[index + 1]} 00:00` : " and ends at the final visible candle"}`).join("; ")}. Return exactly ${expectedPeriodDates.length} rows using those dates. The first candle of every W1 period is Monday 00:00. With the visible 00:00, 04:00, 08:00, 12:00, 16:00 and 20:00 H4 sequence, a Monday 04:00 label is the second candle, not the weekly start. Exclude Saturday and Sunday completely. Never assign Monday 00:00, 04:00 or 08:00—including an early third-candle high—to the previous week.`
@@ -19646,6 +19646,8 @@ async function extractFocusedChartNativeEntryFallback({
     ? "For D1, treat each MN candle inside the visible current calendar year as one authoritative framework period. Return January through the final visible month separately. Read each monthly candle's own high and low; do not replace them with smaller D1 swings. For every month, locate both calendar boundaries on the x-axis first, then scan every wick between them. An isolated tall wick is still the monthly extreme and must not be replaced by the denser candle cluster."
     : focusedTimeframe === "W1"
     ? "For W1, group the visible current calendar year's MN candles into Q1, Q2, Q3 and Q4 up to the final visible candle. Return each quarter separately with its complete high and low."
+    : focusedTimeframe === "MN"
+    ? "Return yearly high/low rows for the current calendar year and previous four years."
     : `Use the authoritative higher-timeframe candle inventory required for ${focusedTimeframe || "the detected timeframe"}.`;
   const frameRule = ["M1", "M5", "M15", "M30", "H1"].includes(focusedTimeframe)
     ? "For Fibonacci only, use the complete visible current calendar-week high and low from Monday through the final visible candle."
@@ -19655,6 +19657,8 @@ async function extractFocusedChartNativeEntryFallback({
     ? "For Fibonacci only, use the complete visible current calendar-year high and low from January 1 through the final visible candle."
     : focusedTimeframe === "W1"
     ? "For Fibonacci only, use the complete visible current calendar-year high and low from January 1 through the final visible candle."
+    : focusedTimeframe === "MN"
+    ? "For Fibonacci use January 1 four years before the visible year through the final visible candle."
     : "Use the complete required current-period high and low for Fibonacci.";
   const sourceExamples = focusedTimeframe === "H4"
     ? "W1 high, W2 low, W3 demand, W4 converted resistance"
@@ -19685,6 +19689,7 @@ async function extractFocusedChartNativeEntryFallback({
 Apply this order exactly:
 1. Build periodInventory before selecting any entry. ${inventoryRule}
    ${exactPeriodBoundaryRule}
+   ${frameMapping ? `Clip the frame at ${frameMapping.start} 00:00. For an opening H4 partial week, exclude prior-month candles and return coverageStart: "${frameMapping.start}" on that row.` : ""}
 2. Identify support/resistance and genuine converted levels from every inventory period high and low.
 3. Identify independent supply/demand bases inside each inventory period only when their own displacement is visibly clear.
 4. ${frameRule} This Fibonacci frame qualifies structure but does not replace the individual D1/W1 inventory.
@@ -19887,13 +19892,13 @@ function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", 
     }));
   }
 
-  if (["D1", "W1", "MN"].includes(tf)) {
+  if (["M1", "M5", "M15", "M30", "H1", "D1", "W1", "MN"].includes(tf)) {
     const periods = (Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [])
       .map((level, index) => ({
         ...level,
         periodLabel:
           level?.periodLabel || level?.day || `${tf === "D1" ? "M" : "Period "}${index + 1}`,
-        sourceUnit: tf === "D1" ? "MN" : tf === "W1" ? "MN" : "MN",
+        sourceUnit: ["M1", "M5", "M15", "M30", "H1"].includes(tf) ? "D1" : "MN",
         structures: Array.isArray(level?.structures) ? level.structures : [],
         source: level?.source || "market_reference_higher_timeframe_inventory",
         periodLifecycle: level?.partialPeriod === true ? "in_progress" : "completed",
@@ -19916,120 +19921,8 @@ function comparePeriodInventories(primary = [], secondary = [], symbol = "") {
 }
 
 
-function deriveVerifiedFixedPeriodBias({
-  timeframe = "",
-  periodInventory = [],
-  periodOpen = null,
-  periodClose = null,
-  currentPrice = null,
-} = {}) {
-  const tf = comparableTimeframe(timeframe);
-  const periods = (Array.isArray(periodInventory) ? periodInventory : [])
-    .filter((period) => nullablePositiveNumber(period?.high) !== null && nullablePositiveNumber(period?.low) !== null);
-  if (!periods.length) return null;
-  const high = Math.max(...periods.map((period) => Number(period.high)));
-  const low = Math.min(...periods.map((period) => Number(period.low)));
-  const range = high - low;
-  const close = nullablePositiveNumber(periodClose) || nullablePositiveNumber(currentPrice);
-  if (!(range > 0) || close === null) return null;
-
-  if (tf === "D1") {
-    const position = (close - low) / range;
-    const latestPeriod = periods[periods.length - 1] || {};
-    const latestOpen = nullablePositiveNumber(latestPeriod?.open);
-    const latestClose = nullablePositiveNumber(latestPeriod?.close) || close;
-    if (position >= 0.618) {
-      return {
-        direction: "bullish",
-        phase: latestOpen !== null && latestClose < latestOpen
-          ? "bearish_pullback_after_bullish_structure"
-          : "bullish_structure",
-        high,
-        low,
-        close,
-        rangePosition: position,
-      };
-    }
-    if (position <= 0.382) {
-      return {
-        direction: "bearish",
-        phase: latestOpen !== null && latestClose > latestOpen
-          ? "bullish_recovery_after_bearish_structure"
-          : "bearish_structure",
-        high,
-        low,
-        close,
-        rangePosition: position,
-      };
-    }
-    // A mid-range close does not erase an established calendar structure.
-    // Compare the first and latest completed monthly extremes so instruments
-    // such as BTC can remain structurally bearish during a bullish recovery.
-    const completedPeriods = periods.filter((period) => period?.partialPeriod !== true && period?.periodLifecycle !== "in_progress");
-    const firstCompleted = completedPeriods[0];
-    const latestCompleted = completedPeriods.at(-1);
-    const firstHigh = nullablePositiveNumber(firstCompleted?.high);
-    const firstLow = nullablePositiveNumber(firstCompleted?.low);
-    const latestHigh = nullablePositiveNumber(latestCompleted?.high);
-    const latestLow = nullablePositiveNumber(latestCompleted?.low);
-    if (completedPeriods.length >= 2 && firstHigh !== null && firstLow !== null && latestHigh !== null && latestLow !== null) {
-      const direction = latestHigh < firstHigh && latestLow < firstLow
-        ? "bearish"
-        : latestHigh > firstHigh && latestLow > firstLow
-        ? "bullish"
-        : null;
-      if (direction) {
-        return {
-          direction,
-          phase: direction === "bearish"
-            ? "bullish_recovery_after_bearish_structure"
-            : "bearish_pullback_after_bullish_structure",
-          high,
-          low,
-          close,
-          rangePosition: position,
-          structureSource: "completed_calendar_period_extreme_progression",
-        };
-      }
-    }
-    return null;
-  }
-
-  if (["M1", "M5", "M15", "M30", "H1", "H4"].includes(tf)) {
-    const open = nullablePositiveNumber(periodOpen) || nullablePositiveNumber(periods[0]?.open);
-    if (open === null) return null;
-    const normalizedMove = (close - open) / range;
-    const latestPeriod = periods[periods.length - 1] || {};
-    const latestOpen = nullablePositiveNumber(latestPeriod?.open);
-    const latestClose = nullablePositiveNumber(latestPeriod?.close) || close;
-    if (normalizedMove >= 0.08) {
-      return {
-        direction: "bullish",
-        phase: latestOpen !== null && latestClose < latestOpen
-          ? "bearish_pullback_after_bullish_breakout"
-          : "bullish_structure",
-        high,
-        low,
-        open,
-        close,
-        normalizedMove,
-      };
-    }
-    if (normalizedMove <= -0.08) {
-      return {
-        direction: "bearish",
-        phase: latestOpen !== null && latestClose > latestOpen
-          ? "bullish_recovery_after_bearish_breakdown"
-          : "bearish_structure",
-        high,
-        low,
-        open,
-        close,
-        normalizedMove,
-      };
-    }
-  }
-  return null;
+function deriveVerifiedFixedPeriodBias(options = {}) {
+  return resolveFrameworkBias(options);
 }
 
 function buildPeriodInventoryStructuralCandidates({
@@ -20249,7 +20142,7 @@ function rankChartNativeFallbackAreas({
   // The dedicated current-period reader is authoritative. Candidate extremes
   // may never replace its high/low with a smaller local range that happens to
   // qualify a line. Reviewed fixtures are deliberately treated as verified.
-  const currentPeriodFrameVerified = fallback?.fixtureApplied === true || fallback?.currentPeriodFrameVerified === true;
+  const currentPeriodFrameVerified = fallback?.currentPeriodFrameVerified === true;
   const currentPeriodFrameChartUsable = fallback?.currentPeriodFrameChartUsable === true;
   const currentPeriodFrameUsable = currentPeriodFrameVerified || currentPeriodFrameChartUsable;
   const visibleWeekHigh = currentPeriodFrameUsable
@@ -20266,7 +20159,7 @@ function rankChartNativeFallbackAreas({
     : ["D1", "W1"].includes(frameTimeframe)
     ? "year"
     : frameTimeframe === "MN"
-    ? "visible_range"
+    ? "five_years"
     : null;
   const visibleWeekFrame = framePeriod &&
     visibleWeekHigh !== null && visibleWeekLow !== null && visibleWeekHigh > visibleWeekLow
@@ -20317,19 +20210,7 @@ function rankChartNativeFallbackAreas({
     timeframe: frameTimeframe,
     inventoryProvenanceVerified: !chartOnlyInventoryUnverified,
   });
-  const verifiedFixtureCandidates =
-    fallback?.fixtureApplied === true &&
-    fallback?.preferVerifiedCandidates === true &&
-    Array.isArray(fallback?.candidates)
-      ? expandExactSupportResistanceBoundaries(fallback.candidates).map((candidate) => ({
-          ...candidate,
-          authoritativeFrameworkLevel: true,
-          provenanceVerified: true,
-        }))
-      : [];
-  const structuralCandidateInventory = verifiedFixtureCandidates.length
-    ? verifiedFixtureCandidates
-    : authoritativeInventory.candidates.length
+  const structuralCandidateInventory = authoritativeInventory.candidates.length
     ? authoritativeInventory.candidates
     : expandExactSupportResistanceBoundaries(fallback.candidates || []);
 
@@ -20375,27 +20256,11 @@ function rankChartNativeFallbackAreas({
     );
     const usableFrame = currentPeriodFrameUsable;
 
-    const rejectionReasons = [];
-    if (!allowedTypes.has(areaType)) rejectionReasons.push("structural role conflicts with bias");
-    if (!sideCompatible) rejectionReasons.push("level is on the wrong side of current price");
-    if (!fibMatch) rejectionReasons.push("outside the 38.2%-61.8% retracement band");
-    if (!structuralEvidenceValid) rejectionReasons.push("missing independent structural provenance");
-    if (!usableFrame) rejectionReasons.push("fixed-period Fibonacci frame is unavailable");
-
-    if (
-      !allowedTypes.has(areaType) ||
-      !sideCompatible ||
-      !fibMatch ||
-      !usableFrame ||
-      !structuralEvidenceValid
-    ) {
-      return {
-        candidate,
-        qualified: false,
-        rejectionReasons,
-        fibMatch,
-      };
-    }
+    const decision = evaluateFrameworkCandidate({
+      candidate, direction, currentPrice: resolvedCurrentPrice, swingHigh, swingLow,
+      tolerance: fibTolerance, frameUsable: usableFrame, structuralEvidenceValid,
+    });
+    if (!decision.qualified) return { candidate, ...decision };
     const converted = ["converted support", "converted resistance"].includes(areaType);
     const fibRatio = fibMatch.ratio;
     const computedFibPrice = fibMatch.fibPrice;
@@ -20495,7 +20360,7 @@ function rankChartNativeFallbackAreas({
         priceSource: "provisional_chart_period_high_low",
       }))
     : candidates;
-  const selected = selectIndependentEntryAreas(selectorCandidates, direction)
+  const selected = selectFrameworkEntries(selectorCandidates, direction)
     .map((selectedArea, index) => {
       const originalArea = chartOnlyInventoryProvisional
         ? candidates.find((area) =>
@@ -20562,6 +20427,7 @@ function rankChartNativeFallbackAreas({
       marketInventoryVerified: fallback?.marketInventoryVerified === true,
       chartOnlyInventoryVerified: fallback?.chartOnlyInventoryVerified === true,
       finalVisibleCandle: fallback?.finalVisibleCandleAuthority || null,
+      sharedFramework: fallback?.sharedFramework || null,
     },
     bias: {
       direction,
@@ -20775,6 +20641,9 @@ function rankRawEntryAreas({
   symbol = "",
   timeframe = "H1",
 }) {
+  if (visualReview?.chartNativeEntryFallback?.sharedFramework) {
+    direction = visualReview.chartNativeEntryFallback.sharedFramework.bias?.direction || "range";
+  }
   if (!["bullish", "bearish"].includes(direction)) {
     return {
       areas: [],
@@ -20800,7 +20669,8 @@ function rankRawEntryAreas({
   // The isolated benchmark service treats the uploaded screenshot as the
   // price authority. External candles may extend beyond the historical image
   // and must not redefine its visible impulse or structural levels.
-  if (BENCHMARK_DRY_RUN_ENABLED) {
+  {
+    // Benchmark and customer requests use the same selector and missing-frame guard.
     const chartNativeFallback = rankChartNativeFallbackAreas({
       visualReview,
       marketReference,
@@ -20820,7 +20690,7 @@ function rankRawEntryAreas({
       ? "month"
       : ["D1", "W1"].includes(String(timeframe || "").toUpperCase())
       ? "year"
-      : null;
+      : String(timeframe || "").toUpperCase() === "MN" ? "five_years" : "unsupported";
     if (requiredFramePeriod) {
       return {
         areas: [],
@@ -29002,37 +28872,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const chartValidationStartedAt =
       csaNowMs();
 
-    // A confirmed benchmark fixture is a reviewed chart image, not an
-    // arbitrary filename. Use it only to prevent a transient vision-model
-    // false negative from stopping that exact regression chart before the
-    // deterministic fixture and Fib checks run. Customer uploads and every
-    // unknown benchmark image still pass the ordinary image validator.
-    const benchmarkReviewedChartFixture = benchmarkDryRun
-      ? getVerifiedChartFixture(req.file?.originalname)
-      : null;
-
     let chartDetection = await detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument, selectedTimeframe: timeframe, selectedDateText, analysisType: mode });
-
-    if (benchmarkReviewedChartFixture && chartDetection?.isTradingChart !== true) {
-      chartDetection = {
-        ...chartDetection,
-        isTradingChart: true,
-        validationHardReject: false,
-        hasUsablePriceData: true,
-        chartDataQuality: "benchmark_fixture_confirmed",
-        validationEvidenceScore: Math.max(8, Number(chartDetection?.validationEvidenceScore || 0)),
-        validationRescueUsed: true,
-        validationRescueReason: "confirmed_benchmark_fixture_validation_guard",
-        detectedInstrument:
-          chartDetection?.detectedInstrument || benchmarkReviewedChartFixture.instrument,
-        detectedTimeframe:
-          chartDetection?.detectedTimeframe || benchmarkReviewedChartFixture.timeframe,
-        latestVisiblePrice:
-          Number(chartDetection?.latestVisiblePrice) > 0
-            ? chartDetection.latestVisiblePrice
-            : benchmarkReviewedChartFixture.currentPrice || null,
-      };
-    }
 
     csaTimingLog(
       "chart_validation",
@@ -29070,32 +28910,16 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // selected instrument and timeframe and keeps all existing mismatch
     // protection.
     if (benchmarkAutoDetectContext) {
-      // Resolve known benchmark context before header OCR. This supplies only
-      // pair/timeframe and cannot supply direction, structure, or Fib levels.
-      const reviewedAutoContext = benchmarkDryRun
-        ? getVerifiedChartFixture(req.file?.originalname)
-        : null;
       let detectedInstrument = String(
         chartDetection?.detectedInstrument ||
         (isDetectedInstrumentUsable(submittedInstrument) ? submittedInstrument : "") ||
-        reviewedAutoContext?.instrument ||
         ""
       ).trim();
       let detectedTimeframe = comparableTimeframe(
         chartDetection?.detectedTimeframe ||
         comparableTimeframe(timeframe || "") ||
-        reviewedAutoContext?.timeframe ||
         ""
       );
-
-      if (reviewedAutoContext?.instrument && reviewedAutoContext?.timeframe) {
-        chartDetection = {
-          ...chartDetection,
-          detectedInstrument,
-          detectedTimeframe,
-          chartHeaderReviewedFixtureUsed: true,
-        };
-      }
 
       if (!isDetectedInstrumentUsable(detectedInstrument) || !detectedTimeframe) {
         let focusedHeader = null;
@@ -29139,27 +28963,6 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             detectedInstrument,
             detectedTimeframe,
             chartHeaderContextHintUsed: true,
-          };
-        }
-      }
-
-      // A known regression chart may supply context only after every image
-      // header read fails. This is isolated to the private benchmark; normal
-      // customer analyses still use their selected instrument/timeframe.
-      if (!isDetectedInstrumentUsable(detectedInstrument) || !detectedTimeframe) {
-        const reviewedFixture = benchmarkDryRun
-          ? getVerifiedChartFixture(req.file?.originalname)
-          : null;
-        const fixtureInstrument = String(reviewedFixture?.instrument || "").trim();
-        const fixtureTimeframe = comparableTimeframe(reviewedFixture?.timeframe || "");
-        if (isDetectedInstrumentUsable(fixtureInstrument) && fixtureTimeframe) {
-          detectedInstrument = fixtureInstrument;
-          detectedTimeframe = fixtureTimeframe;
-          chartDetection = {
-            ...chartDetection,
-            detectedInstrument,
-            detectedTimeframe,
-            chartHeaderReviewedFixtureUsed: true,
           };
         }
       }
@@ -29556,16 +29359,15 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const providerInventoryAligned =
       marketReference?.ok === true &&
       marketReference?.chartDataMatch?.status === "matched_reference";
-    if (BENCHMARK_DRY_RUN_ENABLED || (
-      providerInventoryAligned !== true &&
-      visualReview?.chartNativeEntryFallback?.usable !== true
-    )) {
+    { // Every supported timeframe reconciles its evidence through the shared engine.
       const focusedFallbackStartedAt = csaNowMs();
       const [
         focusedChartNativeFallback,
         visibleCurrentWeekFrame,
       ] = await Promise.all([
-        extractFocusedChartNativeEntryFallback({
+        (providerInventoryAligned && !BENCHMARK_DRY_RUN_ENABLED)
+          ? Promise.resolve(visualReview?.chartNativeEntryFallback || null)
+          : extractFocusedChartNativeEntryFallback({
           imageBase64,
           mimeType,
           chartDetection,
@@ -29582,12 +29384,10 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         Promise.resolve(null),
       ]);
 
-      const mergedChartNativeFallback = BENCHMARK_DRY_RUN_ENABLED
-        ? mergeFocusedSupplyDemandInventory(
+      const mergedChartNativeFallback = mergeFocusedSupplyDemandInventory(
             visualReview?.chartNativeEntryFallback || {},
             focusedChartNativeFallback
-          )
-        : focusedChartNativeFallback;
+          );
 
       const finalVisibleCandle = {
         visibleOpen: chartDetection?.latestVisibleOpen,
@@ -29793,38 +29593,15 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           : conflict.resolution,
       }));
       inventoryPriceConflicts.push(...marketPeriodIntegrity.issues);
-      const fixedPeriodBias = inventoryUsable
-        ? deriveVerifiedFixedPeriodBias({
-            timeframe,
-            periodInventory: selectedPeriodInventory,
-            periodOpen: selectedPeriodInventory[0]?.open ?? mergedChartNativeFallback?.currentPeriodOpen,
-            periodClose:
-              chartDetection?.latestVisibleClose ??
-              selectedPeriodInventory[selectedPeriodInventory.length - 1]?.close,
-            currentPrice:
-              chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
-          })
-        : null;
-      const rawInferredFallbackDirection = inferReviewDirection(
-        visualReview,
-        marketReference
-      );
-      const inferredFallbackDirection = rawInferredFallbackDirection === "buy"
-        ? "bullish"
-        : rawInferredFallbackDirection === "sell"
-        ? "bearish"
-        : rawInferredFallbackDirection;
-      const fallbackDirection = ["bullish", "bearish"].includes(
-        fixedPeriodBias?.direction
-      )
-        ? fixedPeriodBias.direction
-        : ["bullish", "bearish"].includes(
-        mergedChartNativeFallback?.direction
-      )
-        ? mergedChartNativeFallback.direction
-        : ["bullish", "bearish"].includes(inferredFallbackDirection)
-        ? inferredFallbackDirection
-        : null;
+      const sharedFramework = analyzeFramework({
+        timeframe, cutoff: inventoryDate, periodInventory: selectedPeriodInventory,
+        currentPrice: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
+        periodOpen: selectedPeriodInventory[0]?.open ?? mergedChartNativeFallback?.currentPeriodOpen,
+        authority: marketInventoryVerified ? "provider_aligned" : chartOnlyInventoryVerified ? "chart_verified" : "estimate",
+        calendarMappingVerified: marketInventoryVerified || chartOnlyInventoryVerified,
+      });
+      const fixedPeriodBias = sharedFramework.bias;
+      const fallbackDirection = fixedPeriodBias?.direction || null;
       const authoritativeMergedFallback = {
         ...mergedChartNativeFallback,
         direction: fallbackDirection || mergedChartNativeFallback?.direction,
@@ -29865,6 +29642,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           source: "exact_visible_chart_header_ohlc",
         },
         fixedPeriodBias,
+        sharedFramework,
         rasterInventoryAudit: rasterInventory,
       };
 
@@ -30069,43 +29847,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       chartNativeImpulse,
     };
 
-    // Regression charts must assess selector changes, not fluctuate because a
-    // vision model transcribed one already-verified close price differently on
-    // a later run. This fixture path is available only to the isolated dry-run
-    // benchmark service and only for the confirmed chart filenames. New charts
-    // and every customer analysis still use the ordinary live chart reader.
-    const verifiedChartFixture = benchmarkReviewedChartFixture;
-    if (verifiedChartFixture) {
-      const extractedPeriodInventory = visualReview?.chartNativeEntryFallback?.periodInventory ||
-        visualReview?.chartNativeEntryFallback?.periodDayInventory || [];
-      const reviewedPeriodInventory = applyVerifiedPeriodExtremeOverrides(
-        extractedPeriodInventory,
-        verifiedChartFixture
-      );
-      visualReview = {
-        ...visualReview,
-        chartNativeEntryFallback: {
-          ...visualReview?.chartNativeEntryFallback,
-          usable: true,
-          ...verifiedChartFixture,
-          // Keep the live day-by-day inventory unless the reviewed baseline
-          // itself contains a confirmed inventory. Fixtures must not hide the
-          // audit we need to detect skipped Monday/Tuesday/etc. structure.
-          periodInventory:
-            Array.isArray(verifiedChartFixture?.periodInventory) && verifiedChartFixture.periodInventory.length
-              ? verifiedChartFixture.periodInventory
-              : Array.isArray(verifiedChartFixture?.periodDayInventory) && verifiedChartFixture.periodDayInventory.length
-              ? verifiedChartFixture.periodDayInventory
-              : reviewedPeriodInventory,
-          periodDayInventory:
-            Array.isArray(verifiedChartFixture?.periodDayInventory) && verifiedChartFixture.periodDayInventory.length
-              ? verifiedChartFixture.periodDayInventory
-              : reviewedPeriodInventory,
-          source: "verified_benchmark_chart_fixture",
-          fixtureApplied: true,
-        },
-      };
-    }
+    // Expected benchmark answers belong to the validator, never to runtime
+    // price selection. All charts now follow the same live evidence path.
 
     visualReview = resolveIntradayCsaChartMarking({
       visualReview,

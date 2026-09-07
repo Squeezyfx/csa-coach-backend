@@ -1,3 +1,4 @@
+import { calendarMapping, calendarFrame } from "./framework-calendar.js";
 const SR_TYPES = new Set([
   "support",
   "resistance",
@@ -907,82 +908,12 @@ export function mergeFocusedSupplyDemandInventory(
   };
 }
 
-function expectedFrameworkInventoryCount(timeframe = "", latestVisibleDate = "") {
-  const tf = String(timeframe || "").toUpperCase();
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(latestVisibleDate || ""))
-    ? new Date(`${latestVisibleDate}T00:00:00.000Z`)
-    : null;
-  if (!date || Number.isNaN(date.getTime())) return null;
-
-  if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) {
-    const weekday = date.getUTCDay();
-    return weekday >= 1 && weekday <= 5 ? weekday : 5;
-  }
-
-  if (tf === "H4") {
-    const mondayWeeks = new Set();
-    for (let day = 1; day <= date.getUTCDate(); day += 1) {
-      const cursor = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), day));
-      const weekday = cursor.getUTCDay();
-      if (weekday === 0 || weekday === 6) continue;
-      const monday = new Date(cursor);
-      monday.setUTCDate(cursor.getUTCDate() - (weekday - 1));
-      mondayWeeks.add(monday.toISOString().slice(0, 10));
-    }
-    return mondayWeeks.size;
-  }
-
-  if (tf === "D1") {
-    return date.getUTCMonth() + 1;
-  }
-
-  if (tf === "W1") {
-    return Math.floor(date.getUTCMonth() / 3) + 1;
-  }
-
-  return null;
+function expectedFrameworkInventoryCount(timeframe, latestVisibleDate) {
+  return calendarMapping(timeframe, latestVisibleDate)?.dates.length || null;
 }
 
-export function expectedFrameworkPeriodDates(timeframe = "", latestVisibleDate = "") {
-  const tf = String(timeframe || "").toUpperCase();
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(latestVisibleDate || ""))
-    ? new Date(`${latestVisibleDate}T00:00:00.000Z`)
-    : null;
-  if (!date || Number.isNaN(date.getTime())) return [];
-
-  if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) {
-    const weekday = date.getUTCDay();
-    const monday = new Date(date);
-    monday.setUTCDate(date.getUTCDate() - Math.max(0, weekday - 1));
-    const count = weekday >= 1 && weekday <= 5 ? weekday : 5;
-    return Array.from({ length: count }, (_, index) => {
-      const cursor = new Date(monday);
-      cursor.setUTCDate(monday.getUTCDate() + index);
-      return cursor.toISOString().slice(0, 10);
-    });
-  }
-
-  if (tf === "H4") {
-    const dates = [];
-    for (let day = 1; day <= date.getUTCDate(); day += 1) {
-      const cursor = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), day));
-      if (cursor.getUTCDay() === 1) dates.push(cursor.toISOString().slice(0, 10));
-    }
-    return dates;
-  }
-
-  if (tf === "D1") {
-    return Array.from({ length: date.getUTCMonth() + 1 }, (_, month) =>
-      new Date(Date.UTC(date.getUTCFullYear(), month, 1)).toISOString().slice(0, 10)
-    );
-  }
-
-  if (tf === "W1") {
-    return Array.from({ length: Math.floor(date.getUTCMonth() / 3) + 1 }, (_, quarter) =>
-      new Date(Date.UTC(date.getUTCFullYear(), quarter * 3, 1)).toISOString().slice(0, 10)
-    );
-  }
-  return [];
+export function expectedFrameworkPeriodDates(timeframe, latestVisibleDate) {
+  return calendarMapping(timeframe, latestVisibleDate)?.dates || [];
 }
 
 export function reconcileFinalPeriodWithVisibleCandle({
@@ -1033,57 +964,8 @@ export function reconcileFinalPeriodWithVisibleCandle({
   return periods;
 }
 
-export function deriveVerifiedPeriodFrameFromInventory({
-  timeframe = "",
-  latestVisibleDate = "",
-  periodInventory = [],
-} = {}) {
-  const expectedCount = expectedFrameworkInventoryCount(timeframe, latestVisibleDate);
-  const expectedDates = expectedFrameworkPeriodDates(timeframe, latestVisibleDate);
-  const validPeriods = (Array.isArray(periodInventory) ? periodInventory : [])
-    .map((period) => ({
-      ...period,
-      high: Number(period?.high),
-      low: Number(period?.low),
-    }))
-    .filter((period) =>
-      Number.isFinite(period.high) &&
-      Number.isFinite(period.low) &&
-      period.low > 0 &&
-      period.high > period.low
-    );
-
-  const returnedDates = validPeriods.slice(0, expectedCount || 0).map((period) => period?.date || null);
-  const periodDateSequenceVerified =
-    expectedDates.length > 0 &&
-    returnedDates.length === expectedDates.length &&
-    expectedDates.every((date, index) => returnedDates[index] === date);
-
-  if (!expectedCount || validPeriods.length !== expectedCount || !periodDateSequenceVerified) {
-    return {
-      currentPeriodFrameVerified: false,
-      currentPeriodHigh: null,
-      currentPeriodLow: null,
-      expectedCount,
-      returnedCount: validPeriods.length,
-      expectedDates,
-      returnedDates,
-      periodDateSequenceVerified,
-    };
-  }
-
-  const authoritativePeriods = validPeriods.slice(0, expectedCount);
-  return {
-    currentPeriodFrameVerified: true,
-    currentPeriodHigh: Math.max(...authoritativePeriods.map((period) => period.high)),
-    currentPeriodLow: Math.min(...authoritativePeriods.map((period) => period.low)),
-    expectedCount,
-    returnedCount: validPeriods.length,
-    expectedDates,
-    returnedDates,
-    periodDateSequenceVerified,
-    source: "complete_framework_candle_inventory",
-  };
+export function deriveVerifiedPeriodFrameFromInventory(options = {}) {
+  return calendarFrame(options);
 }
 
 function dateOnlyFromCandle(value = "") {
@@ -1162,6 +1044,7 @@ export function aggregateH4CandlesIntoWeeklyInventory({
     .sort((a, b) => a.date.localeCompare(b.date))
     .map((period, index) => ({
       ...period,
+      coverageStart: `${cutoffYear}-${String(cutoffMonth + 1).padStart(2,"0")}-01`,
       periodLabel: `W${index + 1}`,
       sourceUnit: "W1",
       structures: [],
