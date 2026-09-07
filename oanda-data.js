@@ -8,6 +8,39 @@ export function oandaInstrument(symbol='') {
 export function forexPipSize(symbol) {const pair=oandaInstrument(symbol);return pair?(pair.endsWith('_JPY')?.01:.0001):null;}
 export function forexComparisonTolerance(symbol){const pip=forexPipSize(symbol);return pip===null?null:Number((3*pip).toFixed(8));}
 function fail(message,category='provider_error'){return Object.assign(new Error(message),{category});}
+export function normalizeOandaConfig({token="",environment="practice",price="B"}={}) {
+ let cleaned=String(token).trim();
+ // Recover common copy/paste wrappers; do not change internal token characters.
+ for(let i=0;i<3;i++) {
+  cleaned=cleaned.replace(/^OANDA_API_TOKEN\s*=\s*/i,"").trim();
+  if ((cleaned.startsWith('"')&&cleaned.endsWith('"'))||(cleaned.startsWith("'")&&cleaned.endsWith("'"))) cleaned=cleaned.slice(1,-1).trim();
+  cleaned=cleaned.replace(/^Bearer\s+/i,"").trim();
+ }
+ const env=String(environment).trim().toLowerCase(),component=String(price).trim().toUpperCase();
+ if(!cleaned)throw fail("OANDA_API_TOKEN is missing","authentication");
+ if(/\s/.test(cleaned)||!/^[-A-Za-z0-9._~]+$/.test(cleaned))throw fail("OANDA_API_TOKEN contains invalid characters or internal whitespace; paste the personal access token only","authentication");
+ if(!["practice","live"].includes(env))throw fail("OANDA_ENVIRONMENT must be practice or live","configuration");
+ if(!["B","A","M"].includes(component))throw fail("OANDA_PRICE_COMPONENT must be B, A or M","configuration");
+ return {token:cleaned,environment:env,price:component};
+}
+export function oandaHttpError(status,environment) {
+ const category=status===401?'authentication':status===403?'subscription_access':status===429?'rate_limit':status===404?'symbol_unavailable':'provider_error';
+ const hint=status===401?` Token rejected by OANDA ${environment}. Verify that the personal access token belongs to this environment; replace it in Render if invalid or revoked. A trading password or account number is not an API token.`:status===403?' Token lacks permission for this endpoint. Check OANDA API access.':'';
+ return fail(`OANDA candle request failed (${status}).${hint}`,category);
+}
+export async function checkOandaConnection({token,environment="practice",price="B",fetchImpl=fetch}={}) {
+ const config=normalizeOandaConfig({token,environment,price});
+ const origin=config.environment==='live'?'https://api-fxtrade.oanda.com':'https://api-fxpractice.oanda.com';
+ const params=new URLSearchParams({granularity:'M5',price:config.price,count:'2'});
+ const response=await fetchImpl(`${origin}/v3/instruments/EUR_USD/candles?${params}`,{headers:{Authorization:`Bearer ${config.token}`},signal:AbortSignal.timeout(15000)});
+ if(!response.ok)throw oandaHttpError(response.status,config.environment);
+ const data=await response.json();
+ if(data.instrument!=='EUR_USD'||data.granularity!=='M5'||!Array.isArray(data.candles)||!data.candles.length)throw fail('OANDA authenticated but did not return the expected candle data');
+ const key={B:'bid',A:'ask',M:'mid'}[config.price];
+ const sample=data.candles.find(c=>c.complete===true&&['o','h','l','c'].every(k=>Number(c[key]?.[k])>0));
+ if(!sample)throw fail('OANDA authenticated but no completed readable sample candle was returned');
+ return {ok:true,adapterVersion:'1.1.0',environment:config.environment,priceComponent:config.price,instrument:data.instrument,sampleTime:sample.time,sampleOHLC:sample[key],message:'OANDA authentication and candle retrieval succeeded. Historical chart alignment still requires a separate check.'};
+}
 function localString(ms,timezone){
  const parts=new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(new Date(ms));
  const d=Object.fromEntries(parts.map(p=>[p.type,p.value]));return `${d.year}-${d.month}-${d.day} ${d.hour}:${d.minute}:${d.second}`;
@@ -31,8 +64,7 @@ export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,ti
  const instrument=oandaInstrument(symbol),granularity=GRANULARITY[interval];
  if(!instrument)throw fail('OANDA forex adapter does not support this instrument','symbol_unavailable');
  if(!granularity)throw fail('Unsupported OANDA candle interval');
- if(!token)throw fail('OANDA_API_TOKEN is missing','authentication');
- if(!['practice','live'].includes(environment)||!['B','A','M'].includes(price))throw fail('Invalid OANDA environment or price component','configuration');
+ ({token,environment,price}=normalizeOandaConfig({token,environment,price}));
  const start=localToUtc(`${startDate} 00:00:00`,timezone),end=localToUtc(endDateTime,timezone);
  if(end<=start)throw fail('Empty historical window','history_unavailable');
  const origin=environment==='live'?'https://api-fxtrade.oanda.com':'https://api-fxpractice.oanda.com';
@@ -40,8 +72,8 @@ export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,ti
  for(let page=0;page<maxPages;page++){
   const params=new URLSearchParams({granularity,price,from:new Date(cursor).toISOString(),count:'5000',includeFirst:String(includeFirst),smooth:'false',dailyAlignment:'0',alignmentTimezone:timezone,weeklyAlignment:'Monday'});
   const response=await fetchImpl(`${origin}/v3/instruments/${instrument}/candles?${params}`,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(30000)});
+  if(!response.ok)throw oandaHttpError(response.status,environment);
   const data=await response.json();
-  if(!response.ok)throw fail(`OANDA candle request failed (${response.status})`,response.status===401?'authentication':response.status===403?'subscription_access':response.status===429?'rate_limit':response.status===404?'symbol_unavailable':'provider_error');
   if(data.instrument!==instrument||data.granularity!==granularity||!Array.isArray(data.candles))throw fail('OANDA response instrument/interval does not match request');
   if(!data.candles.length){finished=true;break;}
   let last=cursor;
