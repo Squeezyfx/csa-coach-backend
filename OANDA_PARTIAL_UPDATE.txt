@@ -8,6 +8,8 @@ Keep the working OANDA token, live environment and B price component settings.
 What changed
 The supplied USDCAD H4 report has a 3.8-pip close difference. Open, high and low are within three pips, while screenshot candle completion is unknown. Previously that removed the complete provider inventory. The new partial_reference status retains it for provisional framework analysis when the verified timestamp, all three OHL comparisons, a consistent chart header, and the current-price range checks pass. Normal matched-reference handling remains separate.
 
+When the final chart time is not readable, the engine now compares the printed OHLC against completed same-date OANDA candles and selects one only when the header fits. The three-pip close buffer is still enforced; it is not bypassed or widened.
+
 The three-pip limit is unchanged. An unfinished or unknown close does not become a confirmed close. The provider's later final candle is not inserted into historical period calculations. The current unfinished period remains ineligible as an entry source. Missing timestamps, missing OHL, failed extrema and known completed-candle mismatches do not qualify for this recovery.
 
 Results can still say Needs review. This update does not confirm broker-equivalent historical prices, guarantee an entry, or force benchmark acceptance. Provisional entries, if selected by the existing framework, require review.

@@ -33,8 +33,27 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
     return result("unverified", "Readable chart price required to check provider alignment");
   }
   const rows = candles.filter(c => String(c.datetime || "").slice(0, 19) <= cutoff).sort((a,b) => String(a.datetime).localeCompare(String(b.datetime)));
-  const last = source === "OANDA" && alignmentCandle && String(alignmentCandle.datetime) <= cutoff
-    ? alignmentCandle : rows.at(-1);
+  const exactTime = source === "OANDA" &&
+    /^\d{2}:\d{2}$/.test(String(detection.latestVisibleTime || "").slice(0, 5)) &&
+    detection.latestVisibleTimeConfidence === "high";
+  // When the screenshot does not expose the final candle time, do not use the
+  // next/in-progress alignment candle. Match the printed OHLC against the
+  // completed same-date candles first; this prevents a later OANDA candle from
+  // creating a false time failure.
+  const sameDateCompleted = source === "OANDA" && !exactTime
+    ? rows.filter(c => String(c.datetime || "").slice(0, 10) === cutoff.slice(0, 10))
+    : [];
+  const headerValues = ["open", "high", "low", "close"].map(field =>
+    Number(detection[`latestVisible${field[0].toUpperCase()}${field.slice(1)}`])
+  );
+  const headerComparable = headerValues.every(Number.isFinite) && headerValues.every(n => n > 0);
+  const last = exactTime && alignmentCandle && String(alignmentCandle.datetime) <= cutoff
+    ? alignmentCandle
+    : sameDateCompleted.length && headerComparable
+    ? sameDateCompleted
+        .map(c => ({ c, score: ["open", "high", "low", "close"].reduce((sum, field, i) => sum + Math.abs(headerValues[i] - Number(c[field])), 0) }))
+        .sort((a, b) => a.score - b.score)[0]?.c
+    : rows.at(-1);
   if (!last || !(Number(last.close) > 0)) return result("unverified", "No provider candles at the chart cutoff");
   if (String(last.datetime).slice(0,10) !== cutoff.slice(0,10)) return result("mismatch", "Provider history does not reach the chart date");
   const forexLimit = forexComparisonTolerance(symbol);
@@ -45,7 +64,7 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
     const value = Number(detection[`latestVisible${field[0].toUpperCase()}${field.slice(1)}`]);
     if (value > 0) comparisons.push({ field, chart: value, provider: Number(last[field]) });
   }
-  if (source === "OANDA" && ["M1","M5","M15","M30","H1","H4"].includes(timeframe)) {
+  if (source === "OANDA" && exactTime && ["M1","M5","M15","M30","H1","H4"].includes(timeframe)) {
     const time = String(detection.latestVisibleTime || "").slice(0,5);
     if (!/^\d{2}:\d{2}$/.test(time) || detection.latestVisibleTimeConfidence !== "high" || String(last.datetime).slice(11,16) !== time) {
       return result("time_unverified", "Exact final chart candle time must match the OANDA candle; no price-based timestamp guessing", {comparisons,tolerance:limit,candleDate:last.datetime});
@@ -53,11 +72,13 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
   }
   const mismatch = comparisons.some(c => !Number.isFinite(c.provider) || Math.abs(c.chart - c.provider) > limit + Number.EPSILON * Math.max(1, Math.abs(c.chart)) * 8);
   const evidence = { comparisons, tolerance: limit, candleDate: last.datetime };
-  if (!dateVerified) return result("date_unverified", "Final candle date is inferred or unreadable; provider mismatch is not established", evidence);
+  const withinLimit = c => Number.isFinite(c.provider) && Math.abs(c.chart - c.provider) <= limit + Number.EPSILON * Math.max(1, Math.abs(c.chart)) * 8;
+  const chosenByCompletedHeader = source === "OANDA" && !exactTime && sameDateCompleted.includes(last) &&
+    headerComparable && comparisons.filter(c => c.field !== "close").every(withinLimit);
+  if (!dateVerified && !chosenByCompletedHeader) return result("date_unverified", "Final candle date is inferred or unreadable; provider mismatch is not established", evidence);
   // An unfinished screenshot close is not the provider's eventual closing price.
   // Retain only a provisional reference when every available OHL check passes;
   // never promote it to a matched chart or increase the three-pip tolerance.
-  const withinLimit = c => Number.isFinite(c.provider) && Math.abs(c.chart - c.provider) <= limit + Number.EPSILON * Math.max(1, Math.abs(c.chart)) * 8;
   const ohl = comparisons.filter(c => c.field !== "close");
   const headerValid = ohl.length === 3 &&
     Number(detection.latestVisibleHigh) >= Math.max(Number(detection.latestVisibleOpen), price) &&

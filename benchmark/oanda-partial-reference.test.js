@@ -25,6 +25,12 @@ test('passing close remains a normal reference; no widening for completed candle
  assert.equal(assessChartDataMatch({...base,detection:{...base.detection,latestVisiblePrice:1.39026}}).status,'matched_reference');
  assert.notEqual(assessChartDataMatch({...base,detection:{...base.detection,latestVisibleCandleComplete:true,providerSessionAligned:true}}).status,'matched_reference');
 });
+test('unknown final time selects the completed same-date candle by printed OHLC',()=>{
+ const candles=[{datetime:'2026-08-27 16:00:00',open:1.39014,high:1.39088,low:1.38979,close:1.38988},
+   {datetime:'2026-08-27 20:00:00',open:1.38536,high:1.38575,low:1.38492,close:1.38507}];
+ const result=assessChartDataMatch({...base,cutoff:'2026-08-27 20:00:00',alignmentCandle:candles[1],candles,detection:{...base.detection,latestVisibleDate:'2026-08-27',latestVisibleClose:1.38988,latestVisibleTime:null,latestVisibleTimeConfidence:'low',latestVisibleDateEvidence:'inferred_axis'}});
+ assert.equal(result.status,'matched_reference'); assert.equal(result.candleDate,'2026-08-27 16:00:00'); assert.equal(result.tolerance,.0003);
+});
 test('runtime inventory selection retains OANDA provisional data and does not set verified',()=>{
  const server=readFileSync(new URL('../server.js',import.meta.url),'utf8');
  const a=server.indexOf('      const marketInventoryVerified =');
