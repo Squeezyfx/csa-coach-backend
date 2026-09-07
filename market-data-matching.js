@@ -54,6 +54,20 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
   const mismatch = comparisons.some(c => !Number.isFinite(c.provider) || Math.abs(c.chart - c.provider) > limit + Number.EPSILON * Math.max(1, Math.abs(c.chart)) * 8);
   const evidence = { comparisons, tolerance: limit, candleDate: last.datetime };
   if (!dateVerified) return result("date_unverified", "Final candle date is inferred or unreadable; provider mismatch is not established", evidence);
+  // An unfinished screenshot close is not the provider's eventual closing price.
+  // Retain only a provisional reference when every available OHL check passes;
+  // never promote it to a matched chart or increase the three-pip tolerance.
+  const withinLimit = c => Number.isFinite(c.provider) && Math.abs(c.chart - c.provider) <= limit + Number.EPSILON * Math.max(1, Math.abs(c.chart)) * 8;
+  const ohl = comparisons.filter(c => c.field !== "close");
+  const headerValid = ohl.length === 3 &&
+    Number(detection.latestVisibleHigh) >= Math.max(Number(detection.latestVisibleOpen), price) &&
+    Number(detection.latestVisibleLow) <= Math.min(Number(detection.latestVisibleOpen), price);
+  if (mismatch && source === "OANDA" && forexLimit !== null &&
+      detection.latestVisibleCandleComplete !== true && headerValid && ohl.every(withinLimit) &&
+      price >= Number(last.low) - limit && price <= Number(last.high) + limit) {
+    return result("partial_reference", "Final close differs beyond three pips; candle completion is unknown or unfinished. OHL aligns within tolerance; completed provider periods remain provisional and require review.",
+      {...evidence, requiresReview: true, priceVerified: false, failedFields: ["close"]});
+  }
   if (mismatch && detection.latestVisibleCandleComplete !== true) return result("partial_or_unknown_candle", "Final candle may be unfinished; full provider OHLC cannot verify this screenshot", evidence);
   if (mismatch && detection.providerSessionAligned !== true) return result("session_unverified", "Chart and provider candle session boundaries are not verified", evidence);
   return result(mismatch ? "mismatch" : "matched_reference", mismatch ? "Provider candle differs from the visible chart; do not substitute its levels" : "Chart endpoint aligns within tolerance; provider reference, not broker-exact", { comparisons, tolerance: limit, candleDate: last.datetime });

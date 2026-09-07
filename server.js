@@ -10867,7 +10867,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
-const CSA_BUILD_ID = "CSA-v4.70.2-oanda-chart-time";
+const CSA_BUILD_ID = "CSA-v4.70.3-oanda-partial-reference";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -20214,7 +20214,7 @@ function rankChartNativeFallbackAreas({
     fallback?.inventoryAuthority || fallback?.frameworkInventorySource || ""
   ).toLowerCase();
   const chartOnlyInventoryUnverified =
-    inventoryAuthority.includes("chart_only") &&
+    (inventoryAuthority.includes("chart_only") || inventoryAuthority === "provider_reference_provisional") &&
     fallback?.marketInventoryVerified !== true &&
     fallback?.focusedInventoryVerified !== true &&
     fallback?.chartOnlyInventoryVerified !== true;
@@ -20230,6 +20230,12 @@ function rankChartNativeFallbackAreas({
     timeframe: frameTimeframe,
     inventoryProvenanceVerified: !chartOnlyInventoryUnverified,
   });
+  if (inventoryAuthority === "provider_reference_provisional") {
+    for (const candidate of authoritativeInventory.candidates) {
+      candidate.priceSource = "unverified_provider_period_inventory";
+      candidate.structuralEvidence = `${candidate.sourcePeriod} ${candidate.sourceExtreme || "extreme"} from OANDA reference; chart close unresolved`;
+    }
+  }
   const structuralCandidateInventory = authoritativeInventory.candidates.length
     ? authoritativeInventory.candidates
     : expandExactSupportResistanceBoundaries(fallback.candidates || []);
@@ -20267,7 +20273,7 @@ function rankChartNativeFallbackAreas({
     const isSupplyDemand = ["supply", "demand"].includes(areaType);
     const chartEstimatedFrameworkCandidate =
       chartOnlyInventoryProvisional &&
-      /chart_estimated_period_inventory/.test(String(candidate?.priceSource || ""));
+      /chart_estimated_period_inventory|unverified_provider_period_inventory/.test(String(candidate?.priceSource || ""));
     const structuralEvidenceValid = chartEstimatedFrameworkCandidate || (
       !isUnverifiedPeriodCandidate(candidate) &&
       (candidate?.provenanceVerified === true || (isSupplyDemand
@@ -29193,7 +29199,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         completedPeriodReferences.status = "chart_mismatch";
         completedPeriodReferences.periods = [];
       }
-      if (chartDataMatch.status !== "matched_reference") {
+      if (!["matched_reference", "partial_reference"].includes(chartDataMatch.status)) {
         // Do not pass mismatched prices to downstream AI or deterministic selection.
         marketReference = clearRejectedProviderData({ ...marketReference, error: chartDataMatch.reason,
           failureCategory: chartDataMatch.status === "mismatch" ? "chart_data_mismatch" : chartDataMatch.status });
@@ -29577,6 +29583,10 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       const marketInventoryVerified =
         marketReference?.ok === true && marketReference?.chartDataMatch?.status === "matched_reference" && marketPeriodIntegrity.passed &&
         marketInventoryFrame?.currentPeriodFrameVerified === true;
+      const marketInventoryProvisional =
+        marketReference?.ok === true && marketReference?.dataProvider === "OANDA" &&
+        marketReference?.chartDataMatch?.status === "partial_reference" && marketPeriodIntegrity.passed &&
+        marketInventoryFrame?.currentPeriodFrameVerified === true;
       const rawInventoryPriceConflicts = comparePeriodInventories(
         focusedPeriodInventory,
         marketPeriodInventory,
@@ -29605,14 +29615,18 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         rasterByDate.size === rawFocusedPeriodInventory.length &&
         chartPeriodInventory.length === rawFocusedPeriodInventory.length &&
         chartPeriodInventory.every((period) => period?.rasterPriceScaleVerified === true);
-      const inventoryUsable = marketInventoryVerified || chartOnlyInventoryUsable;
+      const inventoryUsable = marketInventoryVerified || marketInventoryProvisional || chartOnlyInventoryUsable;
       const selectedPeriodInventory = marketInventoryVerified
+        ? marketPeriodInventory
+        : marketInventoryProvisional
         ? marketPeriodInventory
         : chartOnlyInventoryUsable
         ? chartPeriodInventory
         : [];
       const inventoryAuthority = marketInventoryVerified
         ? "chart_aligned_provider_reference_not_broker_verified"
+        : marketInventoryProvisional
+        ? "provider_reference_provisional"
         : chartOnlyInventoryVerified
         ? "complete_chart_only_period_inventory_deterministic_raster_verified"
         : chartOnlyInventoryUsable
@@ -29660,6 +29674,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         chartOnlyInventoryUsable,
         focusedInventoryDateSequenceVerified,
         marketInventoryVerified,
+        marketInventoryProvisional,
         dataMatch: marketReference?.chartDataMatch || null,
         providerFailure: marketReference?.ok ? null : { category: marketReference?.failureCategory || "unavailable", reason: marketReference?.error || "Provider unavailable" },
         rejectedFocusedPeriodInventory:
@@ -29701,18 +29716,22 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
               ? fixedPeriodBias.direction === "bullish"
                 ? "The verified fixed-period structure is bullish, with any final bearish move treated as a pullback until controlling support fails."
                 : "The verified fixed-period structure is bearish, with any final bullish move treated as a recovery until controlling resistance breaks."
+              : marketInventoryProvisional
+              ? "Completed OANDA period references support a provisional direction; the unfinished chart endpoint still requires review."
               : fixedPeriodBias.direction === "bullish"
               ? "The complete chart-derived fixed-period structure reads bullish, pending human verification because provider data is unavailable."
               : "The complete chart-derived fixed-period structure reads bearish, pending human verification because provider data is unavailable.",
             reason: chartPriceAuthorityVerified
               ? "Direction was reconciled from the same chart-verified fixed-period high/low inventory used by the benchmark and the exact final chart-header close. Broker-feed equivalence remains a separate status."
+              : marketInventoryProvisional
+              ? "Provisional OANDA reference analysis: only the final close exceeds three pips; no broker-feed equivalence is claimed."
               : "Direction is a provisional chart-only interpretation; external price authority is unavailable or not aligned. Human verification remains required.",
             cutoffPhase: {
               direction: fixedPeriodBias.direction,
               phase: fixedPeriodBias.phase,
               source: chartPriceAuthorityVerified
                 ? "verified_fixed_period_inventory_and_final_chart_close"
-                : "chart_only_fixed_period_inventory_provider_unavailable",
+                : marketInventoryProvisional ? "provider_reference_provisional" : "chart_only_fixed_period_inventory_provider_unavailable",
             },
           },
         };
@@ -29736,7 +29755,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             currentPeriodLow: null,
             source: "deterministic_period_inventory_unavailable",
           };
-      const selectedPeriodFrame = marketInventoryVerified
+      const selectedPeriodFrame = (marketInventoryVerified || marketInventoryProvisional)
         ? marketInventoryFrame
         : chartOnlyInventoryUsable
         ? chartInventoryFrame
@@ -29779,7 +29798,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             (marketInventoryVerified || chartOnlyInventoryVerified) &&
             selectedPeriodFrame?.currentPeriodFrameVerified === true,
           currentPeriodFrameChartUsable:
-            chartOnlyInventoryUsable && !chartOnlyInventoryVerified &&
+            (marketInventoryProvisional || (chartOnlyInventoryUsable && !chartOnlyInventoryVerified)) &&
             selectedPeriodFrame?.currentPeriodFrameVerified === true,
           currentWeekFrameConfidence:
             visibleCurrentWeekFrame?.confidence ||

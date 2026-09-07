@@ -1,0 +1,18 @@
+CSA v4.70.3 — OANDA unfinished-candle reference fix
+
+Apply this update over v4.70.2. Copy the included files into the same paths in your repository; retain the benchmark/public subfolder. Deploy the analysis backend and the benchmark service from that updated commit.
+
+Expected backend build: CSA-v4.70.3-oanda-partial-reference
+Keep the working OANDA token, live environment and B price component settings.
+
+What changed
+The supplied USDCAD H4 report has a 3.8-pip close difference. Open, high and low are within three pips, while screenshot candle completion is unknown. Previously that removed the complete provider inventory. The new partial_reference status retains it for provisional framework analysis when the verified timestamp, all three OHL comparisons, a consistent chart header, and the current-price range checks pass. Normal matched-reference handling remains separate.
+
+The three-pip limit is unchanged. An unfinished or unknown close does not become a confirmed close. The provider's later final candle is not inserted into historical period calculations. The current unfinished period remains ineligible as an entry source. Missing timestamps, missing OHL, failed extrema and known completed-candle mismatches do not qualify for this recovery.
+
+Results can still say Needs review. This update does not confirm broker-equivalent historical prices, guarantee an entry, or force benchmark acceptance. Provisional entries, if selected by the existing framework, require review.
+
+Validation
+249 local tests passed, including five new regression tests covering the reported values, negative matching cases, server inventory selection, and the supported timeframe mappings. JavaScript syntax checks passed. No live Render deployment or authenticated OANDA request was performed for this update.
+
+This is a changed-files update, not a complete application archive. Earlier shared-engine, timestamp, OANDA authentication and non-forex code remain in the base release.

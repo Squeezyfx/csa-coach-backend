@@ -296,11 +296,12 @@ function renderBatchOverview(run) {
     const dataMatch = audit.inventoryAuthority?.dataMatch;
     const providerFailure = audit.inventoryAuthority?.providerFailure;
     const chartRasterAuthorityVerified = audit.inventoryAuthority?.chartOnlyInventoryVerified === true;
+    if (dataMatch?.status === "partial_reference") flags.push(`OANDA: ${dataMatch.reason}`);
     if (dataMatch?.status === "matched_reference") flags.push("Provider reference; not broker-exact");
     if (providerFailure && !chartRasterAuthorityVerified) flags.push(`Data: ${providerFailure.category} — ${providerFailure.reason}`);
     if (audit.fibonacciAudit?.verified === false) {
       flags.push(audit.fibonacciAudit?.chartDerivedUsable === true
-        ? "Chart-derived Fib frame—provisional entries require review"
+        ? (dataMatch?.status === "partial_reference" ? "OANDA reference Fib frame—provisional entries require review" : "Chart-derived Fib frame—provisional entries require review")
         : "Fib frame unverified—no entries permitted");
     }
     if (structuralBias === "unverified") flags.push("bias unverified");
