@@ -30,3 +30,5 @@ Lifecycle correction: for M1-M30 and H1, any daily period strictly before the la
 Cutoff correction: a medium-confidence or inferred chart time (including a vision placeholder such as 00:00) no longer creates an exact intraday cutoff. Exact intraday matching requires a high-confidence timestamp from explicit chart text or the verified axis-bar reader; otherwise the engine uses the end of the visible date so the final day's candles remain available.
 
 Completion-boundary correction: a period ending exactly at the visible date is treated as completed. For example, Tuesday's exclusive end is Wednesday's start, so Tuesday is included when Wednesday is the latest visible date; Wednesday alone remains provisional.
+
+Provisional-endpoint correction: when OANDA alignment is partial or timestamp-uncertain, the latest visible period remains available as Fib context but is excluded from integrity certification and structural entry candidates. Closed periods remain eligible for the shared period inventory.

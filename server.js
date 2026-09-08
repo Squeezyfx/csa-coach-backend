@@ -29589,23 +29589,35 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       const lifecycleCutoffDateTime =
         chartCutoff?.endDateTime ||
         `${chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || ""} 23:59:59`;
+      // A partial OANDA endpoint means the chart's latest visible period is
+      // still live, even when the provider's framework response labels its
+      // aggregate candle complete. Keep that endpoint available for the Fib
+      // frame, but exclude it from structural entry candidates.
+      const oandaEndpointIsProvisional =
+        marketReference?.dataProvider === "OANDA" &&
+        ["partial_reference", "date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(
+          marketReference?.chartDataMatch?.status
+        );
+      const lifecycleComplete = oandaEndpointIsProvisional
+        ? false
+        : marketReference?.currentFrameworkPeriodComplete;
       const focusedPeriodInventory = applyCurrentFrameworkPeriodLifecycle({
         periods: focusedReconciledPeriodInventory,
         timeframe,
         cutoffDateTime: lifecycleCutoffDateTime,
-        explicitlyComplete: marketReference?.currentFrameworkPeriodComplete,
+        explicitlyComplete: lifecycleComplete,
       });
       const chartPeriodInventory = applyCurrentFrameworkPeriodLifecycle({
         periods: chartReconciledPeriodInventory,
         timeframe,
         cutoffDateTime: lifecycleCutoffDateTime,
-        explicitlyComplete: marketReference?.currentFrameworkPeriodComplete,
+        explicitlyComplete: lifecycleComplete,
       });
       const marketPeriodInventory = applyCurrentFrameworkPeriodLifecycle({
         periods: marketReconciledPeriodInventory,
         timeframe,
         cutoffDateTime: lifecycleCutoffDateTime,
-        explicitlyComplete: marketReference?.currentFrameworkPeriodComplete,
+        explicitlyComplete: lifecycleComplete,
       });
       const inventoryDate =
         chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "";
@@ -29626,9 +29638,15 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       });
       const focusedInventoryDateSequenceVerified =
         focusedInventoryFrame?.currentPeriodFrameVerified === true;
+      const integrityPeriods = marketPeriodInventory.filter((period) =>
+        period?.partialPeriod !== true && period?.periodLifecycle !== "in_progress"
+      );
       const marketPeriodIntegrity = auditPeriodInventory({
         cutoffDate: inventoryDate,
-        periods: marketPeriodInventory,
+        // Do not let a warning on the live endpoint invalidate already closed
+        // daily periods. The current period can still form Fib context, but it
+        // cannot certify structural entries until it closes.
+        periods: integrityPeriods,
         candles: timeframe === "D1" ? marketReference?.timeframeCandles || [] : [],
         tolerance: getCleanBreakTolerance(normalizedSymbol || submittedInstrument),
       });

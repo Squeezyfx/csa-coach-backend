@@ -95,6 +95,13 @@ test('the day immediately before the visible date is completed',()=>{
  assert.deepEqual(result.periods.map(p=>p.date),['2026-08-24','2026-08-25']);
  assert.deepEqual(result.rejected.map(p=>[p.date,p.reason]),[['2026-08-26','completion_not_established']]);
 });
+test('provisional OANDA endpoint keeps the current frame for Fib but excludes it from integrity certification',()=>{
+ const server=readFileSync(new URL('../server.js',import.meta.url),'utf8');
+ assert.match(server,/const oandaEndpointIsProvisional/);
+ assert.match(server,/const lifecycleComplete = oandaEndpointIsProvisional/);
+ assert.match(server,/const integrityPeriods = marketPeriodInventory\.filter/);
+ assert.match(server,/current period can still form Fib context/);
+});
 test('all supported timeframes retain provisional status and exclude current entry period',()=>{
  for(const timeframe of ['M1','M5','M15','M30','H1','H4','D1','W1','MN']){
   const map=calendarMapping(timeframe,'2026-08-28');
