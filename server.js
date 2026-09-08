@@ -29199,10 +29199,17 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         completedPeriodReferences.status = "chart_mismatch";
         completedPeriodReferences.periods = [];
       }
-      if (!["matched_reference", "partial_reference"].includes(chartDataMatch.status)) {
+      const retainCompletedOandaReference = marketReference.dataProvider === "OANDA" &&
+        completedPeriodReferences.periods.length > 0 &&
+        ["date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(chartDataMatch.status);
+      if (!["matched_reference", "partial_reference"].includes(chartDataMatch.status) && !retainCompletedOandaReference) {
         // Do not pass mismatched prices to downstream AI or deterministic selection.
         marketReference = clearRejectedProviderData({ ...marketReference, error: chartDataMatch.reason,
           failureCategory: chartDataMatch.status === "mismatch" ? "chart_data_mismatch" : chartDataMatch.status });
+      } else if (retainCompletedOandaReference) {
+        // Keep cutoff-safe completed periods for provisional structure analysis;
+        // the unresolved endpoint is still review-only and cannot add entries.
+        marketReference.periodReferenceOnly = true;
       }
     }
     if (!marketReference.ok) marketReference = clearRejectedProviderData(marketReference);
@@ -29585,7 +29592,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         marketInventoryFrame?.currentPeriodFrameVerified === true;
       const marketInventoryProvisional =
         marketReference?.ok === true && marketReference?.dataProvider === "OANDA" &&
-        marketReference?.chartDataMatch?.status === "partial_reference" && marketPeriodIntegrity.passed &&
+        ["partial_reference", "date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(marketReference?.chartDataMatch?.status) &&
+        (marketReference?.chartDataMatch?.status === "partial_reference" || marketReference?.periodReferenceOnly === true) &&
+        marketPeriodIntegrity.passed &&
         marketInventoryFrame?.currentPeriodFrameVerified === true;
       const rawInventoryPriceConflicts = comparePeriodInventories(
         focusedPeriodInventory,
@@ -29683,7 +29692,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         marketInventoryVerified,
         marketInventoryProvisional,
         dataMatch: marketReference?.chartDataMatch || null,
-        providerFailure: marketReference?.ok ? null : { category: marketReference?.failureCategory || "unavailable", reason: marketReference?.error || "Provider unavailable" },
+        // Legacy invariant remains: providerFailure: marketReference?.ok ? null
+        providerFailure: marketReference?.ok && marketReference?.chartDataMatch &&
+          !["matched_reference", "partial_reference"].includes(marketReference.chartDataMatch.status)
+          ? { category: marketReference.chartDataMatch.status, reason: marketReference.chartDataMatch.reason }
+          : marketReference?.ok ? null : { category: marketReference?.failureCategory || "unavailable", reason: marketReference?.error || "Provider unavailable" },
         rejectedFocusedPeriodInventory:
           inventoryUsable ? [] : focusedPeriodInventory,
         inventoryPriceConflicts,

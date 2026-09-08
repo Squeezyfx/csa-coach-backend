@@ -20,3 +20,5 @@ Validation
 This is a changed-files update, not a complete application archive. Earlier shared-engine, timestamp, OANDA authentication and non-forex code remain in the base release.
 
 Benchmark validation also applies the OANDA three-pip tolerance to required forex levels when the result is explicitly partial_reference, preventing sub-pip expected-level false negatives.
+
+If the final chart timestamp is date-only/unreadable but completed OANDA periods are available, those cutoff-safe periods are retained provisionally; the unresolved endpoint remains review-only and cannot supply an entry.

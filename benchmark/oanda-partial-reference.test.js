@@ -59,6 +59,12 @@ test('provisional OANDA inventory does not create a false zero-versus-four visua
  assert.match(server,/!marketInventoryVerified && !marketInventoryProvisional/);
  assert.match(server,/visual inventory unavailable by design; OANDA period reference retained provisionally/);
 });
+test('date-uncertain OANDA endpoint preserves completed period references provisionally',()=>{
+ const server=readFileSync(new URL('../server.js',import.meta.url),'utf8');
+ assert.match(server,/retainCompletedOandaReference/);
+ assert.match(server,/periodReferenceOnly = true/);
+ assert.match(server,/\["partial_reference", "date_unverified", "time_unverified", "partial_or_unknown_candle"\]/);
+});
 test('all supported timeframes retain provisional status and exclude current entry period',()=>{
  for(const timeframe of ['M1','M5','M15','M30','H1','H4','D1','W1','MN']){
   const map=calendarMapping(timeframe,'2026-08-28');
