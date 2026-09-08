@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import {assessChartDataMatch} from '../market-data-matching.js';
 import {analyzeFramework} from '../shared-analysis-engine.js';
 import {calendarMapping} from '../framework-calendar.js';
+import {buildCompletedPeriodReferences} from '../period-accuracy.js';
 const base={source:'OANDA',symbol:'USDCAD',timeframe:'H4',cutoff:'2026-08-28 20:00:00',
  alignmentCandle:{datetime:'2026-08-28 20:00:00',open:1.39022,high:1.39086,low:1.39006,close:1.39026},
  detection:{latestVisibleDate:'2026-08-28',latestVisibleDateEvidence:'verified_axis_bar_count',dateConfidence:'high',latestVisibleTime:'20:00',latestVisibleTimeConfidence:'high',latestVisiblePriceConfidence:'high',latestVisibleCandleComplete:null,latestVisiblePrice:1.38988,latestVisibleOpen:1.39014,latestVisibleHigh:1.39088,latestVisibleLow:1.38979}};
@@ -82,6 +83,17 @@ test('inferred medium-confidence chart time cannot truncate the visible day',()=
  assert.match(server,/detectedTimeConfidence === "high"/);
  assert.match(server,/explicit_final_candle_timestamp.*verified_axis_bar_count/);
  assert.match(server,/entire final trading day/);
+});
+test('the day immediately before the visible date is completed',()=>{
+ const periods=[
+  {date:'2026-08-24',periodLabel:'Monday',high:1.20148,low:1.19836,open:1.19981,close:1.19917},
+  {date:'2026-08-25',periodLabel:'Tuesday',high:1.20096,low:1.19710,open:1.19915,close:1.19894},
+  {date:'2026-08-26',periodLabel:'Wednesday',high:1.20786,low:1.19835,open:1.19892,close:1.20749,partialPeriod:true,periodLifecycle:'in_progress'},
+ ];
+ const candles=periods.map(p=>({datetime:`${p.date} 12:00:00`,open:p.open,high:p.high,low:p.low,close:p.close}));
+ const result=buildCompletedPeriodReferences({periods,candles,timeframe:'H1',visibleDateFloor:'2026-08-26',providerAvailable:true});
+ assert.deepEqual(result.periods.map(p=>p.date),['2026-08-24','2026-08-25']);
+ assert.deepEqual(result.rejected.map(p=>[p.date,p.reason]),[['2026-08-26','completion_not_established']]);
 });
 test('all supported timeframes retain provisional status and exclude current entry period',()=>{
  for(const timeframe of ['M1','M5','M15','M30','H1','H4','D1','W1','MN']){

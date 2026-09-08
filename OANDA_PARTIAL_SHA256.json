@@ -1,9 +1,10 @@
 {
   "server.js": "f464a5473137e3129af8154d3028a11339053704be5d8a444af540f54b8f24dd",
   "market-data-matching.js": "633779130ed51b084441af0e8506ead77d7a2e9ab9d9176f7f8db3ca9d6635fb",
+  "period-accuracy.js": "a9c8b2756b1f65108401eaf5b06c91f569c443357a35d8b96cf28e354c612145",
   "package.json": "5af539a8b3c9c0dc0587445c9cd3e344ac9307d9878a4942fedb29b1bf2c49e7",
   "benchmark/public/app.js": "7435fc27f668e47e2be6f49877de283f16d54e1383b6db68a383c710f6a96524",
-  "benchmark/oanda-partial-reference.test.js": "fdd00ca1489e49e3a738f4608e7189ed6f60d7d22901f08aaa04151ff36e4b23",
+  "benchmark/oanda-partial-reference.test.js": "e59338c1863884e407b8c79d0afd3519cbc9fdebd5d948b95705cf33c5137135",
   "benchmark/validator.js": "4a2227ebb43891841d7cef07beeb629e96c7fb1501830e24e0c6d8f122078b07",
-  "OANDA_PARTIAL_UPDATE.txt": "b8a0ad3e126a9ecf1b1f7aa1ac317f18a3cb7a2312315290650c2874681bd423"
+  "OANDA_PARTIAL_UPDATE.txt": "d29f9ef401a7ddfaa8c1b086fe272338e320c590b4fea320e0e9b586aecd9264"
 }
