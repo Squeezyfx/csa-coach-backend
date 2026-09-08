@@ -65,6 +65,18 @@ test('date-uncertain OANDA endpoint preserves completed period references provis
  assert.match(server,/periodReferenceOnly = true/);
  assert.match(server,/\["partial_reference", "date_unverified", "time_unverified", "partial_or_unknown_candle"\]/);
 });
+test('H1 displays cutoff-safe partial daily ranges without making them entry-eligible',()=>{
+ const server=readFileSync(new URL('../server.js',import.meta.url),'utf8');
+ assert.match(server,/const displayPeriodInventory = selectedPeriodInventory\.length/);
+ assert.match(server,/periodInventory: displayPeriodInventory/);
+ assert.match(server,/if \(marketInventoryVerified \|\| marketInventoryProvisional\)/);
+});
+test('lower-timeframe days before the latest visible date are closed',()=>{
+ const server=readFileSync(new URL('../server.js',import.meta.url),'utf8');
+ assert.match(server,/const calendarDayClosed = \["M1", "M5", "M15", "M30", "H1"\]/);
+ assert.match(server,/String\(period\?\.date \|\| ""\) < String\(cutoffDate \|\| ""\)/);
+ assert.match(server,/const inheritedPartial = period\?\.partialPeriod === true && !calendarDayClosed/);
+});
 test('all supported timeframes retain provisional status and exclude current entry period',()=>{
  for(const timeframe of ['M1','M5','M15','M30','H1','H4','D1','W1','MN']){
   const map=calendarMapping(timeframe,'2026-08-28');

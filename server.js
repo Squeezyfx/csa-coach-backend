@@ -19872,7 +19872,13 @@ function applyCurrentFrameworkPeriodLifecycle({
     const isCurrentPeriod = Boolean(
       currentStartDate && String(period?.date || "") === String(currentStartDate)
     ) || index === inventory.length - 1;
-    const inProgress = period?.partialPeriod === true || (
+    // For M1–H1, a daily period strictly before the latest visible calendar
+    // date is closed. Do not let a provider/session partial flag incorrectly
+    // keep Tuesday open when the chart already shows Wednesday candles.
+    const calendarDayClosed = ["M1", "M5", "M15", "M30", "H1"].includes(String(timeframe).toUpperCase()) &&
+      String(period?.date || "") < String(cutoffDate || "");
+    const inheritedPartial = period?.partialPeriod === true && !calendarDayClosed;
+    const inProgress = inheritedPartial || (
       currentComplete !== true && isCurrentPeriod
     );
     return {
@@ -19913,7 +19919,7 @@ function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", 
   }
 
   if (["M1", "M5", "M15", "M30", "H1", "D1", "W1", "MN"].includes(tf)) {
-    const periods = (Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [])
+    const providerPeriods = (Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [])
       .map((level, index) => ({
         ...level,
         periodLabel:
@@ -19923,6 +19929,35 @@ function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", 
         source: level?.source || "market_reference_higher_timeframe_inventory",
         periodLifecycle: level?.partialPeriod === true ? "in_progress" : "completed",
       }));
+    // For H1/lower timeframes, retain visible current-week daily ranges even
+    // when the provider's native D1 feed only returns completed days. These
+    // reconstructed days are context-only until their sessions close.
+    const periodsByDate = new Map(providerPeriods.map(period => [String(period.date || period.key), period]));
+    if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) {
+      const dates = expectedFrameworkPeriodDates(tf, cutoffDate || marketReference?.chartCutoff?.resolvedDate || "");
+      const candles = Array.isArray(marketReference?.timeframeCandles) ? marketReference.timeframeCandles : [];
+      for (const date of dates) {
+        if (periodsByDate.has(String(date))) continue;
+        const owned = candles.filter(c => String(c.datetime || "").slice(0, 10) === String(date));
+        const numeric = owned.filter(c => [c.open, c.high, c.low, c.close].every(value => Number.isFinite(Number(value))));
+        if (!numeric.length) continue;
+        periodsByDate.set(String(date), {
+          date: String(date),
+          periodLabel: new Date(`${date}T00:00:00Z`).toLocaleString("en-US", {weekday: "long", timeZone: "UTC"}),
+          sourceUnit: "D1",
+          open: Number(numeric[0].open),
+          high: Math.max(...numeric.map(c => Number(c.high))),
+          low: Math.min(...numeric.map(c => Number(c.low))),
+          close: Number(numeric.at(-1).close),
+          candleCount: numeric.length,
+          source: "partial_period_from_cutoff_safe_selected_timeframe",
+          nativeHigherTimeframeAuthority: false,
+          partialPeriod: true,
+          periodLifecycle: "in_progress",
+        });
+      }
+    }
+    const periods = [...periodsByDate.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
     return applyCurrentFrameworkPeriodLifecycle({
       periods,
       timeframe: tf,
@@ -29632,6 +29667,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         : chartOnlyInventoryUsable
         ? chartPeriodInventory
         : [];
+      const displayPeriodInventory = selectedPeriodInventory.length
+        ? selectedPeriodInventory
+        : marketPeriodInventory;
       const inventoryAuthority = marketInventoryVerified
         ? "chart_aligned_provider_reference_not_broker_verified"
         : marketInventoryProvisional
@@ -29663,7 +29701,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           ? "provider comparison rejected; chart-derived estimate retained provisionally"
           : conflict.resolution,
       }));
-      inventoryPriceConflicts.push(...marketPeriodIntegrity.issues);
+      if (marketInventoryVerified || marketInventoryProvisional) {
+        inventoryPriceConflicts.push(...marketPeriodIntegrity.issues);
+      }
       const sharedFramework = analyzeFramework({
         timeframe, cutoff: inventoryDate, periodInventory: selectedPeriodInventory,
         currentPrice: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
@@ -29681,8 +29721,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           nullablePositiveNumber(chartDetection?.latestVisiblePrice) ||
           nullablePositiveNumber(mergedChartNativeFallback?.currentPrice),
         usable: inventoryUsable && Boolean(fallbackDirection),
-        periodInventory: selectedPeriodInventory,
-        periodDayInventory: selectedPeriodInventory,
+        periodInventory: displayPeriodInventory,
+        periodDayInventory: displayPeriodInventory,
         frameworkInventorySource: inventoryAuthority,
         inventoryAuthority,
         focusedInventoryVerified,
