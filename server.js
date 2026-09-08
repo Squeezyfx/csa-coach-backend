@@ -2901,9 +2901,19 @@ function resolveTwelveDataChartCutoff({
     /^\d{4}-\d{2}-\d{2}$/.test(detectedDate) &&
     ["high", "medium"].includes(detectedDateConfidence);
 
+  // A vision pass may emit a placeholder such as 00:00 while it can read the
+  // calendar date but cannot identify the final bar's actual intraday time.
+  // Never turn that estimate into an exact cutoff: doing so can exclude the
+  // entire final trading day and make OANDA appear to have no history at the
+  // chart date. Exact intraday cutoffs require a high-confidence timestamp
+  // from explicit chart text or the verified axis-bar reader.
+  const timeEvidence = String(
+    chartDetection?.latestVisibleDateEvidence || ""
+  ).toLowerCase();
   const usableDetectedTime =
     /^([01]\d|2[0-3]):[0-5]\d$/.test(detectedTime) &&
-    ["high", "medium"].includes(detectedTimeConfidence);
+    detectedTimeConfidence === "high" &&
+    ["explicit_final_candle_timestamp", "verified_axis_bar_count"].includes(timeEvidence);
 
   const selected =
     /^\d{4}-\d{2}-\d{2}$/.test(String(selectedDateText || "").trim())

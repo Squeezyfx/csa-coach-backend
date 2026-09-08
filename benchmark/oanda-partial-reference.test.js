@@ -77,6 +77,12 @@ test('lower-timeframe days before the latest visible date are closed',()=>{
  assert.match(server,/String\(period\?\.date \|\| ""\) < String\(cutoffDate \|\| ""\)/);
  assert.match(server,/const inheritedPartial = period\?\.partialPeriod === true && !calendarDayClosed/);
 });
+test('inferred medium-confidence chart time cannot truncate the visible day',()=>{
+ const server=readFileSync(new URL('../server.js',import.meta.url),'utf8');
+ assert.match(server,/detectedTimeConfidence === "high"/);
+ assert.match(server,/explicit_final_candle_timestamp.*verified_axis_bar_count/);
+ assert.match(server,/entire final trading day/);
+});
 test('all supported timeframes retain provisional status and exclude current entry period',()=>{
  for(const timeframe of ['M1','M5','M15','M30','H1','H4','D1','W1','MN']){
   const map=calendarMapping(timeframe,'2026-08-28');

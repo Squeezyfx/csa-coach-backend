@@ -26,3 +26,5 @@ If the final chart timestamp is date-only/unreadable but completed OANDA periods
 For M1-H1 reports, cutoff-safe daily high/low ranges for visible incomplete days are displayed as provisional context; incomplete days remain excluded from structural entry selection.
 
 Lifecycle correction: for M1-M30 and H1, any daily period strictly before the latest visible calendar date is treated as closed, even if a provider/session partial flag is stale. Only the latest visible date remains in progress. Thus, when the latest visible candle is Wednesday, Tuesday is included as a completed period; Wednesday remains provisional until its candle/day closes.
+
+Cutoff correction: a medium-confidence or inferred chart time (including a vision placeholder such as 00:00) no longer creates an exact intraday cutoff. Exact intraday matching requires a high-confidence timestamp from explicit chart text or the verified axis-bar reader; otherwise the engine uses the end of the visible date so the final day's candles remain available.
