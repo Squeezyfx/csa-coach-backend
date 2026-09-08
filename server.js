@@ -29638,11 +29638,18 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         // comparison source, not a second authority. Keep the disagreement in
         // diagnostics without multiplying one provider mismatch into a review
         // flag for every monthly high and low.
-        requiresReview: !chartOnlyInventoryUsable && !marketInventoryVerified,
+        // OANDA reference inventory is intentionally authoritative for the
+        // period count when the chart is not raster-read. A zero-length visual
+        // inventory is not a price conflict; it is simply an unavailable
+        // second source. Keep the OANDA result provisional for review, but do
+        // not manufacture a conflict from the skipped visual reader.
+        requiresReview: !chartOnlyInventoryUsable && !marketInventoryVerified && !marketInventoryProvisional,
         resolution: marketInventoryVerified
           ? "verified deterministic candle retained; vision-estimated period price rejected"
           : chartOnlyInventoryVerified
           ? "provider comparison rejected; deterministic chart-raster price retained"
+          : marketInventoryProvisional
+          ? "visual inventory unavailable by design; OANDA period reference retained provisionally"
           : chartOnlyInventoryUsable
           ? "provider comparison rejected; chart-derived estimate retained provisionally"
           : conflict.resolution,

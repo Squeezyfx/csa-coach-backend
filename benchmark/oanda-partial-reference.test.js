@@ -47,6 +47,11 @@ test('runtime inventory selection retains OANDA provisional data and does not se
   }
  }
 });
+test('provisional OANDA inventory does not create a false zero-versus-four visual conflict',()=>{
+ const server=readFileSync(new URL('../server.js',import.meta.url),'utf8');
+ assert.match(server,/!marketInventoryVerified && !marketInventoryProvisional/);
+ assert.match(server,/visual inventory unavailable by design; OANDA period reference retained provisionally/);
+});
 test('all supported timeframes retain provisional status and exclude current entry period',()=>{
  for(const timeframe of ['M1','M5','M15','M30','H1','H4','D1','W1','MN']){
   const map=calendarMapping(timeframe,'2026-08-28');
