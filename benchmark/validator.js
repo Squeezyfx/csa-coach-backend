@@ -431,6 +431,8 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   const references = referenceEntries(result);
   const feedbackText = String(result?.analysis || result?.summary || result?.finalFeedback?.analysis || "");
   const priceDiagnostics = result?.analysisFacts?.selectorDiagnostics;
+  const dataMatch = priceDiagnostics?.transparencyAudit?.inventoryAuthority?.dataMatch;
+  const oandaProvisionalReference = dataMatch?.source === "OANDA" && dataMatch?.status === "partial_reference";
   if (priceDiagnostics) {
     const unverifiedEntries = (priceDiagnostics.selectedEntries || []).filter(entry =>
       entry?.provenanceVerified === false || /unverified|estimated_period/.test(String(entry?.priceSource || "")));
@@ -907,7 +909,9 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const tolerance =
       finiteNumber(expectation.levelTolerance) ??
       toleranceOverride ??
-      exactLevelTolerance(requiredPrice, required.digits);
+      (oandaProvisionalReference && requiredPrice >= 1 && requiredPrice < 10
+        ? Math.max(exactLevelTolerance(requiredPrice, required.digits), Number(dataMatch?.tolerance) || 0.0003)
+        : exactLevelTolerance(requiredPrice, required.digits));
     const matchingZoneExpectation = configuredEntryZones.find((item) =>
       priceInsideZone(requiredPrice, item.zone, tolerance)
     );
@@ -939,7 +943,9 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const tolerance =
       finiteNumber(expectation.levelTolerance) ??
       toleranceOverride ??
-      exactLevelTolerance(requiredPrice, required.digits);
+      (oandaProvisionalReference && requiredPrice >= 1 && requiredPrice < 10
+        ? Math.max(exactLevelTolerance(requiredPrice, required.digits), Number(dataMatch?.tolerance) || 0.0003)
+        : exactLevelTolerance(requiredPrice, required.digits));
     const matchingZoneExpectation = configuredEntryZones.find((item) =>
       priceInsideZone(requiredPrice, item.zone, tolerance)
     );

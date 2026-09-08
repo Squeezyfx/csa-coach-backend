@@ -4,5 +4,6 @@
   "package.json": "5af539a8b3c9c0dc0587445c9cd3e344ac9307d9878a4942fedb29b1bf2c49e7",
   "benchmark/public/app.js": "7435fc27f668e47e2be6f49877de283f16d54e1383b6db68a383c710f6a96524",
   "benchmark/oanda-partial-reference.test.js": "bedbe93dec3367ec27a615862f4e16b43d5c8a6e36af5d647544b9446ef0fafd",
-  "OANDA_PARTIAL_UPDATE.txt": "5a6f9a50cfb96e7d9e4a42594f7b671ecc7cc0ac083872384cb7116301470fbd"
+  "benchmark/validator.js": "4a2227ebb43891841d7cef07beeb629e96c7fb1501830e24e0c6d8f122078b07",
+  "OANDA_PARTIAL_UPDATE.txt": "a996681447fbfec620b39834b7745f40e92719fe6475bd672c573ccc6b400a4f"
 }

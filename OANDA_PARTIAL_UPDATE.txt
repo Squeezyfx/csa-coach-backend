@@ -18,3 +18,5 @@ Validation
 249 local tests passed, including five new regression tests covering the reported values, negative matching cases, server inventory selection, and the supported timeframe mappings. JavaScript syntax checks passed. No live Render deployment or authenticated OANDA request was performed for this update.
 
 This is a changed-files update, not a complete application archive. Earlier shared-engine, timestamp, OANDA authentication and non-forex code remain in the base release.
+
+Benchmark validation also applies the OANDA three-pip tolerance to required forex levels when the result is explicitly partial_reference, preventing sub-pip expected-level false negatives.
