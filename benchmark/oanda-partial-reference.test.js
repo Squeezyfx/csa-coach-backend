@@ -22,14 +22,21 @@ test('missing time, date, OHL, completed candle and failed extrema never qualify
  assert.notEqual(assessChartDataMatch({...base,source:'Twelve Data',candles:[base.alignmentCandle]}).status,'partial_reference');
 });
 test('passing close remains a normal reference; no widening for completed candles',()=>{
- assert.equal(assessChartDataMatch({...base,detection:{...base.detection,latestVisiblePrice:1.39026}}).status,'matched_reference');
+ assert.equal(assessChartDataMatch({...base,detection:{...base.detection,latestVisiblePrice:1.39026,latestVisibleCandleComplete:true}}).status,'matched_reference');
  assert.notEqual(assessChartDataMatch({...base,detection:{...base.detection,latestVisibleCandleComplete:true,providerSessionAligned:true}}).status,'matched_reference');
 });
 test('unknown final time selects the completed same-date candle by printed OHLC',()=>{
  const candles=[{datetime:'2026-08-27 16:00:00',open:1.39014,high:1.39088,low:1.38979,close:1.38988},
    {datetime:'2026-08-27 20:00:00',open:1.38536,high:1.38575,low:1.38492,close:1.38507}];
  const result=assessChartDataMatch({...base,cutoff:'2026-08-27 20:00:00',alignmentCandle:candles[1],candles,detection:{...base.detection,latestVisibleDate:'2026-08-27',latestVisibleClose:1.38988,latestVisibleTime:null,latestVisibleTimeConfidence:'low',latestVisibleDateEvidence:'inferred_axis'}});
- assert.equal(result.status,'matched_reference'); assert.equal(result.candleDate,'2026-08-27 16:00:00'); assert.equal(result.tolerance,.0003);
+ assert.equal(result.status,'partial_reference'); assert.equal(result.candleDate,'2026-08-27 16:00:00'); assert.equal(result.tolerance,.0003); assert.equal(result.closeDeferred,true);
+});
+test('unfinished close is deferred when OHL identifies the candle within tolerance',()=>{
+ const result=assessChartDataMatch({...base,detection:{...base.detection,latestVisiblePrice:1.39026,latestVisibleClose:1.39026}});
+ assert.equal(result.status,'partial_reference');
+ assert.equal(result.closeDeferred,true);
+ assert.deepEqual(result.failedFields,[]);
+ assert.equal(result.requiresReview,true);
 });
 test('runtime inventory selection retains OANDA provisional data and does not set verified',()=>{
  const server=readFileSync(new URL('../server.js',import.meta.url),'utf8');

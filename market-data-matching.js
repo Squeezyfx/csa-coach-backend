@@ -83,11 +83,15 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
   const headerValid = ohl.length === 3 &&
     Number(detection.latestVisibleHigh) >= Math.max(Number(detection.latestVisibleOpen), price) &&
     Number(detection.latestVisibleLow) <= Math.min(Number(detection.latestVisibleOpen), price);
-  if (mismatch && source === "OANDA" && forexLimit !== null &&
-      detection.latestVisibleCandleComplete !== true && headerValid && ohl.every(withinLimit) &&
-      price >= Number(last.low) - limit && price <= Number(last.high) + limit) {
-    return result("partial_reference", "Final close differs beyond three pips; candle completion is unknown or unfinished. OHL aligns within tolerance; completed provider periods remain provisional and require review.",
-      {...evidence, requiresReview: true, priceVerified: false, failedFields: ["close"]});
+  const ohlOnlyAligned = source === "OANDA" && forexLimit !== null &&
+    detection.latestVisibleCandleComplete !== true && headerValid && ohl.every(withinLimit) &&
+    price >= Number(last.low) - limit && price <= Number(last.high) + limit;
+  if (ohlOnlyAligned) {
+    const closeDeferred = !withinLimit(comparisons.find(c => c.field === "close"));
+    return result("partial_reference", closeDeferred
+      ? "Final close comparison deferred because candle completion is unknown or unfinished; OHL aligns within the three-pip buffer. Completed provider periods remain provisional and require review."
+      : "Final close is within the three-pip buffer, but candle completion is unknown or unfinished; completed provider periods remain provisional and require review.",
+      {...evidence, requiresReview: true, priceVerified: false, closeDeferred: true, failedFields: closeDeferred ? ["close"] : []});
   }
   if (mismatch && detection.latestVisibleCandleComplete !== true) return result("partial_or_unknown_candle", "Final candle may be unfinished; full provider OHLC cannot verify this screenshot", evidence);
   if (mismatch && detection.providerSessionAligned !== true) return result("session_unverified", "Chart and provider candle session boundaries are not verified", evidence);

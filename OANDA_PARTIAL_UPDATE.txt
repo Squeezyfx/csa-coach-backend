@@ -10,7 +10,7 @@ The supplied USDCAD H4 report has a 3.8-pip close difference. Open, high and low
 
 When the final chart time is not readable, the engine now compares the printed OHLC against completed same-date OANDA candles and selects one only when the header fits. The three-pip close buffer is still enforced; it is not bypassed or widened.
 
-The three-pip limit is unchanged. An unfinished or unknown close does not become a confirmed close. The provider's later final candle is not inserted into historical period calculations. The current unfinished period remains ineligible as an entry source. Missing timestamps, missing OHL, failed extrema and known completed-candle mismatches do not qualify for this recovery.
+The three-pip limit is unchanged. For an unfinished or unknown candle, the close comparison is explicitly deferred rather than treated as a hard mismatch; O/H/L must still identify the same candle within the three-pip buffer. A completed candle must pass the close buffer normally. An unfinished or unknown close does not become a confirmed close. The provider's later final candle is not inserted into historical period calculations. The current unfinished period remains ineligible as an entry source. Missing timestamps, missing OHL, failed extrema and known completed-candle mismatches do not qualify for this recovery.
 
 Results can still say Needs review. This update does not confirm broker-equivalent historical prices, guarantee an entry, or force benchmark acceptance. Provisional entries, if selected by the existing framework, require review.
 
