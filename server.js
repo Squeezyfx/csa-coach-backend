@@ -1,5 +1,5 @@
 import { readMt4ForexTimestamp } from "./chart-time-reader.js";
-import { fetchOandaSeries, oandaInstrument, forexComparisonTolerance } from "./oanda-data.js";
+import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
 import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
@@ -20040,18 +20040,23 @@ function buildPeriodInventoryStructuralCandidates({
     const periodLabel = String(area?.period || area?.day || "");
     const periodIndex = periodIndexByLabel.get(periodLabel) ?? -1;
     const laterPeriods = periodIndex >= 0 ? periods.slice(periodIndex + 1) : [];
+    // The live period is never an entry source, but it can prove that an
+    // earlier high/low has been broken. Without that confirmation a prior
+    // resistance or supply would remain incorrectly labelled overhead after
+    // price has already traded and held beyond it.
+    const breakConfirmationPeriods = [...laterPeriods, ...inProgressPeriods];
     const bearishSupportBroken =
       direction === "bearish" &&
-      originalType === "support" &&
+      ["support", "demand"].includes(originalType) &&
       price !== null &&
       Number(currentPrice) < price &&
-      laterPeriods.some((period) => period.low < price - cleanBreakTolerance);
+      breakConfirmationPeriods.some((period) => period.low < price - cleanBreakTolerance);
     const bullishResistanceBroken =
       direction === "bullish" &&
-      originalType === "resistance" &&
+      ["resistance", "supply"].includes(originalType) &&
       price !== null &&
       Number(currentPrice) > price &&
-      laterPeriods.some((period) => period.high > price + cleanBreakTolerance);
+      breakConfirmationPeriods.some((period) => period.high > price + cleanBreakTolerance);
     const areaType = bearishSupportBroken
       ? "converted resistance"
       : bullishResistanceBroken
@@ -20293,6 +20298,13 @@ function rankChartNativeFallbackAreas({
     const fibTolerance = impulseRange !== null
       ? Math.max(approvedTolerance, impulseRange * 0.01)
       : approvedTolerance;
+    const compactFibSymbol = String(symbol || "").toUpperCase().replace(/[^A-Z]/g, "");
+    // The selector is also VM-tested in isolation, so keep this small
+    // instrument-aware boundary rule local rather than depending on the
+    // OANDA adapter import. Standard FX receives the agreed three-pip buffer.
+    const fibBoundaryTolerance = /^[A-Z]{6}$/.test(compactFibSymbol)
+      ? compactFibSymbol.endsWith("JPY") ? 0.03 : 0.0003
+      : null;
     const rawLow = asPositiveNumber(candidate?.zoneLow) || price;
     const rawHigh = asPositiveNumber(candidate?.zoneHigh) || price;
     const zoneLow = Math.min(rawLow, rawHigh);
@@ -20305,6 +20317,7 @@ function rankChartNativeFallbackAreas({
       zoneLow,
       zoneHigh,
       tolerance: fibTolerance,
+      boundaryTolerance: fibBoundaryTolerance,
     });
     // Do not silently remove a first support which price has just moved below
     // in an otherwise bullish current period. It remains a conditional
@@ -20329,7 +20342,8 @@ function rankChartNativeFallbackAreas({
 
     const decision = evaluateFrameworkCandidate({
       candidate, direction, currentPrice: resolvedCurrentPrice, swingHigh, swingLow,
-      tolerance: fibTolerance, frameUsable: usableFrame, structuralEvidenceValid,
+      tolerance: fibTolerance, boundaryTolerance: fibBoundaryTolerance,
+      frameUsable: usableFrame, structuralEvidenceValid,
     });
     if (!decision.qualified) return { candidate, ...decision };
     const converted = ["converted support", "converted resistance"].includes(areaType);

@@ -22,7 +22,7 @@ export function analyzeFramework({timeframe,cutoff,periodInventory=[],currentPri
 
 /** Shared structural/Fibonacci gate: used by all timeframe adapters. */
 export function evaluateFrameworkCandidate({candidate={},direction,currentPrice,swingHigh,swingLow,
-  tolerance=0,frameUsable=false,structuralEvidenceValid=false}={}) {
+  tolerance=0,boundaryTolerance=null,frameUsable=false,structuralEvidenceValid=false}={}) {
   const price=candidate.price==null?NaN:Number(candidate.price);
   const type=String(candidate.areaType||"").toLowerCase().trim();
   const allowed=direction==="bullish"?["support","demand","converted support"]:
@@ -30,7 +30,7 @@ export function evaluateFrameworkCandidate({candidate={},direction,currentPrice,
   const zoneLow=Number(candidate.zoneLow)>0?Number(candidate.zoneLow):price;
   const zoneHigh=Number(candidate.zoneHigh)>0?Number(candidate.zoneHigh):price;
   const fibMatch=findNearestAllowedFibonacciMatch({direction,swingHigh,swingLow,price,
-    zoneLow:Math.min(zoneLow,zoneHigh),zoneHigh:Math.max(zoneLow,zoneHigh),tolerance});
+    zoneLow:Math.min(zoneLow,zoneHigh),zoneHigh:Math.max(zoneLow,zoneHigh),tolerance,boundaryTolerance});
   const side=Number.isFinite(price)&&(direction==="bullish"?
     price<currentPrice||(candidate.reclaimRequired===true&&type==="support"):direction==="bearish"&&price>currentPrice);
   const rejectionReasons=[];

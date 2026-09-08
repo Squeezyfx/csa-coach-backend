@@ -32,3 +32,5 @@ Cutoff correction: a medium-confidence or inferred chart time (including a visio
 Completion-boundary correction: a period ending exactly at the visible date is treated as completed. For example, Tuesday's exclusive end is Wednesday's start, so Tuesday is included when Wednesday is the latest visible date; Wednesday alone remains provisional.
 
 Provisional-endpoint correction: when OANDA alignment is partial or timestamp-uncertain, the latest visible period remains available as Fib context but is excluded from integrity certification and structural entry candidates. Closed periods remain eligible for the shared period inventory.
+
+Entry-confluence correction: the instrument-aware three-pip FX buffer now applies at the 38.2% and 61.8% Fib-band edges without widening non-FX Fibonacci rules. The current live period may confirm that an earlier resistance/supply or support/demand level has broken and converted, but it remains excluded as an entry source itself.

@@ -730,6 +730,7 @@ export function findNearestAllowedFibonacciMatch({
   zoneLow = null,
   zoneHigh = null,
   tolerance = 0,
+  boundaryTolerance = null,
 } = {}) {
   const high = Number(swingHigh);
   const low = Number(swingLow);
@@ -770,14 +771,20 @@ export function findNearestAllowedFibonacciMatch({
   const acceptedBandHigh = Math.max(firstRetracementPrice, finalRetracementPrice);
 
   // Fibonacci qualifies independently proven structure anywhere inside the
-  // complete 38.2%-61.8% retracement band. It does not require the structural
-  // price to sit within a small arbitrary distance of one exact Fib line.
-  // Only a tightly capped boundary allowance may absorb broker/zone rounding;
-  // the caller's broader proximity tolerance cannot drag remote structure
-  // into the band.
+  // complete 38.2%-61.8% retracement band. Most callers retain the existing
+  // narrow range-relative boundary allowance. The FX adapter explicitly
+  // provides its three-pip broker buffer as boundaryTolerance.
+  const explicitBoundaryTolerance = Number(boundaryTolerance);
+  const hasExplicitBoundaryTolerance =
+    boundaryTolerance !== null &&
+    boundaryTolerance !== undefined &&
+    Number.isFinite(explicitBoundaryTolerance) &&
+    explicitBoundaryTolerance >= 0;
   const boundaryAllowance = Math.max(
     boundaryRoundingEpsilon,
-    Math.min(allowedTolerance, impulseRange * 0.01)
+    hasExplicitBoundaryTolerance
+      ? explicitBoundaryTolerance
+      : Math.min(allowedTolerance, impulseRange * 0.01)
   );
   const intersectsAcceptedBand =
     upperBoundary >= acceptedBandLow - boundaryAllowance &&

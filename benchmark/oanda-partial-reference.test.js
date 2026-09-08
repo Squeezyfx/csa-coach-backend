@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {assessChartDataMatch} from '../market-data-matching.js';
 import {analyzeFramework} from '../shared-analysis-engine.js';
+import {findNearestAllowedFibonacciMatch} from '../csa-entry-policy.js';
 import {calendarMapping} from '../framework-calendar.js';
 import {buildCompletedPeriodReferences} from '../period-accuracy.js';
 const base={source:'OANDA',symbol:'USDCAD',timeframe:'H4',cutoff:'2026-08-28 20:00:00',
@@ -101,6 +102,20 @@ test('provisional OANDA endpoint keeps the current frame for Fib but excludes it
  assert.match(server,/const lifecycleComplete = oandaEndpointIsProvisional/);
  assert.match(server,/const integrityPeriods = marketPeriodInventory\.filter/);
  assert.match(server,/current period can still form Fib context/);
+});
+test('three-pip forex buffer applies at the 38.2/61.8 Fibonacci band edges',()=>{
+ const match=findNearestAllowedFibonacciMatch({
+  direction:'bullish',swingHigh:1.20786,swingLow:1.19710,
+  price:1.20096,zoneLow:1.20096,zoneHigh:1.20096,tolerance:.0006,boundaryTolerance:.0003,
+ });
+ assert.equal(match?.ratio,.618);
+ assert.equal(match?.withinRetracementBand,true);
+});
+test('live period confirms a prior breakout without becoming an entry source',()=>{
+ const server=readFileSync(new URL('../server.js',import.meta.url),'utf8');
+ assert.match(server,/const breakConfirmationPeriods = \[\.\.\.laterPeriods, \.\.\.inProgressPeriods\]/);
+ assert.match(server,/\["resistance", "supply"\]\.includes\(originalType\)/);
+ assert.match(server,/live period is never an entry source/);
 });
 test('all supported timeframes retain provisional status and exclude current entry period',()=>{
  for(const timeframe of ['M1','M5','M15','M30','H1','H4','D1','W1','MN']){
