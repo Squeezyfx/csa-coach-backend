@@ -29,6 +29,26 @@ test("wrong date, price or header extremes cannot pass", () => {
   assert.equal(assessChartDataMatch({...base,detection:{...base.detection,latestVisibleHigh:110}}).status,"mismatch");
   assert.equal(assessChartDataMatch({...base,detection:{}}).status,"unverified");
 });
+test("D1 weekend cutoff accepts the last tradable Friday when OHLC aligns", () => {
+  const friday = { datetime:"2026-08-21", open:99, high:102, low:98, close:100 };
+  const detection = {
+    ...base.detection,
+    latestVisibleDate:"2026-08-22",
+    latestVisibleDateEvidence:"inferred_axis",
+    dateConfidence:"high",
+  };
+  const result = assessChartDataMatch({
+    candles:[friday], detection, cutoff:"2026-08-22 23:59:59", timeframe:"D1",
+  });
+  assert.equal(result.status,"matched_reference");
+  assert.equal(result.providerCoverage.weekendSessionLag,true);
+  assert.equal(result.providerCoverage.lastProviderCandleDate,"2026-08-21");
+});
+test("weekday provider coverage gaps remain mismatches", () => {
+  const result = assessChartDataMatch({...base, cutoff:"2026-08-24 23:59:59"});
+  assert.equal(result.status,"mismatch");
+  assert.equal(result.providerCoverage.lagDays,4);
+});
 test("future candles cannot rescue an unmatched screenshot", () => {
   assert.equal(assessChartDataMatch({...base,candles:[{datetime:"2026-08-21",close:100}]}).status,"unverified");
 });
@@ -56,6 +76,8 @@ test("server gates inventory approval and UI exposes source failures", () => {
   const ui = readFileSync(new URL("./public/app.js", import.meta.url), "utf8");
   assert.match(server, /map\(\(candidate\) => providerSymbol\(candidate\)\)/);
   assert.match(server, /validateProviderMetadata\(data.meta, providerSymbol, interval\)/);
+  assert.match(server, /providerCoverage/);
+  assert.match(server, /providerDiagnostics/);
   assert.match(server, /marketReference\?\.chartDataMatch\?\.status === "matched_reference"/);
   assert.match(server, /!marketReference.chartDataMatch &&\s*normalizedRequestedCutoffMode/);
   assert.match(ui, /Provider reference; not broker-exact/);

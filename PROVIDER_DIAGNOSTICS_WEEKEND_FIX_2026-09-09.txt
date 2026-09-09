@@ -1,0 +1,30 @@
+CSA benchmark provider diagnostics and D1 weekend-session fix
+
+Changed files
+- server.js
+- market-data-matching.js
+- benchmark/market-data-matching.test.js
+
+What changed
+1. The market-data response now exposes providerDiagnostics and providerCoverage,
+   including requested symbol, candidate symbols, resolved provider symbol,
+   requested date range, first/last returned candles, filtered coverage and
+   failure category.
+2. The response keeps chartDataMatch and provider failure details visible after
+   provider data is rejected, so symbol mapping and date-range failures can be
+   distinguished without another full analysis run.
+3. A D1 chart whose final visible date falls on Saturday or Sunday may align to
+   the last tradable Friday candle when the OHLC values pass the existing
+   tolerance. This does not widen the FX three-pip price rule.
+4. Weekday provider-history gaps remain hard mismatches. No unverified period
+   highs/lows, Fibonacci frames or entries are promoted.
+
+Validation
+- node --check server.js
+- node --test --test-reporter=dot benchmark/*.test.js
+- All tests passed (exit 0).
+
+Scope
+This is an isolated benchmark-engine update. No production files were changed,
+no OANDA token was included, and no live Render deployment or authenticated API
+request was performed.

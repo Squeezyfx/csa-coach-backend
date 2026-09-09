@@ -55,7 +55,24 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
         .sort((a, b) => a.score - b.score)[0]?.c
     : rows.at(-1);
   if (!last || !(Number(last.close) > 0)) return result("unverified", "No provider candles at the chart cutoff");
-  if (String(last.datetime).slice(0,10) !== cutoff.slice(0,10)) return result("mismatch", "Provider history does not reach the chart date");
+  const providerDate = String(last.datetime).slice(0, 10);
+  const cutoffDate = cutoff.slice(0, 10);
+  const providerMs = Date.parse(`${providerDate}T00:00:00Z`);
+  const cutoffMs = Date.parse(`${cutoffDate}T00:00:00Z`);
+  const lagDays = Number.isFinite(providerMs) && Number.isFinite(cutoffMs)
+    ? Math.round((cutoffMs - providerMs) / 86400000)
+    : null;
+  // Daily charts can end on a Saturday/Sunday while the last tradable candle
+  // is Friday. Treat that session gap as an alignment condition, not as a
+  // missing-symbol/history failure. Weekday gaps remain hard mismatches.
+  const cutoffDay = Number.isFinite(cutoffMs) ? new Date(cutoffMs).getUTCDay() : null;
+  const weekendSessionLag = timeframe === "D1" &&
+    [0, 6].includes(cutoffDay) && lagDays !== null && lagDays >= 1 && lagDays <= 2;
+  if (providerDate !== cutoffDate && !weekendSessionLag) {
+    return result("mismatch", "Provider history does not reach the chart date", {
+      providerCoverage: { lastProviderCandleDate: providerDate, requestedCutoffDate: cutoffDate, lagDays },
+    });
+  }
   const forexLimit = forexComparisonTolerance(symbol);
   const limit = forexLimit ?? Math.max(Number(tolerance) || 0, price * 0.0005);
   const comparisons = [{ field: "close", chart: price, provider: Number(last.close) }];
@@ -75,7 +92,7 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
   const withinLimit = c => Number.isFinite(c.provider) && Math.abs(c.chart - c.provider) <= limit + Number.EPSILON * Math.max(1, Math.abs(c.chart)) * 8;
   const chosenByCompletedHeader = source === "OANDA" && !exactTime && sameDateCompleted.includes(last) &&
     headerComparable && comparisons.filter(c => c.field !== "close").every(withinLimit);
-  if (!dateVerified && !chosenByCompletedHeader) return result("date_unverified", "Final candle date is inferred or unreadable; provider mismatch is not established", evidence);
+  if (!dateVerified && !chosenByCompletedHeader && !weekendSessionLag) return result("date_unverified", "Final candle date is inferred or unreadable; provider mismatch is not established", evidence);
   // An unfinished screenshot close is not the provider's eventual closing price.
   // Retain only a provisional reference when every available OHL check passes;
   // never promote it to a matched chart or increase the three-pip tolerance.
@@ -95,12 +112,15 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
   }
   if (mismatch && detection.latestVisibleCandleComplete !== true) return result("partial_or_unknown_candle", "Final candle may be unfinished; full provider OHLC cannot verify this screenshot", evidence);
   if (mismatch && detection.providerSessionAligned !== true) return result("session_unverified", "Chart and provider candle session boundaries are not verified", evidence);
-  return result(mismatch ? "mismatch" : "matched_reference", mismatch ? "Provider candle differs from the visible chart; do not substitute its levels" : "Chart endpoint aligns within tolerance; provider reference, not broker-exact", { comparisons, tolerance: limit, candleDate: last.datetime });
+  return result(mismatch ? "mismatch" : "matched_reference", mismatch ? "Provider candle differs from the visible chart; do not substitute its levels" : weekendSessionLag ? "Chart endpoint aligns with the last tradable session; provider reference, not broker-exact" : "Chart endpoint aligns within tolerance; provider reference, not broker-exact", {
+    comparisons, tolerance: limit, candleDate: last.datetime,
+    providerCoverage: { lastProviderCandleDate: providerDate, requestedCutoffDate: cutoffDate, lagDays, weekendSessionLag },
+  });
 }
 
 export function clearRejectedProviderData(reference = {}) {
   const safe = {};
-  for (const key of ["dataProvider", "providerPriceComponent", "symbol", "providerSymbol", "timezone", "interval", "frameworkInterval", "profile", "chartCutoff", "chartDataMatch", "error", "failureCategory", "rawCandleCount", "filteredCandleCount"]) {
+  for (const key of ["dataProvider", "providerPriceComponent", "symbol", "providerSymbol", "timezone", "interval", "frameworkInterval", "profile", "chartCutoff", "chartDataMatch", "providerCoverage", "error", "failureCategory", "rawCandleCount", "filteredCandleCount", "frameworkCandleCount", "impulseCandleCount"]) {
     if (reference[key] !== undefined) safe[key] = reference[key];
   }
   return { ...safe, ok: false, priceAuthority: "unverified",

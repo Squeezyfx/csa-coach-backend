@@ -1181,6 +1181,11 @@ function compactRawAiResponse({
         : [],
       approvedAreas: buildApprovedMarketAreas(marketReference),
       chartCutoff: marketReference?.chartCutoff || null,
+      chartDataMatch: marketReference?.chartDataMatch || null,
+      providerSymbol: marketReference?.providerSymbol || null,
+      providerCoverage: marketReference?.providerCoverage || null,
+      providerDiagnostics: marketReference?.providerDiagnostics || null,
+      failureCategory: marketReference?.failureCategory || null,
       rawCandleCount: Number(marketReference?.rawCandleCount || 0),
       filteredCandleCount: Number(marketReference?.filteredCandleCount || 0),
     },
@@ -3054,7 +3059,7 @@ async function fetchTwelveDataStructureLevels({
   const apiKey = process.env.TWELVE_DATA_API_KEY;
   const profile = getSupportedCsaTimeframeProfile(timeframe);
 
-  const empty = (error, range = null) => ({
+  const empty = (error, range = null, diagnostics = {}) => ({
     ok: false,
     error,
     dailyLevels: [],
@@ -3072,6 +3077,8 @@ async function fetchTwelveDataStructureLevels({
     frameworkSourceLabel: profile.frameworkSourceLabel || null,
     profile,
     chartCutoff: chartCutoff || null,
+    providerCoverage: diagnostics.providerCoverage || null,
+    providerDiagnostics: diagnostics.providerDiagnostics || null,
   });
 
   if (useOanda && !process.env.OANDA_API_TOKEN) return {...empty("OANDA_API_TOKEN is missing on the server."), dataProvider, failureCategory:"authentication"};
@@ -3113,6 +3120,25 @@ async function fetchTwelveDataStructureLevels({
   )];
   let oandaAlignmentCandle = null;
   let resolvedProviderSymbol = providerCandidates[0] || normalizeSymbol(symbol);
+  const coverageOf = (candles = []) => {
+    const dates = candles.map((bar) => normalizeTwelveDataDateTime(bar?.datetime)).filter(Boolean).sort();
+    return {
+      count: dates.length,
+      firstCandle: dates[0] || null,
+      lastCandle: dates.at(-1) || null,
+    };
+  };
+  const providerDiagnostics = {
+    requestedSymbol: symbol,
+    candidateSymbols: providerCandidates,
+    resolvedProviderSymbol: resolvedProviderSymbol || null,
+    dataProvider,
+    interval: profile.interval,
+    frameworkInterval,
+    requestedStartDate: impulseRange.startDate,
+    requestedEndDateTime: endDateTime,
+    chartDate: chartDate ? formatDateOnly(chartDate) : null,
+  };
 
   const buildTwelveParams = ({
     interval,
@@ -3237,7 +3263,19 @@ async function fetchTwelveDataStructureLevels({
     }
   } catch (error) {
     return {
-      ...empty(error.message, structureRange),
+      ...empty(error.message, structureRange, {
+        providerCoverage: {
+          execution: coverageOf(rawCandles),
+          framework: coverageOf(rawFrameworkCandles),
+          requestedEndDateTime: endDateTime,
+        },
+        providerDiagnostics: {
+          ...providerDiagnostics,
+          resolvedProviderSymbol: resolvedProviderSymbol || null,
+          failureCategory: error.category || "provider_error",
+          providerStatus: error.twelveDataStatus || null,
+        },
+      }),
       dataProvider,
       failureCategory: error.category || "provider_error",
       twelveDataStatus: error.twelveDataStatus || "unknown",
@@ -3950,6 +3988,21 @@ async function fetchTwelveDataStructureLevels({
     oandaAlignmentCandle,
     providerPriceComponent: useOanda ? process.env.OANDA_PRICE_COMPONENT || "B" : null,
     providerSymbol: resolvedProviderSymbol,
+    providerCoverage: {
+      execution: coverageOf(rawCandles),
+      framework: coverageOf(rawFrameworkCandles),
+      filteredExecution: coverageOf(filteredCandles),
+      filteredFramework: coverageOf(filteredFrameworkSourceCandles),
+      requestedEndDateTime: endDateTime,
+      lastIncludedCandle,
+      firstExcludedCandle,
+    },
+    providerDiagnostics: {
+      ...providerDiagnostics,
+      resolvedProviderSymbol,
+      responseReceived: true,
+      failureCategory: null,
+    },
     priceAuthority: "provider_reference_not_broker_verified",
     timezone,
     interval: profile.interval,
@@ -30409,7 +30462,7 @@ ${(visualReview?.strategyMissingInformation || []).length
         occupancy:
           Number(chartDetection?.chartOccupancyPercent || 0),
       },
-      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, filteredCandleCount: marketReference.filteredCandleCount, frameworkCandleCount: marketReference.frameworkCandleCount, impulseCandleCount: marketReference.impulseCandleCount, weekRange: marketReference.weekRange, impulseRange: marketReference.impulseRange, dailyLevels: marketReference.dailyLevels, structuralLevels: marketReference.structuralLevels, currentFrameworkPeriodKey: marketReference.currentFrameworkPeriodKey, currentFrameworkPeriodLabel: marketReference.currentFrameworkPeriodLabel, currentFrameworkPeriodComplete: marketReference.currentFrameworkPeriodComplete, timeframeCandles: marketReference.timeframeCandles, impulseCandles: marketReference.impulseCandles, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
+      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, providerSymbol: marketReference.providerSymbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, filteredCandleCount: marketReference.filteredCandleCount, frameworkCandleCount: marketReference.frameworkCandleCount, impulseCandleCount: marketReference.impulseCandleCount, providerCoverage: marketReference.providerCoverage, providerDiagnostics: marketReference.providerDiagnostics, failureCategory: marketReference.failureCategory || null, chartDataMatch: marketReference.chartDataMatch || null, chartCutoff: marketReference.chartCutoff || null, weekRange: marketReference.weekRange, impulseRange: marketReference.impulseRange, dailyLevels: marketReference.dailyLevels, structuralLevels: marketReference.structuralLevels, currentFrameworkPeriodKey: marketReference.currentFrameworkPeriodKey, currentFrameworkPeriodLabel: marketReference.currentFrameworkPeriodLabel, currentFrameworkPeriodComplete: marketReference.currentFrameworkPeriodComplete, timeframeCandles: marketReference.timeframeCandles, impulseCandles: marketReference.impulseCandles, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
     };
 
     // Shape the complete response first. If this throws, nothing has yet
