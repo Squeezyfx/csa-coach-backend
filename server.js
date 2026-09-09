@@ -29807,6 +29807,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
                   lowDate: null,
                   source: rasterInventory.source,
                   rasterPriceScaleVerified: true,
+                  rasterBoundaryAmbiguous: rasterPeriod.boundaryAmbiguous === true,
                 }
               : period;
           })
@@ -29945,7 +29946,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         rasterInventory?.chartPriceScaleVerified === true &&
         rasterByDate.size === rawFocusedPeriodInventory.length &&
         chartPeriodInventory.length === rawFocusedPeriodInventory.length &&
-        chartPeriodInventory.every((period) => period?.rasterPriceScaleVerified === true);
+        chartPeriodInventory.every((period) =>
+          period?.rasterPriceScaleVerified === true && period?.rasterBoundaryAmbiguous !== true
+        );
       const inventoryUsable = marketInventoryVerified || marketInventoryProvisional || chartOnlyInventoryUsable;
       const selectedPeriodInventory = marketInventoryVerified
         ? marketPeriodInventory

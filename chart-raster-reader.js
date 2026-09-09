@@ -453,12 +453,19 @@ export function extractMt4PngMonthlyInventory({
     if (!owned.length) return null;
     const highCandle = owned.reduce((best, candle) => candle.highY < best.highY ? candle : best);
     const lowCandle = owned.reduce((best, candle) => candle.lowY > best.lowY ? candle : best);
+    // A wick within one candle step of a calendar boundary can belong to
+    // either adjacent period because screenshot interpolation and broker
+    // session cut-offs are not exact. Keep the value, but mark the period
+    // ambiguous so downstream validation cannot silently accept it.
+    const boundaryBuffer = Math.max(candleStep * 0.75, 2);
+    const boundaryAmbiguous = [highCandle.x, lowCandle.x].some((x) =>
+      Math.abs(x - startX) <= boundaryBuffer || Math.abs(x - endX) <= boundaryBuffer
+    );
     return {
       date: start.date,
       high: round(priceAtY(highCandle.highY)),
       low: round(priceAtY(lowCandle.lowY)),
-      rasterHighY: highCandle.highY,
-      rasterLowY: lowCandle.lowY,
+      boundaryAmbiguous,
     };
   }).filter(Boolean);
   if (inventory.length !== starts.length || inventory.some((period) => !(period.high > period.low))) return null;
