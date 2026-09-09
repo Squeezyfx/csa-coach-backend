@@ -22,6 +22,9 @@ What changed
    may try Twelve Data if TWELVE_DATA_API_KEY is configured. The alternate
    provider is used only after its own chart match passes; failed attempts are
    retained in providerAttempts for diagnosis.
+6. The alternate-provider attempt also runs when OANDA has already rejected the
+   reference before the normal matching branch, which covers empty framework
+   inventory cases such as the EURHUF and GBPCAD rerun.
 
 Validation
 - node --check server.js

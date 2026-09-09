@@ -120,7 +120,7 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
 
 export function clearRejectedProviderData(reference = {}) {
   const safe = {};
-  for (const key of ["dataProvider", "providerPriceComponent", "symbol", "providerSymbol", "timezone", "interval", "frameworkInterval", "profile", "chartCutoff", "chartDataMatch", "providerCoverage", "error", "failureCategory", "rawCandleCount", "filteredCandleCount", "frameworkCandleCount", "impulseCandleCount"]) {
+  for (const key of ["dataProvider", "providerPriceComponent", "symbol", "providerSymbol", "timezone", "interval", "frameworkInterval", "profile", "chartCutoff", "chartDataMatch", "providerCoverage", "providerDiagnostics", "providerAttempts", "error", "failureCategory", "rawCandleCount", "filteredCandleCount", "frameworkCandleCount", "impulseCandleCount"]) {
     if (reference[key] !== undefined) safe[key] = reference[key];
   }
   return { ...safe, ok: false, priceAuthority: "unverified",

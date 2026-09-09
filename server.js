@@ -29415,6 +29415,90 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         marketReference.periodReferenceOnly = true;
       }
     }
+
+    // If the primary reference was already rejected before the main matching
+    // branch (for example, because its framework inventory was empty), still
+    // give the configured alternate provider one opportunity. This prevents
+    // an early OANDA rejection from hiding a usable Twelve Data reference.
+    if (!marketReference.ok && marketReference.dataProvider === "OANDA" &&
+        String(process.env.FOREX_DATA_PROVIDER_FALLBACK || "auto").toLowerCase() !== "off" &&
+        process.env.TWELVE_DATA_API_KEY &&
+        ["mismatch", "partial_or_unknown_candle", "date_unverified", "time_unverified"].includes(marketReference.chartDataMatch?.status)) {
+      const primaryAttempt = {
+        provider: "OANDA",
+        symbol: marketReference.providerSymbol || marketReference.symbol || normalizedSymbol,
+        chartDataMatch: marketReference.chartDataMatch,
+        providerCoverage: marketReference.providerCoverage || null,
+        providerDiagnostics: marketReference.providerDiagnostics || null,
+      };
+      let alternate = null;
+      try {
+        alternate = await fetchTwelveDataStructureLevels({
+          symbol: normalizedSymbol,
+          chartDate: resolvedAnalysisDate,
+          timeframe,
+          timezone: resolvedTimezone,
+          analysisType: mode,
+          chartCutoff,
+          providerOverride: "twelve_data",
+        });
+        if (alternate.ok) {
+          const alternateMatch = assessChartDataMatch({
+            candles: alternate.impulseCandles?.length ? alternate.impulseCandles : alternate.timeframeCandles,
+            detection: chartDetection,
+            cutoff: chartCutoff.endDateTime,
+            timeframe,
+            symbol: normalizedSymbol,
+            source: "Twelve Data",
+            tolerance: getCleanBreakTolerance(normalizedSymbol),
+          });
+          alternate.chartDataMatch = alternateMatch;
+          if (["matched_reference", "partial_reference"].includes(alternateMatch.status)) {
+            alternate.providerAttempts = [primaryAttempt, {
+              provider: "Twelve Data",
+              symbol: alternate.providerSymbol || alternate.symbol || normalizedSymbol,
+              chartDataMatch: alternateMatch,
+              providerCoverage: alternate.providerCoverage || null,
+              providerDiagnostics: alternate.providerDiagnostics || null,
+            }];
+            marketReference = alternate;
+            chartDataMatch = alternateMatch;
+            completedPeriodReferences = buildCompletedPeriodReferences({
+              periods: ["D1", "H4"].includes(timeframe)
+                ? marketReferencePeriodInventory({ marketReference, timeframe, cutoffDate: chartCutoff.resolvedDate })
+                : marketReference.dailyLevels || [],
+              candles: marketReference.timeframeCandles || [],
+              timeframe,
+              visibleDateFloor: chartDetection?.latestPrintedAxisDate && chartDetection.latestPrintedAxisDate <= chartCutoff.resolvedDate
+                ? chartDetection.latestPrintedAxisDate : "",
+              providerAvailable: true,
+              tolerance: getCleanBreakTolerance(normalizedSymbol),
+            });
+            completedPeriodReferences.source = "Twelve Data";
+          } else {
+            alternate.error = alternateMatch.reason;
+            alternate.failureCategory = alternateMatch.status;
+          }
+        }
+      } catch (fallbackError) {
+        alternate = { ok: false, error: fallbackError.message, failureCategory: fallbackError.category || "provider_error" };
+      }
+      if (marketReference.dataProvider === "OANDA") {
+        marketReference.providerAttempts = [primaryAttempt, {
+          provider: "Twelve Data",
+          symbol: alternate?.providerSymbol || normalizedSymbol,
+          error: alternate?.error || "Alternate provider did not return an aligned reference",
+          failureCategory: alternate?.failureCategory || null,
+          providerCoverage: alternate?.providerCoverage || null,
+          providerDiagnostics: alternate?.providerDiagnostics || null,
+        }];
+        marketReference.providerDiagnostics = {
+          ...(marketReference.providerDiagnostics || {}),
+          fallbackAttempted: true,
+          fallbackAccepted: false,
+        };
+      }
+    }
     if (!marketReference.ok) marketReference = clearRejectedProviderData(marketReference);
 
     csaTimingLog(
