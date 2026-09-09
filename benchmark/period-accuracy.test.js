@@ -1,3 +1,4 @@
+import { evaluateFrameworkCandidate, selectFrameworkEntries } from "../shared-analysis-engine.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -95,7 +96,7 @@ const functionSource = name => {
   assert.ok(start >= 0, name);
   return server.slice(start, server.indexOf("\n}\n", start) + 2);
 };
-const context = vm.createContext({ ...policy, isUnverifiedPeriodCandidate,
+const context = vm.createContext({ ...policy, evaluateFrameworkCandidate, selectFrameworkEntries, isUnverifiedPeriodCandidate,
   asPositiveNumber: value => Number(value) > 0 ? Number(value) : null,
   getCleanBreakTolerance: () => 0.00001,
   getApprovedPriceTolerance: () => 0.00001,
@@ -129,6 +130,24 @@ test("supply derived from an unverified period cannot bypass the selector", () =
   const feb = result.regressionDiagnostics.candidateEvaluations.find(item => item.candidate.sourceKind === "February high");
   assert.equal(feb.candidate.independentEntryEvidence, false);
   assert.equal(feb.qualified, false);
+});
+
+test("complete chart-only inventory can produce provisional Fib-qualified entries", () => {
+  const result = context.rankChartNativeFallbackAreas({
+    timeframe: "D1", direction: "bearish", currentPrice: 125,
+    visualReview: { chartNativeEntryFallback: {
+      usable: true, direction: "bearish", currentWeekHigh: 200, currentWeekLow: 100,
+      currentPeriodFrameVerified: false, currentPeriodFrameChartUsable: true,
+      inventoryAuthority: "complete_chart_only_period_inventory_provider_unavailable_or_unaligned_provisional",
+      periodInventory: periods,
+    } },
+  });
+  assert.ok(result.areas.some(item => item.sourcePeriod === "February"));
+  assert.ok(result.areas.every(item => item.provisional === true && item.requiresReview === true));
+  assert.ok(result.areas.every(item => item.provenanceVerified === false));
+  assert.equal(result.regressionDiagnostics.transparencyAudit.fibonacciAudit.verified, false);
+  assert.equal(result.regressionDiagnostics.transparencyAudit.fibonacciAudit.chartDerivedUsable, true);
+  assert.ok(result.areas.every(item => item.sourcePeriod !== "March"));
 });
 
 test("matching an estimated extreme cannot manufacture exact-line authority (Cocoa regression)", () => {

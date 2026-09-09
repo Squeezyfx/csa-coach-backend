@@ -1,0 +1,11 @@
+CSA Benchmark v2.81.0
+Build: CSA-v4.64.0-deterministic-png-wick-reader
+Engine: 10.59.0
+
+Changes:
+- Reads MT4 PNG candle wicks directly from image pixels.
+- Calibrates wick prices from the printed right-hand price scale.
+- Maps monthly boundaries from the printed bottom-axis dates.
+- Prevents price-axis tick labels from being substituted for monthly highs/lows.
+- Uses no additional AI call; the existing focused reader only transcribes axis labels.
+- Keeps chart-derived results provisional until human or broker-feed verification.

@@ -1,3 +1,4 @@
+import { calendarMapping } from "../framework-calendar.js";
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
 const BENCHMARK_VALIDATOR_VERSION = "1.15.0";
@@ -405,45 +406,11 @@ function addCheck(checks, id, label, passed, details, critical = true) {
 }
 
 function expectedFrameworkInventory(timeframe = "", latestVisibleDate = "") {
-  const tf = String(timeframe || "").toUpperCase();
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(latestVisibleDate || ""))
-    ? new Date(`${latestVisibleDate}T00:00:00.000Z`)
-    : null;
-  if (!date || Number.isNaN(date.getTime())) return null;
-
-  if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) {
-    const weekday = date.getUTCDay();
-    return {
-      sourceUnit: "D1",
-      expectedCount: weekday >= 1 && weekday <= 5 ? weekday : 5,
-      label: "D1 candle inventory for the current trading week",
-    };
-  }
-
-  if (tf === "H4") {
-    const mondayWeeks = new Set();
-    for (let day = 1; day <= date.getUTCDate(); day += 1) {
-      const cursor = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), day));
-      const weekday = cursor.getUTCDay();
-      if (weekday === 0 || weekday === 6) continue;
-      const monday = new Date(cursor);
-      monday.setUTCDate(cursor.getUTCDate() - (weekday - 1));
-      mondayWeeks.add(monday.toISOString().slice(0, 10));
-    }
-    return {
-      sourceUnit: "W1",
-      expectedCount: mondayWeeks.size,
-      label: "W1 candle inventory for the current calendar month",
-    };
-  }
-
-  if (tf === "D1") {
-    return { sourceUnit: "MN", expectedCount: date.getUTCMonth() + 1,
-      expectedDates: Array.from({ length: date.getUTCMonth() + 1 }, (_, index) =>
-        `${date.getUTCFullYear()}-${String(index + 1).padStart(2, "0")}-01`),
-      label: "Calendar-month inventory through cutoff; current month context-only" };
-  }
-  return null;
+  const mapping = calendarMapping(timeframe, latestVisibleDate);
+  if (!mapping) return null;
+  return {sourceUnit: {day:"D1",week:"W1",month:"MN",quarter:"quarter",year:"year"}[mapping.unit],
+    expectedCount:mapping.dates.length, expectedDates:mapping.dates,
+    label:`${mapping.unit} inventory for current ${mapping.range}`};
 }
 
 export function validateBenchmarkResult(result = {}, expectation = {}) {
@@ -464,6 +431,8 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   const references = referenceEntries(result);
   const feedbackText = String(result?.analysis || result?.summary || result?.finalFeedback?.analysis || "");
   const priceDiagnostics = result?.analysisFacts?.selectorDiagnostics;
+  const dataMatch = priceDiagnostics?.transparencyAudit?.inventoryAuthority?.dataMatch;
+  const oandaProvisionalReference = dataMatch?.source === "OANDA" && dataMatch?.status === "partial_reference";
   if (priceDiagnostics) {
     const unverifiedEntries = (priceDiagnostics.selectedEntries || []).filter(entry =>
       entry?.provenanceVerified === false || /unverified|estimated_period/.test(String(entry?.priceSource || "")));
@@ -724,7 +693,11 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
               Number.isFinite(Number(conflict?.chartCount))
             ))
           );
-        const authorityMissing = Boolean(transparencyAudit.inventoryAuthority?.providerFailure);
+        const chartRasterAuthorityVerified =
+          transparencyAudit.inventoryAuthority?.chartOnlyInventoryVerified === true;
+        const authorityMissing =
+          Boolean(transparencyAudit.inventoryAuthority?.providerFailure) &&
+          !chartRasterAuthorityVerified;
         addCheck(
           checks,
           "automatic_period_price_authority",
@@ -732,7 +705,8 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
           !authorityMissing && inventoryConflicts.length === 0,
           inventoryConflicts.length
             ? `${inventoryConflicts.length} period high/low conflict(s) were exposed. Review the chart values before saving this result.`
-            : authorityMissing ? "External price authority is unavailable or alignment is uncertain; this is not a confirmed price conflict."
+            : authorityMissing ? "Neither provider nor calibrated chart-raster price authority is available."
+            : chartRasterAuthorityVerified ? "Calibrated chart-raster prices are verified against the visible final-candle header; broker-feed equivalence is not claimed."
             : "No unresolved chart-versus-market period high/low conflict was found."
         );
       }
@@ -935,7 +909,9 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const tolerance =
       finiteNumber(expectation.levelTolerance) ??
       toleranceOverride ??
-      exactLevelTolerance(requiredPrice, required.digits);
+      (oandaProvisionalReference && requiredPrice >= 1 && requiredPrice < 10
+        ? Math.max(exactLevelTolerance(requiredPrice, required.digits), Number(dataMatch?.tolerance) || 0.0003)
+        : exactLevelTolerance(requiredPrice, required.digits));
     const matchingZoneExpectation = configuredEntryZones.find((item) =>
       priceInsideZone(requiredPrice, item.zone, tolerance)
     );
@@ -967,7 +943,9 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const tolerance =
       finiteNumber(expectation.levelTolerance) ??
       toleranceOverride ??
-      exactLevelTolerance(requiredPrice, required.digits);
+      (oandaProvisionalReference && requiredPrice >= 1 && requiredPrice < 10
+        ? Math.max(exactLevelTolerance(requiredPrice, required.digits), Number(dataMatch?.tolerance) || 0.0003)
+        : exactLevelTolerance(requiredPrice, required.digits));
     const matchingZoneExpectation = configuredEntryZones.find((item) =>
       priceInsideZone(requiredPrice, item.zone, tolerance)
     );

@@ -1,0 +1,7 @@
+CSA provider symbol request fix — 2026-09-09
+
+Twelve Data requests now try compact symbols first for pair-like instruments (EURHUF, AUDCHF, GBPCAD), then retain the slash-form symbol as a compatibility fallback. Canonical slash symbols remain in diagnostics and metadata validation.
+
+This fixes the request-format failure observed for EUR/HUF without weakening OHLC/date verification. A chart is still kept in review when neither provider can verify the chart's completed candle.
+
+Validation: node --check server.js and node --test --test-reporter=dot benchmark/*.test.js — passed.

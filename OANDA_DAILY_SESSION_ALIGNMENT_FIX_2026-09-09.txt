@@ -1,0 +1,7 @@
+OANDA daily session alignment fix — 2026-09-09
+
+OANDA remains the primary provider. D1 matching now handles a one-calendar-day OANDA/broker session-label offset on weekdays only when all four visible OHLC values match within the instrument tolerance. A date offset alone is never accepted. Larger gaps and any OHLC mismatch remain review failures.
+
+Weekend session handling remains unchanged. Diagnostics now expose weekdaySessionLag and sessionLagAligned in providerCoverage.
+
+Validation: node --check server.js and node --test --test-reporter=dot benchmark/*.test.js — passed.

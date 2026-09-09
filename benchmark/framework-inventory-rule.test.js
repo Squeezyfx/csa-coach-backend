@@ -67,17 +67,9 @@ test("date labels alone cannot verify vision-estimated highs and lows", () => {
   assert.match(serverSource, /vision-estimated period price rejected/);
 });
 
-test("verified fixed-period structure outranks the final pullback direction", () => {
-  assert.match(serverSource, /deriveVerifiedFixedPeriodBias/);
-  const fixedBiasFunction = serverSource.match(
-    /function deriveVerifiedFixedPeriodBias\([\s\S]*?\n}\n\nfunction buildPeriodInventoryStructuralCandidates/
-  )?.[0] || "";
-  assert.match(fixedBiasFunction, /const periods =/);
-  assert.doesNotMatch(fixedBiasFunction, /const normalizedPeriods =/);
-  assert.match(serverSource, /verified fixed-period structure is bullish/);
-  assert.match(serverSource, /final bearish move treated as a pullback/);
-  assert.match(serverSource, /latestClose < latestOpen/);
-  assert.match(serverSource, /latestClose > latestOpen/);
+test("fixed-period bias routes to the shared engine", () => {
+  assert.ok(serverSource.includes("const fixedPeriodBias = sharedFramework.bias"));
+  assert.ok(serverSource.includes("const fallbackDirection = fixedPeriodBias?.direction || null"));
 });
 
 test("focused reader uses the full vision model once for exact period prices", () => {
@@ -115,9 +107,23 @@ test("full period inventory remains available for current Fib-frame verification
   assert.match(serverSource, /inProgressPeriodInventory: authoritativeInventory\.inProgressPeriods/);
 });
 
-test("provider-unavailable broker indices retain a complete chart inventory for review", () => {
-  assert.match(serverSource, /complete_chart_only_period_inventory_provider_unavailable_human_review/);
+test("provider-unavailable charts retain a complete provisional chart inventory", () => {
+  assert.match(serverSource, /complete_chart_only_period_inventory_provider_unavailable_or_unaligned_provisional/);
   assert.match(serverSource, /const chartOnlyInventoryVerified =/);
+  assert.match(serverSource, /const chartOnlyInventoryUsable =/);
+  assert.match(serverSource, /currentPeriodFrameChartUsable/);
   assert.match(serverSource, /Human verification remains required/);
   assert.match(serverSource, /chart_only_fixed_period_inventory_provider_unavailable/);
+  assert.match(serverSource, /const providerInventoryAligned =/);
+  assert.match(serverSource, /providerComparisonPeriodMappingAudit/);
+  assert.match(serverSource, /provider comparison rejected; chart-derived estimate retained provisionally/);
+  assert.match(serverSource, /extractMt4PngMonthlyInventory/);
+  assert.match(serverSource, /rasterCorrectedPeriodInventory/);
+  assert.match(serverSource, /priceAxisTicks/);
+  assert.match(serverSource, /timeAxisDates/);
+  assert.match(serverSource, /chartDetection\?\.timeAxisDates/);
+  assert.match(serverSource, /chartDetection\?\.priceAxisTicks/);
+  assert.match(serverSource, /deterministicPeriodDates\.map/);
+  assert.match(serverSource, /complete_chart_only_period_inventory_deterministic_raster_verified/);
+  assert.match(serverSource, /rasterInventory\?\.chartPriceScaleVerified === true/);
 });

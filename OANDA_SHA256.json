@@ -1,0 +1,8 @@
+{
+  "server.js": "dded53361c3b5e114da75a68f865cdf18c564512688464ae71bcbe9b411c00bd",
+  "market-data-matching.js": "bdf56f45864486fe97fc074bb3291bd3425112fe7c2d1e843155306a12748fb6",
+  "oanda-data.js": "b4fb027c6d29fcac64d18a1753a06e9942a02df3e0bcd4d41a4f3e4042767a59",
+  "package.json": "d77a636b88dcad1d26174a0c64508be98e5224e108e6cb3882e987a5c281925a",
+  "benchmark/oanda-data.test.js": "235459bfdd4b8bcac84dac9b1c3aa8a5fb264dfdbcbb29495da849c556b9a2de",
+  "OANDA_UPDATE.md": "6be4943ff5fbca0c36d0f7b0a7b10bcc7a19d24a498238277ed3579d42bac5ae"
+}

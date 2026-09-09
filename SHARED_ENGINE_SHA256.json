@@ -1,0 +1,15 @@
+{
+  "SHARED_ENGINE_UPDATE.md": "c603fc046fdf22668a9724588cceeda4e9670874e79aec24c49050fc6e34251f",
+  "benchmark/framework-inventory-rule.test.js": "26f079f5ee1c656439db2438a894e6119d3470dca364c432ea8a6d293d81bcbe",
+  "benchmark/h1-calendar-recovery.test.js": "afbd88d7672a2773ae0022b803651456ddbab752ce024cf94116b3e2fc6079ca",
+  "benchmark/period-accuracy.test.js": "138f3746e8ffac8e04795772d3f62f07e78d2c4a1c65e046420a9e7d899b7121",
+  "benchmark/shared-analysis-engine.test.js": "3f45746c5f2eb9ce4049ec9c571db1f7292c36e1704b6cf469a8db29f6c05e69",
+  "benchmark/validator.js": "5afce83751cb4cc4f2296ffc9b0f07d3911d294298a7130b5a9f90936f532af4",
+  "benchmark/verified-chart-fixtures.test.js": "381eb705ad0852befdc041c2ced933ff85a4d3bf1d010715c4040d9cfee3fb15",
+  "benchmark/weekly-fibonacci-policy.js": "870ec2376e624fedf2056be3d935728ff0e58fccb57d0ba9bf9dea48166bb41d",
+  "csa-entry-policy.js": "7474d80b6ee90adb021464e6123b76bb23604cca02858fdce4c1597fb8a6d68f",
+  "framework-calendar.js": "9a58912319c0d2080e7b8599e0bc717536348cc2dbe092eab0b65e11b7fafb88",
+  "package.json": "efcc7ee7901e49c116ce7da7ad747d0435e28e9e12590541f50f5cf322978b3c",
+  "server.js": "5c87d2ba2557ea8b059da021ce3fc3843700e50801386cf70b70185d37149bc2",
+  "shared-analysis-engine.js": "816ee379ff4ce3a096640736dc948989a15a510ee48eca0b7adb27ab241f3264"
+}

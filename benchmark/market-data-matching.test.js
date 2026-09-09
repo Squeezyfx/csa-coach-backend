@@ -24,10 +24,49 @@ test("matching data is labelled reference, never broker exact", () => {
   assert.equal(result.brokerVerified,false);
 });
 test("wrong date, price or header extremes cannot pass", () => {
-  assert.equal(assessChartDataMatch({...base,cutoff:"2026-08-21 23:59:59"}).status,"mismatch");
+  const offset = assessChartDataMatch({...base,cutoff:"2026-08-21 23:59:59"});
+  assert.equal(offset.status,"matched_reference");
+  assert.equal(offset.providerCoverage.weekdaySessionLag,true);
   assert.equal(assessChartDataMatch({...base,detection:{...base.detection,latestVisiblePrice:120}}).status,"mismatch");
   assert.equal(assessChartDataMatch({...base,detection:{...base.detection,latestVisibleHigh:110}}).status,"mismatch");
   assert.equal(assessChartDataMatch({...base,detection:{}}).status,"unverified");
+});
+test("D1 weekend cutoff accepts the last tradable Friday when OHLC aligns", () => {
+  const friday = { datetime:"2026-08-21", open:99, high:102, low:98, close:100 };
+  const detection = {
+    ...base.detection,
+    latestVisibleDate:"2026-08-22",
+    latestVisibleDateEvidence:"inferred_axis",
+    dateConfidence:"high",
+  };
+  const result = assessChartDataMatch({
+    candles:[friday], detection, cutoff:"2026-08-22 23:59:59", timeframe:"D1",
+  });
+  assert.equal(result.status,"matched_reference");
+  assert.equal(result.providerCoverage.weekendSessionLag,true);
+  assert.equal(result.providerCoverage.lastProviderCandleDate,"2026-08-21");
+});
+test("weekday provider coverage gaps remain mismatches", () => {
+  const result = assessChartDataMatch({...base, cutoff:"2026-08-24 23:59:59"});
+  assert.equal(result.status,"mismatch");
+  assert.equal(result.providerCoverage.lagDays,4);
+});
+test("OANDA weekday session offset is accepted only when full OHLC aligns", () => {
+  const result = assessChartDataMatch({
+    ...base,
+    candles:[{datetime:"2026-08-19",open:99,high:102,low:98,close:100}],
+    cutoff:"2026-08-20 23:59:59",
+  });
+  assert.equal(result.status,"matched_reference");
+  assert.equal(result.providerCoverage.weekdaySessionLag,true);
+  assert.equal(result.providerCoverage.sessionLagAligned,true);
+
+  const mismatch = assessChartDataMatch({
+    ...base,
+    candles:[{datetime:"2026-08-19",open:99.5,high:102,low:98,close:100}],
+    cutoff:"2026-08-20 23:59:59",
+  });
+  assert.equal(mismatch.status,"mismatch");
 });
 test("future candles cannot rescue an unmatched screenshot", () => {
   assert.equal(assessChartDataMatch({...base,candles:[{datetime:"2026-08-21",close:100}]}).status,"unverified");
@@ -56,6 +95,8 @@ test("server gates inventory approval and UI exposes source failures", () => {
   const ui = readFileSync(new URL("./public/app.js", import.meta.url), "utf8");
   assert.match(server, /map\(\(candidate\) => providerSymbol\(candidate\)\)/);
   assert.match(server, /validateProviderMetadata\(data.meta, providerSymbol, interval\)/);
+  assert.match(server, /providerCoverage/);
+  assert.match(server, /providerDiagnostics/);
   assert.match(server, /marketReference\?\.chartDataMatch\?\.status === "matched_reference"/);
   assert.match(server, /!marketReference.chartDataMatch &&\s*normalizedRequestedCutoffMode/);
   assert.match(ui, /Provider reference; not broker-exact/);

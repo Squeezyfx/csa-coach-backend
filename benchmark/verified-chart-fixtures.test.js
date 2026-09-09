@@ -84,13 +84,10 @@ test("USA30 D1 verified entries retain nearest-to-deeper execution order", () =>
   assert.deepEqual(ordered.map((item) => item.price), [50575, 49766.5, 48932]);
 });
 
-test("confirmed benchmark fixtures bypass only transient chart-validation false negatives", () => {
-  const serverSource = readFileSync(new URL("../server.js", import.meta.url), "utf8");
-  assert.match(serverSource, /confirmed_benchmark_fixture_validation_guard/);
-  assert.match(serverSource, /benchmarkReviewedChartFixture && chartDetection\?\.isTradingChart !== true/);
-  assert.match(serverSource, /const verifiedChartFixture = benchmarkReviewedChartFixture/);
-  assert.match(serverSource, /chartOnlyInventoryUnverified/);
-  assert.match(serverSource, /preferVerifiedCandidates/);
+test("saved expected answers cannot alter live chart detection or candidates", () => {
+  const source = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  assert.equal(source.includes("confirmed_benchmark_fixture_validation_guard"), false);
+  assert.equal(source.includes("const verifiedChartFixture = benchmarkReviewedChartFixture"), false);
 });
 
 test("reviewed fixtures may provide directional bias without a separate period-direction field", () => {

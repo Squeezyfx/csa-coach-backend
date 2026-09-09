@@ -1,0 +1,36 @@
+CSA v4.70.3 — OANDA unfinished-candle reference fix
+
+Apply this update over v4.70.2. Copy the included files into the same paths in your repository; retain the benchmark/public subfolder. Deploy the analysis backend and the benchmark service from that updated commit.
+
+Expected backend build: CSA-v4.70.3-oanda-partial-reference
+Keep the working OANDA token, live environment and B price component settings.
+
+What changed
+The supplied USDCAD H4 report has a 3.8-pip close difference. Open, high and low are within three pips, while screenshot candle completion is unknown. Previously that removed the complete provider inventory. The new partial_reference status retains it for provisional framework analysis when the verified timestamp, all three OHL comparisons, a consistent chart header, and the current-price range checks pass. Normal matched-reference handling remains separate.
+
+When the final chart time is not readable, the engine now compares the printed OHLC against completed same-date OANDA candles and selects one only when the header fits. The three-pip close buffer is still enforced; it is not bypassed or widened.
+
+The three-pip limit is unchanged. For an unfinished or unknown candle, the close comparison is explicitly deferred rather than treated as a hard mismatch; O/H/L must still identify the same candle within the three-pip buffer. A completed candle must pass the close buffer normally. An unfinished or unknown close does not become a confirmed close. The provider's later final candle is not inserted into historical period calculations. The current unfinished period remains ineligible as an entry source. Missing timestamps, missing OHL, failed extrema and known completed-candle mismatches do not qualify for this recovery.
+
+Results can still say Needs review. This update does not confirm broker-equivalent historical prices, guarantee an entry, or force benchmark acceptance. Provisional entries, if selected by the existing framework, require review.
+
+Validation
+249 local tests passed, including five new regression tests covering the reported values, negative matching cases, server inventory selection, and the supported timeframe mappings. JavaScript syntax checks passed. No live Render deployment or authenticated OANDA request was performed for this update.
+
+This is a changed-files update, not a complete application archive. Earlier shared-engine, timestamp, OANDA authentication and non-forex code remain in the base release.
+
+Benchmark validation also applies the OANDA three-pip tolerance to required forex levels when the result is explicitly partial_reference, preventing sub-pip expected-level false negatives.
+
+If the final chart timestamp is date-only/unreadable but completed OANDA periods are available, those cutoff-safe periods are retained provisionally; the unresolved endpoint remains review-only and cannot supply an entry.
+
+For M1-H1 reports, cutoff-safe daily high/low ranges for visible incomplete days are displayed as provisional context; incomplete days remain excluded from structural entry selection.
+
+Lifecycle correction: for M1-M30 and H1, any daily period strictly before the latest visible calendar date is treated as closed, even if a provider/session partial flag is stale. Only the latest visible date remains in progress. Thus, when the latest visible candle is Wednesday, Tuesday is included as a completed period; Wednesday remains provisional until its candle/day closes.
+
+Cutoff correction: a medium-confidence or inferred chart time (including a vision placeholder such as 00:00) no longer creates an exact intraday cutoff. Exact intraday matching requires a high-confidence timestamp from explicit chart text or the verified axis-bar reader; otherwise the engine uses the end of the visible date so the final day's candles remain available.
+
+Completion-boundary correction: a period ending exactly at the visible date is treated as completed. For example, Tuesday's exclusive end is Wednesday's start, so Tuesday is included when Wednesday is the latest visible date; Wednesday alone remains provisional.
+
+Provisional-endpoint correction: when OANDA alignment is partial or timestamp-uncertain, the latest visible period remains available as Fib context but is excluded from integrity certification and structural entry candidates. Closed periods remain eligible for the shared period inventory.
+
+Entry-confluence correction: the instrument-aware three-pip FX buffer now applies at the 38.2% and 61.8% Fib-band edges without widening non-FX Fibonacci rules. The current live period may confirm that an earlier resistance/supply or support/demand level has broken and converted, but it remains excluded as an entry source itself.

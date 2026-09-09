@@ -86,7 +86,10 @@ export function buildCompletedPeriodReferences({ periods = [], candles = [], tim
       end.setUTCMonth(end.getUTCMonth() + 1);
     } else end.setUTCDate(end.getUTCDate() + (timeframe === "H4" ? 7 : 1));
     // Strictly before an actually printed date; never extrapolate a final day.
-    if (end >= floor || period.partialPeriod === true || period.periodLifecycle === "in_progress") { reject("completion_not_established"); continue; }
+    // A period whose exclusive end is exactly the visible date is complete:
+    // e.g. Tuesday ends when Wednesday begins. Only periods extending beyond
+    // the visible date (the current/incomplete period) remain provisional.
+    if (end > floor || period.partialPeriod === true || period.periodLifecycle === "in_progress") { reject("completion_not_established"); continue; }
     const endDate = end.toISOString().slice(0,10);
     const owned = candles.filter(c => String(c.datetime || c.date || "").slice(0,10) >= date && String(c.datetime || c.date || "").slice(0,10) < endDate);
     const audit = auditPeriodInventory({periods:[period], candles:owned, tolerance, cutoffDate:visibleDateFloor});
