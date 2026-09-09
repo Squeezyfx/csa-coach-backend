@@ -18,6 +18,10 @@ What changed
    tolerance. This does not widen the FX three-pip price rule.
 4. Weekday provider-history gaps remain hard mismatches. No unverified period
    highs/lows, Fibonacci frames or entries are promoted.
+5. When OANDA is primary and a screenshot OHLC conflict occurs, the benchmark
+   may try Twelve Data if TWELVE_DATA_API_KEY is configured. The alternate
+   provider is used only after its own chart match passes; failed attempts are
+   retained in providerAttempts for diagnosis.
 
 Validation
 - node --check server.js

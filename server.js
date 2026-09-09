@@ -1185,6 +1185,7 @@ function compactRawAiResponse({
       providerSymbol: marketReference?.providerSymbol || null,
       providerCoverage: marketReference?.providerCoverage || null,
       providerDiagnostics: marketReference?.providerDiagnostics || null,
+      providerAttempts: Array.isArray(marketReference?.providerAttempts) ? marketReference.providerAttempts : [],
       failureCategory: marketReference?.failureCategory || null,
       rawCandleCount: Number(marketReference?.rawCandleCount || 0),
       filteredCandleCount: Number(marketReference?.filteredCandleCount || 0),
@@ -3053,8 +3054,10 @@ async function fetchTwelveDataStructureLevels({
   timezone = "UTC",
   analysisType = "post-trade",
   chartCutoff = null,
+  providerOverride = "",
 }) {
-  const useOanda = Boolean(oandaInstrument(symbol)) && String(process.env.FOREX_DATA_PROVIDER || "oanda").toLowerCase() === "oanda";
+  const selectedProvider = String(providerOverride || process.env.FOREX_DATA_PROVIDER || "oanda").trim().toLowerCase();
+  const useOanda = Boolean(oandaInstrument(symbol)) && selectedProvider === "oanda";
   const dataProvider = useOanda ? "OANDA" : "Twelve Data";
   const apiKey = process.env.TWELVE_DATA_API_KEY;
   const profile = getSupportedCsaTimeframeProfile(timeframe);
@@ -3138,6 +3141,7 @@ async function fetchTwelveDataStructureLevels({
     requestedStartDate: impulseRange.startDate,
     requestedEndDateTime: endDateTime,
     chartDate: chartDate ? formatDateOnly(chartDate) : null,
+    providerOverride: providerOverride || null,
   };
 
   const buildTwelveParams = ({
@@ -29273,7 +29277,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       chartCutoff = initialFinalVisibleSync.chartCutoff;
     }
 
-    const completedPeriodReferences = buildCompletedPeriodReferences({
+    let completedPeriodReferences = buildCompletedPeriodReferences({
       periods: ["D1", "H4"].includes(timeframe)
         ? marketReferencePeriodInventory({ marketReference, timeframe, cutoffDate: chartCutoff.resolvedDate })
         : marketReference.dailyLevels || [],
@@ -29285,8 +29289,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       tolerance: getCleanBreakTolerance(normalizedSymbol),
     });
     completedPeriodReferences.source = marketReference.dataProvider || "Twelve Data";
+    let chartDataMatch = null;
     if (marketReference.ok) {
-      const chartDataMatch = assessChartDataMatch({
+      chartDataMatch = assessChartDataMatch({
         candles: marketReference.impulseCandles?.length ? marketReference.impulseCandles : marketReference.timeframeCandles,
         detection: chartDetection,
         cutoff: chartCutoff.endDateTime,
@@ -29296,6 +29301,92 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         alignmentCandle: marketReference.oandaAlignmentCandle || null,
         tolerance: getCleanBreakTolerance(normalizedSymbol),
       });
+
+      // OANDA is the primary FX source. If its endpoint is reachable but the
+      // screenshot OHLC does not align, try Twelve Data only when a key is
+      // configured. The alternate source is accepted only if it independently
+      // aligns; otherwise the original provider conflict remains review-only.
+      const fallbackEnabled = String(process.env.FOREX_DATA_PROVIDER_FALLBACK || "auto").toLowerCase() !== "off";
+      const fallbackStatuses = new Set(["mismatch", "partial_or_unknown_candle", "date_unverified", "time_unverified"]);
+      if (marketReference.dataProvider === "OANDA" && fallbackEnabled && process.env.TWELVE_DATA_API_KEY && fallbackStatuses.has(chartDataMatch.status)) {
+        const primaryAttempt = {
+          provider: "OANDA",
+          symbol: marketReference.providerSymbol || marketReference.symbol || normalizedSymbol,
+          chartDataMatch,
+          providerCoverage: marketReference.providerCoverage || null,
+          providerDiagnostics: marketReference.providerDiagnostics || null,
+        };
+        let alternate = null;
+        try {
+          alternate = await fetchTwelveDataStructureLevels({
+            symbol: normalizedSymbol,
+            chartDate: resolvedAnalysisDate,
+            timeframe,
+            timezone: resolvedTimezone,
+            analysisType: mode,
+            chartCutoff,
+            providerOverride: "twelve_data",
+          });
+          if (alternate.ok) {
+            const alternateMatch = assessChartDataMatch({
+              candles: alternate.impulseCandles?.length ? alternate.impulseCandles : alternate.timeframeCandles,
+              detection: chartDetection,
+              cutoff: chartCutoff.endDateTime,
+              timeframe,
+              symbol: normalizedSymbol,
+              source: "Twelve Data",
+              tolerance: getCleanBreakTolerance(normalizedSymbol),
+            });
+            alternate.chartDataMatch = alternateMatch;
+            alternate.providerAttempts = [primaryAttempt, {
+              provider: "Twelve Data",
+              symbol: alternate.providerSymbol || alternate.symbol || normalizedSymbol,
+              chartDataMatch: alternateMatch,
+              providerCoverage: alternate.providerCoverage || null,
+              providerDiagnostics: alternate.providerDiagnostics || null,
+            }];
+            if (["matched_reference", "partial_reference"].includes(alternateMatch.status)) {
+              marketReference = alternate;
+              chartDataMatch = alternateMatch;
+              completedPeriodReferences = buildCompletedPeriodReferences({
+                periods: ["D1", "H4"].includes(timeframe)
+                  ? marketReferencePeriodInventory({ marketReference, timeframe, cutoffDate: chartCutoff.resolvedDate })
+                  : marketReference.dailyLevels || [],
+                candles: marketReference.timeframeCandles || [],
+                timeframe,
+                visibleDateFloor: chartDetection?.latestPrintedAxisDate && chartDetection.latestPrintedAxisDate <= chartCutoff.resolvedDate
+                  ? chartDetection.latestPrintedAxisDate : "",
+                providerAvailable: marketReference.ok === true,
+                tolerance: getCleanBreakTolerance(normalizedSymbol),
+              });
+              completedPeriodReferences.source = "Twelve Data";
+            }
+          }
+        } catch (fallbackError) {
+          alternate = { ok: false, error: fallbackError.message, failureCategory: fallbackError.category || "provider_error" };
+        }
+        if (marketReference.dataProvider === "OANDA") {
+          marketReference.providerAttempts = [primaryAttempt, {
+            provider: "Twelve Data",
+            symbol: alternate?.providerSymbol || normalizedSymbol,
+            error: alternate?.error || "Alternate provider did not return an aligned reference",
+            failureCategory: alternate?.failureCategory || null,
+            providerCoverage: alternate?.providerCoverage || null,
+            providerDiagnostics: alternate?.providerDiagnostics || null,
+          }];
+          marketReference.providerDiagnostics = {
+            ...(marketReference.providerDiagnostics || {}),
+            fallbackAttempted: true,
+            fallbackAccepted: false,
+          };
+        } else {
+          marketReference.providerDiagnostics = {
+            ...(marketReference.providerDiagnostics || {}),
+            fallbackAttempted: true,
+            fallbackAccepted: true,
+          };
+        }
+      }
       marketReference.chartDataMatch = chartDataMatch;
       if (marketReference.dataProvider === "OANDA" && chartDataMatch.status === "matched_reference" && marketReference.oandaAlignmentCandle) {
         const snapshot = {datetime:marketReference.oandaAlignmentCandle.datetime,
@@ -30462,7 +30553,7 @@ ${(visualReview?.strategyMissingInformation || []).length
         occupancy:
           Number(chartDetection?.chartOccupancyPercent || 0),
       },
-      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, providerSymbol: marketReference.providerSymbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, filteredCandleCount: marketReference.filteredCandleCount, frameworkCandleCount: marketReference.frameworkCandleCount, impulseCandleCount: marketReference.impulseCandleCount, providerCoverage: marketReference.providerCoverage, providerDiagnostics: marketReference.providerDiagnostics, failureCategory: marketReference.failureCategory || null, chartDataMatch: marketReference.chartDataMatch || null, chartCutoff: marketReference.chartCutoff || null, weekRange: marketReference.weekRange, impulseRange: marketReference.impulseRange, dailyLevels: marketReference.dailyLevels, structuralLevels: marketReference.structuralLevels, currentFrameworkPeriodKey: marketReference.currentFrameworkPeriodKey, currentFrameworkPeriodLabel: marketReference.currentFrameworkPeriodLabel, currentFrameworkPeriodComplete: marketReference.currentFrameworkPeriodComplete, timeframeCandles: marketReference.timeframeCandles, impulseCandles: marketReference.impulseCandles, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
+      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, providerSymbol: marketReference.providerSymbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, filteredCandleCount: marketReference.filteredCandleCount, frameworkCandleCount: marketReference.frameworkCandleCount, impulseCandleCount: marketReference.impulseCandleCount, providerCoverage: marketReference.providerCoverage, providerDiagnostics: marketReference.providerDiagnostics, providerAttempts: Array.isArray(marketReference.providerAttempts) ? marketReference.providerAttempts : [], failureCategory: marketReference.failureCategory || null, chartDataMatch: marketReference.chartDataMatch || null, chartCutoff: marketReference.chartCutoff || null, weekRange: marketReference.weekRange, impulseRange: marketReference.impulseRange, dailyLevels: marketReference.dailyLevels, structuralLevels: marketReference.structuralLevels, currentFrameworkPeriodKey: marketReference.currentFrameworkPeriodKey, currentFrameworkPeriodLabel: marketReference.currentFrameworkPeriodLabel, currentFrameworkPeriodComplete: marketReference.currentFrameworkPeriodComplete, timeframeCandles: marketReference.timeframeCandles, impulseCandles: marketReference.impulseCandles, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
     };
 
     // Shape the complete response first. If this throws, nothing has yet
