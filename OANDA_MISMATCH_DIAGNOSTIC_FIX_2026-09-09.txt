@@ -1,0 +1,7 @@
+OANDA mismatch diagnostic fix — 2026-09-09
+
+An unfinished final close is now deferred only when provider O/H/L aligns within tolerance. If the provider high, low, or open also disagrees, the result is a hard provider/chart mismatch; the unfinished-close buffer cannot hide it. Diagnostics include mismatchFields, closeMismatch, and ohlMismatch.
+
+This improves the explanation without forcing unverified Fib levels or entries. OANDA remains the primary provider.
+
+Validation: node --check server.js and node --test --test-reporter=dot benchmark/*.test.js — passed.

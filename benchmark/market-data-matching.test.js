@@ -81,6 +81,7 @@ test("unfinished candles and unknown sessions are distinguished from mismatch", 
   const detection = {...base.detection,latestVisiblePrice:101,latestVisibleCandleComplete:null};
   assert.equal(assessChartDataMatch({...base,detection}).status,"partial_or_unknown_candle");
   assert.equal(assessChartDataMatch({...base,detection:{...detection,latestVisibleCandleComplete:true,providerSessionAligned:false}}).status,"session_unverified");
+  assert.equal(assessChartDataMatch({...base,detection:{...detection,latestVisibleHigh:105}}).status,"mismatch");
 });
 test("rejected provider direction and numeric anchors are removed, diagnostics retained", () => {
   const rejected = clearRejectedProviderData({ok:true,directionalBias:{higherTimeframeView:"stale 0.06962",presentPrice:0.06962},approvedAreas:[{price:4}],periodHigh:9,chartDataMatch:{status:"date_unverified",comparisons:[{chart:1,provider:2}]},error:"date uncertain"});
