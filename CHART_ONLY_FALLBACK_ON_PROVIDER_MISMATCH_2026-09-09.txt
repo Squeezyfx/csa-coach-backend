@@ -1,0 +1,7 @@
+Chart-only fallback on provider mismatch — 2026-09-09
+
+OANDA remains primary for verification. When OANDA is unavailable or its candle does not align with a readable screenshot, the system now permits the focused chart/raster reader to build a provisional chart-derived period inventory. Provider status remains visible, and the result is not labelled broker-verified.
+
+This prevents a provider mismatch from erasing all visible period/Fibonacci/entry analysis. It does not relax instrument mismatch, timeframe mismatch, or provider-alignment warnings.
+
+Validation: node --check server.js and node --test --test-reporter=dot benchmark/*.test.js — passed.

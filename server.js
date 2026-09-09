@@ -29709,7 +29709,13 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const providerInventoryAligned =
       marketReference?.ok === true &&
       marketReference?.chartDataMatch?.status === "matched_reference";
-    const providerOnlyForex = marketReference?.dataProvider === "OANDA";
+    // OANDA remains the primary verification source when it aligns. If its
+    // candle does not align with the screenshot, do not discard the chart:
+    // allow the focused chart/raster reader to build a clearly provisional
+    // chart-only inventory. This keeps broker/server details out of the user
+    // workflow while preserving the provider warning and authority boundary.
+    const providerOnlyForex = marketReference?.dataProvider === "OANDA" &&
+      ["matched_reference", "partial_reference"].includes(marketReference?.chartDataMatch?.status);
     { // Every supported timeframe reconciles its evidence through the shared engine.
       const focusedFallbackStartedAt = csaNowMs();
       const [
