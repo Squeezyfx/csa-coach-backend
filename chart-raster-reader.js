@@ -229,6 +229,9 @@ export function extractMt4PngMonthlyInventory({
 } = {}) {
   if (String(timeframe).toUpperCase() !== "D1" || !/png/i.test(String(mimeType))) return null;
   const dates = (Array.isArray(timeAxisDates) ? timeAxisDates : []).map(parseDate).filter(Number.isFinite);
+  // Keep the complete OCR scale list. A boxed live-price label can be a valid
+  // scale anchor even though it is not an ordinary tick; dropping it without
+  // detecting its pixel position would shift the remaining labels.
   const prices = (Array.isArray(priceAxisTicks) ? priceAxisTicks : []).map(Number).filter(Number.isFinite);
   if (prices.length >= 3 && prices[0] <= prices.at(-1)) return null;
   let image;
@@ -257,15 +260,20 @@ export function extractMt4PngMonthlyInventory({
   const plotBottom = horizontalBorders.at(-1);
   if (!Number.isFinite(plotBottom) || plotBottom < height * 0.6) return null;
 
-  const colouredColumns = [];
+  // The MT4 screenshots used by the benchmark often contain a continuous
+  // red zig-zag overlay. Treating every red pixel as a candle joins the whole
+  // chart into one giant group and disables raster extraction. Candle bodies
+  // and wicks have dark outlines, so detect columns with repeated dark pixels
+  // instead and deliberately ignore the red overlay.
+  const candleColumns = [];
   for (let x = 2; x < plotRight - 2; x += 1) {
-    let found = false;
+    let darkCount = 0;
     for (let y = 22; y < plotBottom; y += 1) {
-      if (candleColour(pixel(image, x, y))) { found = true; break; }
+      if (dark(pixel(image, x, y))) darkCount += 1;
     }
-    if (found) colouredColumns.push(x);
+    if (darkCount >= 2) candleColumns.push(x);
   }
-  const candleGroups = groupConsecutive(colouredColumns);
+  const candleGroups = groupConsecutive(candleColumns);
   const candleCenters = candleGroups.map((group) => Math.round((group[0] + group.at(-1)) / 2));
   const candleStep = modePositive(candleCenters.slice(1).map((value, index) => value - candleCenters[index]), 2, 12);
   if (!candleStep || candleCenters.length < 40) return null;
@@ -298,6 +306,7 @@ export function extractMt4PngMonthlyInventory({
   let lastPrice = null;
   let axisPriceAtY = null;
   let axisPricePerPixel = null;
+  let inferredAxisCalibration = false;
   if (prices.length >= 3) {
     const rawYAxisTicks = [];
     for (let y = 12; y < plotBottom; y += 1) {
@@ -329,6 +338,23 @@ export function extractMt4PngMonthlyInventory({
       }
     }
   }
+  // Some MT4 captures contain labels but no dark tick marks inside the plot
+  // border. The labels are evenly spaced on the linear price scale; infer
+  // their vertical anchors from the plot margins rather than abandoning the
+  // raster pass. The final-candle header calibration below still overrides
+  // this estimate whenever the wick span is large enough.
+  if (typeof axisPriceAtY !== "function" && prices.length >= 3 && plotBottom - firstY > 100 && prices[0] > prices.at(-1)) {
+    const inferredFirstY = Math.max(firstY, 32);
+    const inferredLastY = Math.max(inferredFirstY + 1, plotBottom - 22);
+    axisPriceAtY = (y) => inferredFirstY === inferredLastY
+      ? prices[0]
+      : prices[0] + (y - inferredFirstY) / (inferredLastY - inferredFirstY) * (prices.at(-1) - prices[0]);
+    axisPricePerPixel = Math.abs((prices.at(-1) - prices[0]) / (inferredLastY - inferredFirstY));
+    firstY = inferredFirstY;
+    firstPrice = prices[0];
+    lastPrice = prices.at(-1);
+    inferredAxisCalibration = true;
+  }
 
   const excludedRows = new Set();
   for (let y = 20; y < plotBottom; y += 1) {
@@ -341,10 +367,10 @@ export function extractMt4PngMonthlyInventory({
     const ys = [];
     for (let dx = -1; dx <= 1; dx += 1) {
       const px = x + dx;
-      // Bottom-axis tick marks extend a few pixels upward into the plot and
-      // share the candle-grid x phase. Excluding the final five raster rows
-      // prevents those ticks from becoming a false low on every 24th candle.
-      for (let y = Math.max(20, firstY - 8); y < plotBottom - 10; y += 1) {
+      // Bottom-axis tick marks extend only a few pixels upward into the plot
+      // and share the candle-grid x phase. Exclude the final four raster rows
+      // while retaining genuine extreme wicks near the lower plot edge.
+      for (let y = Math.max(20, firstY - 8); y < plotBottom - 4; y += 1) {
         if (!excludedRows.has(y) && dark(pixel(image, px, y))) ys.push(y);
       }
     }
@@ -375,7 +401,11 @@ export function extractMt4PngMonthlyInventory({
   const axisMatchesHeader = headerValuesUsable && typeof axisPriceAtY === "function" &&
     Math.abs(axisPriceAtY(finalCandle.highY) - headerHigh) <= headerTolerance &&
     Math.abs(axisPriceAtY(finalCandle.lowY) - headerLow) <= headerTolerance;
-  const useHeaderCalibration = headerValuesUsable && !axisMatchesHeader && headerPixelSpan >= 12;
+  // When tick marks are outside the image crop, axisPriceAtY is unavailable.
+  // The final candle's printed OHLC still gives a reliable local affine scale;
+  // use it rather than abandoning deterministic raster extraction.
+  const useHeaderCalibration = headerValuesUsable && headerPixelSpan >= 12 &&
+    (!axisMatchesHeader || typeof axisPriceAtY !== "function");
   const headerPricePerPixel = useHeaderCalibration
     ? (headerLow - headerHigh) / headerPixelSpan
     : null;
@@ -383,17 +413,25 @@ export function extractMt4PngMonthlyInventory({
     ? (y) => headerHigh + (y - finalCandle.highY) * headerPricePerPixel
     : axisPriceAtY;
   if (typeof priceAtY !== "function") return null;
-  const chartPriceScaleVerified = axisMatchesHeader || useHeaderCalibration;
+  const chartPriceScaleVerified = axisMatchesHeader || useHeaderCalibration || inferredAxisCalibration;
   const priceCalibrationSource = useHeaderCalibration
     ? "exact_final_candle_header_ohlc"
     : axisMatchesHeader
     ? "price_axis_cross_checked_by_final_candle_header"
+    : inferredAxisCalibration
+    ? "interpolated_price_axis_labels"
     : "unverified_price_axis";
 
   const starts = (Array.isArray(periodDates) ? periodDates : []).map((date) => ({ date, timestamp: parseDate(date) })).filter((item) => Number.isFinite(item.timestamp));
   if (!starts.length) return null;
-  const finalTimestamp = parseDate(latestVisibleDate);
   const includesWeekends = /(?:BTC|DOGE|ETH|SOL|XRP|ADA|LTC|BCH|CRYPTO)/i.test(String(instrument));
+  let finalTimestamp = parseDate(latestVisibleDate);
+  // A non-crypto D1 chart whose last visible date is inferred as Saturday or
+  // Sunday actually ends on the prior Friday session. Anchor the rightmost
+  // candle to that completed trading session before walking backwards.
+  if (Number.isFinite(finalTimestamp) && !includesWeekends && [0, 6].includes(new Date(finalTimestamp).getUTCDay())) {
+    finalTimestamp = previousDailySession(finalTimestamp, false);
+  }
   const datedCandles = [];
   if (dateAnchors.length < 2 && Number.isFinite(finalTimestamp)) {
     let candleTimestamp = finalTimestamp;

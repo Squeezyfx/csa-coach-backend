@@ -1,0 +1,7 @@
+Chart raster calibration fix — 2026-09-09
+
+The chart-first fallback now detects dark candle/wick columns instead of the continuous red zig-zag overlay, which previously disabled deterministic raster extraction. It also supports MT4 captures where price labels sit outside the plot border, uses the printed final-candle OHLC for local calibration when available, keeps the complete axis scale as a calibration anchor, and anchors inferred weekend D1 endpoints to the prior trading session.
+
+This improves chart-derived monthly highs/lows without treating OANDA as the chart source. Provider verification remains a separate status.
+
+Validation: node --check server.js and node --test --test-reporter=dot benchmark/*.test.js — passed.
