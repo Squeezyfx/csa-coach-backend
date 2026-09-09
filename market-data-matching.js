@@ -68,9 +68,16 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
   const cutoffDay = Number.isFinite(cutoffMs) ? new Date(cutoffMs).getUTCDay() : null;
   const weekendSessionLag = timeframe === "D1" &&
     [0, 6].includes(cutoffDay) && lagDays !== null && lagDays >= 1 && lagDays <= 2;
-  if (providerDate !== cutoffDate && !weekendSessionLag) {
+  // OANDA daily candles can be labelled one calendar day earlier than a
+  // broker's D1 candle when their session boundaries differ. Do not accept
+  // that gap by date alone: keep evaluating the full OHLC below and only
+  // permit it when every visible OHLC value agrees within the instrument's
+  // normal tolerance.
+  const weekdaySessionLag = timeframe === "D1" &&
+    cutoffDay >= 1 && cutoffDay <= 5 && lagDays === 1;
+  if (providerDate !== cutoffDate && !weekendSessionLag && !weekdaySessionLag) {
     return result("mismatch", "Provider history does not reach the chart date", {
-      providerCoverage: { lastProviderCandleDate: providerDate, requestedCutoffDate: cutoffDate, lagDays },
+      providerCoverage: { lastProviderCandleDate: providerDate, requestedCutoffDate: cutoffDate, lagDays, weekendSessionLag, weekdaySessionLag },
     });
   }
   const forexLimit = forexComparisonTolerance(symbol);
@@ -90,9 +97,15 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
   const mismatch = comparisons.some(c => !Number.isFinite(c.provider) || Math.abs(c.chart - c.provider) > limit + Number.EPSILON * Math.max(1, Math.abs(c.chart)) * 8);
   const evidence = { comparisons, tolerance: limit, candleDate: last.datetime };
   const withinLimit = c => Number.isFinite(c.provider) && Math.abs(c.chart - c.provider) <= limit + Number.EPSILON * Math.max(1, Math.abs(c.chart)) * 8;
+  const ohlComparisons = comparisons.filter(c => c.field !== "close");
+  const ohlMismatch = ohlComparisons.some(c => !withinLimit(c));
+  const closeComparison = comparisons.find(c => c.field === "close");
+  const closeMismatch = Boolean(closeComparison && !withinLimit(closeComparison));
+  const sessionLagAligned = (weekendSessionLag || weekdaySessionLag) &&
+    comparisons.length === 4 && comparisons.every(withinLimit);
   const chosenByCompletedHeader = source === "OANDA" && !exactTime && sameDateCompleted.includes(last) &&
     headerComparable && comparisons.filter(c => c.field !== "close").every(withinLimit);
-  if (!dateVerified && !chosenByCompletedHeader && !weekendSessionLag) return result("date_unverified", "Final candle date is inferred or unreadable; provider mismatch is not established", evidence);
+  if (!dateVerified && !chosenByCompletedHeader && !weekendSessionLag && !sessionLagAligned) return result("date_unverified", "Final candle date is inferred or unreadable; provider mismatch is not established", evidence);
   // An unfinished screenshot close is not the provider's eventual closing price.
   // Retain only a provisional reference when every available OHL check passes;
   // never promote it to a matched chart or increase the three-pip tolerance.
@@ -110,11 +123,27 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
       : "Final close is within the three-pip buffer, but candle completion is unknown or unfinished; completed provider periods remain provisional and require review.",
       {...evidence, requiresReview: true, priceVerified: false, closeDeferred: true, failedFields: closeDeferred ? ["close"] : []});
   }
-  if (mismatch && detection.latestVisibleCandleComplete !== true) return result("partial_or_unknown_candle", "Final candle may be unfinished; full provider OHLC cannot verify this screenshot", evidence);
+  // An unfinished close may legitimately differ while the candle is forming,
+  // but an O/H/L disagreement is independent of candle completion and must
+  // remain a hard provider/chart mismatch.
+  if (mismatch && detection.latestVisibleCandleComplete !== true && ohlMismatch) {
+    return result("mismatch", "Provider OHLC differs beyond the unfinished close; do not substitute provider levels", {
+      ...evidence,
+      mismatchFields: comparisons.filter(c => !withinLimit(c)).map(c => c.field),
+      closeMismatch,
+      ohlMismatch,
+    });
+  }
+  if (mismatch && detection.latestVisibleCandleComplete !== true) return result("partial_or_unknown_candle", "Final close may be unfinished; provider O/H/L aligns but the completed close cannot be verified", {
+    ...evidence,
+    mismatchFields: comparisons.filter(c => !withinLimit(c)).map(c => c.field),
+    closeMismatch,
+    ohlMismatch,
+  });
   if (mismatch && detection.providerSessionAligned !== true) return result("session_unverified", "Chart and provider candle session boundaries are not verified", evidence);
-  return result(mismatch ? "mismatch" : "matched_reference", mismatch ? "Provider candle differs from the visible chart; do not substitute its levels" : weekendSessionLag ? "Chart endpoint aligns with the last tradable session; provider reference, not broker-exact" : "Chart endpoint aligns within tolerance; provider reference, not broker-exact", {
+  return result(mismatch ? "mismatch" : "matched_reference", mismatch ? "Provider candle differs from the visible chart; do not substitute its levels" : (weekendSessionLag || weekdaySessionLag) ? "Chart endpoint aligns with the provider session despite a one-day label offset; provider reference, not broker-exact" : "Chart endpoint aligns within tolerance; provider reference, not broker-exact", {
     comparisons, tolerance: limit, candleDate: last.datetime,
-    providerCoverage: { lastProviderCandleDate: providerDate, requestedCutoffDate: cutoffDate, lagDays, weekendSessionLag },
+    providerCoverage: { lastProviderCandleDate: providerDate, requestedCutoffDate: cutoffDate, lagDays, weekendSessionLag, weekdaySessionLag, sessionLagAligned },
   });
 }
 

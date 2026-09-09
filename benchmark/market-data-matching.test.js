@@ -24,7 +24,9 @@ test("matching data is labelled reference, never broker exact", () => {
   assert.equal(result.brokerVerified,false);
 });
 test("wrong date, price or header extremes cannot pass", () => {
-  assert.equal(assessChartDataMatch({...base,cutoff:"2026-08-21 23:59:59"}).status,"mismatch");
+  const offset = assessChartDataMatch({...base,cutoff:"2026-08-21 23:59:59"});
+  assert.equal(offset.status,"matched_reference");
+  assert.equal(offset.providerCoverage.weekdaySessionLag,true);
   assert.equal(assessChartDataMatch({...base,detection:{...base.detection,latestVisiblePrice:120}}).status,"mismatch");
   assert.equal(assessChartDataMatch({...base,detection:{...base.detection,latestVisibleHigh:110}}).status,"mismatch");
   assert.equal(assessChartDataMatch({...base,detection:{}}).status,"unverified");
@@ -49,6 +51,23 @@ test("weekday provider coverage gaps remain mismatches", () => {
   assert.equal(result.status,"mismatch");
   assert.equal(result.providerCoverage.lagDays,4);
 });
+test("OANDA weekday session offset is accepted only when full OHLC aligns", () => {
+  const result = assessChartDataMatch({
+    ...base,
+    candles:[{datetime:"2026-08-19",open:99,high:102,low:98,close:100}],
+    cutoff:"2026-08-20 23:59:59",
+  });
+  assert.equal(result.status,"matched_reference");
+  assert.equal(result.providerCoverage.weekdaySessionLag,true);
+  assert.equal(result.providerCoverage.sessionLagAligned,true);
+
+  const mismatch = assessChartDataMatch({
+    ...base,
+    candles:[{datetime:"2026-08-19",open:99.5,high:102,low:98,close:100}],
+    cutoff:"2026-08-20 23:59:59",
+  });
+  assert.equal(mismatch.status,"mismatch");
+});
 test("future candles cannot rescue an unmatched screenshot", () => {
   assert.equal(assessChartDataMatch({...base,candles:[{datetime:"2026-08-21",close:100}]}).status,"unverified");
 });
@@ -62,6 +81,7 @@ test("unfinished candles and unknown sessions are distinguished from mismatch", 
   const detection = {...base.detection,latestVisiblePrice:101,latestVisibleCandleComplete:null};
   assert.equal(assessChartDataMatch({...base,detection}).status,"partial_or_unknown_candle");
   assert.equal(assessChartDataMatch({...base,detection:{...detection,latestVisibleCandleComplete:true,providerSessionAligned:false}}).status,"session_unverified");
+  assert.equal(assessChartDataMatch({...base,detection:{...detection,latestVisibleHigh:105}}).status,"mismatch");
 });
 test("rejected provider direction and numeric anchors are removed, diagnostics retained", () => {
   const rejected = clearRejectedProviderData({ok:true,directionalBias:{higherTimeframeView:"stale 0.06962",presentPrice:0.06962},approvedAreas:[{price:4}],periodHigh:9,chartDataMatch:{status:"date_unverified",comparisons:[{chart:1,provider:2}]},error:"date uncertain"});

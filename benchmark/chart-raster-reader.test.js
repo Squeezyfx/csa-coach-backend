@@ -42,3 +42,12 @@ test("raster reader rejects unsupported images without manufacturing periods", (
     priceAxisTicks: [3, 2, 1],
   }), null);
 });
+
+test("raster reader contains final-candle OHLC protection against a misread price-axis tick", () => {
+  const source = String(extractMt4PngMonthlyInventory);
+  assert.match(source, /exact_final_candle_header_ohlc/);
+  assert.match(source, /headerPixelSpan >= 12/);
+  assert.match(source, /axisMatchesFinalCandleHeader/);
+  assert.match(source, /previousDailySession/);
+  assert.match(source, /latestVisibleDate/);
+});

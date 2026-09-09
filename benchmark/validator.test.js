@@ -678,6 +678,44 @@ test("selector 4.30 exposes but does not fail a resolved external-price disagree
   );
 });
 
+test("calibrated chart-raster authority remains valid when a provider is unavailable", () => {
+  const automatic = structuredClone(baseResult);
+  automatic.chartDetection = {
+    detectedInstrument: "DOGEUSD",
+    detectedTimeframe: "D1",
+    latestVisibleDate: "2026-08-20",
+  };
+  automatic.analysisFacts.selectorDiagnostics = {
+    selectorVersion: "4.38.0",
+    fibonacci: { source: "uploaded_chart_visible_current_year_high_low", swingHigh: 0.15622, swingLow: 0.06715 },
+    structuralCandidates: [],
+    fibCandidates: [],
+    periodInventory: Array.from({ length: 8 }, (_, index) => ({
+      periodLabel: new Date(Date.UTC(2026, index, 1)).toLocaleString("en", { month: "long", timeZone: "UTC" }),
+      date: `2026-${String(index + 1).padStart(2, "0")}-01`,
+      high: 0.15 - index * 0.005,
+      low: 0.07 + index * 0.001,
+    })),
+    transparencyAudit: {
+      auditVersion: "1.1.0",
+      inventoryAuthority: {
+        chartOnlyInventoryVerified: true,
+        providerFailure: { category: "symbol_unavailable", reason: "No provider symbol" },
+      },
+      periodStructureAudit: [{ period: "January", high: 0.15, low: 0.07 }],
+      fibonacciAudit: { verified: true, swingHigh: 0.15622, swingLow: 0.06715 },
+      candidateEvaluationAudit: [],
+      entryDecisionAudit: [{ entry: 1 }, { entry: 2 }, { entry: 3 }],
+      provenanceConflicts: [],
+    },
+  };
+  const result = validateBenchmarkResult(automatic, { automaticMode: true });
+  assert.equal(
+    result.checks.find((check) => check.id === "automatic_period_price_authority")?.passed,
+    true
+  );
+});
+
 test("automatic mode rejects a selected entry that did not pass Fibonacci confluence", () => {
   const automatic = structuredClone(baseResult);
   automatic.chartDetection = {

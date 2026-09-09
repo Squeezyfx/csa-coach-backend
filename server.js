@@ -3121,6 +3121,17 @@ async function fetchTwelveDataStructureLevels({
       .map((candidate) => providerSymbol(candidate))
       .filter(Boolean)
   )];
+  // Twelve Data's forex endpoint accepts compact pair symbols more
+  // consistently than slash-form symbols (for example EURHUF rather than
+  // EUR/HUF). Keep the canonical slash form for diagnostics/metadata, but
+  // try the compact request form first and retain the slash form as a
+  // compatibility fallback for providers/accounts that do accept it.
+  const twelveDataCandidates = [...new Set(
+    providerCandidates.flatMap((candidate) => {
+      const compact = String(candidate).replace(/\//g, "");
+      return compact && compact !== candidate ? [compact, candidate] : [candidate];
+    })
+  )];
   let oandaAlignmentCandle = null;
   let resolvedProviderSymbol = providerCandidates[0] || normalizeSymbol(symbol);
   const coverageOf = (candles = []) => {
@@ -3174,7 +3185,7 @@ async function fetchTwelveDataStructureLevels({
     }
     const orderedCandidates = [...new Set([
       preferredProviderSymbol,
-      ...(preferredProviderSymbol ? [] : providerCandidates),
+      ...(preferredProviderSymbol ? [] : twelveDataCandidates),
     ].filter(Boolean))];
     let lastError = null;
 
