@@ -596,7 +596,19 @@ runButton.addEventListener("click", async () => {
   runStatus.textContent = `Running ${files.length} chart${files.length === 1 ? "" : "s"}…`;
   try {
     const response = await fetch("/api/run", { method:"POST", headers:{ "x-benchmark-key": adminKey.value }, body });
-    const payload = await response.json();
+    // Render/proxy failures may return an HTML error page. Parsing that with
+    // response.json() produces the misleading `Unexpected token '<'` popup.
+    // Read the body first and surface a useful batch-level transport error.
+    const responseText = await response.text();
+    let payload;
+    try {
+      payload = JSON.parse(responseText);
+    } catch {
+      const proxyHint = response.status >= 500
+        ? `The analysis service returned HTTP ${response.status} before the batch completed.`
+        : "The analysis service returned an unexpected non-JSON response.";
+      throw new Error(`${proxyHint} No chart result was saved; retry the batch in smaller groups.`);
+    }
     if (!response.ok || !payload.success) throw new Error(payload.error || "Benchmark run failed.");
     lastRun = payload;
     renderRun(payload);
