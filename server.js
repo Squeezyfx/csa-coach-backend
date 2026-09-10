@@ -20530,6 +20530,19 @@ function rankChartNativeFallbackAreas({
       role: index === 0 ? "primary" : index === 1 ? "secondary" : "tertiary",
       };
     });
+  const selectedKeys = new Set(selected.map((area) =>
+    `${String(area?.areaType || "").toLowerCase()}|${Number(area?.authoritativeCenter)}`
+  ));
+  const additionalQualifiedEntries = candidates
+    .filter((area) => !selectedKeys.has(
+      `${String(area?.areaType || "").toLowerCase()}|${Number(area?.authoritativeCenter)}`
+    ))
+    .map((area) => ({
+      ...area,
+      additionalQualified: true,
+      executionOrder: null,
+      role: "additional-qualified",
+    }));
 
   const fibLevels = impulseRange !== null
     ? {
@@ -20752,6 +20765,7 @@ function rankChartNativeFallbackAreas({
 
   return {
     areas: selected,
+    additionalQualifiedEntries,
     referenceAreas: [],
     validation: {
       passed: true,
@@ -20784,6 +20798,7 @@ function rankChartNativeFallbackAreas({
       periodDayInventory: fallback.periodDayInventory || fallback.periodInventory || [],
       fibonacciQualifiedCandidates: candidates,
       selectedEntries: selected,
+      additionalQualifiedEntries,
     },
   };
 }
@@ -25709,6 +25724,16 @@ function buildValidatedAnalysisFacts({
       ),
     selectedEntryCount:
       rankedRawAreas.length,
+    additionalQualifiedEntries: Array.isArray(rankedAreaResult?.additionalQualifiedEntries)
+      ? rankedAreaResult.additionalQualifiedEntries.map((candidate) => ({
+          direction: candidate.direction,
+          areaType: candidate.areaType,
+          levelText: safeUserText(candidate.levelText || ""),
+          authoritativeCenter: asPositiveNumber(candidate.authoritativeCenter),
+          frameworkPeriod: candidate.frameworkPeriod || candidate.sourcePeriod || null,
+          fibonacciMatches: Array.isArray(candidate.fibonacciMatches) ? candidate.fibonacciMatches : [],
+        }))
+      : [],
     activeEntryAreas: rankedRawAreas.map((candidate, index) => ({
       rank: candidate.executionOrder || index + 1,
       role: candidate.role || (index === 0 ? "primary" : index === 1 ? "secondary" : "alternative"),
