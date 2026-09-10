@@ -2322,6 +2322,9 @@ function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimefr
     .filter((period) => period?.partialPeriod !== true);
   const areas = [];
   completedLevels.forEach((period, index) => {
+    // Keep the measured period visible, but do not create automatic entries
+    // from extrema whose calendar assignment is near a screenshot boundary.
+    if (period?.rasterBoundaryAmbiguous === true) return;
     const label = period.periodLabel || period.day || period.key;
     if (index === 0) {
       areas.push({
@@ -29946,9 +29949,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         rasterInventory?.chartPriceScaleVerified === true &&
         rasterByDate.size === rawFocusedPeriodInventory.length &&
         chartPeriodInventory.length === rawFocusedPeriodInventory.length &&
-        chartPeriodInventory.every((period) =>
-          period?.rasterPriceScaleVerified === true && period?.rasterBoundaryAmbiguous !== true
-        );
+        chartPeriodInventory.every((period) => period?.rasterPriceScaleVerified === true);
       const inventoryUsable = marketInventoryVerified || marketInventoryProvisional || chartOnlyInventoryUsable;
       const selectedPeriodInventory = marketInventoryVerified
         ? marketPeriodInventory
