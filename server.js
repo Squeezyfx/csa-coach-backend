@@ -29225,7 +29225,13 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       return stoppedResponse({ res, errorType: "timeframe_mismatch", error: "Selected timeframe does not match uploaded chart timeframe.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
 
-    if (oandaInstrument(normalizedSymbol || submittedInstrument) && chartDetection?.latestVisibleDateEvidence !== "explicit_final_candle_timestamp") {
+    // The final visible date must be derived from candle spacing for every
+    // instrument, not only OANDA FX pairs. This is what distinguishes a
+    // Thursday chart (with completed Wednesday data) from a Wednesday chart.
+    // Use the axis/bar-count reader whenever the chart does not contain an
+    // explicit timestamp attached to the final candle.
+    if (["M1", "M5", "M15", "M30", "H1", "H4"].includes(String(timeframe || "").toUpperCase()) &&
+      chartDetection?.latestVisibleDateEvidence !== "explicit_final_candle_timestamp") {
       const axisTime = readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps:chartDetection?.timeAxisTimestamps || []});
       if (axisTime) chartDetection = {...chartDetection, latestVisibleDate:axisTime.timestamp.slice(0,10), latestVisibleTime:axisTime.timestamp.slice(11,16), dateConfidence:"high", latestVisibleTimeConfidence:"high", latestVisibleDateEvidence:"verified_axis_bar_count", timestampAudit:axisTime};
     }
