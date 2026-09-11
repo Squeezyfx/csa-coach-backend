@@ -2127,6 +2127,16 @@ function isFrameworkPeriodCompleteAtCutoff({
   const cutoffTime = normalized.slice(11, 19) || "00:00:00";
   if (!cutoffDate) return false;
 
+  // When the screenshot's latest visible session is already before today's
+  // calendar date, that session is historical and therefore closed. This is
+  // essential for a chart captured on Thursday whose last visible H1 candle
+  // is Wednesday: Wednesday must be inventoried, not treated as live.
+  const todayDate = new Date().toISOString().slice(0, 10);
+  if (["daily-in-week", "weekly-in-month", "monthly-in-year"].includes(profile?.structureMode) &&
+    cutoffDate < todayDate) {
+    return true;
+  }
+
   const periodEndDate = getFrameworkPeriodEndDate(
     new Date(`${cutoffDate}T00:00:00.000Z`),
     profile
