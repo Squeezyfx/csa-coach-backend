@@ -19630,10 +19630,12 @@ function buildExactChartFrameworkCandidates({
 
 function normalizeChartNativeEntryFallback(value = {}) {
   const direction = String(value?.direction || "").toLowerCase();
-  const rawPeriodInventory = Array.isArray(value?.periodInventory)
+  const rawPeriodInventory = Array.isArray(value?.periodInventory) && value.periodInventory.length
     ? value.periodInventory
-    : Array.isArray(value?.periodDayInventory)
+    : Array.isArray(value?.periodDayInventory) && value.periodDayInventory.length
     ? value.periodDayInventory
+    : Array.isArray(value?.periodMappingAudit?.periods)
+    ? value.periodMappingAudit.periods
     : [];
   const candidates = (Array.isArray(value?.candidates) ? value.candidates : [])
     .slice(0, 24)
@@ -19700,6 +19702,8 @@ function normalizeChartNativeEntryFallback(value = {}) {
         lowDate: /^\d{4}-\d{2}-\d{2}$/.test(String(period?.lowDate || "")) ? period.lowDate : null,
         open: nullablePositiveNumber(period?.open),
         close: nullablePositiveNumber(period?.close),
+        partialPeriod: period?.partialPeriod === true,
+        periodLifecycle: period?.periodLifecycle === "in_progress" ? "in_progress" : "completed",
         structures: (Array.isArray(period?.structures) ? period.structures : []).slice(0, 12).map((item) => ({
           price: nullablePositiveNumber(item?.price),
           type: safeUserText(item?.type || ""),
@@ -19717,6 +19721,8 @@ function normalizeChartNativeEntryFallback(value = {}) {
         low: nullablePositiveNumber(period?.low),
         open: nullablePositiveNumber(period?.open),
         close: nullablePositiveNumber(period?.close),
+        partialPeriod: period?.partialPeriod === true,
+        periodLifecycle: period?.periodLifecycle === "in_progress" ? "in_progress" : "completed",
         structures: (Array.isArray(period?.structures) ? period.structures : []).slice(0, 12).map((item) => ({
           price: nullablePositiveNumber(item?.price),
           type: safeUserText(item?.type || ""),

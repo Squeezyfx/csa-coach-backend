@@ -11,7 +11,7 @@ const SD_TYPES = new Set(["supply", "demand"]);
 const INSTRUMENT_ALIASES = new Map([
   ["GOLD", "XAUUSD"], ["SILVER", "XAGUSD"], ["BTCUSDT", "BTCUSD"],
   ["US30", "USA30"], ["DJ30", "USA30"], ["DOW30", "USA30"], ["DJI", "USA30"],
-  ["NAS100", "USTEC"], ["NASDAQ100", "USTEC"], ["US100", "USTEC"],
+    ["NAS100", "USTEC"], ["NASDAQ100", "USTEC"], ["US100", "USTEC"], ["USA100", "USTEC"],
   ["SPX500", "US500"], ["SP500", "US500"], ["USA500", "US500"],
   ["DE40", "GER40"], ["DAX40", "GER40"], ["GER30", "GER40"],
   ["FTSE100", "UK100"], ["NIKKEI225", "JP225"], ["HK50", "HK50"],
