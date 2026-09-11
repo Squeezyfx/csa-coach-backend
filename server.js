@@ -29804,8 +29804,13 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
       };
       const focusedOutputPeriodInventory =
-        mergedChartNativeFallback?.periodInventory ||
-        mergedChartNativeFallback?.periodDayInventory || [];
+        (Array.isArray(mergedChartNativeFallback?.periodInventory) && mergedChartNativeFallback.periodInventory.length
+          ? mergedChartNativeFallback.periodInventory
+          : Array.isArray(mergedChartNativeFallback?.periodDayInventory) && mergedChartNativeFallback.periodDayInventory.length
+          ? mergedChartNativeFallback.periodDayInventory
+          : Array.isArray(mergedChartNativeFallback?.periodMappingAudit?.periods)
+          ? mergedChartNativeFallback.periodMappingAudit.periods
+          : []);
       const deterministicPeriodDates = expectedFrameworkPeriodDates(
         timeframe,
         chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || ""
@@ -29813,10 +29818,18 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       // The raster path must not disappear merely because the focused vision
       // response was malformed or marked unusable. D1 month dates are known
       // from the calendar, so seed empty rows and let the image supply prices.
-      const rawFocusedPeriodInventory = focusedOutputPeriodInventory.length
-        ? focusedOutputPeriodInventory
+      const seedDailyPeriods = ["M1", "M5", "M15", "M30", "H1"].includes(String(timeframe).toUpperCase());
+      const seededFrameworkInventory = seedDailyPeriods
+        ? deterministicPeriodDates.map((date) => ({
+            periodLabel: new Date(`${date}T00:00:00Z`).toLocaleString("en", { weekday: "long", timeZone: "UTC" }),
+            sourceUnit: "D1",
+            date,
+            high: null,
+            low: null,
+            structures: [],
+          }))
         : String(timeframe).toUpperCase() === "D1"
-        ? deterministicPeriodDates.map((date, index) => ({
+        ? deterministicPeriodDates.map((date) => ({
             periodLabel: new Date(`${date}T00:00:00Z`).toLocaleString("en", { month: "long", timeZone: "UTC" }),
             sourceUnit: "MN",
             date,
@@ -29825,6 +29838,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             structures: [],
           }))
         : [];
+      const focusedByDate = new Map(focusedOutputPeriodInventory.map((period) => [String(period?.date || ""), period]));
+      const rawFocusedPeriodInventory = seededFrameworkInventory.length
+        ? seededFrameworkInventory.map((seed) => focusedByDate.get(String(seed.date)) || seed)
+        : focusedOutputPeriodInventory.length
+        ? focusedOutputPeriodInventory
+        : seededFrameworkInventory;
       const rasterInventory = providerOnlyForex ? null : extractMt4PngMonthlyInventory({
         imageBase64,
         mimeType,
@@ -29989,8 +30008,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       const chartOnlyInventoryUsable =
         !providerOnlyForex &&
         marketInventoryVerified !== true &&
-        chartInventoryFrame?.currentPeriodFrameVerified === true &&
-        chartPeriodInventory.length > 0;
+        chartPeriodInventory.length > 0 &&
+        chartPeriodInventory.every((period) =>
+          Number.isFinite(Number(period?.high)) &&
+          Number.isFinite(Number(period?.low)) &&
+          Number(period.high) > Number(period.low)
+        );
       const chartOnlyInventoryVerified =
         chartOnlyInventoryUsable &&
         rasterInventory?.chartPriceScaleVerified === true &&
