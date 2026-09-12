@@ -29940,7 +29940,13 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         periods: chartReconciledPeriodInventory,
         timeframe,
         cutoffDateTime: lifecycleCutoffDateTime,
-        explicitlyComplete: lifecycleComplete,
+        // Never inherit a provider's completion flag for chart-derived
+        // periods when the provider is provisional/mismatched.  In
+        // particular, an H4 screenshot captured mid-week must leave the
+        // current W2 period in progress while still exposing completed W1.
+        // The calendar cutoff is the authority unless the provider itself is
+        // chart-aligned and verified.
+        explicitlyComplete: marketInventoryVerified ? lifecycleComplete : null,
       });
       const marketPeriodInventory = applyCurrentFrameworkPeriodLifecycle({
         periods: marketReconciledPeriodInventory,
@@ -30006,7 +30012,6 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       // retain a complete focused inventory for diagnosis instead of returning
       // no bias/period data at all. It remains explicitly human-review-only.
       const chartOnlyInventoryUsable =
-        !providerOnlyForex &&
         marketInventoryVerified !== true &&
         chartPeriodInventory.length > 0 &&
         chartPeriodInventory.every((period) =>
@@ -30014,6 +30019,20 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           Number.isFinite(Number(period?.low)) &&
           Number(period.high) > Number(period.low)
         );
+      // A provisional OANDA reference can contain fewer (or differently
+      // mapped) periods than the uploaded chart.  Once the chart reader has
+      // a complete numeric inventory, prefer that inventory for display and
+      // entry selection; retain the provider values only as a comparison
+      // audit.  This is what makes completed Wednesday visible consistently
+      // for GBPUSD/USDJPY instead of allowing a provisional Mon/Tue feed to
+      // hide it.
+      const providerChartMismatch = !["matched_reference", "partial_reference"].includes(
+        String(marketReference?.chartDataMatch?.status || "")
+      );
+      const chartInventoryPreferred = chartOnlyInventoryUsable && (
+        providerChartMismatch ||
+        chartPeriodInventory.length >= marketPeriodInventory.length
+      );
       const chartOnlyInventoryVerified =
         chartOnlyInventoryUsable &&
         rasterInventory?.chartPriceScaleVerified === true &&
@@ -30023,16 +30042,29 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       const inventoryUsable = marketInventoryVerified || marketInventoryProvisional || chartOnlyInventoryUsable;
       const selectedPeriodInventory = marketInventoryVerified
         ? marketPeriodInventory
+        : (chartOnlyInventoryUsable && (
+            !["matched_reference", "partial_reference"].includes(String(marketReference?.chartDataMatch?.status || "")) ||
+            chartPeriodInventory.length >= marketPeriodInventory.length
+          ))
+        ? chartPeriodInventory
         : marketInventoryProvisional
         ? marketPeriodInventory
-        : chartOnlyInventoryUsable
-        ? chartPeriodInventory
         : [];
       const displayPeriodInventory = selectedPeriodInventory.length
         ? selectedPeriodInventory
         : marketPeriodInventory;
       const inventoryAuthority = marketInventoryVerified
         ? "chart_aligned_provider_reference_not_broker_verified"
+        : (chartOnlyInventoryUsable && (
+            !["matched_reference", "partial_reference"].includes(String(marketReference?.chartDataMatch?.status || "")) ||
+            chartPeriodInventory.length >= marketPeriodInventory.length
+          )) && chartOnlyInventoryVerified
+        ? "complete_chart_only_period_inventory_deterministic_raster_verified"
+        : (chartOnlyInventoryUsable && (
+            !["matched_reference", "partial_reference"].includes(String(marketReference?.chartDataMatch?.status || "")) ||
+            chartPeriodInventory.length >= marketPeriodInventory.length
+          ))
+        ? "complete_chart_only_period_inventory_provider_unavailable_or_unaligned_provisional"
         : marketInventoryProvisional
         ? "provider_reference_provisional"
         : chartOnlyInventoryVerified
@@ -30051,14 +30083,14 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         // inventory is not a price conflict; it is simply an unavailable
         // second source. Keep the OANDA result provisional for review, but do
         // not manufacture a conflict from the skipped visual reader.
-        requiresReview: !chartOnlyInventoryUsable && !marketInventoryVerified && !marketInventoryProvisional,
+        requiresReview: !chartInventoryPreferred && !marketInventoryVerified && !marketInventoryProvisional,
         resolution: marketInventoryVerified
           ? "verified deterministic candle retained; vision-estimated period price rejected"
           : chartOnlyInventoryVerified
           ? "provider comparison rejected; deterministic chart-raster price retained"
           : marketInventoryProvisional
           ? "visual inventory unavailable by design; OANDA period reference retained provisionally"
-          : chartOnlyInventoryUsable
+          : chartInventoryPreferred
           ? "provider comparison rejected; chart-derived estimate retained provisionally"
           : conflict.resolution,
       }));
@@ -30105,7 +30137,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         completedPeriodReferences,
         // The primary mapping audit must describe the inventory actually used.
         // Preserve the provider comparison separately for troubleshooting.
-        periodMappingAudit: chartOnlyInventoryUsable
+        periodMappingAudit: chartInventoryPreferred
           ? chartPeriodMappingAudit
           : periodMappingAudit,
         providerComparisonPeriodMappingAudit: periodMappingAudit,
@@ -30176,10 +30208,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             currentPeriodLow: null,
             source: "deterministic_period_inventory_unavailable",
           };
-      const selectedPeriodFrame = (marketInventoryVerified || marketInventoryProvisional)
+      const selectedPeriodFrame = marketInventoryVerified
         ? marketInventoryFrame
-        : chartOnlyInventoryUsable
+        : chartInventoryPreferred
         ? chartInventoryFrame
+        : marketInventoryProvisional
+        ? marketInventoryFrame
         : null;
 
       visualReview = {
