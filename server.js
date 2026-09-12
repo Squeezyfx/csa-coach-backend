@@ -29946,7 +29946,14 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         // current W2 period in progress while still exposing completed W1.
         // The calendar cutoff is the authority unless the provider itself is
         // chart-aligned and verified.
-        explicitlyComplete: marketInventoryVerified ? lifecycleComplete : null,
+        // This block runs before marketInventoryVerified is calculated below.
+        // Only inherit an explicit completion flag from a chart-aligned
+        // provider; provisional/mismatched feeds must use the calendar cutoff.
+        explicitlyComplete:
+          marketReference?.ok === true &&
+          marketReference?.chartDataMatch?.status === "matched_reference"
+            ? lifecycleComplete
+            : null,
       });
       const marketPeriodInventory = applyCurrentFrameworkPeriodLifecycle({
         periods: marketReconciledPeriodInventory,
