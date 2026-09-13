@@ -259,15 +259,35 @@ function renderBatchOverview(run) {
       : [];
     const referencePeriods = audit.inventoryAuthority?.completedPeriodReferences?.periods || [];
     const chartDerivedInventory = audit.fibonacciAudit?.chartDerivedUsable === true;
+    // Retained as the verified-inventory indicator for baseline compatibility.
     const displayedPeriods = periods.length ? periods : chartDerivedInventory ? allPeriods : [];
-    const periodText = displayedPeriods.length
-      ? displayedPeriods.map((period) => {
+    // The diagnostic view must expose every numeric period that the reader
+    // returned, even when its broker provenance is provisional. Hiding an
+    // estimate makes it impossible to distinguish a period-reading error from
+    // a Fib/confluence or entry-ranking error. Status remains explicit.
+    const diagnosticPeriods = allPeriods;
+    const periodText = diagnosticPeriods.length
+      ? diagnosticPeriods.map((period) => {
           const highStatus = period.highVerified === false ? "estimate—not selectable" : period.highRole || "verified extreme";
           const lowStatus = period.lowVerified === false ? "estimate—not selectable" : period.lowRole || "verified extreme";
           return `${period.period}: H ${compactNumber(period.high, seed)} (${highStatus}), L ${compactNumber(period.low, seed)} (${lowStatus})`;
         }).join(" · ")
       : referencePeriods.length ? `Provider reference only—not chart-verified: ${referencePeriods.map(p => `${p.period}: H ${compactNumber(p.high, seed)}, L ${compactNumber(p.low, seed)}`).join(" · ")}`
       : allPeriods.length ? "Period prices unverified — estimates retained in Export JSON" : "No verified period inventory";
+    const confluenceAudit = Array.isArray(audit.candidateEvaluationAudit)
+      ? audit.candidateEvaluationAudit
+      : [];
+    const confluenceText = confluenceAudit.length
+      ? confluenceAudit.map((candidate) => {
+          const nearest = candidate.nearestFibRatio === 0.5
+            ? "50.0"
+            : Number.isFinite(Number(candidate.nearestFibRatio))
+            ? `${(Number(candidate.nearestFibRatio) * 100).toFixed(1)}`
+            : "—";
+          const status = candidate.qualified === true ? "qualifies" : "reference only";
+          return `${candidate.period || "Period"} ${candidate.extreme || "level"} ${compactNumber(candidate.price, seed)} → ${nearest} @ ${compactNumber(candidate.nearestFibPrice, seed)}; Δ ${compactNumber(candidate.fibDistance, seed)} (${status})`;
+        }).join(" · ")
+      : "No level-to-Fib comparison available";
     const entryText = entries.length
       ? entries.map((entry, index) => {
           const match = Array.isArray(entry.fibonacciMatches) ? entry.fibonacciMatches[0] : null;
@@ -312,12 +332,13 @@ function renderBatchOverview(run) {
       ? audit.provenanceConflicts.filter((conflict) => conflict?.requiresReview === true).length
       : 0;
     if (conflictCount) flags.push(`${conflictCount} price conflict${conflictCount === 1 ? "" : "s"}`);
-    return `<tr class="${flags.length ? "overview-review" : "overview-clear"}"><th>${escapeHtml(`${facts.instrument || analysis.detectedPair || "Unknown"} ${facts.timeframe || analysis.detectedTimeframe || ""}`)}</th><td><b>${escapeHtml(structuralBias)}</b><small>${escapeHtml(String(phase).replaceAll("_", " "))}</small></td><td>${escapeHtml(compactNumber(facts.currentPrice, seed))}</td><td>${escapeHtml(Number(fib.swingHigh) > Number(fib.swingLow) ? `H ${compactNumber(fib.swingHigh, seed)} / L ${compactNumber(fib.swingLow, seed)}` : "Not verified")}<small>${escapeHtml(fibLevels.length ? `38.2 ${compactNumber(fibLevels[0], seed)} · 50 ${compactNumber(fibLevels[1], seed)} · 61.8 ${compactNumber(fibLevels[2], seed)}` : "")}</small></td><td class="overview-periods">${escapeHtml(periodText)}</td><td>${escapeHtml(entryText)}</td><td>${escapeHtml(flags.length ? flags.join("; ") : "clear")}</td></tr>`;
+    const cutoffText = analysis.finalDateUsed || analysis.resolvedCutoff || facts.chartCutoff?.resolvedDate || "cutoff unreadable";
+    return `<tr class="${flags.length ? "overview-review" : "overview-clear"}"><th>${escapeHtml(`${facts.instrument || analysis.detectedPair || "Unknown"} ${facts.timeframe || analysis.detectedTimeframe || ""}`)}</th><td><b>${escapeHtml(structuralBias)}</b><small>cutoff ${escapeHtml(cutoffText)} · ${escapeHtml(String(phase).replaceAll("_", " "))}</small></td><td>${escapeHtml(compactNumber(facts.currentPrice, seed))}</td><td>${escapeHtml(Number(fib.swingHigh) > Number(fib.swingLow) ? `H ${compactNumber(fib.swingHigh, seed)} / L ${compactNumber(fib.swingLow, seed)}` : "Not verified")}<small>${escapeHtml(fibLevels.length ? `38.2 ${compactNumber(fibLevels[0], seed)} · 50 ${compactNumber(fibLevels[1], seed)} · 61.8 ${compactNumber(fibLevels[2], seed)}` : "")}</small></td><td class="overview-periods">${escapeHtml(periodText)}</td><td class="overview-periods">${escapeHtml(confluenceText)}</td><td>${escapeHtml(entryText)}</td><td>${escapeHtml(flags.length ? flags.join("; ") : "clear")}</td></tr>`;
   }).join("");
   const guidance = run.diagnosticSummaryOnly
     ? "Credit-saving view: complete troubleshooting data remains available through Export JSON."
     : "Structural bias and current phase are separated. Expand a chart below only when a row needs investigation.";
-  batchOverview.innerHTML = `<div class="overview-heading"><div><h3>Batch diagnosis summary</h3><p>${escapeHtml(guidance)}</p></div><label><input id="reviewOnly" type="checkbox"> Show review rows only</label></div><div class="audit-table-wrap"><table class="overview-table"><thead><tr><th>Chart</th><th>Structural bias / phase</th><th>Current</th><th>Fib frame / levels</th><th>Period highs & lows</th><th>Entries</th><th>Review flags</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  batchOverview.innerHTML = `<div class="overview-heading"><div><h3>Batch diagnosis summary</h3><p>${escapeHtml(guidance)} The audit order is fixed: bias → period highs/lows → Fib high/low → confluence → entries.</p></div><label><input id="reviewOnly" type="checkbox"> Show review rows only</label></div><div class="audit-table-wrap"><table class="overview-table"><thead><tr><th>Chart</th><th>Structural bias / phase</th><th>Current</th><th>Fib frame / levels</th><th>Period highs & lows</th><th>Confluence audit</th><th>Entries</th><th>Review flags</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   batchOverview.querySelector("#reviewOnly")?.addEventListener("change", (event) => {
     batchOverview.querySelectorAll("tbody tr").forEach((row) => {
       row.hidden = event.target.checked && !row.classList.contains("overview-review");
