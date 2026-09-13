@@ -1,5 +1,30 @@
 // Price authority is separate from a model supplying plausible calendar labels.
 export function buildNoEntryTransparencyAudit(fallback = {}) {
+  // A blocked direction or missing Fib anchor must block entries, not hide
+  // readable completed framework periods.  This is especially important for
+  // H4: W1 can be complete and useful diagnostic evidence while W2 is still
+  // in progress and therefore not entry-eligible.
+  const inventory = Array.isArray(fallback.periodInventory) && fallback.periodInventory.length
+    ? fallback.periodInventory
+    : Array.isArray(fallback.periodDayInventory) && fallback.periodDayInventory.length
+    ? fallback.periodDayInventory
+    : Array.isArray(fallback?.periodMappingAudit?.periods)
+    ? fallback.periodMappingAudit.periods
+    : [];
+  const normalized = inventory
+    .map((period, index) => ({
+      ...period,
+      periodLabel: period?.periodLabel || period?.day || `Period ${index + 1}`,
+      high: positive(period?.high) ? Number(period.high) : null,
+      low: positive(period?.low) ? Number(period.low) : null,
+    }))
+    .filter((period) => period.high !== null && period.low !== null && period.high >= period.low);
+  const completed = normalized.filter((period) =>
+    period?.partialPeriod !== true && period?.periodLifecycle !== "in_progress"
+  );
+  const inProgress = normalized.filter((period) =>
+    period?.partialPeriod === true || period?.periodLifecycle === "in_progress"
+  );
   return {
     auditVersion:"1.2.0", selectionStatus:"blocked",
     inventoryAuthority:{
@@ -11,7 +36,30 @@ export function buildNoEntryTransparencyAudit(fallback = {}) {
       sourceCandleAudit:fallback.marketPeriodIntegrity || null,
       marketInventoryVerified:fallback.marketInventoryVerified === true,
     },
-    periodStructureAudit:[], candidateEvaluationAudit:[], entryDecisionAudit:[],
+    periodStructureAudit: completed.map((period) => ({
+      period: period.periodLabel,
+      date: period.date || null,
+      sourceUnit: period.sourceUnit || null,
+      high: period.high,
+      highRole: period.highRole || null,
+      highOriginalRole: period.highOriginalRole || null,
+      highVerified: period.highVerified === true,
+      low: period.low,
+      lowRole: period.lowRole || null,
+      lowOriginalRole: period.lowOriginalRole || null,
+      lowVerified: period.lowVerified === true,
+      source: period.source || fallback.inventoryAuthority || "uploaded_chart_period_inventory",
+    })),
+    inProgressPeriodAudit: inProgress.map((period) => ({
+      period: period.periodLabel,
+      date: period.date || null,
+      high: period.high,
+      low: period.low,
+      lifecycle: "in_progress",
+      structuralUse: "excluded",
+      retainedFor: "current Fib frame, current price and phase only",
+    })),
+    candidateEvaluationAudit:[], entryDecisionAudit:[],
     fibonacciAudit:{verified:false,source:"not_available",swingHigh:null,swingLow:null,levels:null},
     provenanceConflicts:Array.isArray(fallback.inventoryPriceConflicts) ? fallback.inventoryPriceConflicts : [],
   };
