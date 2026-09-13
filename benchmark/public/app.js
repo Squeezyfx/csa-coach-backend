@@ -245,6 +245,7 @@ function renderBatchOverview(run) {
     const periods = allPeriods.filter(period => period.highVerified === true && period.lowVerified === true);
     const entries = Array.isArray(diagnostics.selectedEntries) ? diagnostics.selectedEntries : [];
     const fib = diagnostics.fibonacci || {};
+    const periodMap = audit.inventoryAuthority?.chartPeriodMap || audit.fibonacciAudit?.chartPeriodMap || null;
     const biasCode = String(analysis.csaDirectionalBias?.biasCode || "").toLowerCase();
     const provisional = analysis.csaDirectionalBias?.provisional === true || audit.fibonacciAudit?.verified === false;
     const structuralBias = ["bullish", "bearish", "range"].includes(biasCode) ? `${biasCode}${provisional ? " (provisional)" : ""}` : "unverified";
@@ -311,6 +312,10 @@ function renderBatchOverview(run) {
         }).join(" · ")
       : "No selected entry";
     const flags = [];
+    if (periodMap?.status !== "verified") {
+      const why = Array.isArray(periodMap?.limitations) ? periodMap.limitations[0] : "chart period boundaries are not calibrated";
+      flags.push(`Period map blocked: ${why || "unverified"}`);
+    }
     const mappingIssues = audit.inventoryAuthority?.periodMappingAudit?.rejected || [];
     if (mappingIssues.length) flags.push(`${mappingIssues.length} period mapping/alignment checks unresolved`);
     const dataMatch = audit.inventoryAuthority?.dataMatch;
@@ -446,6 +451,16 @@ function renderRun(run) {
       }).join("");
       return `<details class="period-audit" open><summary>D1/W1/MN candle high-low and structure inventory — ${periodInventory.length} period${periodInventory.length === 1 ? "" : "s"}</summary><p>Each high and low remains tied to its own higher-timeframe candle and structural classification.</p><p><b>Inventory authority:</b> ${escapeHtml(authorityText)} · chart verified: ${authority.focusedInventoryVerified === true ? "yes" : "no"} · market verified: ${authority.marketInventoryVerified === true ? "yes" : "no"}. ${escapeHtml(endpointText)}</p><div class="audit-table-wrap"><table class="period-inventory"><thead><tr><th>Period</th><th>Date</th><th>High</th><th>High role</th><th>Low</th><th>Low role</th><th>Price source</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
     })();
+    const chartPeriodMapAuditHtml = (() => {
+      const map = transparencyAudit.inventoryAuthority?.chartPeriodMap || transparencyAudit.fibonacciAudit?.chartPeriodMap || {};
+      if (!map || !map.status) return `<details class="period-audit"><summary>Chart period-boundary map</summary><p>No candle-index boundary map was returned for this result.</p></details>`;
+      const rows = (Array.isArray(map.periodStarts) ? map.periodStarts : []).map((period) =>
+        `<tr><th>${escapeHtml(period.period || "—")}</th><td>${escapeHtml(period.startTimestamp || period.expectedStartTimestamp || "unreadable")}</td><td>${Number.isFinite(Number(period.screenX)) ? Number(period.screenX).toFixed(1) : "not mapped"}</td><td>${escapeHtml(period.status || "unknown")}</td><td>${period.selectable === true ? "yes" : "no"}</td></tr>`
+      ).join("") || `<tr><td colspan="5">No framework boundaries were mapped.</td></tr>`;
+      const cutoff = map.cutoff || {};
+      const limits = Array.isArray(map.limitations) && map.limitations.length ? map.limitations.join("; ") : "none";
+      return `<details class="period-audit" open><summary>Chart period-boundary map — ${escapeHtml(map.status)}</summary><p><b>Method:</b> ${escapeHtml(map.mappingMethod || "not reported")}</p><p><b>Cutoff:</b> ${escapeHtml(cutoff.timestamp || "unverified")} · last included ${escapeHtml(cutoff.lastIncludedTimestamp || "—")} · first excluded ${escapeHtml(cutoff.firstExcludedTimestamp || "—")}</p><p><b>Selection gate:</b> ${map.canSelectEntries === true ? "open" : "blocked"}. ${escapeHtml(limits)}</p><div class="audit-table-wrap"><table class="period-inventory"><thead><tr><th>Period</th><th>Start candle</th><th>Chart x</th><th>Lifecycle</th><th>Selectable</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+    })();
     const fibLabelForEntry = (entry, index) => {
       const diagnostic = diagnosticEntries.find((candidate) => Number(candidate?.executionOrder) === index + 1) || {};
       const matches = Array.isArray(diagnostic?.fibonacciMatches) ? diagnostic.fibonacciMatches : [];
@@ -561,7 +576,7 @@ function renderRun(run) {
     const baselineHtml = item.verifiedBaselineId
       ? `<p class="baseline-note">Compared with verified baseline ${escapeHtml(item.verifiedBaselineId)}.</p>`
       : `<p class="baseline-note">Rule checks only; accuracy has not yet been verified.</p>`;
-    return `<article class="result ${item.status}"><div class="result-top"><div><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.fileName)} · ${(item.durationMs / 1000).toFixed(1)}s</p></div><span class="badge">${escapeHtml(statusLabel)}</span></div><p>${headline}</p>${baselineHtml}${findingsHtml}${periodInventoryAuditHtml}${structureAuditHtml}${fibAuditHtml}${entryDecisionAuditHtml}${provenanceConflictHtml}${checkHtml ? `<ul class="checks">${checkHtml}</ul>` : ""}<details><summary>Full analysis response</summary><pre>${escapeHtml(JSON.stringify(item.analysis, null, 2))}</pre></details></article>`;
+    return `<article class="result ${item.status}"><div class="result-top"><div><strong>${escapeHtml(item.label)}</strong><p>${escapeHtml(item.fileName)} · ${(item.durationMs / 1000).toFixed(1)}s</p></div><span class="badge">${escapeHtml(statusLabel)}</span></div><p>${headline}</p>${baselineHtml}${findingsHtml}${chartPeriodMapAuditHtml}${periodInventoryAuditHtml}${structureAuditHtml}${fibAuditHtml}${entryDecisionAuditHtml}${provenanceConflictHtml}${checkHtml ? `<ul class="checks">${checkHtml}</ul>` : ""}<details><summary>Full analysis response</summary><pre>${escapeHtml(JSON.stringify(item.analysis, null, 2))}</pre></details></article>`;
   }).join("");
   promoteButton.hidden = !(
     automatic &&

@@ -1,4 +1,5 @@
 import { readMt4ForexTimestamp } from "./chart-time-reader.js";
+import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
 import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
@@ -20613,6 +20614,7 @@ function rankChartNativeFallbackAreas({
       chartOnlyInventoryVerified: fallback?.chartOnlyInventoryVerified === true,
       finalVisibleCandle: fallback?.finalVisibleCandleAuthority || null,
       sharedFramework: fallback?.sharedFramework || null,
+      chartPeriodMap: fallback?.chartPeriodMap || null,
     },
     bias: {
       direction,
@@ -20668,6 +20670,7 @@ function rankChartNativeFallbackAreas({
         ? Math.max(fibLevels["38.2"], fibLevels["61.8"])
         : null,
       rule: "independently proven structure must intersect the 38.2%-61.8% retracement band",
+      chartPeriodMap: fallback?.chartPeriodMap || null,
     },
     candidateEvaluationAudit: candidateEvaluations.map((evaluation) => {
       const candidatePrice = Number(evaluation.candidate?.price);
@@ -29918,6 +29921,18 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       const lifecycleCutoffDateTime =
         chartCutoff?.endDateTime ||
         `${chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || ""} 23:59:59`;
+      // This is the missing authority layer: derive Monday/Tuesday/etc. (or
+      // H4 W1/W2) start positions from timestamped chart anchors and selected
+      // timeframe candle indices.  It is intentionally separate from price
+      // extraction.  A calendar-looking provider period without this map can
+      // remain visible in diagnostics, but can never become Fib or an entry.
+      const chartPeriodMap = buildChartPeriodMap({
+        timeframe,
+        candles: marketReference?.timeframeCandles || [],
+        chartCutoff,
+        axisCalibration: chartDetection?.timestampAudit || null,
+      });
+      const chartPeriodMapVerified = chartPeriodMap.canSelectEntries === true;
       // A partial OANDA endpoint means the chart's latest visible period is
       // still live, even when the provider's framework response labels its
       // aggregate candle complete. Keep that endpoint available for the Fib
@@ -30042,6 +30057,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       );
       const chartOnlyInventoryVerified =
         chartOnlyInventoryUsable &&
+        chartPeriodMapVerified &&
         rasterInventory?.chartPriceScaleVerified === true &&
         rasterByDate.size === rawFocusedPeriodInventory.length &&
         chartPeriodInventory.length === rawFocusedPeriodInventory.length &&
@@ -30160,6 +30176,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         fixedPeriodBias,
         sharedFramework,
         rasterInventoryAudit: rasterInventory,
+        chartPeriodMap,
+        chartPeriodMapVerified,
       };
 
       if (fixedPeriodBias && inventoryUsable) {
@@ -30258,10 +30276,10 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             null,
           currentPeriodFrameVerified:
             (marketInventoryVerified || chartOnlyInventoryVerified) &&
-            selectedPeriodFrame?.currentPeriodFrameVerified === true,
+            selectedPeriodFrame?.currentPeriodFrameVerified === true && chartPeriodMapVerified,
           currentPeriodFrameChartUsable:
             (marketInventoryProvisional || (chartOnlyInventoryUsable && !chartOnlyInventoryVerified)) &&
-            selectedPeriodFrame?.currentPeriodFrameVerified === true,
+            selectedPeriodFrame?.currentPeriodFrameVerified === true && chartPeriodMapVerified,
           currentWeekFrameConfidence:
             visibleCurrentWeekFrame?.confidence ||
             (inventoryDerivedPeriodFrame?.currentPeriodFrameVerified === true

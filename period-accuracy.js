@@ -35,6 +35,7 @@ export function buildNoEntryTransparencyAudit(fallback = {}) {
       providerFailure:fallback.providerFailure || null,
       sourceCandleAudit:fallback.marketPeriodIntegrity || null,
       marketInventoryVerified:fallback.marketInventoryVerified === true,
+      chartPeriodMap:fallback.chartPeriodMap || null,
     },
     periodStructureAudit: completed.map((period) => ({
       period: period.periodLabel,
@@ -60,7 +61,7 @@ export function buildNoEntryTransparencyAudit(fallback = {}) {
       retainedFor: "current Fib frame, current price and phase only",
     })),
     candidateEvaluationAudit:[], entryDecisionAudit:[],
-    fibonacciAudit:{verified:false,source:"not_available",swingHigh:null,swingLow:null,levels:null},
+    fibonacciAudit:{verified:false,source:"not_available",swingHigh:null,swingLow:null,levels:null,chartPeriodMap:fallback.chartPeriodMap || null},
     provenanceConflicts:Array.isArray(fallback.inventoryPriceConflicts) ? fallback.inventoryPriceConflicts : [],
   };
 }
