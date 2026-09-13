@@ -273,6 +273,7 @@ app.post("/api/run", requireAdmin, upload.array("charts", 30), async (req, res) 
           automaticMode: testCase.mode === "automatic",
         });
         return {
+          fileIndex: testCase.fileIndex,
           label: testCase.label,
           fileName: req.files[testCase.fileIndex]?.originalname || null,
           status: validation.passed ? "passed" : "failed",
@@ -284,6 +285,7 @@ app.post("/api/run", requireAdmin, upload.array("charts", 30), async (req, res) 
         };
       } catch (error) {
         return {
+          fileIndex: testCase.fileIndex,
           label: testCase.label,
           fileName: req.files[testCase.fileIndex]?.originalname || null,
           status: "error",

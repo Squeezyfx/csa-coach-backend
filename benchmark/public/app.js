@@ -235,6 +235,89 @@ function compactNumber(value, precisionSeed) {
   return number.toFixed(decimals);
 }
 
+function chartOverlayModel(item) {
+  const diagnostics = item?.analysis?.analysisFacts?.selectorDiagnostics || {};
+  const audit = diagnostics.transparencyAudit || {};
+  const map = audit.inventoryAuthority?.chartPeriodMap || audit.fibonacciAudit?.chartPeriodMap || null;
+  return { map, fibonacci: diagnostics.fibonacci || {}, entries: diagnostics.selectedEntries || [] };
+}
+
+function drawChartAuditOverlay(canvas, image, model) {
+  const { map, fibonacci, entries } = model;
+  const ratio = Math.min(1, 1500 / image.naturalWidth);
+  canvas.width = Math.round(image.naturalWidth * ratio);
+  canvas.height = Math.round(image.naturalHeight * ratio);
+  const context = canvas.getContext("2d");
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const scaleX = canvas.width / image.naturalWidth;
+  const scaleY = canvas.height / image.naturalHeight;
+  const label = (text, x, y, colour) => {
+    context.font = `${Math.max(12, Math.round(14 * scaleX))}px system-ui, sans-serif`;
+    const width = context.measureText(text).width + 10;
+    context.fillStyle = "rgba(10, 24, 35, .92)";
+    context.fillRect(x, y - 16, width, 21);
+    context.fillStyle = colour;
+    context.fillText(text, x + 5, y);
+  };
+  const boundaries = Array.isArray(map?.periodStarts) ? map.periodStarts : [];
+  boundaries.forEach((period) => {
+    if (!Number.isFinite(Number(period.screenX))) return;
+    const x = Number(period.screenX) * scaleX;
+    const colour = period.status === "in_progress" ? "#ffb44c" : "#198cff";
+    context.save();
+    context.strokeStyle = colour;
+    context.lineWidth = Math.max(1, 2 * scaleX);
+    context.setLineDash([6 * scaleX, 5 * scaleX]);
+    context.beginPath(); context.moveTo(x, 6 * scaleY); context.lineTo(x, canvas.height - 8 * scaleY); context.stroke();
+    context.restore();
+    label(`${period.period} start${period.status === "in_progress" ? " — in progress" : ""}`, Math.min(x + 5, canvas.width - 210), canvas.height - 18, colour);
+  });
+  if (Number.isFinite(Number(map?.cutoff?.screenX))) {
+    const x = Number(map.cutoff.screenX) * scaleX;
+    context.fillStyle = "rgba(255, 160, 55, .14)";
+    context.fillRect(x, 0, canvas.width - x, canvas.height);
+    context.strokeStyle = "#ff9f2f"; context.lineWidth = Math.max(1, 2 * scaleX);
+    context.beginPath(); context.moveTo(x, 0); context.lineTo(x, canvas.height); context.stroke();
+    label("Cutoff — later candles excluded", Math.min(x + 5, canvas.width - 220), 26, "#ffb44c");
+  }
+  const verified = map?.status === "verified";
+  const high = Number(fibonacci.swingHigh), low = Number(fibonacci.swingLow);
+  const lines = [`CSA chart-period audit · ${verified ? "BOUNDARIES VERIFIED" : "BOUNDARIES BLOCKED"}`];
+  if (Number.isFinite(high) && Number.isFinite(low) && high > low) lines.push(`Fib anchors: FH ${high} · FL ${low}`);
+  if (entries.length) lines.push(`Entries: ${entries.slice(0, 3).map((entry, index) => `E${index + 1} ${entry.levelText || entry.authoritativeCenter || "—"}`).join(" · ")}`);
+  if (!verified) lines.push((map?.limitations || ["Timestamp calibration is required before price levels can be drawn."])[0]);
+  context.font = `${Math.max(12, Math.round(14 * scaleX))}px system-ui, sans-serif`;
+  const boxWidth = Math.min(canvas.width - 20, Math.max(...lines.map((line) => context.measureText(line).width)) + 22);
+  const lineHeight = Math.max(18, Math.round(19 * scaleX));
+  context.fillStyle = "rgba(9, 24, 37, .92)"; context.fillRect(12, 12, boxWidth, lines.length * lineHeight + 14);
+  lines.forEach((line, index) => { context.fillStyle = index === 0 ? "#eaf7ff" : index === lines.length - 1 && !verified ? "#ffbd59" : "#a9cee0"; context.fillText(line, 22, 31 + index * lineHeight); });
+}
+
+async function renderChartAuditOverlays(run) {
+  const gallery = document.querySelector("#chartAuditGallery");
+  if (!gallery) return;
+  gallery.innerHTML = "";
+  for (const item of run.results) {
+    const model = chartOverlayModel(item);
+    const file = files[Number.isInteger(item.fileIndex) ? item.fileIndex : files.findIndex((candidate) => candidate.name === item.fileName)];
+    if (!file || !file.type.startsWith("image/")) continue;
+    const card = document.createElement("article"); card.className = "chart-overlay-card";
+    const heading = document.createElement("h4"); heading.textContent = `${item.label} — period/Fib audit`; card.appendChild(heading);
+    const canvas = document.createElement("canvas"); canvas.className = "chart-overlay-canvas"; card.appendChild(canvas);
+    const actions = document.createElement("div"); actions.className = "chart-overlay-actions";
+    const status = document.createElement("span"); status.textContent = model.map?.status === "verified" ? "Boundary map verified" : "Boundary map blocked — diagnostic only"; actions.appendChild(status);
+    const download = document.createElement("button"); download.className = "button secondary"; download.textContent = "Download audit image";
+    download.addEventListener("click", () => { const link = document.createElement("a"); link.download = `${item.label || "chart"}-period-audit.png`; link.href = canvas.toDataURL("image/png"); link.click(); }); actions.appendChild(download); card.appendChild(actions);
+    gallery.appendChild(card);
+    const image = new Image(); const url = URL.createObjectURL(file);
+    await new Promise((resolve) => { image.onload = resolve; image.onerror = resolve; image.src = url; });
+    if (image.naturalWidth) drawChartAuditOverlay(canvas, image, model);
+    else { card.remove(); }
+    URL.revokeObjectURL(url);
+  }
+  if (!gallery.children.length) gallery.innerHTML = "<p>Chart audit images could not be created for this run.</p>";
+}
+
 function renderBatchOverview(run) {
   const rows = run.results.map((item) => {
     const analysis = item.analysis || {};
@@ -343,7 +426,7 @@ function renderBatchOverview(run) {
   const guidance = run.diagnosticSummaryOnly
     ? "Credit-saving view: complete troubleshooting data remains available through Export JSON."
     : "Structural bias and current phase are separated. Expand a chart below only when a row needs investigation.";
-  batchOverview.innerHTML = `<div class="overview-heading"><div><h3>Batch diagnosis summary</h3><p>${escapeHtml(guidance)} The audit order is fixed: bias → period highs/lows → Fib high/low → confluence → entries.</p></div><label><input id="reviewOnly" type="checkbox"> Show review rows only</label></div><div class="audit-table-wrap"><table class="overview-table"><thead><tr><th>Chart</th><th>Structural bias / phase</th><th>Current</th><th>Fib frame / levels</th><th>Period highs & lows</th><th>Confluence audit</th><th>Entries</th><th>Review flags</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  batchOverview.innerHTML = `<div class="overview-heading"><div><h3>Batch diagnosis summary</h3><p>${escapeHtml(guidance)} The audit order is fixed: bias → period highs/lows → Fib high/low → confluence → entries.</p></div><label><input id="reviewOnly" type="checkbox"> Show review rows only</label></div><div class="audit-table-wrap"><table class="overview-table"><thead><tr><th>Chart</th><th>Structural bias / phase</th><th>Current</th><th>Fib frame / levels</th><th>Period highs & lows</th><th>Confluence audit</th><th>Entries</th><th>Review flags</th></tr></thead><tbody>${rows}</tbody></table></div><section id="chartAuditGallery" class="chart-audit-gallery" aria-live="polite"></section>`;
   batchOverview.querySelector("#reviewOnly")?.addEventListener("change", (event) => {
     batchOverview.querySelectorAll("tbody tr").forEach((row) => {
       row.hidden = event.target.checked && !row.classList.contains("overview-review");
@@ -363,6 +446,7 @@ function renderRun(run) {
     summaryCard(automatic ? "Needs review" : "Failed", run.summary.failed), summaryCard("Errors", run.summary.errors),
   ].join("");
   renderBatchOverview(run);
+  void renderChartAuditOverlays(run);
   document.querySelector("#resultCards").innerHTML = run.diagnosticSummaryOnly ? "" : run.results.map((item) => {
     const checks = item.validation?.checks || [];
     const failures = checks.filter((check) => !check.passed);

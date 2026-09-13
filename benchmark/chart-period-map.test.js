@@ -33,6 +33,7 @@ test("H1 period map uses candle indices, marks Thursday in-progress and excludes
   assert.equal(map.status, "verified");
   assert.equal(map.cutoff.lastIncludedTimestamp, "2026-09-10 06:00:00");
   assert.equal(map.cutoff.firstExcludedTimestamp, "2026-09-10 07:00:00");
+  assert.equal(map.cutoff.screenX, 724);
   assert.deepEqual(map.periodStarts.map((period) => [period.period, period.status, period.screenX, period.selectable]), [
     ["Monday", "completed", 100, true],
     ["Tuesday", "completed", 292, true],

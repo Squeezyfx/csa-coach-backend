@@ -116,6 +116,7 @@ export function buildChartPeriodMap({
       exact: exactCutoff,
       lastIncludedTimestamp: lastIncluded?._timestamp || null,
       firstExcludedTimestamp: firstExcluded?._timestamp || null,
+      screenX: lastIncluded ? screenXFor(lastIncluded._timestamp) : null,
     },
     axisCalibration: calibration ? {
       candleStep: Number(calibration.candleStep) || null,
