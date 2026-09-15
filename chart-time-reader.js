@@ -21,7 +21,10 @@ export function readMt4CandleGeometry({imageBase64,timeframe}={}){
  let right=null,bottom=null;for(let x=Math.floor(w*.7);x<w-5;x++){let n=0;for(let y=20;y<h-20;y++)if(dark(x,y))n++;if(n>(h-40)*.8)right=x;}if(right===null)return null;
  for(let y=Math.floor(h*.75);y<h-8;y++){let n=0;for(let x=1;x<right;x++)if(dark(x,y))n++;if(n>right*.8)bottom=y;}if(bottom===null)return null;
  const cols=[];for(let x=2;x<right-2;x++){let n=0;for(let y=22;y<bottom-10;y++){const i=(y*w+x)*4;if(p[i+1]>55&&p[i]<110&&p[i+2]<110||p[i]>145&&p[i+1]<110&&p[i+2]<110)n++;}if(n)cols.push(x);}
- const centers=groups(cols).map(g=>Math.round((g[0]+g.at(-1))/2)),counts=new Map();for(let i=1;i<centers.length;i++){const n=centers[i]-centers[i-1];if(n>=2&&n<=12)counts.set(n,(counts.get(n)||0)+1);}const step=[...counts].sort((a,b)=>b[1]-a[1])[0]?.[0];
+ // Browser-generated benchmark images retain their original wide resolution.
+ // Their H1 candle spacing can exceed 12px, so 12 was an accidental
+ // thumbnail-only ceiling that made an otherwise readable chart uncalibrated.
+ const centers=groups(cols).map(g=>Math.round((g[0]+g.at(-1))/2)),counts=new Map();for(let i=1;i<centers.length;i++){const n=centers[i]-centers[i-1];if(n>=2&&n<=36)counts.set(n,(counts.get(n)||0)+1);}const step=[...counts].sort((a,b)=>b[1]-a[1])[0]?.[0];
  if(!step||centers.length<40)return null;let last=centers.at(-1);for(let x=last;x<Math.min(right-2,last+step*6);x+=step){let n=0;for(let y=22;y<bottom-10;y++)if(dark(x,y))n++;if(n>=2)last=x;}
  return {candleStep:step,firstCandleX:centers[0],lastCandleX:last,candleCount:centers.length};
 }
