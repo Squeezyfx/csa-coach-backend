@@ -1,4 +1,4 @@
-import { readMt4ForexTimestamp } from "./chart-time-reader.js";
+import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
 import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
@@ -2933,7 +2933,7 @@ function resolveTwelveDataChartCutoff({
   const usableDetectedTime =
     /^([01]\d|2[0-3]):[0-5]\d$/.test(detectedTime) &&
     detectedTimeConfidence === "high" &&
-    ["explicit_final_candle_timestamp", "verified_axis_bar_count"].includes(timeEvidence);
+    ["explicit_final_candle_timestamp", "verified_axis_bar_count", "verified_multi_anchor_axis_count"].includes(timeEvidence);
 
   const selected =
     /^\d{4}-\d{2}-\d{2}$/.test(String(selectedDateText || "").trim())
@@ -29253,6 +29253,22 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       chartDetection?.latestVisibleDateEvidence !== "explicit_final_candle_timestamp") {
       const axisTime = readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps:chartDetection?.timeAxisTimestamps || []});
       if (axisTime) chartDetection = {...chartDetection, latestVisibleDate:axisTime.timestamp.slice(0,10), latestVisibleTime:axisTime.timestamp.slice(11,16), dateConfidence:"high", latestVisibleTimeConfidence:"high", latestVisibleDateEvidence:"verified_axis_bar_count", timestampAudit:axisTime};
+      if (!axisTime) {
+        const inferredAxisTime = resolveVisibleTimestampFromAxisCount({
+          timeframe,
+          timeAxisTimestamps: chartDetection?.timeAxisTimestamps || [],
+          visibleCandlesAfterLastPrintedDate: chartDetection?.visibleCandlesAfterLastPrintedDate,
+        });
+        const geometry = inferredAxisTime ? readMt4CandleGeometry({ imageBase64, timeframe }) : null;
+        if (inferredAxisTime && geometry) chartDetection = {
+          ...chartDetection,
+          latestVisibleDate: inferredAxisTime.timestamp.slice(0, 10),
+          latestVisibleTime: inferredAxisTime.timestamp.slice(11, 16),
+          dateConfidence: "high", latestVisibleTimeConfidence: "high",
+          latestVisibleDateEvidence: "verified_multi_anchor_axis_count",
+          timestampAudit: { ...inferredAxisTime, ...geometry, terminalAnchor: true, anchors: [{ x: geometry.lastCandleX, timestamp: inferredAxisTime.timestamp }] },
+        };
+      }
     }
 
     const dateDecision = chooseFinalChartDate({

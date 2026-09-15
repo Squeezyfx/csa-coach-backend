@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {readFileSync} from 'node:fs';
-import {readMt4ForexTimestamp,resolveAxisTimestamp} from '../chart-time-reader.js';
+import {readMt4ForexTimestamp,resolveAxisTimestamp,resolveVisibleTimestampFromAxisCount} from '../chart-time-reader.js';
 import {assessChartDataMatch} from '../market-data-matching.js';
 import {fetchOandaSeries} from '../oanda-data.js';
 // Text transcribed from the user's original PNG; the production vision reader
@@ -18,6 +18,14 @@ test('fractional candle counts and insufficient anchors are rejected',()=>{
  assert.equal(resolveAxisTimestamp({anchors:[],candleStep:4,lastCandleX:100,timeframe:'H4'}),null);
  const anchors=[{x:0,timestamp:'2026-08-24 00:00:00'},{x:4,timestamp:'2026-08-24 04:00:00'},{x:8,timestamp:'2026-08-24 08:00:00'}];
  assert.equal(resolveAxisTimestamp({anchors,candleStep:4,lastCandleX:9,timeframe:'H4'}),null);
+});
+test('multiple printed axis labels plus final-bar count can reconstruct a terminal H1 timestamp',()=>{
+ const result=resolveVisibleTimestampFromAxisCount({timeframe:'H1',visibleCandlesAfterLastPrintedDate:3,timeAxisTimestamps:[
+  '2026-09-07 12:00:00','2026-09-08 12:00:00','2026-09-09 12:00:00'
+ ]});
+ assert.equal(result.timestamp,'2026-09-09 15:00:00');
+ assert.equal(result.evidence,'verified_multi_anchor_axis_count');
+ assert.equal(resolveVisibleTimestampFromAxisCount({timeframe:'H1',visibleCandlesAfterLastPrintedDate:3,timeAxisTimestamps:['2026-09-07 12:00:00','bad','2026-09-09 12:00:00']}),null);
 });
 test('overlapping historical candle is comparison-only, not included in calculation values',async()=>{
  const row=(hour,c)=>({time:`2026-08-28T${hour}:00:00Z`,complete:true,mid:{o:'1.39014',h:'1.39088',l:'1.38979',c}});

@@ -55,6 +55,17 @@ test("period map fails closed when anchor calibration is not available", () => {
   assert.match(map.limitations.join(" "), /three timestamped x-axis anchors/);
 });
 
+test("a validated terminal anchor can map earlier H1 boundaries by candle index", () => {
+  const map = buildChartPeriodMap({
+    timeframe: "H1", candles: h1Candles("2026-09-07", "2026-09-10T08:00:00Z"),
+    chartCutoff: { endDateTime: "2026-09-10 06:00:59", exactVisibleCutoff: true },
+    axisCalibration: { terminalAnchor: true, candleStep: 8, lastCandleX: 724, anchors: [{ x: 724, timestamp: "2026-09-10 06:00:00" }] },
+  });
+  assert.equal(map.status, "verified");
+  assert.equal(map.periodStarts[0].screenX, 100);
+  assert.equal(map.periodStarts.at(-1).selectable, false);
+});
+
 test("H4 map groups periods by Monday and leaves the current week unselectable", () => {
   const candles = [
     "2026-08-31 00:00:00", "2026-09-01 00:00:00", "2026-09-07 00:00:00", "2026-09-10 00:00:00",

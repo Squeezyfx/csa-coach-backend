@@ -71,13 +71,14 @@ export function buildChartPeriodMap({
   const reasons = [];
   if (!INTRADAY.has(tf)) reasons.push("period-map currently applies to intraday M1–H4 charts only");
   if (!exactCutoff) reasons.push("exact cutoff timestamp is missing or not chart-verified");
-  if (anchors.length < 3) reasons.push("at least three timestamped x-axis anchors are required");
+  const terminalCalibration = calibration?.terminalAnchor === true && anchors.length === 1;
+  if (anchors.length < 3 && !terminalCalibration) reasons.push("at least three timestamped x-axis anchors are required");
   if (!(Number(calibration?.candleStep) > 0)) reasons.push("candle spacing could not be calibrated");
   if (!bars.length) reasons.push("no provider candles were available at or before the cutoff");
 
   const byTimestamp = new Map(bars.map((candle, index) => [candle._timestamp, { candle, index }]));
   const anchorIndexes = anchors.map((anchor) => ({ ...anchor, row: byTimestamp.get(iso(anchor.timestamp)) || null }));
-  if (anchors.length >= 3 && anchorIndexes.some((anchor) => !anchor.row)) {
+  if ((anchors.length >= 3 || terminalCalibration) && anchorIndexes.some((anchor) => !anchor.row)) {
     reasons.push("one or more chart time anchors did not match the fetched selected-timeframe candles");
   }
   const usableCalibration = reasons.length === 0;
@@ -134,6 +135,7 @@ export function buildChartPeriodMap({
       includedCandleCount: bars.length,
       matchedAnchorCount: anchorIndexes.filter((anchor) => anchor.row).length,
       allAnchorsMatchProviderCandles: anchors.length > 0 && anchorIndexes.every((anchor) => anchor.row),
+      terminalCalibration,
       weekendSafe: true,
     },
   };
