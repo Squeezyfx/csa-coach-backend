@@ -235,6 +235,12 @@ function compactNumber(value, precisionSeed) {
   return number.toFixed(decimals);
 }
 
+function finiteCoordinate(value) {
+  // Number(null) is 0 in JavaScript. A missing map coordinate must never be
+  // mistaken for the far-left edge of the chart.
+  return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+}
+
 function chartOverlayModel(item) {
   const diagnostics = item?.analysis?.analysisFacts?.selectorDiagnostics || {};
   const audit = diagnostics.transparencyAudit || {};
@@ -261,7 +267,7 @@ function drawChartAuditOverlay(canvas, image, model) {
   };
   const boundaries = Array.isArray(map?.periodStarts) ? map.periodStarts : [];
   boundaries.forEach((period) => {
-    if (!Number.isFinite(Number(period.screenX))) return;
+    if (!finiteCoordinate(period.screenX)) return;
     const x = Number(period.screenX) * scaleX;
     const colour = period.status === "in_progress" ? "#ffb44c" : "#198cff";
     context.save();
@@ -272,7 +278,7 @@ function drawChartAuditOverlay(canvas, image, model) {
     context.restore();
     label(`${period.period} start${period.status === "in_progress" ? " — in progress" : ""}`, Math.min(x + 5, canvas.width - 210), canvas.height - 18, colour);
   });
-  if (Number.isFinite(Number(map?.cutoff?.screenX))) {
+  if (finiteCoordinate(map?.cutoff?.screenX)) {
     const x = Number(map.cutoff.screenX) * scaleX;
     context.fillStyle = "rgba(255, 160, 55, .14)";
     context.fillRect(x, 0, canvas.width - x, canvas.height);
@@ -539,7 +545,7 @@ function renderRun(run) {
       const map = transparencyAudit.inventoryAuthority?.chartPeriodMap || transparencyAudit.fibonacciAudit?.chartPeriodMap || {};
       if (!map || !map.status) return `<details class="period-audit"><summary>Chart period-boundary map</summary><p>No candle-index boundary map was returned for this result.</p></details>`;
       const rows = (Array.isArray(map.periodStarts) ? map.periodStarts : []).map((period) =>
-        `<tr><th>${escapeHtml(period.period || "—")}</th><td>${escapeHtml(period.startTimestamp || period.expectedStartTimestamp || "unreadable")}</td><td>${Number.isFinite(Number(period.screenX)) ? Number(period.screenX).toFixed(1) : "not mapped"}</td><td>${escapeHtml(period.status || "unknown")}</td><td>${period.selectable === true ? "yes" : "no"}</td></tr>`
+        `<tr><th>${escapeHtml(period.period || "—")}</th><td>${escapeHtml(period.startTimestamp || period.expectedStartTimestamp || "unreadable")}</td><td>${finiteCoordinate(period.screenX) ? Number(period.screenX).toFixed(1) : "not mapped"}</td><td>${escapeHtml(period.status || "unknown")}</td><td>${period.selectable === true ? "yes" : "no"}</td></tr>`
       ).join("") || `<tr><td colspan="5">No framework boundaries were mapped.</td></tr>`;
       const cutoff = map.cutoff || {};
       const limits = Array.isArray(map.limitations) && map.limitations.length ? map.limitations.join("; ") : "none";
