@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {readFileSync} from 'node:fs';
-import {readMt4ForexTimestamp,resolveAxisTimestamp,resolveVisibleTimestampFromAxisCount} from '../chart-time-reader.js';
+import {readMt4ForexTimestamp,readMt4CandleGeometry,resolveAxisTimestamp,resolveVisibleTimestampFromAxisCount} from '../chart-time-reader.js';
 import {assessChartDataMatch} from '../market-data-matching.js';
 import {fetchOandaSeries} from '../oanda-data.js';
 // Text transcribed from the user's original PNG; the production vision reader
@@ -26,6 +26,11 @@ test('multiple printed axis labels plus final-bar count can reconstruct a termin
  assert.equal(result.timestamp,'2026-09-09 15:00:00');
  assert.equal(result.evidence,'verified_multi_anchor_axis_count');
  assert.equal(resolveVisibleTimestampFromAxisCount({timeframe:'H1',visibleCandlesAfterLastPrintedDate:3,timeAxisTimestamps:['2026-09-07 12:00:00','bad','2026-09-09 12:00:00']}),null);
+});
+test('candle geometry uses dark wick columns and is not dependent on coloured overlays',()=>{
+ const geometry=readMt4CandleGeometry({imageBase64:args.imageBase64,timeframe:'H4'});
+ assert.ok(geometry?.candleStep > 0);
+ assert.ok(geometry?.lastCandleX > geometry?.firstCandleX);
 });
 test('overlapping historical candle is comparison-only, not included in calculation values',async()=>{
  const row=(hour,c)=>({time:`2026-08-28T${hour}:00:00Z`,complete:true,mid:{o:'1.39014',h:'1.39088',l:'1.38979',c}});

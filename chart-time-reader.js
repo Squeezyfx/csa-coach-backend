@@ -20,7 +20,10 @@ export function readMt4CandleGeometry({imageBase64,timeframe}={}){
  const {width:w,height:h,pixels:p}=im;const dark=(x,y)=>{const i=(y*w+x)*4;return p[i]<72&&p[i+1]<72&&p[i+2]<72;};
  let right=null,bottom=null;for(let x=Math.floor(w*.7);x<w-5;x++){let n=0;for(let y=20;y<h-20;y++)if(dark(x,y))n++;if(n>(h-40)*.8)right=x;}if(right===null)return null;
  for(let y=Math.floor(h*.75);y<h-8;y++){let n=0;for(let x=1;x<right;x++)if(dark(x,y))n++;if(n>right*.8)bottom=y;}if(bottom===null)return null;
- const cols=[];for(let x=2;x<right-2;x++){let n=0;for(let y=22;y<bottom-10;y++){const i=(y*w+x)*4;if(p[i+1]>55&&p[i]<110&&p[i+2]<110||p[i]>145&&p[i+1]<110&&p[i+2]<110)n++;}if(n)cols.push(x);}
+ // Red/green body pixels also match drawn indicators and zig-zags. Candle
+ // wicks/outlines are dark, so use repeated dark pixels only; this keeps a
+ // continuous red indicator from collapsing the whole chart into one group.
+ const cols=[];for(let x=2;x<right-2;x++){let n=0;for(let y=22;y<bottom-10;y++)if(dark(x,y))n++;if(n>=2)cols.push(x);}
  // Browser-generated benchmark images retain their original wide resolution.
  // Their H1 candle spacing can exceed 12px, so 12 was an accidental
  // thumbnail-only ceiling that made an otherwise readable chart uncalibrated.
