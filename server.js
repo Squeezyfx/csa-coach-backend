@@ -1,6 +1,7 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
+import { analyseFrameworkEntries } from "./framework-periods.js";
 import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
@@ -3290,6 +3291,58 @@ async function fetchTwelveDataStructureLevels({
       });
       rawFrameworkCandles = frameworkSeries.values;
     }
+
+    // ---- shadow inventory: diagnostic only, nothing downstream reads this ----
+    // Framework candles are already one-per-period (H1->1day, H4->1week,
+    // D1->1month), so the provider has effectively already returned the period
+    // inventory the vision pass is being asked to read off pixels. Compute it
+    // both ways and log the difference before trusting either.
+    try {
+      const shadowCutoffDate = candleDateOnly(normalizeTwelveDataDateTime(endDateTime));
+      const shadowPeriodCandles = (rawFrameworkCandles || [])
+        .map((bar) => ({
+          time: normalizeTwelveDataDateTime(bar?.datetime),
+          high: Number(bar?.high),
+          low: Number(bar?.low),
+        }))
+        .filter((bar) =>
+          bar.time &&
+          Number.isFinite(bar.high) &&
+          Number.isFinite(bar.low) &&
+          // A benchmark screenshot ends before today but the provider returns
+          // candles through today. Truncate at the chart's own cutoff instead
+          // of requiring the two final anchors to be equal, which can never
+          // succeed on a historical screenshot.
+          (!shadowCutoffDate || candleDateOnly(bar.time) <= shadowCutoffDate)
+        );
+
+      const shadow = analyseFrameworkEntries(
+        shadowPeriodCandles,
+        profile.selectedTimeframe,
+        {
+          latest: shadowCutoffDate || null,
+          currentPrice: Number(rawCandles?.[rawCandles.length - 1]?.close),
+        }
+      );
+
+      console.log("[shadow-inventory] " + JSON.stringify({
+        symbol,
+        timeframe: profile.selectedTimeframe,
+        structureMode: profile.structureMode,
+        chartCutoffDate: shadowCutoffDate,
+        candlesFetched: (rawFrameworkCandles || []).length,
+        candlesAfterCutoff: shadowPeriodCandles.length,
+        firstCandle: shadowPeriodCandles[0]?.time || null,
+        lastCandle: shadowPeriodCandles[shadowPeriodCandles.length - 1]?.time || null,
+        periods: shadow.periods.map((p) => [p.label, p.date, p.high, p.low]),
+        frame: shadow.frame,
+        levels: shadow.levels,
+        entries: shadow.entries.map((e) => [e.order, e.periodLabel, e.kind, e.price, e.fibName]),
+      }));
+    } catch (shadowError) {
+      console.log("[shadow-inventory] failed: " + shadowError.message);
+    }
+    // ---- end shadow inventory ----
   } catch (error) {
     return {
       ...empty(error.message, structureRange, {
