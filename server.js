@@ -1,7 +1,7 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
-import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields } from "./framework-periods.js";
+import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields, supplementLivePeriod } from "./framework-periods.js";
 import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
@@ -3313,9 +3313,24 @@ async function fetchTwelveDataStructureLevels({
           // requiring the two final anchors to be equal.
           (!cutoffDate || candleDateOnly(bar.time) <= cutoffDate)
         );
-      if (periodCandles.length) {
+      // Rebuild the live period from execution candles if the provider left
+      // it out (OANDA D1 intermittently omits the incomplete day).
+      const executionPeriodCandles = (rawCandles || [])
+        .map((bar) => ({
+          time: normalizeTwelveDataDateTime(bar?.datetime),
+          high: Number(bar?.high),
+          low: Number(bar?.low),
+        }))
+        .filter((bar) => bar.time && (!cutoffDate || candleDateOnly(bar.time) <= cutoffDate));
+      const livePeriodRepair = cutoffDate
+        ? supplementLivePeriod(periodCandles, executionPeriodCandles, profile.selectedTimeframe, cutoffDate)
+        : { candles: periodCandles, supplemented: null };
+      if (livePeriodRepair.supplemented) {
+        console.log("[provider-inventory] live period " + JSON.stringify(livePeriodRepair.supplemented));
+      }
+      if (livePeriodRepair.candles.length) {
         providerPeriodAnalysis = analyseFrameworkEntries(
-          periodCandles, profile.selectedTimeframe,
+          livePeriodRepair.candles, profile.selectedTimeframe,
           { latest: cutoffDate || null,
             currentPrice: Number(rawCandles?.[rawCandles.length - 1]?.close) }
         );
@@ -29517,7 +29532,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         completedPeriodReferences.status = "chart_mismatch";
         completedPeriodReferences.periods = [];
       }
-      const retainCompletedOandaReference = marketReference.dataProvider === "OANDA" &&
+      // Applies to every provider. Restricting this to OANDA made Twelve Data
+      // symbols (BTC, XAU) discard their framework candles on date_unverified
+      // before the same-instrument check could run, which is why they reported
+      // frameworkCandleCount: 0 despite a full execution series.
+      const retainCompletedOandaReference = ["OANDA", "Twelve Data"].includes(marketReference.dataProvider || "Twelve Data") &&
         completedPeriodReferences.periods.length > 0 &&
         ["date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(chartDataMatch.status);
       if (!["matched_reference", "partial_reference"].includes(chartDataMatch.status) && !retainCompletedOandaReference) {
@@ -30262,7 +30281,10 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         marketInventoryProvisional,
         dataMatch: marketReference?.chartDataMatch || null,
         // Legacy invariant remains: providerFailure: marketReference?.ok ? null
-        providerFailure: marketReference?.ok && marketReference?.chartDataMatch &&
+        // A certified provider inventory is not a provider failure, whatever the
+        // final-candle alignment said. dataMatch above still carries that status.
+        providerFailure: marketInventoryVerified ? null
+          : marketReference?.ok && marketReference?.chartDataMatch &&
           !["matched_reference", "partial_reference"].includes(marketReference.chartDataMatch.status)
           ? { category: marketReference.chartDataMatch.status, reason: marketReference.chartDataMatch.reason }
           : marketReference?.ok ? null : { category: marketReference?.failureCategory || "unavailable", reason: marketReference?.error || "Provider unavailable" },
@@ -30387,9 +30409,16 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           currentPeriodDirection:
             fixedPeriodBias?.direction ??
             null,
+          // The chart period (boundary) map locates period starts on screen.
+          // Raster-read prices need it; provider candles are already keyed by
+          // timestamp and do not. Gating provider frames on it left every
+          // chart at "Fib frame: Not verified" whenever an x-axis anchor
+          // failed to match (e.g. provider missing the live H1 candle).
           currentPeriodFrameVerified:
-            (marketInventoryVerified || chartOnlyInventoryVerified) &&
-            selectedPeriodFrame?.currentPeriodFrameVerified === true && chartPeriodMapVerified,
+            selectedPeriodFrame?.currentPeriodFrameVerified === true && (
+              marketInventoryVerified ||
+              (chartOnlyInventoryVerified && chartPeriodMapVerified)
+            ),
           currentPeriodFrameChartUsable:
             (marketInventoryProvisional || (chartOnlyInventoryUsable && !chartOnlyInventoryVerified)) &&
             selectedPeriodFrame?.currentPeriodFrameVerified === true && chartPeriodMapVerified,

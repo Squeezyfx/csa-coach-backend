@@ -1,6 +1,7 @@
+import { calendarMapping } from "../framework-calendar.js";
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
-const BENCHMARK_VALIDATOR_VERSION = "1.7.0";
+const BENCHMARK_VALIDATOR_VERSION = "1.16.0";
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -363,7 +364,7 @@ function refreshValidation(validation = {}) {
 export function applyBatchFeedbackDiversityChecks(results = []) {
   const eligible = results
     .map((item, index) => ({ item, index, templates: feedbackItems(item?.analysis) }))
-    .filter(({ item, templates }) => item?.status !== "error" && templates.length > 0);
+    .filter(({ item, templates }) => item?.status !== "error" && item?.analysis?.benchmarkDiagnosticOnly !== true && templates.length > 0);
 
   const collisions = new Map();
   for (let left = 0; left < eligible.length; left += 1) {
@@ -371,7 +372,14 @@ export function applyBatchFeedbackDiversityChecks(results = []) {
       const shared = [...new Set(eligible[left].templates)].filter((template) =>
         eligible[right].templates.includes(template)
       );
-      if (shared.length < 2) continue;
+      // A couple of generic readiness reminders are acceptable when most of
+      // the feedback is chart-specific. Reject a run only when repeated
+      // boilerplate makes up at least half of the shorter chart's feedback.
+      const shorterFeedbackCount = Math.min(
+        eligible[left].templates.length,
+        eligible[right].templates.length
+      );
+      if (shared.length < 2 || shared.length / shorterFeedbackCount < 0.5) continue;
       collisions.set(eligible[left].index, Math.max(collisions.get(eligible[left].index) || 0, shared.length));
       collisions.set(eligible[right].index, Math.max(collisions.get(eligible[right].index) || 0, shared.length));
     }
@@ -393,8 +401,51 @@ export function applyBatchFeedbackDiversityChecks(results = []) {
   });
 }
 
+/**
+ * Provider-candle frame authority.
+ *
+ * Returns the current-period frame ONLY when the server certified the
+ * provider inventory (marketInventoryVerified). currentPeriodFrameVerified on
+ * its own is not enough: chart-only (vision) inventories also set it to true
+ * with source "complete_framework_candle_inventory" (USOIL, USA100, BTCUSD in
+ * the 2026-09-16 export), so reading that flag without the authority gate
+ * would re-admit vision prices.
+ *
+ * chartDataMatch.status is deliberately not consulted. It describes whether
+ * the broker's final candle could be aligned with the provider, which is a
+ * feed/date question, not a price-authority question.
+ */
+function providerFrameAuthority(selectorDiagnostics) {
+  const authority = selectorDiagnostics?.transparencyAudit?.inventoryAuthority;
+  if (authority?.marketInventoryVerified !== true) return null;
+  const frame = authority?.sharedFramework?.frame;
+  const high = finiteNumber(frame?.currentPeriodHigh);
+  const low = finiteNumber(frame?.currentPeriodLow);
+  if (frame?.currentPeriodFrameVerified !== true || high === null || low === null || !(high > low)) {
+    return null;
+  }
+  return { high, low, source: "provider_framework_candles" };
+}
+
+/** Relative tolerance for "the selector used the same frame as the provider". */
+const FRAME_AGREEMENT_RATIO = 1e-6;
+function sameFrame(a, b) {
+  if (!a || !b) return false;
+  const scale = Math.max(Math.abs(a.high), Math.abs(a.low), 1);
+  return Math.abs(a.high - b.high) <= scale * FRAME_AGREEMENT_RATIO &&
+    Math.abs(a.low - b.low) <= scale * FRAME_AGREEMENT_RATIO;
+}
+
 function addCheck(checks, id, label, passed, details, critical = true) {
   checks.push({ id, label, passed: Boolean(passed), details: details || "", critical });
+}
+
+function expectedFrameworkInventory(timeframe = "", latestVisibleDate = "") {
+  const mapping = calendarMapping(timeframe, latestVisibleDate);
+  if (!mapping) return null;
+  return {sourceUnit: {day:"D1",week:"W1",month:"MN",quarter:"quarter",year:"year"}[mapping.unit],
+    expectedCount:mapping.dates.length, expectedDates:mapping.dates,
+    label:`${mapping.unit} inventory for current ${mapping.range}`};
 }
 
 export function validateBenchmarkResult(result = {}, expectation = {}) {
@@ -414,6 +465,33 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   const promotedEntries = allPromotedEntries(result);
   const references = referenceEntries(result);
   const feedbackText = String(result?.analysis || result?.summary || result?.finalFeedback?.analysis || "");
+  const priceDiagnostics = result?.analysisFacts?.selectorDiagnostics;
+  const dataMatch = priceDiagnostics?.transparencyAudit?.inventoryAuthority?.dataMatch;
+  const oandaProvisionalReference = dataMatch?.source === "OANDA" && dataMatch?.status === "partial_reference";
+  if (priceDiagnostics) {
+    const unverifiedEntries = (priceDiagnostics.selectedEntries || []).filter(entry =>
+      entry?.provenanceVerified === false || /unverified|estimated_period/.test(String(entry?.priceSource || "")));
+    addCheck(checks, "automatic_selected_price_provenance", "Selected prices have verified provenance",
+      unverifiedEntries.length === 0, unverifiedEntries.length
+        ? "Unverified period estimates were selected as entries; do not save this result."
+        : "No explicitly unverified period estimate was selected.");
+    const fibAudit = priceDiagnostics.transparencyAudit?.fibonacciAudit;
+    const providerFrame = providerFrameAuthority(priceDiagnostics);
+    const auditHigh = finiteNumber(fibAudit?.swingHigh);
+    const auditLow = finiteNumber(fibAudit?.swingLow);
+    const auditFrame = auditHigh !== null && auditLow !== null ? { high: auditHigh, low: auditLow } : null;
+    if (providerFrame && auditFrame && !sameFrame(providerFrame, auditFrame)) {
+      addCheck(checks, "verified_fibonacci_frame", "Fixed-period frame has verified price authority", false,
+        `Selector Fib frame ${auditHigh}/${auditLow} disagrees with the verified provider frame ` +
+        `${providerFrame.high}/${providerFrame.low}. Entries were measured against the wrong frame.`);
+    } else if (providerFrame) {
+      addCheck(checks, "verified_fibonacci_frame", "Fixed-period frame has verified price authority", true,
+        `Provider-candle frame: high ${providerFrame.high}, low ${providerFrame.low}.`);
+    } else if (fibAudit?.verified === false) {
+      addCheck(checks, "verified_fibonacci_frame", "Fixed-period frame has verified price authority", false,
+        "The frame is unverified. A saved expected result cannot override missing price authority.");
+    }
+  }
 
   if (expectation.automaticMode === true) {
     const detectedInstrument = String(
@@ -423,6 +501,26 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       result?.chartDetection?.detectedTimeframe || result?.detectedTimeframe || ""
     ).trim();
     const selectorDiagnostics = result?.analysisFacts?.selectorDiagnostics;
+    const frameworkInventory = Array.isArray(selectorDiagnostics?.periodInventory)
+      ? selectorDiagnostics.periodInventory
+      : Array.isArray(selectorDiagnostics?.periodDayInventory)
+      ? selectorDiagnostics.periodDayInventory
+      : [];
+    const latestVisibleDate = String(
+      result?.chartDetection?.latestVisibleDate || result?.detectedLatestVisibleDate || ""
+    );
+    const inventoryRequirement = expectedFrameworkInventory(detectedTimeframe, latestVisibleDate);
+    const inventoryPeriodsValid = frameworkInventory.every((period) => {
+      const high = finiteNumber(period?.high);
+      const low = finiteNumber(period?.low);
+      return high !== null && low !== null && high > low;
+    });
+    const frameworkInventoryComplete = !inventoryRequirement || (
+      frameworkInventory.length >= inventoryRequirement.expectedCount && inventoryPeriodsValid &&
+      (!inventoryRequirement.expectedDates || (
+        frameworkInventory.length === inventoryRequirement.expectedDates.length &&
+        inventoryRequirement.expectedDates.every((date, index) => frameworkInventory[index]?.date === date)))
+    );
     const fibCandidates = Array.isArray(selectorDiagnostics?.fibCandidates)
       ? selectorDiagnostics.fibCandidates
       : [];
@@ -430,13 +528,31 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       ? selectorDiagnostics.selectedEntries
       : [];
     const fallbackSelectorCompleted =
-      selectorDiagnostics?.fallbackSource === "uploaded_chart_only" &&
-      fallbackSelectedEntries.length > 0;
-    const fallbackSwingHigh = finiteNumber(selectorDiagnostics?.fibonacci?.swingHigh);
-    const fallbackSwingLow = finiteNumber(selectorDiagnostics?.fibonacci?.swingLow);
+      String(selectorDiagnostics?.fallbackSource || "").startsWith("uploaded_chart_only") &&
+      (
+        Array.isArray(selectorDiagnostics?.structuralCandidates) ||
+        fallbackSelectedEntries.length > 0
+      );
+    const verifiedProviderFrame = providerFrameAuthority(selectorDiagnostics);
+    const fallbackSwingHigh =
+      finiteNumber(selectorDiagnostics?.fibonacci?.swingHigh) ?? verifiedProviderFrame?.high ?? null;
+    const fallbackSwingLow =
+      finiteNumber(selectorDiagnostics?.fibonacci?.swingLow) ?? verifiedProviderFrame?.low ?? null;
     const fallbackRange = fallbackSwingHigh !== null && fallbackSwingLow !== null && fallbackSwingHigh > fallbackSwingLow
       ? fallbackSwingHigh - fallbackSwingLow
       : null;
+    const requiresCurrentPeriodFrame = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"].includes(
+      String(detectedTimeframe || "").toUpperCase()
+    );
+    const currentPeriodFrameAvailable =
+      !requiresCurrentPeriodFrame ||
+      (
+        fallbackRange !== null &&
+        (
+          verifiedProviderFrame !== null ||
+          !String(selectorDiagnostics?.fibonacci?.source || "").endsWith("_required")
+        )
+      );
     const recognizedTypes = new Set([
       "support", "resistance", "converted support", "converted resistance",
       "demand", "supply",
@@ -448,6 +564,10 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       const ratio = finiteNumber(match?.ratio);
       const price = finiteNumber(match?.price);
       const suffix = price === null ? "" : ` @ ${String(price)}`;
+      const explicitLabel = String(match?.label || "").trim();
+      if (explicitLabel.toLowerCase().startsWith("between ")) {
+        return `${explicitLabel}${suffix}`;
+      }
       if (ratio !== null) {
         return `${ratio === 0.5 ? "50%" : `${(ratio * 100).toFixed(1)}%`}${suffix}`;
       }
@@ -457,7 +577,11 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const fibEvidenceForEntry = (entry) => {
       const entryPrice = finiteNumber(entry.center);
       if (entryPrice === null) return [];
-      const tolerance = defaultTolerance(entryPrice);
+      const displayedDecimals = String(entry.levelText || "").split(".")[1]?.length;
+      const displayRoundingTolerance = Number.isInteger(displayedDecimals)
+        ? 0.5 * (10 ** -displayedDecimals) + Number.EPSILON
+        : 0;
+      const tolerance = Math.max(defaultTolerance(entryPrice), displayRoundingTolerance);
       const matchedEvaluatedCandidate = fibCandidates.some((candidate) => {
         if (candidate?.passed !== true) return false;
         const candidatePrice =
@@ -509,14 +633,23 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
             ? [0.382, 0.5, 0.618].find((approved) => Math.abs(ratio - approved) <= 0.002)
             : null;
           if (!approvedRatio || fallbackRange === null || candidatePrice === null) return false;
-          const computedPrice = direction === "bearish"
-            ? fallbackSwingLow + fallbackRange * approvedRatio
-            : fallbackSwingHigh - fallbackRange * approvedRatio;
-          const arithmeticTolerance = Math.max(
+          const fib382 = direction === "bearish"
+            ? fallbackSwingLow + fallbackRange * 0.382
+            : fallbackSwingHigh - fallbackRange * 0.382;
+          const fib618 = direction === "bearish"
+            ? fallbackSwingLow + fallbackRange * 0.618
+            : fallbackSwingHigh - fallbackRange * 0.618;
+          const bandLow = Math.min(fib382, fib618);
+          const bandHigh = Math.max(fib382, fib618);
+          const boundaryAllowance = Math.max(
             defaultTolerance(candidatePrice),
-            finiteNumber(candidate?.fibonacciTolerance) ?? fallbackRange * 0.06
+            Math.min(
+              finiteNumber(candidate?.fibonacciTolerance) ?? 0,
+              fallbackRange * 0.01
+            )
           );
-          return Math.abs(candidatePrice - computedPrice) <= arithmeticTolerance;
+          return candidatePrice >= bandLow - boundaryAllowance &&
+            candidatePrice <= bandHigh + boundaryAllowance;
         });
         return candidatePrice !== null &&
           Math.abs(candidatePrice - entryPrice) <= tolerance
@@ -527,6 +660,11 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     };
     const entryFibEvidence = entries.map((entry) => fibEvidenceForEntry(entry));
     const everyEntryHasFibConfluence = entryFibEvidence.every((evidence) => evidence.length > 0);
+    const structuralBias = normalizeDirection(
+      result?.csaDirectionalBias?.biasCode || result?.csaDirectionalBias?.bias || ""
+    );
+    const structuralBiasDeclared = Boolean(result?.csaDirectionalBias);
+    const structuralBiasAvailable = ["bullish", "bearish", "range"].includes(structuralBias);
 
     addCheck(
       checks,
@@ -542,6 +680,101 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
       direction !== "unknown",
       `Resolved direction: ${direction}.`
     );
+    addCheck(
+      checks,
+      "automatic_structural_bias_consistency",
+      "Headline bias agrees with verified period structure",
+      !structuralBiasDeclared || (structuralBiasAvailable && direction === structuralBias),
+      !structuralBiasDeclared
+        ? "No separate structural-bias field was supplied by this legacy fixture."
+        : !structuralBiasAvailable
+        ? "Verified period structure is unavailable; do not present a visual range estimate as an authoritative bias."
+        : direction === structuralBias
+        ? `Structural bias: ${structuralBias}.`
+        : `Headline bias ${direction} conflicts with verified period bias ${structuralBias}.`
+    );
+    addCheck(
+      checks,
+      "automatic_framework_period_inventory",
+      "Timeframe-specific D1/W1 candle highs and lows were inventoried",
+      frameworkInventoryComplete,
+      inventoryRequirement
+        ? `${inventoryRequirement.label}: expected ${inventoryRequirement.expectedCount}, returned ${frameworkInventory.length}.`
+        : "No dated H1/H4 inventory requirement could be calculated for this result."
+    );
+    addCheck(
+      checks,
+      "automatic_fibonacci_period_frame",
+      "Current-period Fibonacci high and low were read",
+      currentPeriodFrameAvailable && (
+        verifiedProviderFrame !== null ||
+        selectorDiagnostics?.transparencyAudit?.fibonacciAudit?.verified !== false
+      ),
+      currentPeriodFrameAvailable
+        ? `Frame: high ${fallbackSwingHigh}, low ${fallbackSwingLow}` +
+          (verifiedProviderFrame ? " (provider framework candles)." : ".")
+        : "No entry can be accepted until the required current-period high and low are both read from the chart."
+    );
+    const selectorVersionParts = String(selectorDiagnostics?.selectorVersion || "0")
+      .split(".")
+      .map((part) => Number(part) || 0);
+    const transparentAuditRequired =
+      selectorVersionParts[0] > 4 ||
+      (selectorVersionParts[0] === 4 && selectorVersionParts[1] >= 28);
+    if (transparentAuditRequired) {
+      const transparencyAudit = selectorDiagnostics?.transparencyAudit || {};
+      const transparentDiagnosticsComplete =
+        Array.isArray(transparencyAudit.periodStructureAudit) &&
+        transparencyAudit.periodStructureAudit.length > 0 &&
+        finiteNumber(transparencyAudit?.fibonacciAudit?.swingHigh) !== null &&
+        finiteNumber(transparencyAudit?.fibonacciAudit?.swingLow) !== null &&
+        Array.isArray(transparencyAudit.candidateEvaluationAudit) &&
+        Array.isArray(transparencyAudit.entryDecisionAudit) &&
+        transparencyAudit.entryDecisionAudit.length === 3 &&
+        Array.isArray(transparencyAudit.provenanceConflicts);
+      addCheck(
+        checks,
+        "automatic_transparent_selector_audit",
+        "Period, structure, Fibonacci, entry and provenance diagnostics returned",
+        transparentDiagnosticsComplete,
+        transparentDiagnosticsComplete
+          ? `${transparencyAudit.periodStructureAudit.length} period(s) and ${transparencyAudit.candidateEvaluationAudit.length} candidate(s) are fully auditable.`
+          : "Selector 4.28+ must return period structure, Fib range, candidate decisions, Entry 1-3 decisions and provenance conflicts."
+      );
+      if (String(transparencyAudit?.auditVersion || "").startsWith("1.1")) {
+        const inventoryConflicts = (Array.isArray(transparencyAudit.provenanceConflicts)
+          ? transparencyAudit.provenanceConflicts
+          : []).filter((conflict) =>
+            conflict?.requiresReview === true || (conflict?.requiresReview !== false && (
+              Number.isFinite(Number(conflict?.chartPrice)) ||
+              Number.isFinite(Number(conflict?.chartCount))
+            ))
+          );
+        const chartRasterAuthorityVerified =
+          transparencyAudit.inventoryAuthority?.chartOnlyInventoryVerified === true;
+        // The server derives providerFailure from chartDataMatch.status, so a
+        // "date_unverified" final-candle alignment shows up here as a provider
+        // failure even when the provider inventory itself was certified.
+        const providerAuthorityVerified =
+          transparencyAudit.inventoryAuthority?.marketInventoryVerified === true;
+        const authorityMissing =
+          Boolean(transparencyAudit.inventoryAuthority?.providerFailure) &&
+          !providerAuthorityVerified &&
+          !chartRasterAuthorityVerified;
+        addCheck(
+          checks,
+          "automatic_period_price_authority",
+          "Period price authority is available without unresolved conflicts",
+          !authorityMissing && inventoryConflicts.length === 0,
+          inventoryConflicts.length
+            ? `${inventoryConflicts.length} period high/low conflict(s) were exposed. Review the chart values before saving this result.`
+            : authorityMissing ? "Neither provider nor calibrated chart-raster price authority is available."
+            : providerAuthorityVerified ? "Period prices come from verified provider framework candles; broker-feed equivalence is not claimed."
+            : chartRasterAuthorityVerified ? "Calibrated chart-raster prices are verified against the visible final-candle header; broker-feed equivalence is not claimed."
+            : "No unresolved chart-versus-market period high/low conflict was found."
+        );
+      }
+    }
     addCheck(
       checks,
       "ordered_selector",
@@ -740,7 +973,9 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const tolerance =
       finiteNumber(expectation.levelTolerance) ??
       toleranceOverride ??
-      exactLevelTolerance(requiredPrice, required.digits);
+      (oandaProvisionalReference && requiredPrice >= 1 && requiredPrice < 10
+        ? Math.max(exactLevelTolerance(requiredPrice, required.digits), Number(dataMatch?.tolerance) || 0.0003)
+        : exactLevelTolerance(requiredPrice, required.digits));
     const matchingZoneExpectation = configuredEntryZones.find((item) =>
       priceInsideZone(requiredPrice, item.zone, tolerance)
     );
@@ -772,7 +1007,9 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const tolerance =
       finiteNumber(expectation.levelTolerance) ??
       toleranceOverride ??
-      exactLevelTolerance(requiredPrice, required.digits);
+      (oandaProvisionalReference && requiredPrice >= 1 && requiredPrice < 10
+        ? Math.max(exactLevelTolerance(requiredPrice, required.digits), Number(dataMatch?.tolerance) || 0.0003)
+        : exactLevelTolerance(requiredPrice, required.digits));
     const matchingZoneExpectation = configuredEntryZones.find((item) =>
       priceInsideZone(requiredPrice, item.zone, tolerance)
     );

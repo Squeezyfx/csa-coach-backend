@@ -170,6 +170,47 @@ export function buildPeriodInventory(candles = [], timeframe, latest = null) {
   return rows.map((r) => ({ ...r, start: r.start.toISOString().slice(0, 10) }));
 }
 
+// ------------------------------------------------------- live-period repair
+
+/**
+ * Providers intermittently omit the in-progress framework candle (OANDA D1
+ * returns only complete bars on some requests). The frame then collapses to
+ * the completed periods only — two periods on a Wednesday H1 chart.
+ *
+ * When, and only when, the period containing `latest` is missing from the
+ * framework series, rebuild it from execution candles of the same provider.
+ * Two guards keep this from inventing a period:
+ *  - execution coverage must start before the live period, otherwise the
+ *    rebuilt high/low could be missing the period's opening sessions;
+ *  - periods that already have a framework candle are never touched, because
+ *    provider day boundaries (e.g. 17:00 New York) need not match UTC keys.
+ *
+ * Returns { candles, supplemented } where candles is a new array.
+ */
+export function supplementLivePeriod(frameworkCandles = [], executionCandles = [], timeframe, latest) {
+  const scope = frameworkScope(timeframe);
+  const base = Array.isArray(frameworkCandles) ? [...frameworkCandles] : [];
+  if (!scope || !latest) return { candles: base, supplemented: null };
+  const liveKey = periodKey(latest, scope.period);
+  const cutoff = utc(latest);
+  if (base.some((c) => c?.time && periodKey(c.time, scope.period) === liveKey)) {
+    return { candles: base, supplemented: null };
+  }
+  const exec = (executionCandles || [])
+    .filter((c) => c?.time && Number.isFinite(Number(c.high)) && Number.isFinite(Number(c.low)))
+    .filter((c) => utc(c.time) <= cutoff);
+  const live = exec.filter((c) => periodKey(c.time, scope.period) === liveKey);
+  const coveredBefore = exec.some((c) => periodKey(c.time, scope.period) < liveKey);
+  if (!live.length || !coveredBefore) {
+    return { candles: base, supplemented: { key: liveKey, applied: false,
+      reason: live.length ? "execution_coverage_starts_inside_live_period" : "no_execution_candles_in_live_period" } };
+  }
+  const high = Math.max(...live.map((c) => Number(c.high)));
+  const low = Math.min(...live.map((c) => Number(c.low)));
+  base.push({ time: live[0].time, high, low, source: "execution_candles_live_period" });
+  return { candles: base, supplemented: { key: liveKey, applied: true, candleCount: live.length, high, low } };
+}
+
 // ------------------------------------------------------------------- frame
 
 export function deriveFibFrame(periods = []) {
