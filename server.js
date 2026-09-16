@@ -1,7 +1,7 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
-import { analyseFrameworkEntries } from "./framework-periods.js";
+import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields } from "./framework-periods.js";
 import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
@@ -3258,6 +3258,9 @@ async function fetchTwelveDataStructureLevels({
 
   let rawCandles = [];
   let rawFrameworkCandles = [];
+  // Period inventory derived from provider candles. Null when the provider has
+  // no coverage for this symbol, in which case the vision path still applies.
+  let providerPeriodAnalysis = null;
 
   try {
     const executionSeries = await fetchTwelveSeries({
@@ -3292,57 +3295,45 @@ async function fetchTwelveDataStructureLevels({
       rawFrameworkCandles = frameworkSeries.values;
     }
 
-    // ---- shadow inventory: diagnostic only, nothing downstream reads this ----
     // Framework candles are already one-per-period (H1->1day, H4->1week,
-    // D1->1month), so the provider has effectively already returned the period
-    // inventory the vision pass is being asked to read off pixels. Compute it
-    // both ways and log the difference before trusting either.
+    // D1->1month), so the provider has effectively returned the period
+    // inventory the vision pass is asked to read off pixels. Derive it here;
+    // the caller decides whether to use it.
     try {
-      const shadowCutoffDate = candleDateOnly(normalizeTwelveDataDateTime(endDateTime));
-      const shadowPeriodCandles = (rawFrameworkCandles || [])
+      const cutoffDate = candleDateOnly(normalizeTwelveDataDateTime(endDateTime));
+      const periodCandles = (rawFrameworkCandles || [])
         .map((bar) => ({
           time: normalizeTwelveDataDateTime(bar?.datetime),
           high: Number(bar?.high),
           low: Number(bar?.low),
         }))
         .filter((bar) =>
-          bar.time &&
-          Number.isFinite(bar.high) &&
-          Number.isFinite(bar.low) &&
-          // A benchmark screenshot ends before today but the provider returns
-          // candles through today. Truncate at the chart's own cutoff instead
-          // of requiring the two final anchors to be equal, which can never
-          // succeed on a historical screenshot.
-          (!shadowCutoffDate || candleDateOnly(bar.time) <= shadowCutoffDate)
+          bar.time && Number.isFinite(bar.high) && Number.isFinite(bar.low) &&
+          // A screenshot ends before today while the provider returns candles
+          // through today. Truncate at the chart's own cutoff rather than
+          // requiring the two final anchors to be equal.
+          (!cutoffDate || candleDateOnly(bar.time) <= cutoffDate)
         );
-
-      const shadow = analyseFrameworkEntries(
-        shadowPeriodCandles,
-        profile.selectedTimeframe,
-        {
-          latest: shadowCutoffDate || null,
-          currentPrice: Number(rawCandles?.[rawCandles.length - 1]?.close),
-        }
-      );
-
+      if (periodCandles.length) {
+        providerPeriodAnalysis = analyseFrameworkEntries(
+          periodCandles,
+          profile.selectedTimeframe,
+          { latest: cutoffDate || null,
+            currentPrice: Number(rawCandles?.[rawCandles.length - 1]?.close) }
+        );
+      }
       console.log("[shadow-inventory] " + JSON.stringify({
-        symbol,
-        timeframe: profile.selectedTimeframe,
-        structureMode: profile.structureMode,
-        chartCutoffDate: shadowCutoffDate,
-        candlesFetched: (rawFrameworkCandles || []).length,
-        candlesAfterCutoff: shadowPeriodCandles.length,
-        firstCandle: shadowPeriodCandles[0]?.time || null,
-        lastCandle: shadowPeriodCandles[shadowPeriodCandles.length - 1]?.time || null,
-        periods: shadow.periods.map((p) => [p.label, p.date, p.high, p.low]),
-        frame: shadow.frame,
-        levels: shadow.levels,
-        entries: shadow.entries.map((e) => [e.order, e.periodLabel, e.kind, e.price, e.fibName]),
+        symbol, timeframe: profile.selectedTimeframe,
+        chartCutoffDate: cutoffDate,
+        candlesAfterCutoff: periodCandles.length,
+        periods: providerPeriodAnalysis?.periods?.map((p) => [p.label, p.date, p.high, p.low]) || [],
+        frame: providerPeriodAnalysis?.frame || null,
+        entries: providerPeriodAnalysis?.entries?.map((e) => [e.order, e.periodLabel, e.kind, e.price, e.fibName]) || [],
       }));
     } catch (shadowError) {
+      providerPeriodAnalysis = null;
       console.log("[shadow-inventory] failed: " + shadowError.message);
     }
-    // ---- end shadow inventory ----
   } catch (error) {
     return {
       ...empty(error.message, structureRange, {
@@ -4070,6 +4061,7 @@ async function fetchTwelveDataStructureLevels({
     oandaAlignmentCandle,
     providerPriceComponent: useOanda ? process.env.OANDA_PRICE_COMPONENT || "B" : null,
     providerSymbol: resolvedProviderSymbol,
+    providerPeriodAnalysis,
     providerCoverage: {
       execution: coverageOf(rawCandles),
       framework: coverageOf(rawFrameworkCandles),
@@ -29863,10 +29855,38 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         Promise.resolve(null),
       ]);
 
-      const mergedChartNativeFallback = mergeFocusedSupplyDemandInventory(
+      let mergedChartNativeFallback = mergeFocusedSupplyDemandInventory(
             visualReview?.chartNativeEntryFallback || {},
             focusedChartNativeFallback
           );
+
+      // Provider candles beat a vision read of the same pixels. The vision pass
+      // has been observed returning price-axis gridlines and the OHLC header as
+      // period extremes; provider candles are exact. Fall back to the vision
+      // inventory only where the provider has no coverage for the symbol, and
+      // record which authority produced the rows either way.
+      const providerAnalysis = marketReference?.providerPeriodAnalysis || null;
+      const providerRows = providerAnalysis ? toProviderInventoryRows(providerAnalysis) : [];
+      if (providerRows.length) {
+        mergedChartNativeFallback = {
+          ...mergedChartNativeFallback,
+          ...toProviderFrameFields(providerAnalysis),
+          periodInventory: providerRows,
+          periodDayInventory: providerRows,
+          periodInventoryAuthority: "provider_framework_candles",
+        };
+      } else {
+        mergedChartNativeFallback = {
+          ...mergedChartNativeFallback,
+          periodInventoryAuthority: "chart_vision_fallback",
+        };
+      }
+      console.log("[inventory-authority] " + JSON.stringify({
+        symbol: normalizedSymbol, timeframe,
+        authority: mergedChartNativeFallback.periodInventoryAuthority,
+        rows: mergedChartNativeFallback.periodInventory?.length || 0,
+        frameVerified: mergedChartNativeFallback.currentPeriodFrameVerified === true,
+      }));
 
       const finalVisibleCandle = {
         visibleOpen: chartDetection?.latestVisibleOpen,

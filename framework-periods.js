@@ -299,3 +299,49 @@ export function describeEntries(analysis) {
   }
   return lines.join("\n");
 }
+
+// ------------------------------------------------- provider inventory rows
+
+const SOURCE_UNIT = { day: "D1", week: "W1", month: "MN", quarter: "MN" };
+
+/**
+ * Convert an analysis into rows shaped for normalizeChartNativeEntryFallback.
+ *
+ * Two things the consumer requires that the internal rows do not carry:
+ *  - `date` must be a full YYYY-MM-DD. The internal key for a month period is
+ *    "2026-09", which the consumer's regex filter silently drops.
+ *  - `sourceUnit` must be D1 / W1 / MN, matching the framework candle interval.
+ */
+export function toProviderInventoryRows(analysis) {
+  if (!analysis?.periods?.length) return [];
+  const unit = SOURCE_UNIT[analysis.scope?.period] || null;
+  return analysis.periods.map((p) => ({
+    coverageStart: p.start || null,
+    periodLabel: p.label,
+    sourceUnit: unit,
+    date: p.start || null,
+    high: p.high,
+    low: p.low,
+    highDate: null,
+    lowDate: null,
+    open: null,
+    close: null,
+    partialPeriod: Boolean(p.inProgress),
+    periodLifecycle: p.inProgress ? "in_progress" : "completed",
+    structures: [],
+    priceSource: "provider_framework_candles",
+  }));
+}
+
+/** Frame fields in the shape the fallback consumer expects. */
+export function toProviderFrameFields(analysis) {
+  const f = analysis?.frame;
+  if (!f?.verified) return { currentPeriodFrameVerified: false };
+  return {
+    currentPeriodHigh: f.high,
+    currentPeriodLow: f.low,
+    currentWeekHigh: f.high,
+    currentWeekLow: f.low,
+    currentPeriodFrameVerified: true,
+  };
+}
