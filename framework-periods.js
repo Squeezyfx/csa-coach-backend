@@ -161,9 +161,12 @@ export function buildPeriodInventory(candles = [], timeframe, latest = null) {
   }
 
   const rows = [...groups.values()].sort((a, b) => a.start - b.start);
-  // The final period is still forming; flag rather than drop it — it owns the
-  // frame extreme often enough that excluding it would move the Fib levels.
-  if (rows.length) rows[rows.length - 1].inProgress = true;
+  // Mark in-progress by the period that CONTAINS the cutoff, not by position.
+  // When a provider is missing the live candle the last returned row is a
+  // completed period, and flagging it by position mislabels it — which then
+  // excludes a finished period from structural selection.
+  const livePeriodKey = periodKey(latestDate, scope.period);
+  for (const row of rows) row.inProgress = row.key === livePeriodKey;
   return rows.map((r) => ({ ...r, start: r.start.toISOString().slice(0, 10) }));
 }
 

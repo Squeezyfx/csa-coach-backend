@@ -3259,7 +3259,7 @@ async function fetchTwelveDataStructureLevels({
   let rawCandles = [];
   let rawFrameworkCandles = [];
   // Period inventory derived from provider candles. Null when the provider has
-  // no coverage for this symbol, in which case the vision path still applies.
+  // no coverage for this symbol; the vision path still applies there.
   let providerPeriodAnalysis = null;
 
   try {
@@ -3297,8 +3297,7 @@ async function fetchTwelveDataStructureLevels({
 
     // Framework candles are already one-per-period (H1->1day, H4->1week,
     // D1->1month), so the provider has effectively returned the period
-    // inventory the vision pass is asked to read off pixels. Derive it here;
-    // the caller decides whether to use it.
+    // inventory the vision pass is asked to read off pixels.
     try {
       const cutoffDate = candleDateOnly(normalizeTwelveDataDateTime(endDateTime));
       const periodCandles = (rawFrameworkCandles || [])
@@ -3316,23 +3315,14 @@ async function fetchTwelveDataStructureLevels({
         );
       if (periodCandles.length) {
         providerPeriodAnalysis = analyseFrameworkEntries(
-          periodCandles,
-          profile.selectedTimeframe,
+          periodCandles, profile.selectedTimeframe,
           { latest: cutoffDate || null,
             currentPrice: Number(rawCandles?.[rawCandles.length - 1]?.close) }
         );
       }
-      console.log("[shadow-inventory] " + JSON.stringify({
-        symbol, timeframe: profile.selectedTimeframe,
-        chartCutoffDate: cutoffDate,
-        candlesAfterCutoff: periodCandles.length,
-        periods: providerPeriodAnalysis?.periods?.map((p) => [p.label, p.date, p.high, p.low]) || [],
-        frame: providerPeriodAnalysis?.frame || null,
-        entries: providerPeriodAnalysis?.entries?.map((e) => [e.order, e.periodLabel, e.kind, e.price, e.fibName]) || [],
-      }));
-    } catch (shadowError) {
+    } catch (inventoryError) {
       providerPeriodAnalysis = null;
-      console.log("[shadow-inventory] failed: " + shadowError.message);
+      console.log("[provider-inventory] failed: " + inventoryError.message);
     }
   } catch (error) {
     return {
@@ -29863,8 +29853,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       // Provider candles beat a vision read of the same pixels. The vision pass
       // has been observed returning price-axis gridlines and the OHLC header as
       // period extremes; provider candles are exact. Fall back to the vision
-      // inventory only where the provider has no coverage for the symbol, and
-      // record which authority produced the rows either way.
+      // inventory only where the provider has no coverage.
       const providerAnalysis = marketReference?.providerPeriodAnalysis || null;
       const providerRows = providerAnalysis ? toProviderInventoryRows(providerAnalysis) : [];
       if (providerRows.length) {
@@ -29881,12 +29870,6 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           periodInventoryAuthority: "chart_vision_fallback",
         };
       }
-      console.log("[inventory-authority] " + JSON.stringify({
-        symbol: normalizedSymbol, timeframe,
-        authority: mergedChartNativeFallback.periodInventoryAuthority,
-        rows: mergedChartNativeFallback.periodInventory?.length || 0,
-        frameVerified: mergedChartNativeFallback.currentPeriodFrameVerified === true,
-      }));
 
       const finalVisibleCandle = {
         visibleOpen: chartDetection?.latestVisibleOpen,
@@ -30096,9 +30079,50 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         candles: timeframe === "D1" ? marketReference?.timeframeCandles || [] : [],
         tolerance: getCleanBreakTolerance(normalizedSymbol || submittedInstrument),
       });
+      // Screenshots come from the customer's own broker, whose feed differs
+      // from the provider's by a few pips. Requiring the two to agree before
+      // trusting the provider is circular: the provider IS the price authority,
+      // so the chart cannot be the thing that certifies it. The price
+      // comparison is retained as a SAME-INSTRUMENT check only — a wrong-symbol
+      // chart is off by whole percent, a feed difference by a fraction of one.
+      const SAME_INSTRUMENT_TOLERANCE_RATIO = 0.005; // 0.5% of price
+      const feedComparisons = Array.isArray(marketReference?.chartDataMatch?.comparisons)
+        ? marketReference.chartDataMatch.comparisons
+        : [];
+      const feedDeviations = feedComparisons
+        .map((item) => {
+          const chartValue = Number(item?.chart);
+          const providerValue = Number(item?.provider);
+          if (!Number.isFinite(chartValue) || !Number.isFinite(providerValue) || chartValue === 0) return null;
+          return Math.abs(chartValue - providerValue) / Math.abs(chartValue);
+        })
+        .filter((value) => value !== null);
+      const sameInstrumentConfirmed =
+        feedDeviations.length > 0 &&
+        feedDeviations.every((value) => value <= SAME_INSTRUMENT_TOLERANCE_RATIO);
+      const providerInventoryAuthoritative =
+        marketReference?.ok === true &&
+        Array.isArray(marketReference?.providerPeriodAnalysis?.periods) &&
+        marketReference.providerPeriodAnalysis.periods.length > 0 &&
+        sameInstrumentConfirmed;
+
       const marketInventoryVerified =
-        marketReference?.ok === true && marketReference?.chartDataMatch?.status === "matched_reference" && marketPeriodIntegrity.passed &&
-        marketInventoryFrame?.currentPeriodFrameVerified === true;
+        marketReference?.ok === true && marketPeriodIntegrity.passed &&
+        marketInventoryFrame?.currentPeriodFrameVerified === true &&
+        (marketReference?.chartDataMatch?.status === "matched_reference" ||
+          providerInventoryAuthoritative);
+
+      console.log("[inventory-authority] " + JSON.stringify({
+        symbol: normalizedSymbol, timeframe,
+        authority: mergedChartNativeFallback?.periodInventoryAuthority || null,
+        rows: mergedChartNativeFallback?.periodInventory?.length || 0,
+        dataMatchStatus: marketReference?.chartDataMatch?.status || null,
+        maxFeedDeviationPct: feedDeviations.length
+          ? Number((Math.max(...feedDeviations) * 100).toFixed(4)) : null,
+        sameInstrumentConfirmed,
+        providerInventoryAuthoritative,
+        marketInventoryVerified,
+      }));
       const marketInventoryProvisional =
         marketReference?.ok === true && marketReference?.dataProvider === "OANDA" &&
         ["partial_reference", "date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(marketReference?.chartDataMatch?.status) &&
