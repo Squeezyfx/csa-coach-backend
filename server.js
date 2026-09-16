@@ -2,6 +2,8 @@ import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFr
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
 import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields, supplementLivePeriod } from "./framework-periods.js";
+import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle } from "./candle-alignment.js";
+import { periodCompleteAtCutoff } from "./period-completion.js";
 import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
@@ -2133,21 +2135,23 @@ function isFrameworkPeriodCompleteAtCutoff({
   // calendar date, that session is historical and therefore closed. This is
   // essential for a chart captured on Thursday whose last visible H1 candle
   // is Wednesday: Wednesday must be inventoried, not treated as live.
-  const todayDate = new Date().toISOString().slice(0, 10);
-  if (["daily-in-week", "weekly-in-month", "monthly-in-year"].includes(profile?.structureMode) &&
-    cutoffDate < todayDate) {
-    return true;
-  }
-
+  // Completion is decided from the cutoff alone. The previous rule
+  // ("cutoff date before today => complete") marked every historical chart's
+  // live period as closed, so a chart ending Wednesday 08:00 and reviewed a
+  // week later used the provider's full Wednesday bar. The Thursday-capture
+  // case it was written for (last visible candle Wednesday 23:00) is still
+  // complete under periodCompleteAtCutoff, because 23:00 is the last H1 candle.
   const periodEndDate = getFrameworkPeriodEndDate(
     new Date(`${cutoffDate}T00:00:00.000Z`),
     profile
   );
 
-  if (!periodEndDate) return false;
-  if (cutoffDate > periodEndDate) return true;
-  if (cutoffDate < periodEndDate) return false;
-  return cutoffTime >= "23:59:00";
+  return periodCompleteAtCutoff({
+    cutoffDate,
+    cutoffTime,
+    periodEndDate,
+    interval: profile?.interval,
+  });
 }
 
 function getOutputSizeForInterval(interval) {
@@ -3261,6 +3265,7 @@ async function fetchTwelveDataStructureLevels({
   // Period inventory derived from provider candles. Null when the provider has
   // no coverage for this symbol; the vision path still applies there.
   let providerPeriodAnalysis = null;
+  let livePeriodAudit = null;
 
   try {
     const executionSeries = await fetchTwelveSeries({
@@ -3322,12 +3327,16 @@ async function fetchTwelveDataStructureLevels({
           low: Number(bar?.low),
         }))
         .filter((bar) => bar.time && (!cutoffDate || candleDateOnly(bar.time) <= cutoffDate));
+      // Pass the full cutoff timestamp so the live period stops at the chart's
+      // final candle, not at the end of its calendar day.
+      const cutoffStamp = normalizeTwelveDataDateTime(endDateTime) || cutoffDate;
       const livePeriodRepair = cutoffDate
-        ? supplementLivePeriod(periodCandles, executionPeriodCandles, profile.selectedTimeframe, cutoffDate)
+        ? supplementLivePeriod(periodCandles, executionPeriodCandles, profile.selectedTimeframe, cutoffStamp)
         : { candles: periodCandles, supplemented: null };
       if (livePeriodRepair.supplemented) {
         console.log("[provider-inventory] live period " + JSON.stringify(livePeriodRepair.supplemented));
       }
+      livePeriodAudit = livePeriodRepair.supplemented;
       if (livePeriodRepair.candles.length) {
         providerPeriodAnalysis = analyseFrameworkEntries(
           livePeriodRepair.candles, profile.selectedTimeframe,
@@ -4067,6 +4076,7 @@ async function fetchTwelveDataStructureLevels({
     providerPriceComponent: useOanda ? process.env.OANDA_PRICE_COMPONENT || "B" : null,
     providerSymbol: resolvedProviderSymbol,
     providerPeriodAnalysis,
+    livePeriodAudit,
     providerCoverage: {
       execution: coverageOf(rawCandles),
       framework: coverageOf(rawFrameworkCandles),
@@ -4130,7 +4140,23 @@ function findBestCandleForVisibleClose({
   tolerance = 0,
   anchorDate = "",
   maximumDateDistanceDays = null,
+  visibleOhlc = null,
 }) {
+  // With a full visible OHLC, match the candle's shape, not just its close.
+  // A close-only match picked XAUUSD's 13:00 bar for an 08:00 chart and
+  // leaked five hours of future data into the review.
+  if (visibleOhlc) {
+    const anchor = parseISODateOnly(anchorDate);
+    const maxDays = Number(maximumDateDistanceDays);
+    const hit = findOhlcAlignedCandle(candles, visibleOhlc, tolerance, {
+      accept: (candle) => {
+        if (!anchor || !Number.isFinite(maxDays)) return true;
+        const d = parseISODateOnly(candleDateOnly(candle?.datetime));
+        return !d || Math.abs(getDaysBetweenDates(anchor, d)) <= maxDays;
+      },
+    });
+    return hit ? { ...hit, closeDistance: Math.abs(Number(hit.candle.close) - visibleOhlc.close), matchMode: hit.mode } : null;
+  }
   const target = Number(targetPrice);
   if (!Array.isArray(candles) || !candles.length || !Number.isFinite(target)) {
     return null;
@@ -4237,17 +4263,24 @@ async function synchronizeFinalVisibleMarketReference({
   });
   const initialMismatch =
     lastClose === null ? null : Math.abs(lastClose - visiblePrice);
+  const visibleOhlc = visibleOhlcFromDetection(chartDetection);
+  const initialAlignment = visibleOhlc && lastCandle
+    ? ohlcAligned(visibleOhlc, lastCandle, initialTolerance)
+    : null;
 
   if (
-    lastClose !== null &&
-    Number.isFinite(initialMismatch) &&
-    initialMismatch <= initialTolerance
+    visibleOhlc
+      ? initialAlignment?.aligned === true
+      : (lastClose !== null &&
+        Number.isFinite(initialMismatch) &&
+        initialMismatch <= initialTolerance)
   ) {
     return unchanged("market_close_matches_final_visible_price", {
       lastMarketCandle: lastCandle?.datetime || null,
       lastMarketClose: lastClose,
       tolerance: initialTolerance,
       mismatch: initialMismatch,
+      alignment: initialAlignment,
     });
   }
 
@@ -4261,6 +4294,7 @@ async function synchronizeFinalVisibleMarketReference({
     tolerance: initialTolerance,
     anchorDate: chartDetection?.latestVisibleDate || "",
     maximumDateDistanceDays: chartDetection?.latestVisibleDate ? 1 : null,
+    visibleOhlc,
   });
   let searchSource = "initial_market_reference";
 
@@ -4318,6 +4352,7 @@ async function synchronizeFinalVisibleMarketReference({
         tolerance: extendedTolerance,
         anchorDate: chartDetection?.latestVisibleDate || "",
         maximumDateDistanceDays: chartDetection?.latestVisibleDate ? 1 : null,
+        visibleOhlc,
       });
 
       if (extendedMatch) {
@@ -4370,6 +4405,9 @@ async function synchronizeFinalVisibleMarketReference({
     visiblePrice,
     matchedMarketClose: Number(match.candle.close),
     matchedMarketCandle: matchedDateTime,
+    matchMode: match.matchMode || "close_only",
+    feedOffset: Number.isFinite(match.offset) ? match.offset : null,
+    ohlcResidual: Number.isFinite(match.residual) ? match.residual : null,
     reason:
       "The external OHLC series was synchronized to the final visible screenshot close before structure, lifecycle and Fibonacci calculations were performed.",
   };
@@ -4395,10 +4433,16 @@ async function synchronizeFinalVisibleMarketReference({
       ? null
       : Math.abs(synchronizedClose - visiblePrice);
 
-  const verified =
-    synchronizedClose !== null &&
-    Number.isFinite(synchronizedMismatch) &&
-    synchronizedMismatch <= synchronizedTolerance;
+  // With an OHLC match the feed offset is expected, so verify the shape
+  // rather than the raw close.
+  const synchronizedAlignment = visibleOhlc && synchronizedLast
+    ? ohlcAligned(visibleOhlc, synchronizedLast, synchronizedTolerance)
+    : null;
+  const verified = visibleOhlc
+    ? synchronizedAlignment?.aligned === true
+    : (synchronizedClose !== null &&
+      Number.isFinite(synchronizedMismatch) &&
+      synchronizedMismatch <= synchronizedTolerance);
 
   console.log("Final visible price synchronization:", {
     adjusted: verified,
@@ -4436,6 +4480,9 @@ async function synchronizeFinalVisibleMarketReference({
     reason: "final_visible_price_synchronized",
     diagnostics: {
       searchSource,
+      matchMode: match.matchMode || "close_only",
+      feedOffset: synchronizedAlignment?.offset ?? null,
+      ohlcResidual: synchronizedAlignment?.residual ?? null,
       visiblePrice,
       priceConfidence,
       matchedMarketCandle: matchedDateTime,
@@ -11009,7 +11056,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
-const CSA_BUILD_ID = "CSA-v4.70.3-oanda-partial-reference";
+const CSA_BUILD_ID = "CSA-v4.71.0-cutoff-safe-live-period";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS

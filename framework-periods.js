@@ -173,42 +173,76 @@ export function buildPeriodInventory(candles = [], timeframe, latest = null) {
 // ------------------------------------------------------- live-period repair
 
 /**
- * Providers intermittently omit the in-progress framework candle (OANDA D1
- * returns only complete bars on some requests). The frame then collapses to
- * the completed periods only — two periods on a Wednesday H1 chart.
+ * Make the live (in-progress) framework period cutoff-safe.
  *
- * When, and only when, the period containing `latest` is missing from the
- * framework series, rebuild it from execution candles of the same provider.
- * Two guards keep this from inventing a period:
- *  - execution coverage must start before the live period, otherwise the
- *    rebuilt high/low could be missing the period's opening sessions;
- *  - periods that already have a framework candle are never touched, because
- *    provider day boundaries (e.g. 17:00 New York) need not match UTC keys.
+ * Two failure modes, one rule:
+ *  - The provider omits the live bar (OHLC D1 intermittently), so the frame
+ *    collapses to completed periods only.
+ *  - The provider returns the live bar, but it was fetched after the chart
+ *    was taken, so it holds highs/lows from after the screenshot. A daily bar
+ *    fetched a week later covers the whole day even when the chart ends at
+ *    08:00.
  *
+ * In both cases, the live period is rebuilt from execution candles that are
+ * already cut at the chart's final candle. Completed periods are never
+ * touched, because provider day boundaries need not match UTC keys.
+ *
+ * Guard: execution coverage must start before the live period. Otherwise the
+ * rebuilt high/low could miss the period's opening sessions. If the guard
+ * fails and a provider live bar exists, it is kept but flagged cutoffUnsafe.
+ *
+ * `cutoff` is "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS"; execution candles later
+ * than it are ignored.
  * Returns { candles, supplemented } where candles is a new array.
  */
-export function supplementLivePeriod(frameworkCandles = [], executionCandles = [], timeframe, latest) {
+export function supplementLivePeriod(frameworkCandles = [], executionCandles = [], timeframe, cutoff) {
   const scope = frameworkScope(timeframe);
   const base = Array.isArray(frameworkCandles) ? [...frameworkCandles] : [];
-  if (!scope || !latest) return { candles: base, supplemented: null };
-  const liveKey = periodKey(latest, scope.period);
-  const cutoff = utc(latest);
-  if (base.some((c) => c?.time && periodKey(c.time, scope.period) === liveKey)) {
-    return { candles: base, supplemented: null };
-  }
+  if (!scope || !cutoff) return { candles: base, supplemented: null };
+  const cutoffText = String(cutoff).trim();
+  const cutoffDay = cutoffText.slice(0, 10);
+  const liveKey = periodKey(cutoffDay, scope.period);
+  const isLive = (c) => c?.time && periodKey(c.time, scope.period) === liveKey;
+  const providerLive = base.filter(isLive);
+
   const exec = (executionCandles || [])
     .filter((c) => c?.time && Number.isFinite(Number(c.high)) && Number.isFinite(Number(c.low)))
-    .filter((c) => utc(c.time) <= cutoff);
-  const live = exec.filter((c) => periodKey(c.time, scope.period) === liveKey);
+    .filter((c) => {
+      const t = String(c.time).trim();
+      return cutoffText.length > 10 ? t <= cutoffText : t.slice(0, 10) <= cutoffDay;
+    });
+  const live = exec.filter(isLive);
   const coveredBefore = exec.some((c) => periodKey(c.time, scope.period) < liveKey);
+
   if (!live.length || !coveredBefore) {
-    return { candles: base, supplemented: { key: liveKey, applied: false,
-      reason: live.length ? "execution_coverage_starts_inside_live_period" : "no_execution_candles_in_live_period" } };
+    return {
+      candles: base,
+      supplemented: {
+        key: liveKey,
+        applied: false,
+        providerLiveBarKept: providerLive.length > 0,
+        cutoffUnsafe: providerLive.length > 0,
+        reason: live.length ? "execution_coverage_starts_inside_live_period" : "no_execution_candles_in_live_period",
+      },
+    };
   }
   const high = Math.max(...live.map((c) => Number(c.high)));
   const low = Math.min(...live.map((c) => Number(c.low)));
-  base.push({ time: live[0].time, high, low, source: "execution_candles_live_period" });
-  return { candles: base, supplemented: { key: liveKey, applied: true, candleCount: live.length, high, low } };
+  const rebuilt = { time: live[0].time, high, low, source: "execution_candles_live_period" };
+  return {
+    candles: [...base.filter((c) => !isLive(c)), rebuilt],
+    supplemented: {
+      key: liveKey,
+      applied: true,
+      replacedProviderBar: providerLive.length > 0,
+      providerHigh: providerLive.length ? Math.max(...providerLive.map((c) => Number(c.high))) : null,
+      providerLow: providerLive.length ? Math.min(...providerLive.map((c) => Number(c.low))) : null,
+      candleCount: live.length,
+      lastCandle: live[live.length - 1].time,
+      high,
+      low,
+    },
+  };
 }
 
 // ------------------------------------------------------------------- frame
