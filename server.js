@@ -1,5 +1,7 @@
-import { readMt4ForexTimestamp } from "./chart-time-reader.js";
+import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
+import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
+import { analyseFrameworkEntries } from "./framework-periods.js";
 import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
@@ -2127,6 +2129,16 @@ function isFrameworkPeriodCompleteAtCutoff({
   const cutoffTime = normalized.slice(11, 19) || "00:00:00";
   if (!cutoffDate) return false;
 
+  // When the screenshot's latest visible session is already before today's
+  // calendar date, that session is historical and therefore closed. This is
+  // essential for a chart captured on Thursday whose last visible H1 candle
+  // is Wednesday: Wednesday must be inventoried, not treated as live.
+  const todayDate = new Date().toISOString().slice(0, 10);
+  if (["daily-in-week", "weekly-in-month", "monthly-in-year"].includes(profile?.structureMode) &&
+    cutoffDate < todayDate) {
+    return true;
+  }
+
   const periodEndDate = getFrameworkPeriodEndDate(
     new Date(`${cutoffDate}T00:00:00.000Z`),
     profile
@@ -2322,6 +2334,9 @@ function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimefr
     .filter((period) => period?.partialPeriod !== true);
   const areas = [];
   completedLevels.forEach((period, index) => {
+    // Keep the measured period visible, but do not create automatic entries
+    // from extrema whose calendar assignment is near a screenshot boundary.
+    if (period?.rasterBoundaryAmbiguous === true) return;
     const label = period.periodLabel || period.day || period.key;
     if (index === 0) {
       areas.push({
@@ -2919,7 +2934,7 @@ function resolveTwelveDataChartCutoff({
   const usableDetectedTime =
     /^([01]\d|2[0-3]):[0-5]\d$/.test(detectedTime) &&
     detectedTimeConfidence === "high" &&
-    ["explicit_final_candle_timestamp", "verified_axis_bar_count"].includes(timeEvidence);
+    ["explicit_final_candle_timestamp", "verified_axis_bar_count", "verified_multi_anchor_axis_count"].includes(timeEvidence);
 
   const selected =
     /^\d{4}-\d{2}-\d{2}$/.test(String(selectedDateText || "").trim())
@@ -3276,6 +3291,58 @@ async function fetchTwelveDataStructureLevels({
       });
       rawFrameworkCandles = frameworkSeries.values;
     }
+
+    // ---- shadow inventory: diagnostic only, nothing downstream reads this ----
+    // Framework candles are already one-per-period (H1->1day, H4->1week,
+    // D1->1month), so the provider has effectively already returned the period
+    // inventory the vision pass is being asked to read off pixels. Compute it
+    // both ways and log the difference before trusting either.
+    try {
+      const shadowCutoffDate = candleDateOnly(normalizeTwelveDataDateTime(endDateTime));
+      const shadowPeriodCandles = (rawFrameworkCandles || [])
+        .map((bar) => ({
+          time: normalizeTwelveDataDateTime(bar?.datetime),
+          high: Number(bar?.high),
+          low: Number(bar?.low),
+        }))
+        .filter((bar) =>
+          bar.time &&
+          Number.isFinite(bar.high) &&
+          Number.isFinite(bar.low) &&
+          // A benchmark screenshot ends before today but the provider returns
+          // candles through today. Truncate at the chart's own cutoff instead
+          // of requiring the two final anchors to be equal, which can never
+          // succeed on a historical screenshot.
+          (!shadowCutoffDate || candleDateOnly(bar.time) <= shadowCutoffDate)
+        );
+
+      const shadow = analyseFrameworkEntries(
+        shadowPeriodCandles,
+        profile.selectedTimeframe,
+        {
+          latest: shadowCutoffDate || null,
+          currentPrice: Number(rawCandles?.[rawCandles.length - 1]?.close),
+        }
+      );
+
+      console.log("[shadow-inventory] " + JSON.stringify({
+        symbol,
+        timeframe: profile.selectedTimeframe,
+        structureMode: profile.structureMode,
+        chartCutoffDate: shadowCutoffDate,
+        candlesFetched: (rawFrameworkCandles || []).length,
+        candlesAfterCutoff: shadowPeriodCandles.length,
+        firstCandle: shadowPeriodCandles[0]?.time || null,
+        lastCandle: shadowPeriodCandles[shadowPeriodCandles.length - 1]?.time || null,
+        periods: shadow.periods.map((p) => [p.label, p.date, p.high, p.low]),
+        frame: shadow.frame,
+        levels: shadow.levels,
+        entries: shadow.entries.map((e) => [e.order, e.periodLabel, e.kind, e.price, e.fibName]),
+      }));
+    } catch (shadowError) {
+      console.log("[shadow-inventory] failed: " + shadowError.message);
+    }
+    // ---- end shadow inventory ----
   } catch (error) {
     return {
       ...empty(error.message, structureRange, {
@@ -19617,10 +19684,12 @@ function buildExactChartFrameworkCandidates({
 
 function normalizeChartNativeEntryFallback(value = {}) {
   const direction = String(value?.direction || "").toLowerCase();
-  const rawPeriodInventory = Array.isArray(value?.periodInventory)
+  const rawPeriodInventory = Array.isArray(value?.periodInventory) && value.periodInventory.length
     ? value.periodInventory
-    : Array.isArray(value?.periodDayInventory)
+    : Array.isArray(value?.periodDayInventory) && value.periodDayInventory.length
     ? value.periodDayInventory
+    : Array.isArray(value?.periodMappingAudit?.periods)
+    ? value.periodMappingAudit.periods
     : [];
   const candidates = (Array.isArray(value?.candidates) ? value.candidates : [])
     .slice(0, 24)
@@ -19687,6 +19756,8 @@ function normalizeChartNativeEntryFallback(value = {}) {
         lowDate: /^\d{4}-\d{2}-\d{2}$/.test(String(period?.lowDate || "")) ? period.lowDate : null,
         open: nullablePositiveNumber(period?.open),
         close: nullablePositiveNumber(period?.close),
+        partialPeriod: period?.partialPeriod === true,
+        periodLifecycle: period?.periodLifecycle === "in_progress" ? "in_progress" : "completed",
         structures: (Array.isArray(period?.structures) ? period.structures : []).slice(0, 12).map((item) => ({
           price: nullablePositiveNumber(item?.price),
           type: safeUserText(item?.type || ""),
@@ -19704,6 +19775,8 @@ function normalizeChartNativeEntryFallback(value = {}) {
         low: nullablePositiveNumber(period?.low),
         open: nullablePositiveNumber(period?.open),
         close: nullablePositiveNumber(period?.close),
+        partialPeriod: period?.partialPeriod === true,
+        periodLifecycle: period?.periodLifecycle === "in_progress" ? "in_progress" : "completed",
         structures: (Array.isArray(period?.structures) ? period.structures : []).slice(0, 12).map((item) => ({
           price: nullablePositiveNumber(item?.price),
           type: safeUserText(item?.type || ""),
@@ -20527,6 +20600,19 @@ function rankChartNativeFallbackAreas({
       role: index === 0 ? "primary" : index === 1 ? "secondary" : "tertiary",
       };
     });
+  const selectedKeys = new Set(selected.map((area) =>
+    `${String(area?.areaType || "").toLowerCase()}|${Number(area?.authoritativeCenter)}`
+  ));
+  const additionalQualifiedEntries = candidates
+    .filter((area) => !selectedKeys.has(
+      `${String(area?.areaType || "").toLowerCase()}|${Number(area?.authoritativeCenter)}`
+    ))
+    .map((area) => ({
+      ...area,
+      additionalQualified: true,
+      executionOrder: null,
+      role: "additional-qualified",
+    }));
 
   const fibLevels = impulseRange !== null
     ? {
@@ -20581,6 +20667,7 @@ function rankChartNativeFallbackAreas({
       chartOnlyInventoryVerified: fallback?.chartOnlyInventoryVerified === true,
       finalVisibleCandle: fallback?.finalVisibleCandleAuthority || null,
       sharedFramework: fallback?.sharedFramework || null,
+      chartPeriodMap: fallback?.chartPeriodMap || null,
     },
     bias: {
       direction,
@@ -20636,6 +20723,7 @@ function rankChartNativeFallbackAreas({
         ? Math.max(fibLevels["38.2"], fibLevels["61.8"])
         : null,
       rule: "independently proven structure must intersect the 38.2%-61.8% retracement band",
+      chartPeriodMap: fallback?.chartPeriodMap || null,
     },
     candidateEvaluationAudit: candidateEvaluations.map((evaluation) => {
       const candidatePrice = Number(evaluation.candidate?.price);
@@ -20749,6 +20837,7 @@ function rankChartNativeFallbackAreas({
 
   return {
     areas: selected,
+    additionalQualifiedEntries,
     referenceAreas: [],
     validation: {
       passed: true,
@@ -20781,6 +20870,7 @@ function rankChartNativeFallbackAreas({
       periodDayInventory: fallback.periodDayInventory || fallback.periodInventory || [],
       fibonacciQualifiedCandidates: candidates,
       selectedEntries: selected,
+      additionalQualifiedEntries,
     },
   };
 }
@@ -25706,6 +25796,16 @@ function buildValidatedAnalysisFacts({
       ),
     selectedEntryCount:
       rankedRawAreas.length,
+    additionalQualifiedEntries: Array.isArray(rankedAreaResult?.additionalQualifiedEntries)
+      ? rankedAreaResult.additionalQualifiedEntries.map((candidate) => ({
+          direction: candidate.direction,
+          areaType: candidate.areaType,
+          levelText: safeUserText(candidate.levelText || ""),
+          authoritativeCenter: asPositiveNumber(candidate.authoritativeCenter),
+          frameworkPeriod: candidate.frameworkPeriod || candidate.sourcePeriod || null,
+          fibonacciMatches: Array.isArray(candidate.fibonacciMatches) ? candidate.fibonacciMatches : [],
+        }))
+      : [],
     activeEntryAreas: rankedRawAreas.map((candidate, index) => ({
       rank: candidate.executionOrder || index + 1,
       role: candidate.role || (index === 0 ? "primary" : index === 1 ? "secondary" : "alternative"),
@@ -29197,9 +29297,31 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       return stoppedResponse({ res, errorType: "timeframe_mismatch", error: "Selected timeframe does not match uploaded chart timeframe.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
 
-    if (oandaInstrument(normalizedSymbol || submittedInstrument) && chartDetection?.latestVisibleDateEvidence !== "explicit_final_candle_timestamp") {
+    // The final visible date must be derived from candle spacing for every
+    // instrument, not only OANDA FX pairs. This is what distinguishes a
+    // Thursday chart (with completed Wednesday data) from a Wednesday chart.
+    // Use the axis/bar-count reader whenever the chart does not contain an
+    // explicit timestamp attached to the final candle.
+    if (["M1", "M5", "M15", "M30", "H1", "H4"].includes(String(timeframe || "").toUpperCase()) &&
+      chartDetection?.latestVisibleDateEvidence !== "explicit_final_candle_timestamp") {
       const axisTime = readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps:chartDetection?.timeAxisTimestamps || []});
       if (axisTime) chartDetection = {...chartDetection, latestVisibleDate:axisTime.timestamp.slice(0,10), latestVisibleTime:axisTime.timestamp.slice(11,16), dateConfidence:"high", latestVisibleTimeConfidence:"high", latestVisibleDateEvidence:"verified_axis_bar_count", timestampAudit:axisTime};
+      if (!axisTime) {
+        const inferredAxisTime = resolveVisibleTimestampFromAxisCount({
+          timeframe,
+          timeAxisTimestamps: chartDetection?.timeAxisTimestamps || [],
+          visibleCandlesAfterLastPrintedDate: chartDetection?.visibleCandlesAfterLastPrintedDate,
+        });
+        const geometry = inferredAxisTime ? readMt4CandleGeometry({ imageBase64, timeframe }) : null;
+        if (inferredAxisTime && geometry) chartDetection = {
+          ...chartDetection,
+          latestVisibleDate: inferredAxisTime.timestamp.slice(0, 10),
+          latestVisibleTime: inferredAxisTime.timestamp.slice(11, 16),
+          dateConfidence: "high", latestVisibleTimeConfidence: "high",
+          latestVisibleDateEvidence: "verified_multi_anchor_axis_count",
+          timestampAudit: { ...inferredAxisTime, ...geometry, terminalAnchor: true, anchors: [{ x: geometry.lastCandleX, timestamp: inferredAxisTime.timestamp }] },
+        };
+      }
     }
 
     const dateDecision = chooseFinalChartDate({
@@ -29709,7 +29831,13 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     const providerInventoryAligned =
       marketReference?.ok === true &&
       marketReference?.chartDataMatch?.status === "matched_reference";
-    const providerOnlyForex = marketReference?.dataProvider === "OANDA";
+    // OANDA remains the primary verification source when it aligns. If its
+    // candle does not align with the screenshot, do not discard the chart:
+    // allow the focused chart/raster reader to build a clearly provisional
+    // chart-only inventory. This keeps broker/server details out of the user
+    // workflow while preserving the provider warning and authority boundary.
+    const providerOnlyForex = marketReference?.dataProvider === "OANDA" &&
+      ["matched_reference", "partial_reference"].includes(marketReference?.chartDataMatch?.status);
     { // Every supported timeframe reconciles its evidence through the shared engine.
       const focusedFallbackStartedAt = csaNowMs();
       const [
@@ -29748,8 +29876,13 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
       };
       const focusedOutputPeriodInventory =
-        mergedChartNativeFallback?.periodInventory ||
-        mergedChartNativeFallback?.periodDayInventory || [];
+        (Array.isArray(mergedChartNativeFallback?.periodInventory) && mergedChartNativeFallback.periodInventory.length
+          ? mergedChartNativeFallback.periodInventory
+          : Array.isArray(mergedChartNativeFallback?.periodDayInventory) && mergedChartNativeFallback.periodDayInventory.length
+          ? mergedChartNativeFallback.periodDayInventory
+          : Array.isArray(mergedChartNativeFallback?.periodMappingAudit?.periods)
+          ? mergedChartNativeFallback.periodMappingAudit.periods
+          : []);
       const deterministicPeriodDates = expectedFrameworkPeriodDates(
         timeframe,
         chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || ""
@@ -29757,10 +29890,18 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       // The raster path must not disappear merely because the focused vision
       // response was malformed or marked unusable. D1 month dates are known
       // from the calendar, so seed empty rows and let the image supply prices.
-      const rawFocusedPeriodInventory = focusedOutputPeriodInventory.length
-        ? focusedOutputPeriodInventory
+      const seedDailyPeriods = ["M1", "M5", "M15", "M30", "H1"].includes(String(timeframe).toUpperCase());
+      const seededFrameworkInventory = seedDailyPeriods
+        ? deterministicPeriodDates.map((date) => ({
+            periodLabel: new Date(`${date}T00:00:00Z`).toLocaleString("en", { weekday: "long", timeZone: "UTC" }),
+            sourceUnit: "D1",
+            date,
+            high: null,
+            low: null,
+            structures: [],
+          }))
         : String(timeframe).toUpperCase() === "D1"
-        ? deterministicPeriodDates.map((date, index) => ({
+        ? deterministicPeriodDates.map((date) => ({
             periodLabel: new Date(`${date}T00:00:00Z`).toLocaleString("en", { month: "long", timeZone: "UTC" }),
             sourceUnit: "MN",
             date,
@@ -29769,6 +29910,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             structures: [],
           }))
         : [];
+      const focusedByDate = new Map(focusedOutputPeriodInventory.map((period) => [String(period?.date || ""), period]));
+      const rawFocusedPeriodInventory = seededFrameworkInventory.length
+        ? seededFrameworkInventory.map((seed) => focusedByDate.get(String(seed.date)) || seed)
+        : focusedOutputPeriodInventory.length
+        ? focusedOutputPeriodInventory
+        : seededFrameworkInventory;
       const rasterInventory = providerOnlyForex ? null : extractMt4PngMonthlyInventory({
         imageBase64,
         mimeType,
@@ -29801,6 +29948,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
                   lowDate: null,
                   source: rasterInventory.source,
                   rasterPriceScaleVerified: true,
+                  rasterBoundaryAmbiguous: rasterPeriod.boundaryAmbiguous === true,
                 }
               : period;
           })
@@ -29842,6 +29990,18 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       const lifecycleCutoffDateTime =
         chartCutoff?.endDateTime ||
         `${chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || ""} 23:59:59`;
+      // This is the missing authority layer: derive Monday/Tuesday/etc. (or
+      // H4 W1/W2) start positions from timestamped chart anchors and selected
+      // timeframe candle indices.  It is intentionally separate from price
+      // extraction.  A calendar-looking provider period without this map can
+      // remain visible in diagnostics, but can never become Fib or an entry.
+      const chartPeriodMap = buildChartPeriodMap({
+        timeframe,
+        candles: marketReference?.timeframeCandles || [],
+        chartCutoff,
+        axisCalibration: chartDetection?.timestampAudit || null,
+      });
+      const chartPeriodMapVerified = chartPeriodMap.canSelectEntries === true;
       // A partial OANDA endpoint means the chart's latest visible period is
       // still live, even when the provider's framework response labels its
       // aggregate candle complete. Keep that endpoint available for the Fib
@@ -29864,7 +30024,20 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         periods: chartReconciledPeriodInventory,
         timeframe,
         cutoffDateTime: lifecycleCutoffDateTime,
-        explicitlyComplete: lifecycleComplete,
+        // Never inherit a provider's completion flag for chart-derived
+        // periods when the provider is provisional/mismatched.  In
+        // particular, an H4 screenshot captured mid-week must leave the
+        // current W2 period in progress while still exposing completed W1.
+        // The calendar cutoff is the authority unless the provider itself is
+        // chart-aligned and verified.
+        // This block runs before marketInventoryVerified is calculated below.
+        // Only inherit an explicit completion flag from a chart-aligned
+        // provider; provisional/mismatched feeds must use the calendar cutoff.
+        explicitlyComplete:
+          marketReference?.ok === true &&
+          marketReference?.chartDataMatch?.status === "matched_reference"
+            ? lifecycleComplete
+            : null,
       });
       const marketPeriodInventory = applyCurrentFrameworkPeriodLifecycle({
         periods: marketReconciledPeriodInventory,
@@ -29930,12 +30103,30 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       // retain a complete focused inventory for diagnosis instead of returning
       // no bias/period data at all. It remains explicitly human-review-only.
       const chartOnlyInventoryUsable =
-        !providerOnlyForex &&
         marketInventoryVerified !== true &&
-        chartInventoryFrame?.currentPeriodFrameVerified === true &&
-        chartPeriodInventory.length > 0;
+        chartPeriodInventory.length > 0 &&
+        chartPeriodInventory.every((period) =>
+          Number.isFinite(Number(period?.high)) &&
+          Number.isFinite(Number(period?.low)) &&
+          Number(period.high) > Number(period.low)
+        );
+      // A provisional OANDA reference can contain fewer (or differently
+      // mapped) periods than the uploaded chart.  Once the chart reader has
+      // a complete numeric inventory, prefer that inventory for display and
+      // entry selection; retain the provider values only as a comparison
+      // audit.  This is what makes completed Wednesday visible consistently
+      // for GBPUSD/USDJPY instead of allowing a provisional Mon/Tue feed to
+      // hide it.
+      const providerChartMismatch = !["matched_reference", "partial_reference"].includes(
+        String(marketReference?.chartDataMatch?.status || "")
+      );
+      const chartInventoryPreferred = chartOnlyInventoryUsable && (
+        providerChartMismatch ||
+        chartPeriodInventory.length >= marketPeriodInventory.length
+      );
       const chartOnlyInventoryVerified =
         chartOnlyInventoryUsable &&
+        chartPeriodMapVerified &&
         rasterInventory?.chartPriceScaleVerified === true &&
         rasterByDate.size === rawFocusedPeriodInventory.length &&
         chartPeriodInventory.length === rawFocusedPeriodInventory.length &&
@@ -29943,16 +30134,29 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       const inventoryUsable = marketInventoryVerified || marketInventoryProvisional || chartOnlyInventoryUsable;
       const selectedPeriodInventory = marketInventoryVerified
         ? marketPeriodInventory
+        : (chartOnlyInventoryUsable && (
+            !["matched_reference", "partial_reference"].includes(String(marketReference?.chartDataMatch?.status || "")) ||
+            chartPeriodInventory.length >= marketPeriodInventory.length
+          ))
+        ? chartPeriodInventory
         : marketInventoryProvisional
         ? marketPeriodInventory
-        : chartOnlyInventoryUsable
-        ? chartPeriodInventory
         : [];
       const displayPeriodInventory = selectedPeriodInventory.length
         ? selectedPeriodInventory
         : marketPeriodInventory;
       const inventoryAuthority = marketInventoryVerified
         ? "chart_aligned_provider_reference_not_broker_verified"
+        : (chartOnlyInventoryUsable && (
+            !["matched_reference", "partial_reference"].includes(String(marketReference?.chartDataMatch?.status || "")) ||
+            chartPeriodInventory.length >= marketPeriodInventory.length
+          )) && chartOnlyInventoryVerified
+        ? "complete_chart_only_period_inventory_deterministic_raster_verified"
+        : (chartOnlyInventoryUsable && (
+            !["matched_reference", "partial_reference"].includes(String(marketReference?.chartDataMatch?.status || "")) ||
+            chartPeriodInventory.length >= marketPeriodInventory.length
+          ))
+        ? "complete_chart_only_period_inventory_provider_unavailable_or_unaligned_provisional"
         : marketInventoryProvisional
         ? "provider_reference_provisional"
         : chartOnlyInventoryVerified
@@ -29971,14 +30175,14 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         // inventory is not a price conflict; it is simply an unavailable
         // second source. Keep the OANDA result provisional for review, but do
         // not manufacture a conflict from the skipped visual reader.
-        requiresReview: !chartOnlyInventoryUsable && !marketInventoryVerified && !marketInventoryProvisional,
+        requiresReview: !chartInventoryPreferred && !marketInventoryVerified && !marketInventoryProvisional,
         resolution: marketInventoryVerified
           ? "verified deterministic candle retained; vision-estimated period price rejected"
           : chartOnlyInventoryVerified
           ? "provider comparison rejected; deterministic chart-raster price retained"
           : marketInventoryProvisional
           ? "visual inventory unavailable by design; OANDA period reference retained provisionally"
-          : chartOnlyInventoryUsable
+          : chartInventoryPreferred
           ? "provider comparison rejected; chart-derived estimate retained provisionally"
           : conflict.resolution,
       }));
@@ -30025,7 +30229,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         completedPeriodReferences,
         // The primary mapping audit must describe the inventory actually used.
         // Preserve the provider comparison separately for troubleshooting.
-        periodMappingAudit: chartOnlyInventoryUsable
+        periodMappingAudit: chartInventoryPreferred
           ? chartPeriodMappingAudit
           : periodMappingAudit,
         providerComparisonPeriodMappingAudit: periodMappingAudit,
@@ -30041,6 +30245,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         fixedPeriodBias,
         sharedFramework,
         rasterInventoryAudit: rasterInventory,
+        chartPeriodMap,
+        chartPeriodMapVerified,
       };
 
       if (fixedPeriodBias && inventoryUsable) {
@@ -30096,10 +30302,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             currentPeriodLow: null,
             source: "deterministic_period_inventory_unavailable",
           };
-      const selectedPeriodFrame = (marketInventoryVerified || marketInventoryProvisional)
+      const selectedPeriodFrame = marketInventoryVerified
         ? marketInventoryFrame
-        : chartOnlyInventoryUsable
+        : chartInventoryPreferred
         ? chartInventoryFrame
+        : marketInventoryProvisional
+        ? marketInventoryFrame
         : null;
 
       visualReview = {
@@ -30137,10 +30345,10 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             null,
           currentPeriodFrameVerified:
             (marketInventoryVerified || chartOnlyInventoryVerified) &&
-            selectedPeriodFrame?.currentPeriodFrameVerified === true,
+            selectedPeriodFrame?.currentPeriodFrameVerified === true && chartPeriodMapVerified,
           currentPeriodFrameChartUsable:
             (marketInventoryProvisional || (chartOnlyInventoryUsable && !chartOnlyInventoryVerified)) &&
-            selectedPeriodFrame?.currentPeriodFrameVerified === true,
+            selectedPeriodFrame?.currentPeriodFrameVerified === true && chartPeriodMapVerified,
           currentWeekFrameConfidence:
             visibleCurrentWeekFrame?.confidence ||
             (inventoryDerivedPeriodFrame?.currentPeriodFrameVerified === true
