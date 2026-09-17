@@ -4291,7 +4291,20 @@ async function synchronizeFinalVisibleMarketReference({
     },
   });
 
-  if (marketReference?.dataProvider === "OANDA") return unchanged("oanda_timestamp_locked_no_price_based_date_shift");
+  // This skip was written for FX pairs, where OANDA's own candle timestamps
+  // are reliable enough that a chart cutoff resolved to an EXACT time from
+  // them needs no second-guessing. Extending OANDA to index/commodity CFDs
+  // (USA100, USOIL) exposed a case that assumption never covered: when the
+  // chart's own time-reading confidence is only "medium", the cutoff never
+  // reaches an exact time in the first place and falls back to end-of-day —
+  // nothing OANDA-specific has actually been "locked". Skipping the price
+  // check then left USA100 compared against a 20:00 candle when 14:00 was
+  // the real one (chart_data_mismatch on the open, 2026-09-09). Only skip
+  // when the cutoff genuinely reached an exact time; a day-level fallback
+  // gets the same price-based rescue Twelve-Data-sourced charts get.
+  if (marketReference?.dataProvider === "OANDA" && chartCutoff?.precision !== "day") {
+    return unchanged("oanda_timestamp_locked_no_price_based_date_shift");
+  }
   if (normalizedMode !== "final_visible") {
     return unchanged("not_final_visible_mode");
   }
@@ -11121,7 +11134,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
-const CSA_BUILD_ID = "CSA-v4.73.1-price-scaled-period-tolerance";
+const CSA_BUILD_ID = "CSA-v4.73.2-oanda-cfd-day-fallback-recheck";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
