@@ -1,7 +1,9 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
-import { analyseFrameworkEntries } from "./framework-periods.js";
+import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields, supplementLivePeriod } from "./framework-periods.js";
+import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, reconcileChartDataMatch } from "./candle-alignment.js";
+import { periodCompleteAtCutoff } from "./period-completion.js";
 import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
@@ -1616,6 +1618,16 @@ const CONTEXT_ONLY_TRIGGER_WORDS = [
   "consolidation", "consolidating", "reaction", "range", "ranging", "moving away"
 ];
 
+// Tickers that are NOT currency pairs but happen to be 6 characters, so the
+// generic "6 letters -> split 3/3" forex heuristic below would otherwise cut
+// them in half (USA100 -> "USA/100"). That corrupted string then reaches
+// every downstream provider/instrument lookup, including OANDA's own
+// instrument table, under a name it was never meant to receive. USA100 was
+// getting routed to Twelve Data's NDX/USTEC (subscription-restricted)
+// instead of ever being tried against OANDA, because oandaInstrument()
+// received "USA/100" rather than "USA100" or a real alias.
+const NON_FOREX_SIX_CHAR_TICKERS = new Set(["USA100", "NAS100", "USA30", "GER40", "USDIDX"]);
+
 function normalizeSymbol(input = "") {
   const raw = String(input).trim().toUpperCase().replace(/\s+/g, "");
   const map = {
@@ -1626,6 +1638,7 @@ function normalizeSymbol(input = "") {
   };
   if (map[raw]) return map[raw];
   if (raw.includes("/")) return raw;
+  if (NON_FOREX_SIX_CHAR_TICKERS.has(raw)) return raw;
   if (raw.length === 6) return `${raw.slice(0, 3)}/${raw.slice(3)}`;
   return raw || "";
 }
@@ -2133,21 +2146,23 @@ function isFrameworkPeriodCompleteAtCutoff({
   // calendar date, that session is historical and therefore closed. This is
   // essential for a chart captured on Thursday whose last visible H1 candle
   // is Wednesday: Wednesday must be inventoried, not treated as live.
-  const todayDate = new Date().toISOString().slice(0, 10);
-  if (["daily-in-week", "weekly-in-month", "monthly-in-year"].includes(profile?.structureMode) &&
-    cutoffDate < todayDate) {
-    return true;
-  }
-
+  // Completion is decided from the cutoff alone. The previous rule
+  // ("cutoff date before today => complete") marked every historical chart's
+  // live period as closed, so a chart ending Wednesday 08:00 and reviewed a
+  // week later used the provider's full Wednesday bar. The Thursday-capture
+  // case it was written for (last visible candle Wednesday 23:00) is still
+  // complete under periodCompleteAtCutoff, because 23:00 is the last H1 candle.
   const periodEndDate = getFrameworkPeriodEndDate(
     new Date(`${cutoffDate}T00:00:00.000Z`),
     profile
   );
 
-  if (!periodEndDate) return false;
-  if (cutoffDate > periodEndDate) return true;
-  if (cutoffDate < periodEndDate) return false;
-  return cutoffTime >= "23:59:00";
+  return periodCompleteAtCutoff({
+    cutoffDate,
+    cutoffTime,
+    periodEndDate,
+    interval: profile?.interval,
+  });
 }
 
 function getOutputSizeForInterval(interval) {
@@ -3258,6 +3273,10 @@ async function fetchTwelveDataStructureLevels({
 
   let rawCandles = [];
   let rawFrameworkCandles = [];
+  // Period inventory derived from provider candles. Null when the provider has
+  // no coverage for this symbol; the vision path still applies there.
+  let providerPeriodAnalysis = null;
+  let livePeriodAudit = null;
 
   try {
     const executionSeries = await fetchTwelveSeries({
@@ -3292,57 +3311,54 @@ async function fetchTwelveDataStructureLevels({
       rawFrameworkCandles = frameworkSeries.values;
     }
 
-    // ---- shadow inventory: diagnostic only, nothing downstream reads this ----
     // Framework candles are already one-per-period (H1->1day, H4->1week,
-    // D1->1month), so the provider has effectively already returned the period
-    // inventory the vision pass is being asked to read off pixels. Compute it
-    // both ways and log the difference before trusting either.
+    // D1->1month), so the provider has effectively returned the period
+    // inventory the vision pass is asked to read off pixels.
     try {
-      const shadowCutoffDate = candleDateOnly(normalizeTwelveDataDateTime(endDateTime));
-      const shadowPeriodCandles = (rawFrameworkCandles || [])
+      const cutoffDate = candleDateOnly(normalizeTwelveDataDateTime(endDateTime));
+      const periodCandles = (rawFrameworkCandles || [])
         .map((bar) => ({
           time: normalizeTwelveDataDateTime(bar?.datetime),
           high: Number(bar?.high),
           low: Number(bar?.low),
         }))
         .filter((bar) =>
-          bar.time &&
-          Number.isFinite(bar.high) &&
-          Number.isFinite(bar.low) &&
-          // A benchmark screenshot ends before today but the provider returns
-          // candles through today. Truncate at the chart's own cutoff instead
-          // of requiring the two final anchors to be equal, which can never
-          // succeed on a historical screenshot.
-          (!shadowCutoffDate || candleDateOnly(bar.time) <= shadowCutoffDate)
+          bar.time && Number.isFinite(bar.high) && Number.isFinite(bar.low) &&
+          // A screenshot ends before today while the provider returns candles
+          // through today. Truncate at the chart's own cutoff rather than
+          // requiring the two final anchors to be equal.
+          (!cutoffDate || candleDateOnly(bar.time) <= cutoffDate)
         );
-
-      const shadow = analyseFrameworkEntries(
-        shadowPeriodCandles,
-        profile.selectedTimeframe,
-        {
-          latest: shadowCutoffDate || null,
-          currentPrice: Number(rawCandles?.[rawCandles.length - 1]?.close),
-        }
-      );
-
-      console.log("[shadow-inventory] " + JSON.stringify({
-        symbol,
-        timeframe: profile.selectedTimeframe,
-        structureMode: profile.structureMode,
-        chartCutoffDate: shadowCutoffDate,
-        candlesFetched: (rawFrameworkCandles || []).length,
-        candlesAfterCutoff: shadowPeriodCandles.length,
-        firstCandle: shadowPeriodCandles[0]?.time || null,
-        lastCandle: shadowPeriodCandles[shadowPeriodCandles.length - 1]?.time || null,
-        periods: shadow.periods.map((p) => [p.label, p.date, p.high, p.low]),
-        frame: shadow.frame,
-        levels: shadow.levels,
-        entries: shadow.entries.map((e) => [e.order, e.periodLabel, e.kind, e.price, e.fibName]),
-      }));
-    } catch (shadowError) {
-      console.log("[shadow-inventory] failed: " + shadowError.message);
+      // Rebuild the live period from execution candles if the provider left
+      // it out (OANDA D1 intermittently omits the incomplete day).
+      const executionPeriodCandles = (rawCandles || [])
+        .map((bar) => ({
+          time: normalizeTwelveDataDateTime(bar?.datetime),
+          high: Number(bar?.high),
+          low: Number(bar?.low),
+        }))
+        .filter((bar) => bar.time && (!cutoffDate || candleDateOnly(bar.time) <= cutoffDate));
+      // Pass the full cutoff timestamp so the live period stops at the chart's
+      // final candle, not at the end of its calendar day.
+      const cutoffStamp = normalizeTwelveDataDateTime(endDateTime) || cutoffDate;
+      const livePeriodRepair = cutoffDate
+        ? supplementLivePeriod(periodCandles, executionPeriodCandles, profile.selectedTimeframe, cutoffStamp)
+        : { candles: periodCandles, supplemented: null };
+      if (livePeriodRepair.supplemented) {
+        console.log("[provider-inventory] live period " + JSON.stringify(livePeriodRepair.supplemented));
+      }
+      livePeriodAudit = livePeriodRepair.supplemented;
+      if (livePeriodRepair.candles.length) {
+        providerPeriodAnalysis = analyseFrameworkEntries(
+          livePeriodRepair.candles, profile.selectedTimeframe,
+          { latest: cutoffDate || null,
+            currentPrice: Number(rawCandles?.[rawCandles.length - 1]?.close) }
+        );
+      }
+    } catch (inventoryError) {
+      providerPeriodAnalysis = null;
+      console.log("[provider-inventory] failed: " + inventoryError.message);
     }
-    // ---- end shadow inventory ----
   } catch (error) {
     return {
       ...empty(error.message, structureRange, {
@@ -4070,6 +4086,8 @@ async function fetchTwelveDataStructureLevels({
     oandaAlignmentCandle,
     providerPriceComponent: useOanda ? process.env.OANDA_PRICE_COMPONENT || "B" : null,
     providerSymbol: resolvedProviderSymbol,
+    providerPeriodAnalysis,
+    livePeriodAudit,
     providerCoverage: {
       execution: coverageOf(rawCandles),
       framework: coverageOf(rawFrameworkCandles),
@@ -4133,7 +4151,23 @@ function findBestCandleForVisibleClose({
   tolerance = 0,
   anchorDate = "",
   maximumDateDistanceDays = null,
+  visibleOhlc = null,
 }) {
+  // With a full visible OHLC, match the candle's shape, not just its close.
+  // A close-only match picked XAUUSD's 13:00 bar for an 08:00 chart and
+  // leaked five hours of future data into the review.
+  if (visibleOhlc) {
+    const anchor = parseISODateOnly(anchorDate);
+    const maxDays = Number(maximumDateDistanceDays);
+    const hit = findOhlcAlignedCandle(candles, visibleOhlc, tolerance, {
+      accept: (candle) => {
+        if (!anchor || !Number.isFinite(maxDays)) return true;
+        const d = parseISODateOnly(candleDateOnly(candle?.datetime));
+        return !d || Math.abs(getDaysBetweenDates(anchor, d)) <= maxDays;
+      },
+    });
+    return hit ? { ...hit, closeDistance: Math.abs(Number(hit.candle.close) - visibleOhlc.close), matchMode: hit.mode } : null;
+  }
   const target = Number(targetPrice);
   if (!Array.isArray(candles) || !candles.length || !Number.isFinite(target)) {
     return null;
@@ -4240,17 +4274,24 @@ async function synchronizeFinalVisibleMarketReference({
   });
   const initialMismatch =
     lastClose === null ? null : Math.abs(lastClose - visiblePrice);
+  const visibleOhlc = visibleOhlcFromDetection(chartDetection);
+  const initialAlignment = visibleOhlc && lastCandle
+    ? ohlcAligned(visibleOhlc, lastCandle, initialTolerance)
+    : null;
 
   if (
-    lastClose !== null &&
-    Number.isFinite(initialMismatch) &&
-    initialMismatch <= initialTolerance
+    visibleOhlc
+      ? initialAlignment?.aligned === true
+      : (lastClose !== null &&
+        Number.isFinite(initialMismatch) &&
+        initialMismatch <= initialTolerance)
   ) {
     return unchanged("market_close_matches_final_visible_price", {
       lastMarketCandle: lastCandle?.datetime || null,
       lastMarketClose: lastClose,
       tolerance: initialTolerance,
       mismatch: initialMismatch,
+      alignment: initialAlignment,
     });
   }
 
@@ -4264,6 +4305,7 @@ async function synchronizeFinalVisibleMarketReference({
     tolerance: initialTolerance,
     anchorDate: chartDetection?.latestVisibleDate || "",
     maximumDateDistanceDays: chartDetection?.latestVisibleDate ? 1 : null,
+    visibleOhlc,
   });
   let searchSource = "initial_market_reference";
 
@@ -4321,6 +4363,7 @@ async function synchronizeFinalVisibleMarketReference({
         tolerance: extendedTolerance,
         anchorDate: chartDetection?.latestVisibleDate || "",
         maximumDateDistanceDays: chartDetection?.latestVisibleDate ? 1 : null,
+        visibleOhlc,
       });
 
       if (extendedMatch) {
@@ -4373,6 +4416,9 @@ async function synchronizeFinalVisibleMarketReference({
     visiblePrice,
     matchedMarketClose: Number(match.candle.close),
     matchedMarketCandle: matchedDateTime,
+    matchMode: match.matchMode || "close_only",
+    feedOffset: Number.isFinite(match.offset) ? match.offset : null,
+    ohlcResidual: Number.isFinite(match.residual) ? match.residual : null,
     reason:
       "The external OHLC series was synchronized to the final visible screenshot close before structure, lifecycle and Fibonacci calculations were performed.",
   };
@@ -4398,10 +4444,16 @@ async function synchronizeFinalVisibleMarketReference({
       ? null
       : Math.abs(synchronizedClose - visiblePrice);
 
-  const verified =
-    synchronizedClose !== null &&
-    Number.isFinite(synchronizedMismatch) &&
-    synchronizedMismatch <= synchronizedTolerance;
+  // With an OHLC match the feed offset is expected, so verify the shape
+  // rather than the raw close.
+  const synchronizedAlignment = visibleOhlc && synchronizedLast
+    ? ohlcAligned(visibleOhlc, synchronizedLast, synchronizedTolerance)
+    : null;
+  const verified = visibleOhlc
+    ? synchronizedAlignment?.aligned === true
+    : (synchronizedClose !== null &&
+      Number.isFinite(synchronizedMismatch) &&
+      synchronizedMismatch <= synchronizedTolerance);
 
   console.log("Final visible price synchronization:", {
     adjusted: verified,
@@ -4439,6 +4491,9 @@ async function synchronizeFinalVisibleMarketReference({
     reason: "final_visible_price_synchronized",
     diagnostics: {
       searchSource,
+      matchMode: match.matchMode || "close_only",
+      feedOffset: synchronizedAlignment?.offset ?? null,
+      ohlcResidual: synchronizedAlignment?.residual ?? null,
       visiblePrice,
       priceConfidence,
       matchedMarketCandle: matchedDateTime,
@@ -11012,7 +11067,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
-const CSA_BUILD_ID = "CSA-v4.70.3-oanda-partial-reference";
+const CSA_BUILD_ID = "CSA-v4.72.0-symbol-and-feed-offset-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -29520,6 +29575,32 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           };
         }
       }
+      // The comparison above can be a close-only check (see its own
+      // module); that alone cannot distinguish a genuine mismatch from a
+      // constant broker feed offset, or from a chart candle that was still
+      // forming when the screenshot was taken. Re-check with the full
+      // visible OHLC before accepting a rejection. This never downgrades an
+      // existing match, and the partial-candle check never searches beyond
+      // the single candle already identified, so it cannot substitute a
+      // different, wrong bar the way a looser close search could.
+      const reconciledDataMatch = reconcileChartDataMatch({
+        chartDataMatch,
+        candles: marketReference.impulseCandles?.length ? marketReference.impulseCandles : marketReference.timeframeCandles,
+        alignmentCandle: marketReference.oandaAlignmentCandle || null,
+        visibleOhlc: visibleOhlcFromDetection(chartDetection),
+        tolerance: getFinalVisiblePriceSyncTolerance({ marketReference, symbol: normalizedSymbol, targetPrice: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice }),
+        // A feed offset is a small, roughly constant amount (a few pips), not
+        // a fraction of price. Scaling it as a percentage let a BTC candle
+        // hundreds of dollars away from the chart's own open pass as a
+        // "matched" feed offset. getCleanBreakTolerance is this codebase's
+        // existing per-symbol small-move scale; five of it comfortably covers
+        // a broker/provider feed gap without accepting an unrelated candle.
+        maxOffset: getCleanBreakTolerance(normalizedSymbol) * 5,
+      });
+      if (reconciledDataMatch !== chartDataMatch) {
+        console.log("[chart-data-match] reconciled: " + JSON.stringify({ symbol: normalizedSymbol, from: chartDataMatch.status, to: reconciledDataMatch.status, matchMode: reconciledDataMatch.matchMode, feedOffset: reconciledDataMatch.feedOffset }));
+        chartDataMatch = reconciledDataMatch;
+      }
       marketReference.chartDataMatch = chartDataMatch;
       if (marketReference.dataProvider === "OANDA" && chartDataMatch.status === "matched_reference" && marketReference.oandaAlignmentCandle) {
         const snapshot = {datetime:marketReference.oandaAlignmentCandle.datetime,
@@ -29535,7 +29616,11 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         completedPeriodReferences.status = "chart_mismatch";
         completedPeriodReferences.periods = [];
       }
-      const retainCompletedOandaReference = marketReference.dataProvider === "OANDA" &&
+      // Applies to every provider. Restricting this to OANDA made Twelve Data
+      // symbols (BTC, XAU) discard their framework candles on date_unverified
+      // before the same-instrument check could run, which is why they reported
+      // frameworkCandleCount: 0 despite a full execution series.
+      const retainCompletedOandaReference = ["OANDA", "Twelve Data"].includes(marketReference.dataProvider || "Twelve Data") &&
         completedPeriodReferences.periods.length > 0 &&
         ["date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(chartDataMatch.status);
       if (!["matched_reference", "partial_reference"].includes(chartDataMatch.status) && !retainCompletedOandaReference) {
@@ -29863,10 +29948,31 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         Promise.resolve(null),
       ]);
 
-      const mergedChartNativeFallback = mergeFocusedSupplyDemandInventory(
+      let mergedChartNativeFallback = mergeFocusedSupplyDemandInventory(
             visualReview?.chartNativeEntryFallback || {},
             focusedChartNativeFallback
           );
+
+      // Provider candles beat a vision read of the same pixels. The vision pass
+      // has been observed returning price-axis gridlines and the OHLC header as
+      // period extremes; provider candles are exact. Fall back to the vision
+      // inventory only where the provider has no coverage.
+      const providerAnalysis = marketReference?.providerPeriodAnalysis || null;
+      const providerRows = providerAnalysis ? toProviderInventoryRows(providerAnalysis) : [];
+      if (providerRows.length) {
+        mergedChartNativeFallback = {
+          ...mergedChartNativeFallback,
+          ...toProviderFrameFields(providerAnalysis),
+          periodInventory: providerRows,
+          periodDayInventory: providerRows,
+          periodInventoryAuthority: "provider_framework_candles",
+        };
+      } else {
+        mergedChartNativeFallback = {
+          ...mergedChartNativeFallback,
+          periodInventoryAuthority: "chart_vision_fallback",
+        };
+      }
 
       const finalVisibleCandle = {
         visibleOpen: chartDetection?.latestVisibleOpen,
@@ -30076,9 +30182,50 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         candles: timeframe === "D1" ? marketReference?.timeframeCandles || [] : [],
         tolerance: getCleanBreakTolerance(normalizedSymbol || submittedInstrument),
       });
+      // Screenshots come from the customer's own broker, whose feed differs
+      // from the provider's by a few pips. Requiring the two to agree before
+      // trusting the provider is circular: the provider IS the price authority,
+      // so the chart cannot be the thing that certifies it. The price
+      // comparison is retained as a SAME-INSTRUMENT check only — a wrong-symbol
+      // chart is off by whole percent, a feed difference by a fraction of one.
+      const SAME_INSTRUMENT_TOLERANCE_RATIO = 0.005; // 0.5% of price
+      const feedComparisons = Array.isArray(marketReference?.chartDataMatch?.comparisons)
+        ? marketReference.chartDataMatch.comparisons
+        : [];
+      const feedDeviations = feedComparisons
+        .map((item) => {
+          const chartValue = Number(item?.chart);
+          const providerValue = Number(item?.provider);
+          if (!Number.isFinite(chartValue) || !Number.isFinite(providerValue) || chartValue === 0) return null;
+          return Math.abs(chartValue - providerValue) / Math.abs(chartValue);
+        })
+        .filter((value) => value !== null);
+      const sameInstrumentConfirmed =
+        feedDeviations.length > 0 &&
+        feedDeviations.every((value) => value <= SAME_INSTRUMENT_TOLERANCE_RATIO);
+      const providerInventoryAuthoritative =
+        marketReference?.ok === true &&
+        Array.isArray(marketReference?.providerPeriodAnalysis?.periods) &&
+        marketReference.providerPeriodAnalysis.periods.length > 0 &&
+        sameInstrumentConfirmed;
+
       const marketInventoryVerified =
-        marketReference?.ok === true && marketReference?.chartDataMatch?.status === "matched_reference" && marketPeriodIntegrity.passed &&
-        marketInventoryFrame?.currentPeriodFrameVerified === true;
+        marketReference?.ok === true && marketPeriodIntegrity.passed &&
+        marketInventoryFrame?.currentPeriodFrameVerified === true &&
+        (marketReference?.chartDataMatch?.status === "matched_reference" ||
+          providerInventoryAuthoritative);
+
+      console.log("[inventory-authority] " + JSON.stringify({
+        symbol: normalizedSymbol, timeframe,
+        authority: mergedChartNativeFallback?.periodInventoryAuthority || null,
+        rows: mergedChartNativeFallback?.periodInventory?.length || 0,
+        dataMatchStatus: marketReference?.chartDataMatch?.status || null,
+        maxFeedDeviationPct: feedDeviations.length
+          ? Number((Math.max(...feedDeviations) * 100).toFixed(4)) : null,
+        sameInstrumentConfirmed,
+        providerInventoryAuthoritative,
+        marketInventoryVerified,
+      }));
       const marketInventoryProvisional =
         marketReference?.ok === true && marketReference?.dataProvider === "OANDA" &&
         ["partial_reference", "date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(marketReference?.chartDataMatch?.status) &&
@@ -30218,7 +30365,10 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         marketInventoryProvisional,
         dataMatch: marketReference?.chartDataMatch || null,
         // Legacy invariant remains: providerFailure: marketReference?.ok ? null
-        providerFailure: marketReference?.ok && marketReference?.chartDataMatch &&
+        // A certified provider inventory is not a provider failure, whatever the
+        // final-candle alignment said. dataMatch above still carries that status.
+        providerFailure: marketInventoryVerified ? null
+          : marketReference?.ok && marketReference?.chartDataMatch &&
           !["matched_reference", "partial_reference"].includes(marketReference.chartDataMatch.status)
           ? { category: marketReference.chartDataMatch.status, reason: marketReference.chartDataMatch.reason }
           : marketReference?.ok ? null : { category: marketReference?.failureCategory || "unavailable", reason: marketReference?.error || "Provider unavailable" },
@@ -30343,9 +30493,16 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           currentPeriodDirection:
             fixedPeriodBias?.direction ??
             null,
+          // The chart period (boundary) map locates period starts on screen.
+          // Raster-read prices need it; provider candles are already keyed by
+          // timestamp and do not. Gating provider frames on it left every
+          // chart at "Fib frame: Not verified" whenever an x-axis anchor
+          // failed to match (e.g. provider missing the live H1 candle).
           currentPeriodFrameVerified:
-            (marketInventoryVerified || chartOnlyInventoryVerified) &&
-            selectedPeriodFrame?.currentPeriodFrameVerified === true && chartPeriodMapVerified,
+            selectedPeriodFrame?.currentPeriodFrameVerified === true && (
+              marketInventoryVerified ||
+              (chartOnlyInventoryVerified && chartPeriodMapVerified)
+            ),
           currentPeriodFrameChartUsable:
             (marketInventoryProvisional || (chartOnlyInventoryUsable && !chartOnlyInventoryVerified)) &&
             selectedPeriodFrame?.currentPeriodFrameVerified === true && chartPeriodMapVerified,
