@@ -146,7 +146,7 @@ export function buildCompletedPeriodReferences({ periods = [], candles = [], tim
     output.periods.push({ date, endDateExclusive:endDate, period:period.periodLabel || period.day || date,
       high:Number(period.high), low:Number(period.low), source:"provider_reference",
       integrityChecked:true, chartVerified:false, brokerVerified:false, entryEligible:false,
-      evidence:audit.evidence[0] });
+      evidence:audit.evidence[0], advisories: audit.advisories.length ? audit.advisories : undefined });
   }
   output.periods.sort((a,b) => a.date.localeCompare(b.date));
   output.status = output.periods.length ? "completed_provider_reference" : "no_completed_reference";
@@ -155,6 +155,7 @@ export function buildCompletedPeriodReferences({ periods = [], candles = [], tim
 
 export function auditPeriodInventory({ periods = [], candles = [], tolerance = 0, cutoffDate = "" } = {}) {
   const issues = [];
+  const advisories = [];
   const seen = new Set();
   const evidence = [];
   for (let index = 0; index < periods.length; index += 1) {
@@ -172,9 +173,25 @@ export function auditPeriodInventory({ periods = [], candles = [], tolerance = 0
       fail("Invalid period high/low; null and zero are not prices");
       continue;
     }
-    if (period.sourceIntegrityWarning === true ||
-        (period.authoritativeSourceMissing === true && period.partialPeriod !== true)) {
+    // `sourceIntegrityWarning` means the native provider candle for this
+    // period existed but did not score well enough against the cutoff-safe
+    // reconstruction to be trusted on its own (see server.js's
+    // native_htf_alignment_failed_cutoff_safe_fallback) — server.js's own
+    // comment there is explicit that the cutoff-safe reconstruction is kept
+    // and meant to remain usable, with the warning only diagnostic. Failing
+    // the whole period here contradicted that: BNBUSD's 2026-08-31 week had
+    // a sound reconstruction (every other check in this loop passed) but was
+    // discarded anyway on this flag alone, so it never survived into
+    // completedPeriodReferences at all — not "provisional", just gone.
+    // `authoritativeSourceMissing` is a different, weaker situation (no
+    // provider higher-timeframe candle existed for the period at all, not
+    // just one that failed reconciliation) and remains a hard failure.
+    if (period.authoritativeSourceMissing === true && period.partialPeriod !== true) {
       fail("Provider period authority is incomplete or has an integrity warning");
+    } else if (period.sourceIntegrityWarning === true) {
+      advisories.push({ period: period.periodLabel || date, date, extreme: "period_integrity",
+        requiresReview: false, advisory: true,
+        resolution: "Native provider candle did not reconcile against the cutoff-safe reconstruction; using the reconstruction. Other integrity checks for this period passed." });
     }
     for (const field of ["open", "close"]) {
       if (positive(period[field]) && (Number(period[field]) > Number(period.high) + tolerance ||
@@ -193,7 +210,7 @@ export function auditPeriodInventory({ periods = [], candles = [], tolerance = 0
       highCandleDate: owned.find(c => Math.abs(Number(c.high) - Number(period.high)) <= tolerance)?.datetime || null,
       lowCandleDate: owned.find(c => Math.abs(Number(c.low) - Number(period.low)) <= tolerance)?.datetime || null });
   }
-  return { passed: periods.length > 0 && issues.length === 0, issues, evidence };
+  return { passed: periods.length > 0 && issues.length === 0, issues, advisories, evidence };
 }
 
 export function compareDatedPeriodInventories(primary = [], secondary = [], tolerance = 0) {

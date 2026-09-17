@@ -1,11 +1,31 @@
 // Read-only OANDA adapter. It never changes provider prices to fit a chart.
 const CURRENCIES=new Set('USD EUR GBP JPY CHF CAD AUD NZD SGD HKD NOK SEK DKK ZAR MXN TRY PLN CNH HUF CZK'.split(' '));
 const GRANULARITY={'1min':'M1','5min':'M5','15min':'M15','30min':'M30','1h':'H1','4h':'H4','1day':'D','1week':'W','1month':'M'};
+// UNVERIFIED against any live account: these are OANDA's commonly published
+// v20 CFD instrument codes, but (a) CFD availability depends on the specific
+// account's region/type — some OANDA accounts are FX-and-metals only — and
+// (b) I have no API access to confirm these codes or that this account can
+// see them. Before relying on this, call this account's own
+// /v3/accounts/{accountID}/instruments and check the returned names match.
+// Today this table is the only thing that can route USA100/USOIL to OANDA at
+// all: the regex below requires two 3-letter currency codes, so it could
+// never have matched these regardless of how the input string was spelled.
+const CFD_INSTRUMENTS={USA100:'NAS100_USD',NAS100:'NAS100_USD',USTEC:'NAS100_USD',
+ USA500:'SPX500_USD',US500:'SPX500_USD',SPX500:'SPX500_USD',USA30:'US30_USD',US30:'US30_USD',
+ UK100:'UK100_GBP',GER30:'DE30_EUR',GER40:'DE40_EUR',DE30:'DE30_EUR',DE40:'DE40_EUR',
+ JP225:'JP225_USD',USOIL:'WTICO_USD',WTICO:'WTICO_USD',UKOIL:'BCO_USD',UKBRENT:'BCO_USD'};
 export function oandaInstrument(symbol='') {
- const parts=String(symbol).toUpperCase().replace(/^#/,'').replace(/[/_]/g,'').match(/^([A-Z]{3})([A-Z]{3})$/);
+ const raw=String(symbol).toUpperCase().replace(/^#/,'').replace(/[/_]/g,'');
+ if(CFD_INSTRUMENTS[raw])return CFD_INSTRUMENTS[raw];
+ const parts=raw.match(/^([A-Z]{3})([A-Z]{3})$/);
  return parts&&parts[1]!==parts[2]&&CURRENCIES.has(parts[1])&&CURRENCIES.has(parts[2])?`${parts[1]}_${parts[2]}`:null;
 }
-export function forexPipSize(symbol) {const pair=oandaInstrument(symbol);return pair?(pair.endsWith('_JPY')?.01:.0001):null;}
+// A CFD instrument (from the table above) is not a currency pair, so a pip
+// size / three-pip tolerance built for currency pairs must not apply to it —
+// 0.0003 is meaningless for an index around 29000. Only compute a pip size
+// when the instrument is genuinely two recognized currencies.
+function isForexPair(pair){const p=String(pair||'').split('_');return p.length===2&&CURRENCIES.has(p[0])&&CURRENCIES.has(p[1]);}
+export function forexPipSize(symbol) {const pair=oandaInstrument(symbol);return isForexPair(pair)?(pair.endsWith('_JPY')?.01:.0001):null;}
 export function forexComparisonTolerance(symbol){const pip=forexPipSize(symbol);return pip===null?null:Number((3*pip).toFixed(8));}
 function fail(message,category='provider_error'){return Object.assign(new Error(message),{category});}
 export function normalizeOandaConfig({token="",environment="practice",price="B"}={}) {

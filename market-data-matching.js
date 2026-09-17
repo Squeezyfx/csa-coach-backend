@@ -2,7 +2,11 @@ import { forexComparisonTolerance } from "./oanda-data.js";
 // Provider reference checks are not a claim of broker-feed equivalence.
 export function providerSymbol(input = "") {
   const raw = String(input).trim().toUpperCase().replace(/^#/, "");
-  const aliases = { GOLD: "XAU/USD", SILVER: "XAG/USD", PLATINUM: "XPT/USD" };
+  // Twelve Data's commodities endpoint documents this instrument as
+  // "WTI/USD" ("Crude Oil WTI Spot"; confirmed against their own API docs).
+  // USOIL had no alias here at all, so it was sent to Twelve Data verbatim
+  // and rejected as an unrecognized symbol.
+  const aliases = { GOLD: "XAU/USD", SILVER: "XAG/USD", PLATINUM: "XPT/USD", USOIL: "WTI/USD", WTICOUSD: "WTI/USD" };
   if (aliases[raw]) return aliases[raw];
   if (raw.includes("/")) return raw;
   const pair = raw.match(/^(EUR|GBP|USD|CHF|CAD|AUD|NZD|JPY|SGD|HKD|SEK|NOK|DKK|ZAR|MXN|XAU|XAG|XPT|XPD|BTC|ETH|DOGE|SOL|XRP|ADA|LTC|BCH|BNB|AVAX|LINK|DOT|MATIC|TRX|SHIB|PEPE)(USDT|USDC|USD|EUR|GBP|JPY|CHF|CAD|AUD|NZD|SGD|HKD|SEK|NOK|DKK|ZAR|MXN|BTC|ETH)$/);
