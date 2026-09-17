@@ -3877,7 +3877,14 @@ async function fetchTwelveDataStructureLevels({
     level?.partialPeriod !== true
   );
 
-  console.log("CSA AUTHORITATIVE FRAMEWORK PERIODS:", {
+  // Built once and both logged (as before) and attached to the returned
+  // marketReference (new) so it reaches the benchmark export. Server logs on
+  // this deployment were not reliably capturing large single-line JSON
+  // payloads, which made a chart's period-level failure (e.g. why one week's
+  // candle was rejected) invisible once clearRejectedProviderData stripped
+  // the rest of marketReference for a failed chart. This is diagnostic only
+  // — it changes no decision, only what is visible afterward.
+  const frameworkPeriodDiagnostics = {
     source: ["daily-in-week", "weekly-in-month"].includes(profile?.structureMode)
       ? "native higher-timeframe candles reconciled extreme-by-extreme against CSA period integrity"
       : profile.frameworkSourceLabel || null,
@@ -3914,7 +3921,8 @@ async function fetchTwelveDataStructureLevels({
       partialPeriod: level.partialPeriod === true,
     })),
     rule: "completed_framework_periods_use_native_D1_W1_extremes_only_when_each_extreme_passes_session_integrity; native_period_mapping_is_chronologically_locked; contaminated_extremes_fall_back_to_cutoff_safe_same_period_reconstruction; incomplete_periods_reconstruct_only_to_cutoff",
-  });
+  };
+  console.log("CSA AUTHORITATIVE FRAMEWORK PERIODS:", frameworkPeriodDiagnostics);
   const csaAreas =
     buildCsaAreas(
       completedDailyLevels,
@@ -4061,6 +4069,7 @@ async function fetchTwelveDataStructureLevels({
         ? ""
         : `No usable ${profile.sourceUnitPlural} were returned before the chart cutoff.`,
     dailyLevels,
+    frameworkPeriodDiagnostics,
     structuralLevels: completedDailyLevels,
     currentFrameworkPeriodKey: currentFrameworkPeriod?.key || null,
     currentFrameworkPeriodLabel: currentFrameworkPeriod?.label || null,
@@ -11097,7 +11106,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
-const CSA_BUILD_ID = "CSA-v4.72.2-preferred-hour-tiebreak";
+const CSA_BUILD_ID = "CSA-v4.73.0-export-period-diagnostics";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -31043,7 +31052,7 @@ ${(visualReview?.strategyMissingInformation || []).length
         occupancy:
           Number(chartDetection?.chartOccupancyPercent || 0),
       },
-      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, providerSymbol: marketReference.providerSymbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, filteredCandleCount: marketReference.filteredCandleCount, frameworkCandleCount: marketReference.frameworkCandleCount, impulseCandleCount: marketReference.impulseCandleCount, providerCoverage: marketReference.providerCoverage, providerDiagnostics: marketReference.providerDiagnostics, providerAttempts: Array.isArray(marketReference.providerAttempts) ? marketReference.providerAttempts : [], failureCategory: marketReference.failureCategory || null, chartDataMatch: marketReference.chartDataMatch || null, chartCutoff: marketReference.chartCutoff || null, weekRange: marketReference.weekRange, impulseRange: marketReference.impulseRange, dailyLevels: marketReference.dailyLevels, structuralLevels: marketReference.structuralLevels, currentFrameworkPeriodKey: marketReference.currentFrameworkPeriodKey, currentFrameworkPeriodLabel: marketReference.currentFrameworkPeriodLabel, currentFrameworkPeriodComplete: marketReference.currentFrameworkPeriodComplete, timeframeCandles: marketReference.timeframeCandles, impulseCandles: marketReference.impulseCandles, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
+      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, providerSymbol: marketReference.providerSymbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, filteredCandleCount: marketReference.filteredCandleCount, frameworkCandleCount: marketReference.frameworkCandleCount, impulseCandleCount: marketReference.impulseCandleCount, providerCoverage: marketReference.providerCoverage, providerDiagnostics: marketReference.providerDiagnostics, providerAttempts: Array.isArray(marketReference.providerAttempts) ? marketReference.providerAttempts : [], failureCategory: marketReference.failureCategory || null, chartDataMatch: marketReference.chartDataMatch || null, chartCutoff: marketReference.chartCutoff || null, weekRange: marketReference.weekRange, impulseRange: marketReference.impulseRange, dailyLevels: marketReference.dailyLevels, structuralLevels: marketReference.structuralLevels, currentFrameworkPeriodKey: marketReference.currentFrameworkPeriodKey, currentFrameworkPeriodLabel: marketReference.currentFrameworkPeriodLabel, currentFrameworkPeriodComplete: marketReference.currentFrameworkPeriodComplete, timeframeCandles: marketReference.timeframeCandles, impulseCandles: marketReference.impulseCandles, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol), frameworkPeriodDiagnostics: marketReference.frameworkPeriodDiagnostics || null },
     };
 
     // Shape the complete response first. If this throws, nothing has yet
