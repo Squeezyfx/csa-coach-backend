@@ -1889,11 +1889,26 @@ function sanitizeVisibleTrigger(trigger, confidence = "low") {
   return text;
 }
 
-function getCleanBreakTolerance(symbol = "") {
+function getCleanBreakTolerance(symbol = "", price = null) {
   const compact = comparableInstrument(symbol);
   if (compact.includes("JPY")) return 0.02;
   if (compact.includes("XAU")) return 0.2;
   if (compact.includes("BTC")) return 20;
+  // The 0.0002 fallback below is an FX-pip-scale value with no relation to
+  // price level. For any instrument outside the four families above — other
+  // crypto, indices, other commodities — it is not just tight but close to
+  // zero relative to price: 0.0002 against BNB at ~$700 or an index at
+  // ~29000 leaves no room for ordinary rounding, let alone real feed
+  // variance. This is what failed BNBUSD's 2026-08-31 week: its own
+  // reconciled high (729.9) could not match any real candle within 0.0002
+  // of it, so the period-integrity check saw every nearby candle as
+  // "escaping" its range. closePriceTolerance (a sibling function in this
+  // file) already established the fix for this same gap with a price-scaled
+  // fallback; mirrored here rather than inventing a new rule. Backward
+  // compatible: omitting `price` reproduces the exact old constant, so every
+  // call site that does not opt in is unaffected.
+  const p = Number(price);
+  if (Number.isFinite(p) && p > 0) return Math.max(p * 0.0005, 0.0002);
   return 0.0002;
 }
 
@@ -11106,7 +11121,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
-const CSA_BUILD_ID = "CSA-v4.73.0-export-period-diagnostics";
+const CSA_BUILD_ID = "CSA-v4.73.1-price-scaled-period-tolerance";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -29513,7 +29528,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       visibleDateFloor: chartDetection?.latestPrintedAxisDate && chartDetection.latestPrintedAxisDate <= chartCutoff.resolvedDate
         ? chartDetection.latestPrintedAxisDate : "",
       providerAvailable: marketReference.ok === true,
-      tolerance: getCleanBreakTolerance(normalizedSymbol),
+      tolerance: getCleanBreakTolerance(normalizedSymbol, (chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice)),
     });
     completedPeriodReferences.source = marketReference.dataProvider || "Twelve Data";
     let chartDataMatch = null;
@@ -29584,7 +29599,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
                 visibleDateFloor: chartDetection?.latestPrintedAxisDate && chartDetection.latestPrintedAxisDate <= chartCutoff.resolvedDate
                   ? chartDetection.latestPrintedAxisDate : "",
                 providerAvailable: marketReference.ok === true,
-                tolerance: getCleanBreakTolerance(normalizedSymbol),
+                tolerance: getCleanBreakTolerance(normalizedSymbol, (chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice)),
               });
               completedPeriodReferences.source = "Twelve Data";
             }
@@ -29729,7 +29744,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
               visibleDateFloor: chartDetection?.latestPrintedAxisDate && chartDetection.latestPrintedAxisDate <= chartCutoff.resolvedDate
                 ? chartDetection.latestPrintedAxisDate : "",
               providerAvailable: true,
-              tolerance: getCleanBreakTolerance(normalizedSymbol),
+              tolerance: getCleanBreakTolerance(normalizedSymbol, (chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice)),
             });
             completedPeriodReferences.source = "Twelve Data";
           } else {
