@@ -17,7 +17,17 @@
  * close match has a large one.
  */
 
-/** Same bound as the server's same-instrument check. */
+/**
+ * Default feed-offset bound when the caller does not supply a symbol-aware
+ * one. Kept only as a fallback: a flat percentage of price is the wrong
+ * shape for this check. A feed/broker offset is a roughly constant, small
+ * absolute amount (a few pips), not a fraction of price, so it should not
+ * scale with the instrument's price level. 0.5% of BTC at $78,000 is $390 —
+ * larger than BTC often moves within one hourly candle — which is how an
+ * unrelated candle passed as a "feed offset" match in the reference export.
+ * Callers should pass `maxOffset` (an absolute price amount, e.g. a multiple
+ * of their own per-symbol clean-break tolerance) instead of relying on this.
+ */
 export const MAX_FEED_OFFSET_RATIO = 0.005;
 
 const FIELDS = ["open", "high", "low", "close"];
@@ -65,6 +75,12 @@ export function scoreOhlcAlignment(visible, candle) {
   return { diffs, offset, residual, offsetRatio };
 }
 
+function offsetWithinBound(offset, visibleClose, maxOffset) {
+  return Number.isFinite(maxOffset)
+    ? Math.abs(offset) <= maxOffset
+    : Math.abs(offset) / visibleClose <= MAX_FEED_OFFSET_RATIO;
+}
+
 /**
  * True when the candle is the same bar as the screenshot's final candle,
  * allowing a constant feed offset.
@@ -74,10 +90,10 @@ export function scoreOhlcAlignment(visible, candle) {
  * In that case only the open must track the offset, and the chart's high and
  * low must sit inside the provider range (after removing the offset).
  */
-export function ohlcAligned(visible, candle, tolerance, { partial = false } = {}) {
+export function ohlcAligned(visible, candle, tolerance, { partial = false, maxOffset = null } = {}) {
   const s = scoreOhlcAlignment(visible, candle);
   if (!s) return { aligned: false, reason: "incomplete_ohlc" };
-  if (s.offsetRatio > MAX_FEED_OFFSET_RATIO) {
+  if (!offsetWithinBound(s.offset, visible.close, maxOffset)) {
     return { aligned: false, reason: "offset_exceeds_same_instrument_bound", ...s };
   }
   if (!partial) {
@@ -85,13 +101,19 @@ export function ohlcAligned(visible, candle, tolerance, { partial = false } = {}
       ? { aligned: true, mode: "full_ohlc", ...s }
       : { aligned: false, reason: "ohlc_shape_mismatch", ...s };
   }
+  // The partial check only needs the open to agree (the period hasn't moved
+  // yet at its own start), so gate specifically on the open offset rather
+  // than the median-of-four offset scoreOhlcAlignment computed for full mode.
   const openOffset = s.diffs.open;
+  if (!offsetWithinBound(openOffset, visible.close, maxOffset)) {
+    return { aligned: false, reason: "offset_exceeds_same_instrument_bound", ...s, offset: openOffset };
+  }
   const hi = num(candle.high) + openOffset;
   const lo = num(candle.low) + openOffset;
   const inside = visible.high <= hi + tolerance && visible.low >= lo - tolerance;
   return inside
     ? { aligned: true, mode: "partial_open_and_range", ...s, offset: openOffset }
-    : { aligned: false, reason: "partial_candle_outside_provider_range", ...s };
+    : { aligned: false, reason: "partial_candle_outside_provider_range", ...s, offset: openOffset };
 }
 
 /**
@@ -101,14 +123,77 @@ export function ohlcAligned(visible, candle, tolerance, { partial = false } = {}
  */
 export function findOhlcAlignedCandle(candles = [], visible, tolerance, {
   accept = () => true,
+  maxOffset = null,
 } = {}) {
   if (!visible || !Array.isArray(candles)) return null;
   const hits = [];
   candles.forEach((candle, index) => {
     if (!accept(candle)) return;
-    const r = ohlcAligned(visible, candle, tolerance);
+    const r = ohlcAligned(visible, candle, tolerance, { maxOffset });
     if (r.aligned) hits.push({ candle, index, ...r });
   });
   hits.sort((a, b) => a.residual - b.residual || a.index - b.index);
   return hits[0] || null;
+}
+
+/**
+ * Correct a same-instrument chartDataMatch that a close-only comparison
+ * flagged as unverified, when the chart's own OHLC actually matches a
+ * provider candle.
+ *
+ * Two matches are checked, in order:
+ *  1. Full-shape match near the candle the caller already identified
+ *     (candleDate). Catches a broker feed offset that a plain close
+ *     comparison mistook for a mismatch.
+ *  2. Partial-candle match against that exact candle only. The chart's final
+ *     candle can still be forming (screenshot taken mid-hour) while the
+ *     provider's candle for the same hour has already closed; only the open
+ *     is expected to track the feed offset, and the chart's high/low must sit
+ *     inside the provider's completed range. This is GBPUSD 2026-09-09
+ *     15:00 in the reference export: open matched to 2.9 pips, but the
+ *     chart's high/low were narrower than the closed hourly bar because the
+ *     hour had not finished when the screenshot was taken.
+ *
+ * Only ever upgrades a non-matching status to "matched_reference" or
+ * "partial_reference" — an existing match is left alone, and no candle
+ * search is widened for the partial check, so this cannot pick a
+ * numerically-closer but wrong candle the way a close-only search can.
+ */
+export function reconcileChartDataMatch({
+  chartDataMatch, candles = [], alignmentCandle = null, visibleOhlc, tolerance, maxOffset = null, windowSize = 2,
+} = {}) {
+  if (!chartDataMatch || !visibleOhlc || !["mismatch", "date_unverified", "time_unverified", "partial_or_unknown_candle"]
+    .includes(chartDataMatch.status)) {
+    return chartDataMatch;
+  }
+  // The candle assessChartDataMatch actually compared against may be the live,
+  // still-forming candle OANDA returns through a separate alignment fetch,
+  // not anything present in the regular candle series (that series omits
+  // in-progress candles). Search it first so the anchor lookup below can
+  // find it.
+  const pool = alignmentCandle ? [...candles, alignmentCandle] : candles;
+  const anchorIndex = pool.findIndex((c) => normalizeCandleDatetime(c?.datetime) === normalizeCandleDatetime(chartDataMatch.candleDate));
+  if (anchorIndex === -1) return chartDataMatch;
+
+  const window = pool
+    .map((candle, index) => ({ candle, index }))
+    .filter(({ index }) => Math.abs(index - anchorIndex) <= windowSize);
+  const full = findOhlcAlignedCandle(window.map((w) => w.candle), visibleOhlc, tolerance, { maxOffset });
+  if (full) {
+    return { ...chartDataMatch, status: "matched_reference", matchMode: full.mode,
+      feedOffset: full.offset, ohlcResidual: full.residual, candleDate: full.candle.datetime,
+      priorStatus: chartDataMatch.status, reason: "OHLC shape matched a provider candle; the original close-only check missed a consistent feed offset." };
+  }
+  const anchorCandle = pool[anchorIndex];
+  const partial = ohlcAligned(visibleOhlc, anchorCandle, tolerance, { partial: true, maxOffset });
+  if (partial.aligned) {
+    return { ...chartDataMatch, status: "partial_reference", matchMode: partial.mode,
+      feedOffset: partial.offset, ohlcResidual: partial.residual,
+      priorStatus: chartDataMatch.status, reason: "Chart candle was still forming; open and range fit inside the provider's completed candle for the same period." };
+  }
+  return chartDataMatch;
+}
+
+function normalizeCandleDatetime(value = "") {
+  return String(value || "").trim().replace("T", " ").slice(0, 19);
 }

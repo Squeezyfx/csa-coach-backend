@@ -2,7 +2,7 @@ import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFr
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
 import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields, supplementLivePeriod } from "./framework-periods.js";
-import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle } from "./candle-alignment.js";
+import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, reconcileChartDataMatch } from "./candle-alignment.js";
 import { periodCompleteAtCutoff } from "./period-completion.js";
 import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
@@ -1618,6 +1618,16 @@ const CONTEXT_ONLY_TRIGGER_WORDS = [
   "consolidation", "consolidating", "reaction", "range", "ranging", "moving away"
 ];
 
+// Tickers that are NOT currency pairs but happen to be 6 characters, so the
+// generic "6 letters -> split 3/3" forex heuristic below would otherwise cut
+// them in half (USA100 -> "USA/100"). That corrupted string then reaches
+// every downstream provider/instrument lookup, including OANDA's own
+// instrument table, under a name it was never meant to receive. USA100 was
+// getting routed to Twelve Data's NDX/USTEC (subscription-restricted)
+// instead of ever being tried against OANDA, because oandaInstrument()
+// received "USA/100" rather than "USA100" or a real alias.
+const NON_FOREX_SIX_CHAR_TICKERS = new Set(["USA100", "NAS100", "USA30", "GER40", "USDIDX"]);
+
 function normalizeSymbol(input = "") {
   const raw = String(input).trim().toUpperCase().replace(/\s+/g, "");
   const map = {
@@ -1628,6 +1638,7 @@ function normalizeSymbol(input = "") {
   };
   if (map[raw]) return map[raw];
   if (raw.includes("/")) return raw;
+  if (NON_FOREX_SIX_CHAR_TICKERS.has(raw)) return raw;
   if (raw.length === 6) return `${raw.slice(0, 3)}/${raw.slice(3)}`;
   return raw || "";
 }
@@ -11056,7 +11067,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
-const CSA_BUILD_ID = "CSA-v4.71.0-cutoff-safe-live-period";
+const CSA_BUILD_ID = "CSA-v4.72.0-symbol-and-feed-offset-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -29563,6 +29574,32 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             fallbackAccepted: true,
           };
         }
+      }
+      // The comparison above can be a close-only check (see its own
+      // module); that alone cannot distinguish a genuine mismatch from a
+      // constant broker feed offset, or from a chart candle that was still
+      // forming when the screenshot was taken. Re-check with the full
+      // visible OHLC before accepting a rejection. This never downgrades an
+      // existing match, and the partial-candle check never searches beyond
+      // the single candle already identified, so it cannot substitute a
+      // different, wrong bar the way a looser close search could.
+      const reconciledDataMatch = reconcileChartDataMatch({
+        chartDataMatch,
+        candles: marketReference.impulseCandles?.length ? marketReference.impulseCandles : marketReference.timeframeCandles,
+        alignmentCandle: marketReference.oandaAlignmentCandle || null,
+        visibleOhlc: visibleOhlcFromDetection(chartDetection),
+        tolerance: getFinalVisiblePriceSyncTolerance({ marketReference, symbol: normalizedSymbol, targetPrice: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice }),
+        // A feed offset is a small, roughly constant amount (a few pips), not
+        // a fraction of price. Scaling it as a percentage let a BTC candle
+        // hundreds of dollars away from the chart's own open pass as a
+        // "matched" feed offset. getCleanBreakTolerance is this codebase's
+        // existing per-symbol small-move scale; five of it comfortably covers
+        // a broker/provider feed gap without accepting an unrelated candle.
+        maxOffset: getCleanBreakTolerance(normalizedSymbol) * 5,
+      });
+      if (reconciledDataMatch !== chartDataMatch) {
+        console.log("[chart-data-match] reconciled: " + JSON.stringify({ symbol: normalizedSymbol, from: chartDataMatch.status, to: reconciledDataMatch.status, matchMode: reconciledDataMatch.matchMode, feedOffset: reconciledDataMatch.feedOffset }));
+        chartDataMatch = reconciledDataMatch;
       }
       marketReference.chartDataMatch = chartDataMatch;
       if (marketReference.dataProvider === "OANDA" && chartDataMatch.status === "matched_reference" && marketReference.oandaAlignmentCandle) {
