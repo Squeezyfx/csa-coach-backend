@@ -2,7 +2,7 @@ import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFr
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
 import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields, supplementLivePeriod } from "./framework-periods.js";
-import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, reconcileChartDataMatch } from "./candle-alignment.js";
+import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch } from "./candle-alignment.js";
 import { periodCompleteAtCutoff } from "./period-completion.js";
 import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
@@ -4145,6 +4145,14 @@ function getFinalVisiblePriceSyncTolerance({
   );
 }
 
+/** "YYYY-MM-DD HH:MM:00" from chart detection's date+time, or null if either is unusable. */
+function preferredCandleDatetime(chartDetection) {
+  const date = String(chartDetection?.latestVisibleDate || "").trim();
+  const time = String(chartDetection?.latestVisibleTime || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return null;
+  return `${date} ${time}:00`;
+}
+
 function findBestCandleForVisibleClose({
   candles = [],
   targetPrice = null,
@@ -4152,20 +4160,29 @@ function findBestCandleForVisibleClose({
   anchorDate = "",
   maximumDateDistanceDays = null,
   visibleOhlc = null,
+  preferredDatetime = null,
 }) {
   // With a full visible OHLC, match the candle's shape, not just its close.
   // A close-only match picked XAUUSD's 13:00 bar for an 08:00 chart and
   // leaked five hours of future data into the review.
+  //
+  // A pure smallest-residual search across the whole day is not safe either:
+  // a broker feed offset drifts over a session, so a distant candle's diffs
+  // can occasionally cluster tighter than the true match's and win anyway.
+  // XAUUSD 2026-09-09 hit exactly this: 08:00 (correct) has residual 1.73;
+  // 23:00, fifteen hours later, has residual 1.38 and would otherwise win.
+  // preferredDatetime (the chart's own detected hour, at any confidence,
+  // since alignment here is what actually validates it) is checked first and
+  // used whenever it aligns at all, before the broader search runs.
   if (visibleOhlc) {
     const anchor = parseISODateOnly(anchorDate);
     const maxDays = Number(maximumDateDistanceDays);
-    const hit = findOhlcAlignedCandle(candles, visibleOhlc, tolerance, {
-      accept: (candle) => {
-        if (!anchor || !Number.isFinite(maxDays)) return true;
-        const d = parseISODateOnly(candleDateOnly(candle?.datetime));
-        return !d || Math.abs(getDaysBetweenDates(anchor, d)) <= maxDays;
-      },
-    });
+    const accept = (candle) => {
+      if (!anchor || !Number.isFinite(maxDays)) return true;
+      const d = parseISODateOnly(candleDateOnly(candle?.datetime));
+      return !d || Math.abs(getDaysBetweenDates(anchor, d)) <= maxDays;
+    };
+    const hit = pickAlignedCandle(candles, visibleOhlc, tolerance, { accept, preferredDatetime });
     return hit ? { ...hit, closeDistance: Math.abs(Number(hit.candle.close) - visibleOhlc.close), matchMode: hit.mode } : null;
   }
   const target = Number(targetPrice);
@@ -4317,6 +4334,7 @@ async function synchronizeFinalVisibleMarketReference({
     anchorDate: chartDetection?.latestVisibleDate || "",
     maximumDateDistanceDays: chartDetection?.latestVisibleDate ? 1 : null,
     visibleOhlc,
+    preferredDatetime: preferredCandleDatetime(chartDetection),
   });
   let searchSource = "initial_market_reference";
 
@@ -4375,6 +4393,7 @@ async function synchronizeFinalVisibleMarketReference({
         anchorDate: chartDetection?.latestVisibleDate || "",
         maximumDateDistanceDays: chartDetection?.latestVisibleDate ? 1 : null,
         visibleOhlc,
+        preferredDatetime: preferredCandleDatetime(chartDetection),
       });
 
       if (extendedMatch) {
@@ -11078,7 +11097,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
-const CSA_BUILD_ID = "CSA-v4.72.1-exact-time-evidence-widened";
+const CSA_BUILD_ID = "CSA-v4.72.2-preferred-hour-tiebreak";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS

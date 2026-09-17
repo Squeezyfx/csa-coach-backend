@@ -137,6 +137,40 @@ export function findOhlcAlignedCandle(candles = [], visible, tolerance, {
 }
 
 /**
+ * Pick the provider candle matching the chart's final visible candle.
+ *
+ * A pure "smallest residual across the day" search is not safe on its own:
+ * a broker's feed offset is not perfectly constant through a session, so a
+ * distant candle's four diffs can occasionally cluster more tightly than the
+ * true match's do, and win on residual alone even though it is obviously the
+ * wrong hour. XAUUSD 2026-09-09 is a reference case for this: the 08:00
+ * candle (correct, offset ~+11) has residual 1.73; the 23:00 candle (15
+ * hours later, offset ~+18) has residual 1.38 and would win a plain search.
+ *
+ * When the chart itself suggested an hour (`preferredDatetime`, built from
+ * whatever time-reading path ran, at any confidence level, since alignment
+ * below is what actually validates it), that specific candle is checked
+ * first and used if it aligns at all, before any broader search runs. Only
+ * when there is no hour hint, or that hour does not exist in the provider
+ * series, or it fails alignment there, does the search fall back to ranking
+ * every candle in the window — the previous, riskier behaviour.
+ */
+export function pickAlignedCandle(candles = [], visible, tolerance, {
+  accept = () => true,
+  maxOffset = null,
+  preferredDatetime = null,
+} = {}) {
+  if (preferredDatetime) {
+    const index = candles.findIndex((c) => normalizeCandleDatetime(c?.datetime) === normalizeCandleDatetime(preferredDatetime));
+    if (index !== -1 && accept(candles[index])) {
+      const r = ohlcAligned(visible, candles[index], tolerance, { maxOffset });
+      if (r.aligned) return { candle: candles[index], index, ...r, preferred: true };
+    }
+  }
+  return findOhlcAlignedCandle(candles, visible, tolerance, { accept, maxOffset });
+}
+
+/**
  * Correct a same-instrument chartDataMatch that a close-only comparison
  * flagged as unverified, when the chart's own OHLC actually matches a
  * provider candle.
