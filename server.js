@@ -4254,7 +4254,18 @@ async function synchronizeFinalVisibleMarketReference({
   if (normalizedMode !== "final_visible") {
     return unchanged("not_final_visible_mode");
   }
-  if (chartDetection?.latestVisibleDateEvidence !== "explicit_final_candle_timestamp") {
+  // Line ~2952 already treats these three evidence types as equally exact
+  // ("usableDetectedTime"), because the axis/bar-count reader below promotes
+  // its own output to latestVisibleTimeConfidence: "high" whenever the vision
+  // pass itself did not return an explicit timestamp. Gating this price check
+  // on "explicit_final_candle_timestamp" alone excluded exactly the runs
+  // where that reader's own hour is wrong: XAUUSD 2026-09-09 was read as
+  // 08:00 (explicit, correct) on one run and 09:00 (verified_multi_anchor_
+  // axis_count, one candle off) on the next run of the same chart, and the
+  // second evidence type skipped this check entirely, letting the wrong hour
+  // through uncorrected.
+  const EXACT_TIME_EVIDENCE = ["explicit_final_candle_timestamp", "verified_axis_bar_count", "verified_multi_anchor_axis_count"];
+  if (!EXACT_TIME_EVIDENCE.includes(chartDetection?.latestVisibleDateEvidence)) {
     return unchanged("date_unverified_no_price_based_date_shift");
   }
 
@@ -11067,7 +11078,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
-const CSA_BUILD_ID = "CSA-v4.72.0-symbol-and-feed-offset-fix";
+const CSA_BUILD_ID = "CSA-v4.72.1-exact-time-evidence-widened";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
