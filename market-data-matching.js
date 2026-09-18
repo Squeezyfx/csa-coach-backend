@@ -153,7 +153,12 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
 
 export function clearRejectedProviderData(reference = {}) {
   const safe = {};
-  for (const key of ["dataProvider", "providerPriceComponent", "symbol", "providerSymbol", "timezone", "interval", "frameworkInterval", "profile", "chartCutoff", "chartDataMatch", "providerCoverage", "providerDiagnostics", "providerAttempts", "error", "failureCategory", "rawCandleCount", "filteredCandleCount", "frameworkCandleCount", "impulseCandleCount", "frameworkPeriodDiagnostics"]) {
+  // "timeframeCandles" added alongside frameworkPeriodDiagnostics: BNBUSD's
+  // 2026-08-31 week fails with a $50.74 gap between the provider's native
+  // weekly candle (780.64) and the cutoff-safe reconstruction (729.9) — too
+  // large to be rounding noise, and too large to responsibly guess at
+  // without seeing the actual hourly candles for that week. Diagnostic only.
+  for (const key of ["dataProvider", "providerPriceComponent", "symbol", "providerSymbol", "timezone", "interval", "frameworkInterval", "profile", "chartCutoff", "chartDataMatch", "providerCoverage", "providerDiagnostics", "providerAttempts", "error", "failureCategory", "rawCandleCount", "filteredCandleCount", "frameworkCandleCount", "impulseCandleCount", "frameworkPeriodDiagnostics", "timeframeCandles"]) {
     if (reference[key] !== undefined) safe[key] = reference[key];
   }
   return { ...safe, ok: false, priceAuthority: "unverified",
