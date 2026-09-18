@@ -3564,6 +3564,13 @@ async function fetchTwelveDataStructureLevels({
     filteredCandlesFirstDatetime: filteredCandles[0]?.datetime || null,
     filteredCandlesLastDatetime: filteredCandles.at(-1)?.datetime || null,
     executionFrameworkRawCandlesCount: executionFrameworkRawCandles.length,
+    // The count alone (54, confirmed non-zero) wasn't enough to find why
+    // normalizeMarketCandles turns this into an empty timeframeCandles — its
+    // filter requires datetime plus all four of open/high/low/close to be
+    // finite, so whichever of those is actually malformed has to be seen
+    // directly. A small sample rather than the full 54 to keep this light.
+    executionFrameworkRawCandlesSample: executionFrameworkRawCandles.slice(0, 5),
+    timeframeCandlesCount: timeframeCandles.length,
     structureMode: profile?.structureMode || null,
   };
 
@@ -11154,7 +11161,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
-const CSA_BUILD_ID = "CSA-v4.73.3-structure-range-diagnostics";
+const CSA_BUILD_ID = "CSA-v4.73.4-structure-range-sample";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
