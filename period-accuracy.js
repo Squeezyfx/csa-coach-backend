@@ -127,7 +127,7 @@ export function buildCompletedPeriodReferences({ periods = [], candles = [], tim
   for (const period of periods) {
     const date = String(period.date || "");
     const start = new Date(`${date}T00:00:00Z`);
-    const reject = reason => output.rejected.push({ date, reason });
+    const reject = (reason, details = {}) => output.rejected.push({ date, reason, ...details });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(start.getTime()) || start.toISOString().slice(0,10) !== date || counts.get(period.date) !== 1) { reject("invalid_or_duplicate_date"); continue; }
     const end = new Date(start);
     if (timeframe === "D1") {
@@ -142,7 +142,10 @@ export function buildCompletedPeriodReferences({ periods = [], candles = [], tim
     const endDate = end.toISOString().slice(0,10);
     const owned = candles.filter(c => String(c.datetime || c.date || "").slice(0,10) >= date && String(c.datetime || c.date || "").slice(0,10) < endDate);
     const audit = auditPeriodInventory({periods:[period], candles:owned, tolerance, cutoffDate:visibleDateFloor});
-    if (!audit.passed) { reject("period_integrity_failed"); continue; }
+    // Surface the actual issue, not just the generic label: "period_integrity_failed"
+    // alone gave no way to tell a genuine data problem from a rounding-scale
+    // near-miss (BNBUSD's 2026-08-31 week needed this to diagnose).
+    if (!audit.passed) { reject("period_integrity_failed", { issues: audit.issues, periodHigh: Number(period.high), periodLow: Number(period.low), tolerance }); continue; }
     output.periods.push({ date, endDateExclusive:endDate, period:period.periodLabel || period.day || date,
       high:Number(period.high), low:Number(period.low), source:"provider_reference",
       integrityChecked:true, chartVerified:false, brokerVerified:false, entryEligible:false,
