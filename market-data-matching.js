@@ -160,7 +160,18 @@ export function clearRejectedProviderData(reference = {}) {
     if (reference[key] !== undefined) safe[key] = reference[key];
   }
   return { ...safe, ok: false, priceAuthority: "unverified",
-    dailyLevels: [], structuralLevels: [], timeframeCandles: [], impulseCandles: [], csaAreas: [], approvedAreas: [],
+    // timeframeCandles is deliberately NOT reset here (see below): adding it
+    // to the allowlist above did nothing on its own, because this line used
+    // to also list `timeframeCandles: []` after `...safe` — later properties
+    // in an object literal win, so it silently overwrote the real array back
+    // to empty every time. That was the actual cause of BNBUSD's raw candles
+    // never reaching the export, not anything in how those candles were
+    // built. dailyLevels/structuralLevels/impulseCandles/csaAreas/
+    // approvedAreas are still reset here on purpose: those are downstream
+    // ANALYSIS results that genuinely should not be trusted once the
+    // provider data behind them is unverified. The raw candles themselves
+    // are not an analysis result, just evidence for diagnosing why.
+    dailyLevels: [], structuralLevels: [], timeframeCandles: safe.timeframeCandles || [], impulseCandles: [], csaAreas: [], approvedAreas: [],
     frameworkCandleCount: 0, impulseCandleCount: 0,
     directionalBias: { bias: "Unverified", biasCode: "unverified", confidence: "low", provisional: true,
       higherTimeframeView: "Provider prices were not verified against the chart; no provider-derived direction is available.",
