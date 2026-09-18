@@ -2,7 +2,7 @@ import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFr
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
 import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields, supplementLivePeriod } from "./framework-periods.js";
-import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, reconcileChartDataMatch } from "./candle-alignment.js";
+import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch } from "./candle-alignment.js";
 import { periodCompleteAtCutoff } from "./period-completion.js";
 import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
@@ -1889,11 +1889,26 @@ function sanitizeVisibleTrigger(trigger, confidence = "low") {
   return text;
 }
 
-function getCleanBreakTolerance(symbol = "") {
+function getCleanBreakTolerance(symbol = "", price = null) {
   const compact = comparableInstrument(symbol);
   if (compact.includes("JPY")) return 0.02;
   if (compact.includes("XAU")) return 0.2;
   if (compact.includes("BTC")) return 20;
+  // The 0.0002 fallback below is an FX-pip-scale value with no relation to
+  // price level. For any instrument outside the four families above — other
+  // crypto, indices, other commodities — it is not just tight but close to
+  // zero relative to price: 0.0002 against BNB at ~$700 or an index at
+  // ~29000 leaves no room for ordinary rounding, let alone real feed
+  // variance. This is what failed BNBUSD's 2026-08-31 week: its own
+  // reconciled high (729.9) could not match any real candle within 0.0002
+  // of it, so the period-integrity check saw every nearby candle as
+  // "escaping" its range. closePriceTolerance (a sibling function in this
+  // file) already established the fix for this same gap with a price-scaled
+  // fallback; mirrored here rather than inventing a new rule. Backward
+  // compatible: omitting `price` reproduces the exact old constant, so every
+  // call site that does not opt in is unaffected.
+  const p = Number(price);
+  if (Number.isFinite(p) && p > 0) return Math.max(p * 0.0005, 0.0002);
   return 0.0002;
 }
 
@@ -3533,6 +3548,25 @@ async function fetchTwelveDataStructureLevels({
       executionFrameworkRawCandles
     );
 
+  // Diagnostic only, attached below via structureRangeDiagnostics: BNBUSD H4
+  // returned rawCandleCount/filteredCandleCount > 0 but timeframeCandles: []
+  // — every downstream per-candle array came back empty even though the
+  // provider clearly returned data. A hand-built reproduction of this exact
+  // filter with realistic H4 timestamps did not reproduce the emptiness, so
+  // the cause is something about the real request (the resolved structureRange
+  // dates, or the actual datetime format Twelve Data returned) rather than a
+  // logic bug visible in this function. Exposing the inputs directly rather
+  // than guessing again.
+  const structureRangeDiagnostics = {
+    structureRange,
+    chartDateISO: chartDate instanceof Date && !Number.isNaN(chartDate.getTime()) ? chartDate.toISOString() : String(chartDate),
+    filteredCandlesCount: filteredCandles.length,
+    filteredCandlesFirstDatetime: filteredCandles[0]?.datetime || null,
+    filteredCandlesLastDatetime: filteredCandles.at(-1)?.datetime || null,
+    executionFrameworkRawCandlesCount: executionFrameworkRawCandles.length,
+    structureMode: profile?.structureMode || null,
+  };
+
   // V4.9.0 â€” NATIVE HIGHER-TIMEFRAME AUTHORITY
   // -------------------------------------------------
   // Completed CSA framework periods are owned by the provider's native
@@ -3877,7 +3911,14 @@ async function fetchTwelveDataStructureLevels({
     level?.partialPeriod !== true
   );
 
-  console.log("CSA AUTHORITATIVE FRAMEWORK PERIODS:", {
+  // Built once and both logged (as before) and attached to the returned
+  // marketReference (new) so it reaches the benchmark export. Server logs on
+  // this deployment were not reliably capturing large single-line JSON
+  // payloads, which made a chart's period-level failure (e.g. why one week's
+  // candle was rejected) invisible once clearRejectedProviderData stripped
+  // the rest of marketReference for a failed chart. This is diagnostic only
+  // — it changes no decision, only what is visible afterward.
+  const frameworkPeriodDiagnostics = {
     source: ["daily-in-week", "weekly-in-month"].includes(profile?.structureMode)
       ? "native higher-timeframe candles reconciled extreme-by-extreme against CSA period integrity"
       : profile.frameworkSourceLabel || null,
@@ -3914,7 +3955,8 @@ async function fetchTwelveDataStructureLevels({
       partialPeriod: level.partialPeriod === true,
     })),
     rule: "completed_framework_periods_use_native_D1_W1_extremes_only_when_each_extreme_passes_session_integrity; native_period_mapping_is_chronologically_locked; contaminated_extremes_fall_back_to_cutoff_safe_same_period_reconstruction; incomplete_periods_reconstruct_only_to_cutoff",
-  });
+  };
+  console.log("CSA AUTHORITATIVE FRAMEWORK PERIODS:", frameworkPeriodDiagnostics);
   const csaAreas =
     buildCsaAreas(
       completedDailyLevels,
@@ -4061,6 +4103,8 @@ async function fetchTwelveDataStructureLevels({
         ? ""
         : `No usable ${profile.sourceUnitPlural} were returned before the chart cutoff.`,
     dailyLevels,
+    frameworkPeriodDiagnostics,
+    structureRangeDiagnostics,
     structuralLevels: completedDailyLevels,
     currentFrameworkPeriodKey: currentFrameworkPeriod?.key || null,
     currentFrameworkPeriodLabel: currentFrameworkPeriod?.label || null,
@@ -4145,6 +4189,14 @@ function getFinalVisiblePriceSyncTolerance({
   );
 }
 
+/** "YYYY-MM-DD HH:MM:00" from chart detection's date+time, or null if either is unusable. */
+function preferredCandleDatetime(chartDetection) {
+  const date = String(chartDetection?.latestVisibleDate || "").trim();
+  const time = String(chartDetection?.latestVisibleTime || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return null;
+  return `${date} ${time}:00`;
+}
+
 function findBestCandleForVisibleClose({
   candles = [],
   targetPrice = null,
@@ -4152,20 +4204,29 @@ function findBestCandleForVisibleClose({
   anchorDate = "",
   maximumDateDistanceDays = null,
   visibleOhlc = null,
+  preferredDatetime = null,
 }) {
   // With a full visible OHLC, match the candle's shape, not just its close.
   // A close-only match picked XAUUSD's 13:00 bar for an 08:00 chart and
   // leaked five hours of future data into the review.
+  //
+  // A pure smallest-residual search across the whole day is not safe either:
+  // a broker feed offset drifts over a session, so a distant candle's diffs
+  // can occasionally cluster tighter than the true match's and win anyway.
+  // XAUUSD 2026-09-09 hit exactly this: 08:00 (correct) has residual 1.73;
+  // 23:00, fifteen hours later, has residual 1.38 and would otherwise win.
+  // preferredDatetime (the chart's own detected hour, at any confidence,
+  // since alignment here is what actually validates it) is checked first and
+  // used whenever it aligns at all, before the broader search runs.
   if (visibleOhlc) {
     const anchor = parseISODateOnly(anchorDate);
     const maxDays = Number(maximumDateDistanceDays);
-    const hit = findOhlcAlignedCandle(candles, visibleOhlc, tolerance, {
-      accept: (candle) => {
-        if (!anchor || !Number.isFinite(maxDays)) return true;
-        const d = parseISODateOnly(candleDateOnly(candle?.datetime));
-        return !d || Math.abs(getDaysBetweenDates(anchor, d)) <= maxDays;
-      },
-    });
+    const accept = (candle) => {
+      if (!anchor || !Number.isFinite(maxDays)) return true;
+      const d = parseISODateOnly(candleDateOnly(candle?.datetime));
+      return !d || Math.abs(getDaysBetweenDates(anchor, d)) <= maxDays;
+    };
+    const hit = pickAlignedCandle(candles, visibleOhlc, tolerance, { accept, preferredDatetime });
     return hit ? { ...hit, closeDistance: Math.abs(Number(hit.candle.close) - visibleOhlc.close), matchMode: hit.mode } : null;
   }
   const target = Number(targetPrice);
@@ -4250,11 +4311,35 @@ async function synchronizeFinalVisibleMarketReference({
     },
   });
 
-  if (marketReference?.dataProvider === "OANDA") return unchanged("oanda_timestamp_locked_no_price_based_date_shift");
+  // This skip was written for FX pairs, where OANDA's own candle timestamps
+  // are reliable enough that a chart cutoff resolved to an EXACT time from
+  // them needs no second-guessing. Extending OANDA to index/commodity CFDs
+  // (USA100, USOIL) exposed a case that assumption never covered: when the
+  // chart's own time-reading confidence is only "medium", the cutoff never
+  // reaches an exact time in the first place and falls back to end-of-day —
+  // nothing OANDA-specific has actually been "locked". Skipping the price
+  // check then left USA100 compared against a 20:00 candle when 14:00 was
+  // the real one (chart_data_mismatch on the open, 2026-09-09). Only skip
+  // when the cutoff genuinely reached an exact time; a day-level fallback
+  // gets the same price-based rescue Twelve-Data-sourced charts get.
+  if (marketReference?.dataProvider === "OANDA" && chartCutoff?.precision !== "day") {
+    return unchanged("oanda_timestamp_locked_no_price_based_date_shift");
+  }
   if (normalizedMode !== "final_visible") {
     return unchanged("not_final_visible_mode");
   }
-  if (chartDetection?.latestVisibleDateEvidence !== "explicit_final_candle_timestamp") {
+  // Line ~2952 already treats these three evidence types as equally exact
+  // ("usableDetectedTime"), because the axis/bar-count reader below promotes
+  // its own output to latestVisibleTimeConfidence: "high" whenever the vision
+  // pass itself did not return an explicit timestamp. Gating this price check
+  // on "explicit_final_candle_timestamp" alone excluded exactly the runs
+  // where that reader's own hour is wrong: XAUUSD 2026-09-09 was read as
+  // 08:00 (explicit, correct) on one run and 09:00 (verified_multi_anchor_
+  // axis_count, one candle off) on the next run of the same chart, and the
+  // second evidence type skipped this check entirely, letting the wrong hour
+  // through uncorrected.
+  const EXACT_TIME_EVIDENCE = ["explicit_final_candle_timestamp", "verified_axis_bar_count", "verified_multi_anchor_axis_count"];
+  if (!EXACT_TIME_EVIDENCE.includes(chartDetection?.latestVisibleDateEvidence)) {
     return unchanged("date_unverified_no_price_based_date_shift");
   }
 
@@ -4306,6 +4391,7 @@ async function synchronizeFinalVisibleMarketReference({
     anchorDate: chartDetection?.latestVisibleDate || "",
     maximumDateDistanceDays: chartDetection?.latestVisibleDate ? 1 : null,
     visibleOhlc,
+    preferredDatetime: preferredCandleDatetime(chartDetection),
   });
   let searchSource = "initial_market_reference";
 
@@ -4364,6 +4450,7 @@ async function synchronizeFinalVisibleMarketReference({
         anchorDate: chartDetection?.latestVisibleDate || "",
         maximumDateDistanceDays: chartDetection?.latestVisibleDate ? 1 : null,
         visibleOhlc,
+        preferredDatetime: preferredCandleDatetime(chartDetection),
       });
 
       if (extendedMatch) {
@@ -11067,7 +11154,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
-const CSA_BUILD_ID = "CSA-v4.72.0-symbol-and-feed-offset-fix";
+const CSA_BUILD_ID = "CSA-v4.73.3-structure-range-diagnostics";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -29474,7 +29561,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       visibleDateFloor: chartDetection?.latestPrintedAxisDate && chartDetection.latestPrintedAxisDate <= chartCutoff.resolvedDate
         ? chartDetection.latestPrintedAxisDate : "",
       providerAvailable: marketReference.ok === true,
-      tolerance: getCleanBreakTolerance(normalizedSymbol),
+      tolerance: getCleanBreakTolerance(normalizedSymbol, (chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice)),
     });
     completedPeriodReferences.source = marketReference.dataProvider || "Twelve Data";
     let chartDataMatch = null;
@@ -29545,7 +29632,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
                 visibleDateFloor: chartDetection?.latestPrintedAxisDate && chartDetection.latestPrintedAxisDate <= chartCutoff.resolvedDate
                   ? chartDetection.latestPrintedAxisDate : "",
                 providerAvailable: marketReference.ok === true,
-                tolerance: getCleanBreakTolerance(normalizedSymbol),
+                tolerance: getCleanBreakTolerance(normalizedSymbol, (chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice)),
               });
               completedPeriodReferences.source = "Twelve Data";
             }
@@ -29690,7 +29777,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
               visibleDateFloor: chartDetection?.latestPrintedAxisDate && chartDetection.latestPrintedAxisDate <= chartCutoff.resolvedDate
                 ? chartDetection.latestPrintedAxisDate : "",
               providerAvailable: true,
-              tolerance: getCleanBreakTolerance(normalizedSymbol),
+              tolerance: getCleanBreakTolerance(normalizedSymbol, (chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice)),
             });
             completedPeriodReferences.source = "Twelve Data";
           } else {
@@ -31013,7 +31100,7 @@ ${(visualReview?.strategyMissingInformation || []).length
         occupancy:
           Number(chartDetection?.chartOccupancyPercent || 0),
       },
-      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, providerSymbol: marketReference.providerSymbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, filteredCandleCount: marketReference.filteredCandleCount, frameworkCandleCount: marketReference.frameworkCandleCount, impulseCandleCount: marketReference.impulseCandleCount, providerCoverage: marketReference.providerCoverage, providerDiagnostics: marketReference.providerDiagnostics, providerAttempts: Array.isArray(marketReference.providerAttempts) ? marketReference.providerAttempts : [], failureCategory: marketReference.failureCategory || null, chartDataMatch: marketReference.chartDataMatch || null, chartCutoff: marketReference.chartCutoff || null, weekRange: marketReference.weekRange, impulseRange: marketReference.impulseRange, dailyLevels: marketReference.dailyLevels, structuralLevels: marketReference.structuralLevels, currentFrameworkPeriodKey: marketReference.currentFrameworkPeriodKey, currentFrameworkPeriodLabel: marketReference.currentFrameworkPeriodLabel, currentFrameworkPeriodComplete: marketReference.currentFrameworkPeriodComplete, timeframeCandles: marketReference.timeframeCandles, impulseCandles: marketReference.impulseCandles, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol) },
+      marketReference: { ok: marketReference.ok, error: marketReference.error, symbol: marketReference.symbol, providerSymbol: marketReference.providerSymbol, timezone: marketReference.timezone, interval: marketReference.interval, rawCandleCount: marketReference.rawCandleCount, filteredCandleCount: marketReference.filteredCandleCount, frameworkCandleCount: marketReference.frameworkCandleCount, impulseCandleCount: marketReference.impulseCandleCount, providerCoverage: marketReference.providerCoverage, providerDiagnostics: marketReference.providerDiagnostics, providerAttempts: Array.isArray(marketReference.providerAttempts) ? marketReference.providerAttempts : [], failureCategory: marketReference.failureCategory || null, chartDataMatch: marketReference.chartDataMatch || null, chartCutoff: marketReference.chartCutoff || null, weekRange: marketReference.weekRange, impulseRange: marketReference.impulseRange, dailyLevels: marketReference.dailyLevels, structuralLevels: marketReference.structuralLevels, currentFrameworkPeriodKey: marketReference.currentFrameworkPeriodKey, currentFrameworkPeriodLabel: marketReference.currentFrameworkPeriodLabel, currentFrameworkPeriodComplete: marketReference.currentFrameworkPeriodComplete, timeframeCandles: marketReference.timeframeCandles, structureRangeDiagnostics: marketReference.structureRangeDiagnostics || null, impulseCandles: marketReference.impulseCandles, csaAreas: marketReference.csaAreas, directionalBias: marketReference.directionalBias, profile: marketReference.profile, structureMode: marketReference.profile?.structureMode, structureLabel: marketReference.profile?.structureLabel, cleanBreakTolerance: getCleanBreakTolerance(normalizedSymbol), frameworkPeriodDiagnostics: marketReference.frameworkPeriodDiagnostics || null },
     };
 
     // Shape the complete response first. If this throws, nothing has yet
