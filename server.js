@@ -11185,7 +11185,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
-const CSA_BUILD_ID = "CSA-v4.74.0-crypto-week-and-preferred-tolerance";
+const CSA_BUILD_ID = "CSA-v4.74.1-second-weekly-aggregator-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -20216,6 +20216,14 @@ function applyCurrentFrameworkPeriodLifecycle({
 function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", cutoffDate = "" } = {}) {
   const tf = comparableTimeframe(timeframe);
   if (tf === "H4") {
+    // aggregateH4CandlesIntoWeeklyInventory (csa-entry-policy.js) is a
+    // separate, independent weekly grouping from the one server.js itself
+    // builds (buildStructureLevelsFromCandles) for the reconciliation
+    // diagnostic. Both assumed markets close on weekends; only the first was
+    // fixed for crypto initially, which is why BNBUSD's reconciliation
+    // diagnostic could show the correct $780.64 high while this function,
+    // feeding the actual period-integrity check, still produced the old,
+    // understated $729.9 — it was dropping Saturday's candles entirely.
     const periods = aggregateH4CandlesIntoWeeklyInventory({
       candles: marketReference?.timeframeCandles || [],
       cutoffDate:
@@ -20223,6 +20231,7 @@ function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", 
         marketReference?.chartCutoff?.resolvedDate ||
         marketReference?.chartCutoff?.latestVisibleDate ||
         "",
+      tradesOnWeekends: isCryptoSymbol(marketReference?.symbol || marketReference?.providerSymbol || ""),
     });
     // Preserve an unfinished final week for the live monthly Fib frame, but
     // tag it so provisional W4/W5 wicks cannot become structural entries.

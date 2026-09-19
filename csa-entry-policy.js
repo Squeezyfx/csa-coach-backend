@@ -980,14 +980,25 @@ function dateOnlyFromCandle(value = "") {
   return match ? match[1] : null;
 }
 
-function mondayForTradingCandle(date) {
+function mondayForTradingCandle(date, { tradesOnWeekends = false } = {}) {
   const normalized = new Date(date);
   if (Number.isNaN(normalized.getTime())) return null;
   const weekday = normalized.getUTCDay();
-  // CSA weekly inventory is Monday-Friday only. Weekend candles must never be
-  // shifted into the following Monday because that contaminates the new week.
-  if (weekday === 0 || weekday === 6) return null;
-  const offset = 1 - weekday;
+  // CSA weekly inventory is Monday-Friday only for session-based markets
+  // (FX, indices, commodities), which is why a weekend candle here was
+  // dropped outright rather than shifted into the following Monday — the
+  // comment above this used to explain that a shift would "contaminate the
+  // new week." Crypto trades every day of the week, so a Saturday/Sunday
+  // candle is real trading, not a data artifact, and dropping it instead
+  // just discards real price action. BNBUSD's 2026-08-31 week is a direct
+  // case: its actual high of 780.64 fell on Saturday 2026-09-05 (confirmed
+  // against the chart and against Coinbase/TradingView) and was being
+  // dropped here, leaving the week's high understated by over $50.
+  if (!tradesOnWeekends && (weekday === 0 || weekday === 6)) return null;
+  // Find the Monday of the week actually containing this date. 1 - weekday
+  // only lands correctly for weekday 1-6; Sunday (0) needs -6, not +1, or it
+  // lands on the following week's Monday instead of the current week's.
+  const offset = weekday === 0 ? -6 : 1 - weekday;
   normalized.setUTCDate(normalized.getUTCDate() + offset);
   return normalized;
 }
@@ -995,6 +1006,7 @@ function mondayForTradingCandle(date) {
 export function aggregateH4CandlesIntoWeeklyInventory({
   candles = [],
   cutoffDate = "",
+  tradesOnWeekends = false,
 } = {}) {
   const cutoff = /^\d{4}-\d{2}-\d{2}$/.test(String(cutoffDate || ""))
     ? new Date(`${cutoffDate}T23:59:59.999Z`)
@@ -1025,7 +1037,7 @@ export function aggregateH4CandlesIntoWeeklyInventory({
       continue;
     }
 
-    const monday = mondayForTradingCandle(candleDate);
+    const monday = mondayForTradingCandle(candleDate, { tradesOnWeekends });
     if (!monday || monday > cutoff) continue;
     const key = monday.toISOString().slice(0, 10);
     const existing = grouped.get(key);
