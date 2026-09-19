@@ -7,7 +7,7 @@ import { periodCompleteAtCutoff } from "./period-completion.js";
 import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
-import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData } from "./market-data-matching.js";
+import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData, isCryptoSymbol } from "./market-data-matching.js";
 import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences, reconcilePeriodMapping, buildNoEntryTransparencyAudit } from "./period-accuracy.js";
 import cors from "cors";
 import multer from "multer";
@@ -2079,9 +2079,17 @@ function getPeriodKeyAndLabel(date, profile) {
   if (profile.structureMode === "daily-in-week") { const dateOnly = formatDateOnly(date); return { key: dateOnly, label: weekdayNameFromDate(dateOnly), date: dateOnly }; }
   if (profile.structureMode === "weekly-in-month") {
     const tradingDate = new Date(date);
-    const weekday = tradingDate.getUTCDay();
-    if (weekday === 0) tradingDate.setUTCDate(tradingDate.getUTCDate() + 1);
-    if (weekday === 6) tradingDate.setUTCDate(tradingDate.getUTCDate() + 2);
+    // FX, indices and commodities close on weekends, so a Saturday/Sunday
+    // timestamp there is normally a data artifact belonging to the next
+    // session — hence shifting it onto the following Monday. Crypto trades
+    // every day; applying that same shift moved real Saturday trading
+    // (BNBUSD 2026-09-05, including its actual weekly high of 780.64) into
+    // the following week's group, understating the true week by over $50.
+    if (!profile.tradesOnWeekends) {
+      const weekday = tradingDate.getUTCDay();
+      if (weekday === 0) tradingDate.setUTCDate(tradingDate.getUTCDate() + 1);
+      if (weekday === 6) tradingDate.setUTCDate(tradingDate.getUTCDate() + 2);
+    }
     const tradingYear = tradingDate.getUTCFullYear();
     const tradingMonth = tradingDate.getUTCMonth();
     const mondayWeeks = [];
@@ -2097,7 +2105,13 @@ function getPeriodKeyAndLabel(date, profile) {
         mondayWeeks.push(mondayKey);
       }
     }
-    const targetMonday = addDays(tradingDate, 1 - tradingDate.getUTCDay());
+    // 1 - weekday only lands on the correct Monday for weekday 1-6; for
+    // Sunday (0) it would add a day forward instead of subtracting six. That
+    // was never reachable before crypto could skip the shift above (every
+    // other path already turns Sunday into Monday first), so it never
+    // surfaced. Handled explicitly rather than relying on the shift above.
+    const daysToMonday = tradingDate.getUTCDay() === 0 ? -6 : 1 - tradingDate.getUTCDay();
+    const targetMonday = addDays(tradingDate, daysToMonday);
     const targetMondayKey = formatDateOnly(targetMonday);
     const weekNumber = Math.max(1, mondayWeeks.indexOf(targetMondayKey) + 1);
     return {
@@ -3105,7 +3119,7 @@ async function fetchTwelveDataStructureLevels({
   const useOanda = Boolean(oandaInstrument(symbol)) && selectedProvider === "oanda";
   const dataProvider = useOanda ? "OANDA" : "Twelve Data";
   const apiKey = process.env.TWELVE_DATA_API_KEY;
-  const profile = getSupportedCsaTimeframeProfile(timeframe);
+  const profile = { ...getSupportedCsaTimeframeProfile(timeframe), tradesOnWeekends: isCryptoSymbol(symbol) };
 
   const empty = (error, range = null, diagnostics = {}) => ({
     ok: false,
@@ -3564,6 +3578,13 @@ async function fetchTwelveDataStructureLevels({
     filteredCandlesFirstDatetime: filteredCandles[0]?.datetime || null,
     filteredCandlesLastDatetime: filteredCandles.at(-1)?.datetime || null,
     executionFrameworkRawCandlesCount: executionFrameworkRawCandles.length,
+    // The count alone (54, confirmed non-zero) wasn't enough to find why
+    // normalizeMarketCandles turns this into an empty timeframeCandles — its
+    // filter requires datetime plus all four of open/high/low/close to be
+    // finite, so whichever of those is actually malformed has to be seen
+    // directly. A small sample rather than the full 54 to keep this light.
+    executionFrameworkRawCandlesSample: executionFrameworkRawCandles.slice(0, 5),
+    timeframeCandlesCount: timeframeCandles.length,
     structureMode: profile?.structureMode || null,
   };
 
@@ -4205,6 +4226,7 @@ function findBestCandleForVisibleClose({
   maximumDateDistanceDays = null,
   visibleOhlc = null,
   preferredDatetime = null,
+  preferredTolerance = null,
 }) {
   // With a full visible OHLC, match the candle's shape, not just its close.
   // A close-only match picked XAUUSD's 13:00 bar for an 08:00 chart and
@@ -4226,7 +4248,7 @@ function findBestCandleForVisibleClose({
       const d = parseISODateOnly(candleDateOnly(candle?.datetime));
       return !d || Math.abs(getDaysBetweenDates(anchor, d)) <= maxDays;
     };
-    const hit = pickAlignedCandle(candles, visibleOhlc, tolerance, { accept, preferredDatetime });
+    const hit = pickAlignedCandle(candles, visibleOhlc, tolerance, { accept, preferredDatetime, preferredTolerance });
     return hit ? { ...hit, closeDistance: Math.abs(Number(hit.candle.close) - visibleOhlc.close), matchMode: hit.mode } : null;
   }
   const target = Number(targetPrice);
@@ -4392,6 +4414,14 @@ async function synchronizeFinalVisibleMarketReference({
     maximumDateDistanceDays: chartDetection?.latestVisibleDate ? 1 : null,
     visibleOhlc,
     preferredDatetime: preferredCandleDatetime(chartDetection),
+    // The day-scan tolerance above (initialTolerance) is ATR-based and too
+    // generous to validate one specific hour on its own — see
+    // pickAlignedCandle's comment. XAUUSD 2026-09-09 accepted the wrong hour
+    // (09:00, residual 2.71) under that tolerance (4.52) before the broader
+    // search ever got a chance to find the correct one (08:00, residual
+    // 1.74). closePriceTolerance is this file's existing generic per-symbol
+    // "how close should the same candle actually be" scale.
+    preferredTolerance: closePriceTolerance(symbol, visiblePrice) * 1.5,
   });
   let searchSource = "initial_market_reference";
 
@@ -4451,6 +4481,7 @@ async function synchronizeFinalVisibleMarketReference({
         maximumDateDistanceDays: chartDetection?.latestVisibleDate ? 1 : null,
         visibleOhlc,
         preferredDatetime: preferredCandleDatetime(chartDetection),
+        preferredTolerance: closePriceTolerance(symbol, visiblePrice) * 1.5,
       });
 
       if (extendedMatch) {
@@ -11154,7 +11185,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
-const CSA_BUILD_ID = "CSA-v4.73.3-structure-range-diagnostics";
+const CSA_BUILD_ID = "CSA-v4.74.1-second-weekly-aggregator-fix";
 const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
@@ -20185,6 +20216,14 @@ function applyCurrentFrameworkPeriodLifecycle({
 function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", cutoffDate = "" } = {}) {
   const tf = comparableTimeframe(timeframe);
   if (tf === "H4") {
+    // aggregateH4CandlesIntoWeeklyInventory (csa-entry-policy.js) is a
+    // separate, independent weekly grouping from the one server.js itself
+    // builds (buildStructureLevelsFromCandles) for the reconciliation
+    // diagnostic. Both assumed markets close on weekends; only the first was
+    // fixed for crypto initially, which is why BNBUSD's reconciliation
+    // diagnostic could show the correct $780.64 high while this function,
+    // feeding the actual period-integrity check, still produced the old,
+    // understated $729.9 — it was dropping Saturday's candles entirely.
     const periods = aggregateH4CandlesIntoWeeklyInventory({
       candles: marketReference?.timeframeCandles || [],
       cutoffDate:
@@ -20192,6 +20231,7 @@ function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", 
         marketReference?.chartCutoff?.resolvedDate ||
         marketReference?.chartCutoff?.latestVisibleDate ||
         "",
+      tradesOnWeekends: isCryptoSymbol(marketReference?.symbol || marketReference?.providerSymbol || ""),
     });
     // Preserve an unfinished final week for the live monthly Fib frame, but
     // tag it so provisional W4/W5 wicks cannot become structural entries.
