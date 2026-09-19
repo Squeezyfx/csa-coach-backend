@@ -1,5 +1,23 @@
 import { forexComparisonTolerance } from "./oanda-data.js";
 // Provider reference checks are not a claim of broker-feed equivalence.
+const CRYPTO_BASES = "BTC|ETH|DOGE|SOL|XRP|ADA|LTC|BCH|BNB|AVAX|LINK|DOT|MATIC|TRX|SHIB|PEPE";
+/**
+ * Crypto trades every day of the week, unlike FX, indices and commodities,
+ * which close on weekends. This matters beyond price matching: period
+ * grouping (in server.js) shifts Saturday/Sunday candles onto the following
+ * Monday specifically because a weekend timestamp is normally a data
+ * artifact for session-based markets. Applied to crypto, that shift moves
+ * real weekend trading into the wrong calendar week. BNBUSD's 2026-08-31
+ * week is a direct case: its real high (780.64, confirmed independently
+ * against the chart and against Coinbase/TradingView) fell on Saturday
+ * 2026-09-05 and got shifted into the following week's group, leaving the
+ * original week's reconstructed high understated by over $50 — which then
+ * looked like a provider-candle mismatch rather than the grouping bug it was.
+ */
+export function isCryptoSymbol(input = "") {
+  const raw = String(input).trim().toUpperCase().replace(/^#/, "").replace(/[/_]/g, "");
+  return new RegExp(`^(?:${CRYPTO_BASES})(?:USDT|USDC|USD|EUR|GBP|JPY|CHF|CAD|AUD|NZD|SGD|HKD|SEK|NOK|DKK|ZAR|MXN|BTC|ETH)$`).test(raw);
+}
 export function providerSymbol(input = "") {
   const raw = String(input).trim().toUpperCase().replace(/^#/, "");
   // Twelve Data's commodities endpoint documents this instrument as
@@ -9,7 +27,7 @@ export function providerSymbol(input = "") {
   const aliases = { GOLD: "XAU/USD", SILVER: "XAG/USD", PLATINUM: "XPT/USD", USOIL: "WTI/USD", WTICOUSD: "WTI/USD" };
   if (aliases[raw]) return aliases[raw];
   if (raw.includes("/")) return raw;
-  const pair = raw.match(/^(EUR|GBP|USD|CHF|CAD|AUD|NZD|JPY|SGD|HKD|SEK|NOK|DKK|ZAR|MXN|XAU|XAG|XPT|XPD|BTC|ETH|DOGE|SOL|XRP|ADA|LTC|BCH|BNB|AVAX|LINK|DOT|MATIC|TRX|SHIB|PEPE)(USDT|USDC|USD|EUR|GBP|JPY|CHF|CAD|AUD|NZD|SGD|HKD|SEK|NOK|DKK|ZAR|MXN|BTC|ETH)$/);
+  const pair = raw.match(new RegExp(`^(EUR|GBP|USD|CHF|CAD|AUD|NZD|JPY|SGD|HKD|SEK|NOK|DKK|ZAR|MXN|XAU|XAG|XPT|XPD|${CRYPTO_BASES})(USDT|USDC|USD|EUR|GBP|JPY|CHF|CAD|AUD|NZD|SGD|HKD|SEK|NOK|DKK|ZAR|MXN|BTC|ETH)$`));
   return pair ? `${pair[1]}/${pair[2]}` : raw;
 }
 

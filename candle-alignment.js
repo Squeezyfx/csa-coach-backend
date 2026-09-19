@@ -159,11 +159,21 @@ export function pickAlignedCandle(candles = [], visible, tolerance, {
   accept = () => true,
   maxOffset = null,
   preferredDatetime = null,
+  preferredTolerance = null,
 } = {}) {
   if (preferredDatetime) {
     const index = candles.findIndex((c) => normalizeCandleDatetime(c?.datetime) === normalizeCandleDatetime(preferredDatetime));
     if (index !== -1 && accept(candles[index])) {
-      const r = ohlcAligned(visible, candles[index], tolerance, { maxOffset });
+      // The broad ATR-based `tolerance` is sized for scanning an entire day
+      // and is too generous to validate one specific hour on its own: an
+      // adjacent, wrong hour's residual can still land inside it. XAUUSD
+      // 2026-09-09 is a direct case — 08:00 (correct) has residual 1.74;
+      // 09:00, the wrong hour the chart reader actually reported that run,
+      // has residual 2.71 and would pass the day-scan tolerance (4.52)
+      // anyway. `preferredTolerance`, a tighter price-proportional bound
+      // when supplied, is what actually separates them. Falls back to the
+      // day-scan tolerance for callers that don't have a tighter one.
+      const r = ohlcAligned(visible, candles[index], preferredTolerance ?? tolerance, { maxOffset });
       if (r.aligned) return { candle: candles[index], index, ...r, preferred: true };
     }
   }
