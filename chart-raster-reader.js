@@ -214,6 +214,149 @@ function regularAxisPositions(candidates, approximateStep, minimumCount = 3, tol
   return best.length >= minimumCount ? best : [];
 }
 
+// Locates the MT4 plot frame: the right-hand price-axis border and the
+// bottom time-axis border. Shared by every raster reader in this file so
+// the price calibration and the candle scan agree on the same plot box.
+function detectPlotFrame(image) {
+  const { width, height } = image;
+  const verticalBorders = [];
+  for (let x = 0; x < width - 20; x += 1) {
+    let count = 0;
+    for (let y = 20; y < height - 20; y += 1) if (dark(pixel(image, x, y))) count += 1;
+    if (count > (height - 40) * 0.6) verticalBorders.push(x);
+  }
+  const plotRight = verticalBorders.at(-1);
+  if (!Number.isFinite(plotRight)) return null;
+  const horizontalBorders = [];
+  for (let y = 0; y < height - 8; y += 1) {
+    let count = 0;
+    for (let x = 0; x <= plotRight; x += 1) if (dark(pixel(image, x, y))) count += 1;
+    if (count > plotRight * 0.6) horizontalBorders.push(y);
+  }
+  const plotBottom = horizontalBorders.at(-1);
+  if (!Number.isFinite(plotBottom) || plotBottom < height * 0.6) return null;
+  return { plotRight, plotBottom };
+}
+
+// Y-axis (price) calibration from the right-edge tick marks and the OCR'd
+// price labels. Moved verbatim out of extractMt4PngMonthlyInventory so the
+// same calibration can be reused for any timeframe. This measures the axis
+// only; it does not cross-check against candle OHLC (the monthly reader
+// still does that itself with the final-candle header).
+function calibratePriceAxis(image, { plotRight, plotBottom, prices }) {
+  const { width } = image;
+  let firstY = 20;
+  let lastY = null;
+  let yAnchors = [];
+  let firstPrice = null;
+  let lastPrice = null;
+  let axisPriceAtY = null;
+  let axisPricePerPixel = null;
+  let inferredAxisCalibration = false;
+  if (prices.length >= 3) {
+    const rawYAxisTicks = [];
+    for (let y = 12; y < plotBottom; y += 1) {
+      let count = 0;
+      for (let x = plotRight; x < Math.min(width, plotRight + 7); x += 1) if (dark(pixel(image, x, y))) count += 1;
+      if (count >= 3) rawYAxisTicks.push(y);
+    }
+    const yTickGroups = groupConsecutive(rawYAxisTicks).filter((group) => group.length <= 2);
+    const yStep = modePositive(yTickGroups.slice(1).map((group, index) => group[0] - yTickGroups[index][0]), 20, 100) || 49;
+    let yAxisPositions = regularAxisPositions(yTickGroups.map((group) => group[0]), yStep, 3);
+    if (yAxisPositions.length !== prices.length) {
+      if (yAxisPositions.length > prices.length) yAxisPositions = yAxisPositions.slice(0, prices.length);
+      else {
+        const firstDetectedY = yTickGroups[0]?.[0];
+        if (Number.isFinite(firstDetectedY)) {
+          yAxisPositions = Array.from({ length: prices.length }, (_, index) => firstDetectedY + index * yStep);
+          if (yAxisPositions.at(-1) >= plotBottom + 2) yAxisPositions = [];
+        }
+      }
+    }
+    if (yAxisPositions.length === prices.length) {
+      firstY = yAxisPositions[0];
+      lastY = yAxisPositions.at(-1);
+      firstPrice = prices[0];
+      lastPrice = prices.at(-1);
+      if (lastY > firstY && firstPrice > lastPrice) {
+        axisPricePerPixel = Math.abs((lastPrice - firstPrice) / (lastY - firstY));
+        const tickFirstY = firstY;
+        const tickLastY = lastY;
+        axisPriceAtY = (y) => firstPrice + (y - tickFirstY) / (tickLastY - tickFirstY) * (lastPrice - firstPrice);
+        yAnchors = yAxisPositions.map((y, index) => ({ y, price: prices[index], evidence: "tick_mark" }));
+      }
+    }
+  }
+  // Some MT4 captures contain labels but no dark tick marks inside the plot
+  // border. The labels are evenly spaced on the linear price scale; infer
+  // their vertical anchors from the plot margins rather than abandoning the
+  // raster pass. The final-candle header calibration below still overrides
+  // this estimate whenever the wick span is large enough.
+  if (typeof axisPriceAtY !== "function" && prices.length >= 3 && plotBottom - firstY > 100 && prices[0] > prices.at(-1)) {
+    const inferredFirstY = Math.max(firstY, 32);
+    const inferredLastY = Math.max(inferredFirstY + 1, plotBottom - 22);
+    axisPriceAtY = (y) => inferredFirstY === inferredLastY
+      ? prices[0]
+      : prices[0] + (y - inferredFirstY) / (inferredLastY - inferredFirstY) * (prices.at(-1) - prices[0]);
+    axisPricePerPixel = Math.abs((prices.at(-1) - prices[0]) / (inferredLastY - inferredFirstY));
+    firstY = inferredFirstY;
+    firstPrice = prices[0];
+    lastPrice = prices.at(-1);
+    inferredAxisCalibration = true;
+    lastY = inferredLastY;
+    const labelSpacing = prices.length > 1 ? (inferredLastY - inferredFirstY) / (prices.length - 1) : 0;
+    yAnchors = prices.map((price, index) => ({ y: inferredFirstY + index * labelSpacing, price, evidence: "inferred_from_plot_margins" }));
+  }
+
+  return { firstY, lastY, firstPrice, lastPrice, axisPriceAtY, axisPricePerPixel, inferredAxisCalibration, anchors: yAnchors };
+}
+
+/**
+ * Public Y-axis calibration, the price-side counterpart of the time-axis
+ * calibration in chart-time-reader.js. Returns plain data only (no
+ * functions), so it can travel through chartDetection like timestampAudit.
+ * Convert a pixel row to a price with priceAtCalibratedY(calibration, y).
+ *
+ * verified is always false here: axis ticks alone are not cross-checked.
+ * One OCR misread label stretches every price, which is why the monthly
+ * reader also checks the final candle's header OHLC before trusting it.
+ */
+export function readMt4PriceAxisCalibration({ imageBase64, priceAxisTicks = [] } = {}) {
+  const prices = (Array.isArray(priceAxisTicks) ? priceAxisTicks : []).map(Number).filter(Number.isFinite);
+  if (prices.length < 3 || prices[0] <= prices.at(-1)) return null;
+  let image;
+  try {
+    image = decodePng8(Buffer.from(String(imageBase64 || ""), "base64"));
+  } catch {
+    return null;
+  }
+  if (!image || image.width < 500 || image.height < 250) return null;
+  const frame = detectPlotFrame(image);
+  if (!frame) return null;
+  const axis = calibratePriceAxis(image, { ...frame, prices });
+  if (typeof axis.axisPriceAtY !== "function" || !(axis.lastY > axis.firstY)) return null;
+  return {
+    version: "1.0.0",
+    source: axis.inferredAxisCalibration ? "interpolated_price_axis_labels" : "price_axis_tick_marks",
+    verified: false,
+    verification: "not_cross_checked_against_candle_ohlc",
+    plotRight: frame.plotRight,
+    plotBottom: frame.plotBottom,
+    firstY: axis.firstY,
+    lastY: axis.lastY,
+    firstPrice: axis.firstPrice,
+    lastPrice: axis.lastPrice,
+    pricePerPixel: axis.axisPricePerPixel,
+    anchors: axis.anchors,
+  };
+}
+
+export function priceAtCalibratedY(calibration, y) {
+  const { firstY, lastY, firstPrice, lastPrice } = calibration || {};
+  if (![firstY, lastY, firstPrice, lastPrice, Number(y)].every(Number.isFinite) || !(lastY > firstY)) return null;
+  return firstPrice + (Number(y) - firstY) / (lastY - firstY) * (lastPrice - firstPrice);
+}
+
 export function extractMt4PngMonthlyInventory({
   imageBase64,
   mimeType = "",
@@ -243,22 +386,9 @@ export function extractMt4PngMonthlyInventory({
   if (!image || image.width < 500 || image.height < 250) return null;
 
   const { width, height } = image;
-  const verticalBorders = [];
-  for (let x = 0; x < width - 20; x += 1) {
-    let count = 0;
-    for (let y = 20; y < height - 20; y += 1) if (dark(pixel(image, x, y))) count += 1;
-    if (count > (height - 40) * 0.6) verticalBorders.push(x);
-  }
-  const plotRight = verticalBorders.at(-1);
-  if (!Number.isFinite(plotRight)) return null;
-  const horizontalBorders = [];
-  for (let y = 0; y < height - 8; y += 1) {
-    let count = 0;
-    for (let x = 0; x <= plotRight; x += 1) if (dark(pixel(image, x, y))) count += 1;
-    if (count > plotRight * 0.6) horizontalBorders.push(y);
-  }
-  const plotBottom = horizontalBorders.at(-1);
-  if (!Number.isFinite(plotBottom) || plotBottom < height * 0.6) return null;
+  const frame = detectPlotFrame(image);
+  if (!frame) return null;
+  const { plotRight, plotBottom } = frame;
 
   // The MT4 screenshots used by the benchmark often contain a continuous
   // red zig-zag overlay. Treating every red pixel as a candle joins the whole
@@ -301,60 +431,8 @@ export function extractMt4PngMonthlyInventory({
     }
   }
 
-  let firstY = 20;
-  let firstPrice = null;
-  let lastPrice = null;
-  let axisPriceAtY = null;
-  let axisPricePerPixel = null;
-  let inferredAxisCalibration = false;
-  if (prices.length >= 3) {
-    const rawYAxisTicks = [];
-    for (let y = 12; y < plotBottom; y += 1) {
-      let count = 0;
-      for (let x = plotRight; x < Math.min(width, plotRight + 7); x += 1) if (dark(pixel(image, x, y))) count += 1;
-      if (count >= 3) rawYAxisTicks.push(y);
-    }
-    const yTickGroups = groupConsecutive(rawYAxisTicks).filter((group) => group.length <= 2);
-    const yStep = modePositive(yTickGroups.slice(1).map((group, index) => group[0] - yTickGroups[index][0]), 20, 100) || 49;
-    let yAxisPositions = regularAxisPositions(yTickGroups.map((group) => group[0]), yStep, 3);
-    if (yAxisPositions.length !== prices.length) {
-      if (yAxisPositions.length > prices.length) yAxisPositions = yAxisPositions.slice(0, prices.length);
-      else {
-        const firstDetectedY = yTickGroups[0]?.[0];
-        if (Number.isFinite(firstDetectedY)) {
-          yAxisPositions = Array.from({ length: prices.length }, (_, index) => firstDetectedY + index * yStep);
-          if (yAxisPositions.at(-1) >= plotBottom + 2) yAxisPositions = [];
-        }
-      }
-    }
-    if (yAxisPositions.length === prices.length) {
-      firstY = yAxisPositions[0];
-      const lastY = yAxisPositions.at(-1);
-      firstPrice = prices[0];
-      lastPrice = prices.at(-1);
-      if (lastY > firstY && firstPrice > lastPrice) {
-        axisPricePerPixel = Math.abs((lastPrice - firstPrice) / (lastY - firstY));
-        axisPriceAtY = (y) => firstPrice + (y - firstY) / (lastY - firstY) * (lastPrice - firstPrice);
-      }
-    }
-  }
-  // Some MT4 captures contain labels but no dark tick marks inside the plot
-  // border. The labels are evenly spaced on the linear price scale; infer
-  // their vertical anchors from the plot margins rather than abandoning the
-  // raster pass. The final-candle header calibration below still overrides
-  // this estimate whenever the wick span is large enough.
-  if (typeof axisPriceAtY !== "function" && prices.length >= 3 && plotBottom - firstY > 100 && prices[0] > prices.at(-1)) {
-    const inferredFirstY = Math.max(firstY, 32);
-    const inferredLastY = Math.max(inferredFirstY + 1, plotBottom - 22);
-    axisPriceAtY = (y) => inferredFirstY === inferredLastY
-      ? prices[0]
-      : prices[0] + (y - inferredFirstY) / (inferredLastY - inferredFirstY) * (prices.at(-1) - prices[0]);
-    axisPricePerPixel = Math.abs((prices.at(-1) - prices[0]) / (inferredLastY - inferredFirstY));
-    firstY = inferredFirstY;
-    firstPrice = prices[0];
-    lastPrice = prices.at(-1);
-    inferredAxisCalibration = true;
-  }
+  const priceAxis = calibratePriceAxis(image, { plotRight, plotBottom, prices });
+  const { firstY, firstPrice, lastPrice, axisPriceAtY, axisPricePerPixel, inferredAxisCalibration } = priceAxis;
 
   const excludedRows = new Set();
   for (let y = 20; y < plotBottom; y += 1) {

@@ -48,7 +48,7 @@ import {
   shouldMergeQualifiedSupplyDemandCluster,
 } from "./csa-entry-policy.js";
 import { buildVisiblePeriodFibonacciFrame, resolveCalendarPeriodDirection } from "./benchmark/weekly-fibonacci-policy.js";
-import { extractMt4PngMonthlyInventory } from "./chart-raster-reader.js";
+import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration } from "./chart-raster-reader.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -29504,6 +29504,19 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           timestampAudit: { ...inferredAxisTime, ...geometry, terminalAnchor: true, anchors: [{ x: geometry.lastCandleX, timestamp: inferredAxisTime.timestamp }] },
         };
       }
+    }
+
+    // Price-axis (Y) calibration: the counterpart of timestampAudit above.
+    // Plain data only; it is axis-derived and not yet cross-checked against
+    // candle OHLC, so consumers must treat verified:false accordingly.
+    try {
+      const priceAxisCalibration = readMt4PriceAxisCalibration({
+        imageBase64,
+        priceAxisTicks: chartDetection?.priceAxisTicks || [],
+      });
+      if (priceAxisCalibration) chartDetection = { ...chartDetection, priceAxisCalibration };
+    } catch (error) {
+      console.warn("[price-axis-calibration] skipped:", error?.message || error);
     }
 
     const dateDecision = chooseFinalChartDate({
