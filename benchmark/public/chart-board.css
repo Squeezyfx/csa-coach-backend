@@ -1,0 +1,41 @@
+/* CSA chart-first batch view. Loads after styles.css and reuses its tokens. */
+body.chart-first #batchOverview,
+body.chart-first #resultCards,
+body.chart-first .chart-audit-gallery { display: none; }
+
+.cb-board { display: grid; gap: 16px; margin: 18px 0 4px; }
+.cb-toolbar { display: flex; flex-wrap: wrap; gap: 10px 18px; justify-content: space-between; align-items: center; color: var(--muted); font-size: 12px; }
+.cb-toolbar label { display: flex; align-items: center; gap: 8px; white-space: nowrap; cursor: pointer; }
+.cb-toolbar input { width: auto; }
+
+.cb-card { border: 1px solid #355467; border-radius: 12px; background: #091319; padding: 14px; }
+.cb-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px; }
+.cb-label { color: var(--muted); font-size: 12px; }
+.cb-name { font-size: 16px; letter-spacing: .01em; }
+.cb-bias { font-weight: 800; font-size: 13px; padding: 3px 10px; border-radius: 99px; background: #26313b; }
+.cb-bias.cb-bullish { color: var(--green); }
+.cb-bias.cb-bearish { color: var(--red); }
+.cb-phase { color: #8fb5c5; font-size: 12px; }
+.cb-badge { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; padding: 4px 9px; border-radius: 99px; background: #26313b; }
+.cb-verified { color: var(--green); }
+.cb-partial { color: var(--amber); }
+.cb-none { color: var(--muted); }
+.cb-entries { color: var(--muted); font-size: 12px; }
+.cb-entries.cb-has { color: var(--amber); font-weight: 750; }
+.cb-download { margin-left: auto; border: 0; border-radius: 9px; padding: 8px 14px; font: inherit; font-size: 12px; font-weight: 750; background: #24313b; color: var(--text); cursor: pointer; }
+.cb-download:hover { background: #2e3d49; }
+
+.cb-canvas { overflow-x: auto; border: 1px solid #253846; border-radius: 8px; background: #111; }
+.cb-canvas canvas { display: block; width: 100%; height: auto; min-width: 760px; cursor: zoom-in; }
+.cb-loading { padding: 46px; text-align: center; color: var(--muted); }
+
+.cb-details { margin-top: 10px; font-size: 13px; }
+.cb-details summary { cursor: pointer; color: #e7f6ff; font-weight: 700; }
+.cb-details ul { margin: 8px 0 0; padding-left: 20px; }
+.cb-details li { margin-bottom: 3px; }
+.cb-reasons { color: #ffcf8a; }
+
+.cb-lightbox { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(2,5,8,.9); cursor: zoom-out; }
+.cb-lightbox img { max-width: 100%; max-height: 100%; border-radius: 6px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+
+@media (max-width: 800px) { .cb-head { gap: 6px 10px; } .cb-download { margin-left: 0; } }
