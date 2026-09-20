@@ -1,0 +1,31 @@
+/* CSA chart-first batch view */
+body.chart-first #batchOverview,
+body.chart-first #resultCards { display: none; }
+.cb-board { display: grid; gap: 18px; margin: 18px 0; }
+.cb-toolbar { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center; font-size: 12px; opacity: .85; }
+.cb-toolbar label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+.cb-card { border: 1px solid rgba(120,160,190,.35); border-radius: 10px; padding: 12px; background: rgba(255,255,255,.02); }
+.cb-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 10px; font-size: 13px; }
+.cb-label { opacity: .6; font-size: 12px; }
+.cb-name { font-size: 15px; }
+.cb-bias { font-weight: 700; padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,.08); }
+.cb-bullish { color: #3ecf6e; }
+.cb-bearish { color: #ff6b6b; }
+.cb-phase { opacity: .7; font-size: 12px; }
+.cb-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+.cb-verified { background: #1f6f3f; color: #fff; }
+.cb-partial { background: #6b5a1a; color: #fff; }
+.cb-none { background: #555; color: #fff; }
+.cb-entries { font-size: 12px; opacity: .75; }
+.cb-entries.cb-has { opacity: 1; color: #f5a000; font-weight: 700; }
+.cb-download { margin-left: auto; font: inherit; font-size: 12px; font-weight: 700; padding: 5px 12px; border-radius: 6px; border: 0; background: #2b3440; color: #fff; cursor: pointer; }
+.cb-download:hover { background: #3a4656; }
+.cb-canvas { overflow-x: auto; }
+.cb-canvas canvas { display: block; width: 100%; height: auto; min-width: 700px; border-radius: 4px; cursor: zoom-in; }
+.cb-loading { padding: 40px; text-align: center; opacity: .6; }
+.cb-details { margin-top: 8px; font-size: 12px; }
+.cb-details summary { cursor: pointer; opacity: .75; }
+.cb-details ul { margin: 6px 0; padding-left: 18px; }
+.cb-reasons { opacity: .75; }
+.cb-lightbox { position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,.85); display: flex; align-items: center; justify-content: center; cursor: zoom-out; padding: 20px; }
+.cb-lightbox img { max-width: 100%; max-height: 100%; box-shadow: 0 0 30px rgba(0,0,0,.6); }
