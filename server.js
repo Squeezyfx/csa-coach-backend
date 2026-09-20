@@ -49,6 +49,7 @@ import {
 } from "./csa-entry-policy.js";
 import { buildVisiblePeriodFibonacciFrame, resolveCalendarPeriodDirection } from "./benchmark/weekly-fibonacci-policy.js";
 import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration } from "./chart-raster-reader.js";
+import { buildChartOverlay } from "./chart-overlay.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -30937,6 +30938,14 @@ ${(visualReview?.strategyMissingInformation || []).length
         ),
     };
 
+    // Ready-to-draw overlay (period highs/lows, Fib, entries) in screenshot
+    // pixels. Never allowed to break the analysis response.
+    let chartOverlay = null;
+    try {
+      chartOverlay = buildChartOverlay({ chartDetection, analysisFacts, marketReference, timeframe });
+    } catch (error) {
+      console.warn("[chart-overlay] skipped:", error?.message || error);
+    }
     const responseBody = {
       success: true,
       entitlement: updatedEntitlement,
@@ -31136,6 +31145,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       journalTags: ["setup review", "directional bias", "entry area", "visual csa comparison", "uploaded chart comparison", "risk reward", marketReference.profile?.selectedTimeframe || selectedTimeframeProfile.selectedTimeframe, marketReference.profile?.structureMode || selectedTimeframeProfile.structureMode, marketReference.ok ? "market-data-backed" : "vision-only fallback", visualReview?.frameworkMatch || "visual-not-reviewed", bias.biasCode || "bias-unavailable"],
       visualReview,
       chartDetection,
+      chartOverlay,
       chartValidationAudit: {
         buildId: CSA_BUILD_ID,
         isTradingChart:

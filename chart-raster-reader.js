@@ -322,8 +322,9 @@ function calibratePriceAxis(image, { plotRight, plotBottom, prices }) {
  * reader also checks the final candle's header OHLC before trusting it.
  */
 export function readMt4PriceAxisCalibration({ imageBase64, priceAxisTicks = [] } = {}) {
-  const prices = (Array.isArray(priceAxisTicks) ? priceAxisTicks : []).map(Number).filter(Number.isFinite);
-  if (prices.length < 3 || prices[0] <= prices.at(-1)) return null;
+  const rawPrices = (Array.isArray(priceAxisTicks) ? priceAxisTicks : []).map(Number).filter(Number.isFinite);
+  if (rawPrices.length < 3 || rawPrices[0] <= rawPrices.at(-1)) return null;
+  const { prices, filledLabels } = fillMissingPriceLabels(rawPrices);
   let image;
   try {
     image = decodePng8(Buffer.from(String(imageBase64 || ""), "base64"));
@@ -348,7 +349,39 @@ export function readMt4PriceAxisCalibration({ imageBase64, priceAxisTicks = [] }
     lastPrice: axis.lastPrice,
     pricePerPixel: axis.axisPricePerPixel,
     anchors: axis.anchors,
+    filledLabels,
+    imageWidth: image.width,
+    imageHeight: image.height,
   };
+}
+
+// MT4 axis labels are evenly spaced. A label hidden behind the boxed
+// current-price tag (e.g. USOIL 95.80 under 96.05) shows up as one gap that
+// is twice the normal spacing. Without a fill, the labels shift against the
+// tick marks and every price on the scale is wrong.
+function fillMissingPriceLabels(prices) {
+  const gaps = prices.slice(1).map((price, index) => prices[index] - price);
+  const sorted = [...gaps].sort((a, b) => a - b);
+  const typical = sorted[Math.floor(sorted.length / 2)];
+  if (!(typical > 0)) return { prices, filledLabels: [] };
+  const out = [prices[0]];
+  const filledLabels = [];
+  for (let index = 1; index < prices.length; index += 1) {
+    const ratio = gaps[index - 1] / typical;
+    if (ratio > 1.7 && ratio < 2.3) {
+      const filled = (prices[index - 1] + prices[index]) / 2;
+      out.push(filled);
+      filledLabels.push(Number(filled.toFixed(6)));
+    }
+    out.push(prices[index]);
+  }
+  return { prices: out, filledLabels };
+}
+
+export function yAtCalibratedPrice(calibration, price) {
+  const { firstY, lastY, firstPrice, lastPrice } = calibration || {};
+  if (![firstY, lastY, firstPrice, lastPrice, Number(price)].every(Number.isFinite) || firstPrice === lastPrice) return null;
+  return firstY + (Number(price) - firstPrice) / (lastPrice - firstPrice) * (lastY - firstY);
 }
 
 export function priceAtCalibratedY(calibration, y) {
