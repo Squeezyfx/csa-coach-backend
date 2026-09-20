@@ -29487,13 +29487,18 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // explicit timestamp attached to the final candle.
     if (["M1", "M5", "M15", "M30", "H1", "H4"].includes(String(timeframe || "").toUpperCase()) &&
       chartDetection?.latestVisibleDateEvidence !== "explicit_final_candle_timestamp") {
-      const axisTime = readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps:chartDetection?.timeAxisTimestamps || []});
+      // Crypto trades through the weekend; the axis/bar-count readers must not
+      // skip Sat/Sun when counting bars for a crypto chart or every anchor
+      // pair spanning a weekend fails validation (see chart-time-reader.js).
+      const tradesOnWeekends = isCryptoSymbol(normalizedSymbol || submittedInstrument || "");
+      const axisTime = readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps:chartDetection?.timeAxisTimestamps || [],tradesOnWeekends});
       if (axisTime) chartDetection = {...chartDetection, latestVisibleDate:axisTime.timestamp.slice(0,10), latestVisibleTime:axisTime.timestamp.slice(11,16), dateConfidence:"high", latestVisibleTimeConfidence:"high", latestVisibleDateEvidence:"verified_axis_bar_count", timestampAudit:axisTime};
       if (!axisTime) {
         const inferredAxisTime = resolveVisibleTimestampFromAxisCount({
           timeframe,
           timeAxisTimestamps: chartDetection?.timeAxisTimestamps || [],
           visibleCandlesAfterLastPrintedDate: chartDetection?.visibleCandlesAfterLastPrintedDate,
+          tradesOnWeekends,
         });
         const geometry = inferredAxisTime ? readMt4CandleGeometry({ imageBase64, timeframe }) : null;
         if (inferredAxisTime && geometry) chartDetection = {

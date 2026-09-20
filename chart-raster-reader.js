@@ -1,4 +1,5 @@
 import { inflateSync } from "node:zlib";
+import { isCryptoSymbol } from "./market-data-matching.js";
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
@@ -535,7 +536,7 @@ export function extractMt4PngMonthlyInventory({
 
   const starts = (Array.isArray(periodDates) ? periodDates : []).map((date) => ({ date, timestamp: parseDate(date) })).filter((item) => Number.isFinite(item.timestamp));
   if (!starts.length) return null;
-  const includesWeekends = /(?:BTC|DOGE|ETH|SOL|XRP|ADA|LTC|BCH|CRYPTO)/i.test(String(instrument));
+  const includesWeekends = isCryptoSymbol(instrument);
   let finalTimestamp = parseDate(latestVisibleDate);
   // A non-crypto D1 chart whose last visible date is inferred as Saturday or
   // Sunday actually ends on the prior Friday session. Anchor the rightmost
