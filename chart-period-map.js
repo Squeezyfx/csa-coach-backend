@@ -72,14 +72,28 @@ export function buildChartPeriodMap({
   const reasons = [];
   if (!INTRADAY.has(tf)) reasons.push("period-map currently applies to intraday M1–H4 charts only");
   if (!exactCutoff) reasons.push("exact cutoff timestamp is missing or not chart-verified");
-  const terminalCalibration = calibration?.terminalAnchor === true && anchors.length === 1;
-  if (anchors.length < 3 && !terminalCalibration) reasons.push("at least three timestamped x-axis anchors are required");
+  // The chart's printed axis labels span its full visible history (often
+  // several weeks), but the fetched provider candles are deliberately
+  // narrowed to the current framework period only. An axis label from
+  // before that window will never have a matching provider candle — that's
+  // expected, not a calibration failure, so only anchors that actually fall
+  // inside the fetched candle range are required to match one.
+  const barsStartMs = bars.length ? instant(bars[0]._timestamp) : NaN;
+  const barsEndMs = bars.length ? instant(bars.at(-1)._timestamp) : NaN;
+  const usableAnchors = Number.isFinite(barsStartMs) && Number.isFinite(barsEndMs)
+    ? anchors.filter((anchor) => {
+        const t = instant(anchor.timestamp);
+        return Number.isFinite(t) && t >= barsStartMs && t <= barsEndMs;
+      })
+    : anchors;
+  const terminalCalibration = calibration?.terminalAnchor === true && usableAnchors.length === 1;
+  if (usableAnchors.length < 3 && !terminalCalibration) reasons.push("at least three timestamped x-axis anchors are required");
   if (!(Number(calibration?.candleStep) > 0)) reasons.push("candle spacing could not be calibrated");
   if (!bars.length) reasons.push("no provider candles were available at or before the cutoff");
 
   const byTimestamp = new Map(bars.map((candle, index) => [candle._timestamp, { candle, index }]));
-  const anchorIndexes = anchors.map((anchor) => ({ ...anchor, row: byTimestamp.get(iso(anchor.timestamp)) || null }));
-  if ((anchors.length >= 3 || terminalCalibration) && anchorIndexes.some((anchor) => !anchor.row)) {
+  const anchorIndexes = usableAnchors.map((anchor) => ({ ...anchor, row: byTimestamp.get(iso(anchor.timestamp)) || null }));
+  if ((usableAnchors.length >= 3 || terminalCalibration) && anchorIndexes.some((anchor) => !anchor.row)) {
     reasons.push("one or more chart time anchors did not match the fetched selected-timeframe candles");
   }
   const usableCalibration = reasons.length === 0;
