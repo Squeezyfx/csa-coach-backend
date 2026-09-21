@@ -20,7 +20,7 @@ export function parseCalendarDate(value) {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0,10)===text ? date : null;
 }
 const iso=date=>date.toISOString().slice(0,10);
-export function calendarMapping(timeframe, cutoff) {
+export function calendarMapping(timeframe, cutoff, {tradesOnWeekends=false}={}) {
   const profile=frameworkProfile(timeframe), date=parseCalendarDate(cutoff);
   if(!profile || !date) return null;
   const year=date.getUTCFullYear(), month=date.getUTCMonth();
@@ -29,7 +29,10 @@ export function calendarMapping(timeframe, cutoff) {
   if(profile.range==="week") {
     start=new Date(date);
     start.setUTCDate(start.getUTCDate()-((start.getUTCDay()+6)%7));
-    const count=Math.min(5,((date.getUTCDay()+6)%7)+1);
+    // FX/indices/commodities trade Monday-Friday only, so the week's day
+    // count is capped at 5. Crypto trades every day of the week, so its
+    // weekend candles (Sat/Sun) need their own period keys too.
+    const count=Math.min(tradesOnWeekends?7:5,((date.getUTCDay()+6)%7)+1);
     for(let i=0;i<count;i++) dates.push(iso(new Date(+start+i*DAY)));
   } else if(profile.range==="month") {
     start=new Date(Date.UTC(year,month,1));
@@ -49,8 +52,8 @@ export function calendarMapping(timeframe, cutoff) {
   }
   return {...profile,start:iso(start),cutoff:iso(date),dates};
 }
-export function calendarFrame({timeframe,latestVisibleDate,periodInventory=[]}={}) {
-  const map=calendarMapping(timeframe,latestVisibleDate);
+export function calendarFrame({timeframe,latestVisibleDate,periodInventory=[],tradesOnWeekends=false}={}) {
+  const map=calendarMapping(timeframe,latestVisibleDate,{tradesOnWeekends});
   const rows=Array.isArray(periodInventory)?periodInventory:[];
   const expectedDates=map?.dates || [], returnedDates=rows.map(x=>x?.date);
   const sequence=expectedDates.length>0 && rows.length===expectedDates.length &&

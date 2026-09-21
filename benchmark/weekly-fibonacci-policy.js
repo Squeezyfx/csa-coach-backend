@@ -10,7 +10,7 @@ function asValidCandle(candle) {
 }
 
 /** One shared current-period Fib frame; never a candidate-local swing. */
-export function buildVisiblePeriodFibonacciFrame({ candles = [], direction = "range", timeframe = "" } = {}) {
+export function buildVisiblePeriodFibonacciFrame({ candles = [], direction = "range", timeframe = "", tradesOnWeekends = false } = {}) {
   const period = frameworkProfile(timeframe)?.range;
   if (!period || !["bullish", "bearish"].includes(direction)) return null;
 
@@ -18,7 +18,7 @@ export function buildVisiblePeriodFibonacciFrame({ candles = [], direction = "ra
   if (!ordered.length) return null;
 
   const finalDate = new Date(ordered.at(-1).datetime);
-  const mapping = calendarMapping(timeframe, finalDate.toISOString());
+  const mapping = calendarMapping(timeframe, finalDate.toISOString(), {tradesOnWeekends});
   const start = new Date(mapping.start + "T00:00:00Z");
 
   // A calendar Fib is valid only when the supplied candles visibly include

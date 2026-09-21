@@ -3,9 +3,9 @@ import { findNearestAllowedFibonacciMatch, selectIndependentEntryAreas } from ".
 
 /** Adapters supply evidence; the engine never upgrades an estimate to verified. */
 export function analyzeFramework({timeframe,cutoff,periodInventory=[],currentPrice,periodOpen,
-  authority="estimate",calendarMappingVerified=false}={}) {
-  const mapping=calendarMapping(timeframe,cutoff);
-  const frame=calendarFrame({timeframe,latestVisibleDate:cutoff,periodInventory});
+  authority="estimate",calendarMappingVerified=false,tradesOnWeekends=false}={}) {
+  const mapping=calendarMapping(timeframe,cutoff,{tradesOnWeekends});
+  const frame=calendarFrame({timeframe,latestVisibleDate:cutoff,periodInventory,tradesOnWeekends});
   const complete=frame.currentPeriodFrameVerified;
   const verified=complete&&calendarMappingVerified&&["chart_verified","provider_aligned"].includes(authority);
   const markedInventory=periodInventory.map(p=>({...p,partialPeriod:p.partialPeriod===true||p.date===mapping?.dates.at(-1)}));

@@ -1,4 +1,5 @@
 import { calendarMapping } from "../framework-calendar.js";
+import { isCryptoSymbol } from "../market-data-matching.js";
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
 const BENCHMARK_VALIDATOR_VERSION = "1.15.0";
@@ -405,8 +406,8 @@ function addCheck(checks, id, label, passed, details, critical = true) {
   checks.push({ id, label, passed: Boolean(passed), details: details || "", critical });
 }
 
-function expectedFrameworkInventory(timeframe = "", latestVisibleDate = "") {
-  const mapping = calendarMapping(timeframe, latestVisibleDate);
+function expectedFrameworkInventory(timeframe = "", latestVisibleDate = "", tradesOnWeekends = false) {
+  const mapping = calendarMapping(timeframe, latestVisibleDate, {tradesOnWeekends});
   if (!mapping) return null;
   return {sourceUnit: {day:"D1",week:"W1",month:"MN",quarter:"quarter",year:"year"}[mapping.unit],
     expectedCount:mapping.dates.length, expectedDates:mapping.dates,
@@ -462,7 +463,7 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const latestVisibleDate = String(
       result?.chartDetection?.latestVisibleDate || result?.detectedLatestVisibleDate || ""
     );
-    const inventoryRequirement = expectedFrameworkInventory(detectedTimeframe, latestVisibleDate);
+    const inventoryRequirement = expectedFrameworkInventory(detectedTimeframe, latestVisibleDate, isCryptoSymbol(detectedInstrument));
     const inventoryPeriodsValid = frameworkInventory.every((period) => {
       const high = finiteNumber(period?.high);
       const low = finiteNumber(period?.low);

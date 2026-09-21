@@ -915,12 +915,12 @@ export function mergeFocusedSupplyDemandInventory(
   };
 }
 
-function expectedFrameworkInventoryCount(timeframe, latestVisibleDate) {
-  return calendarMapping(timeframe, latestVisibleDate)?.dates.length || null;
+function expectedFrameworkInventoryCount(timeframe, latestVisibleDate, tradesOnWeekends = false) {
+  return calendarMapping(timeframe, latestVisibleDate, {tradesOnWeekends})?.dates.length || null;
 }
 
-export function expectedFrameworkPeriodDates(timeframe, latestVisibleDate) {
-  return calendarMapping(timeframe, latestVisibleDate)?.dates || [];
+export function expectedFrameworkPeriodDates(timeframe, latestVisibleDate, tradesOnWeekends = false) {
+  return calendarMapping(timeframe, latestVisibleDate, {tradesOnWeekends})?.dates || [];
 }
 
 export function reconcileFinalPeriodWithVisibleCandle({
@@ -931,13 +931,14 @@ export function reconcileFinalPeriodWithVisibleCandle({
   visibleHigh = null,
   visibleLow = null,
   visibleClose = null,
+  tradesOnWeekends = false,
 } = {}) {
   const periods = (Array.isArray(periodInventory) ? periodInventory : [])
     .map((period) => ({ ...period }));
   if (!periods.length) return periods;
 
   if (visibleDate && timeframe) {
-    const expected = expectedFrameworkPeriodDates(timeframe, String(visibleDate).slice(0, 10));
+    const expected = expectedFrameworkPeriodDates(timeframe, String(visibleDate).slice(0, 10), tradesOnWeekends);
     if (!expected.length || periods.at(-1)?.date !== expected.at(-1)) return periods;
   }
 

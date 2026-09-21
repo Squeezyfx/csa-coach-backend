@@ -50,6 +50,7 @@ export function buildChartPeriodMap({
   candles = [],
   chartCutoff = {},
   axisCalibration = null,
+  tradesOnWeekends = false,
 } = {}) {
   const tf = normalizeFrameworkTimeframe(timeframe);
   const cutoff = iso(chartCutoff?.endDateTime || "");
@@ -67,7 +68,7 @@ export function buildChartPeriodMap({
   const bars = values.filter((candle) => !Number.isFinite(cutoffMs) || instant(candle._timestamp) <= cutoffMs);
   const firstExcluded = values.find((candle) => Number.isFinite(cutoffMs) && instant(candle._timestamp) > cutoffMs) || null;
   const lastIncluded = bars.at(-1) || null;
-  const map = calendarMapping(tf, dateOnly(cutoff));
+  const map = calendarMapping(tf, dateOnly(cutoff), {tradesOnWeekends});
   const reasons = [];
   if (!INTRADAY.has(tf)) reasons.push("period-map currently applies to intraday M1–H4 charts only");
   if (!exactCutoff) reasons.push("exact cutoff timestamp is missing or not chart-verified");

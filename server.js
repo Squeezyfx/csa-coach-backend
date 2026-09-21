@@ -2031,12 +2031,14 @@ function getMonthName(monthIndex) {
 function getQuarterLabel(monthIndex) { return monthIndex <= 2 ? "Q1" : monthIndex <= 5 ? "Q2" : monthIndex <= 8 ? "Q3" : "Q4"; }
 function weekdayNameFromDate(dateString) { return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(new Date(`${dateString}T00:00:00.000Z`)); }
 
-function getWeekRangeForDate(chartDate, useFullWeek = false) {
+function getWeekRangeForDate(chartDate, useFullWeek = false, tradesOnWeekends = false) {
   const day = chartDate.getUTCDay();
   const monday = addDays(chartDate, day === 0 ? -6 : 1 - day);
-  const friday = addDays(monday, 4);
-  const end = useFullWeek ? friday : chartDate < friday ? chartDate : friday;
-  return { start: monday, end, final: friday, startDate: formatDateOnly(monday), endDate: formatDateOnly(end), finalDate: formatDateOnly(friday) };
+  // Crypto trades every day, so its week runs Monday-Sunday; FX/indices/
+  // commodities close on weekends and their week still ends Friday.
+  const weekEnd = addDays(monday, tradesOnWeekends ? 6 : 4);
+  const end = useFullWeek ? weekEnd : chartDate < weekEnd ? chartDate : weekEnd;
+  return { start: monday, end, final: weekEnd, startDate: formatDateOnly(monday), endDate: formatDateOnly(end), finalDate: formatDateOnly(weekEnd) };
 }
 
 function getMonthRangeForDate(chartDate, useFullMonth = false) {
@@ -2068,11 +2070,11 @@ function getStructureRangeForProfile(chartDate, profile, analysisType = "post-tr
   // Do not use candles after the selected date to judge the current setup.
   // Example: if the selected date is Tuesday, the review must not use Wednesday-Friday data.
   const useFull = false;
-  if (profile.structureMode === "daily-in-week") return getWeekRangeForDate(chartDate, useFull);
+  if (profile.structureMode === "daily-in-week") return getWeekRangeForDate(chartDate, useFull, profile.tradesOnWeekends === true);
   if (profile.structureMode === "weekly-in-month") return getMonthRangeForDate(chartDate, useFull);
   if (["monthly-in-year", "quarterly-in-year"].includes(profile.structureMode)) return getYearRangeForDate(chartDate, useFull);
   if (profile.structureMode === "yearly-in-multi-year") return getMultiYearRangeForDate(chartDate, 4, useFull);
-  return getWeekRangeForDate(chartDate, useFull);
+  return getWeekRangeForDate(chartDate, useFull, profile.tradesOnWeekends === true);
 }
 
 function getPeriodKeyAndLabel(date, profile) {
@@ -2139,8 +2141,14 @@ function getFrameworkPeriodEndDate(date, profile = getSupportedCsaTimeframeProfi
   }
 
   if (profile.structureMode === "weekly-in-month") {
-    // CSA trading week is Monday-Friday. Saturday/Sunday do not create
-    // authoritative intraday framework levels.
+    // CSA trading week is Monday-Friday for FX/indices/commodities;
+    // Saturday/Sunday do not create authoritative intraday framework levels
+    // there. Crypto trades every day, so its week runs through Sunday.
+    if (profile.tradesOnWeekends) {
+      const day = d.getUTCDay();
+      const daysToSunday = day === 0 ? 0 : 7 - day;
+      return formatDateOnly(addDays(d, daysToSunday));
+    }
     const day = d.getUTCDay();
     const daysToFriday = day === 0 ? -2 : day === 6 ? -1 : 5 - day;
     return formatDateOnly(addDays(d, daysToFriday));
@@ -2301,7 +2309,8 @@ function filterCandlesToStructureRange(
 
     if (
       profile?.structureMode ===
-      "daily-in-week"
+      "daily-in-week" &&
+      profile?.tradesOnWeekends !== true
     ) {
       const date =
         new Date(
@@ -2339,7 +2348,7 @@ function buildStructureLevelsFromCandles(candles, structureRange, profile) {
     const date = new Date(`${dateOnly}T00:00:00.000Z`);
     if (Number.isNaN(date.getTime())) return;
     if (dateOnly < structureRange.startDate || dateOnly > structureRange.endDate) return;
-    if (profile.structureMode === "daily-in-week") { const dayNum = date.getUTCDay(); if (dayNum < 1 || dayNum > 5) return; }
+    if (profile.structureMode === "daily-in-week" && profile.tradesOnWeekends !== true) { const dayNum = date.getUTCDay(); if (dayNum < 1 || dayNum > 5) return; }
     const open = safeNumber(bar.open), high = safeNumber(bar.high), low = safeNumber(bar.low), close = safeNumber(bar.close);
     if ([open, high, low, close].some((v) => v === null)) return;
     const period = getPeriodKeyAndLabel(date, profile);
@@ -11871,7 +11880,7 @@ function buildLatestImpulseFibonacci({
   // M1-H1=current week, H4=current month, D1/W1=current year. Do not let a
   // shorter structure-led/chart-native impulse manufacture confluence.
   const visiblePeriodFrame = finalVisibleEndpointAuthority?.enabled === true
-    ? buildVisiblePeriodFibonacciFrame({ candles: ordered, direction, timeframe })
+    ? buildVisiblePeriodFibonacciFrame({ candles: ordered, direction, timeframe, tradesOnWeekends: isCryptoSymbol(symbol) })
     : null;
 
   // H4/D1/W1 cannot fall through to a local impulse when their required
@@ -19973,18 +19982,22 @@ async function extractFocusedChartNativeEntryFallback({
   timeframe = "",
 } = {}) {
   const focusedTimeframe = String(timeframe || chartDetection?.timeframe || "").toUpperCase();
+  const focusedTradesOnWeekends = isCryptoSymbol(submittedInstrument || "");
   const expectedPeriodDates = expectedFrameworkPeriodDates(
     focusedTimeframe,
-    chartDetection?.latestVisibleDate || ""
+    chartDetection?.latestVisibleDate || "",
+    focusedTradesOnWeekends
   );
-  const frameMapping = calendarMapping(focusedTimeframe, chartDetection?.latestVisibleDate);
+  const frameMapping = calendarMapping(focusedTimeframe, chartDetection?.latestVisibleDate, {tradesOnWeekends: focusedTradesOnWeekends});
   const exactPeriodBoundaryRule = expectedPeriodDates.length
     ? focusedTimeframe === "H4"
-      ? `The required H4 weekly boundaries are ${expectedPeriodDates.map((date, index) => `W${index + 1} starts ${date} 00:00 inclusive${expectedPeriodDates[index + 1] ? ` and ends immediately before ${expectedPeriodDates[index + 1]} 00:00` : " and ends at the final visible candle"}`).join("; ")}. Return exactly ${expectedPeriodDates.length} rows using those dates. The first candle of every W1 period is Monday 00:00. With the visible 00:00, 04:00, 08:00, 12:00, 16:00 and 20:00 H4 sequence, a Monday 04:00 label is the second candle, not the weekly start. Exclude Saturday and Sunday completely. Never assign Monday 00:00, 04:00 or 08:00—including an early third-candle high—to the previous week.`
+      ? `The required H4 weekly boundaries are ${expectedPeriodDates.map((date, index) => `W${index + 1} starts ${date} 00:00 inclusive${expectedPeriodDates[index + 1] ? ` and ends immediately before ${expectedPeriodDates[index + 1]} 00:00` : " and ends at the final visible candle"}`).join("; ")}. Return exactly ${expectedPeriodDates.length} rows using those dates. The first candle of every W1 period is Monday 00:00. With the visible 00:00, 04:00, 08:00, 12:00, 16:00 and 20:00 H4 sequence, a Monday 04:00 label is the second candle, not the weekly start. ${focusedTradesOnWeekends ? "This instrument trades every day; Saturday and Sunday each own their own W1 boundary like any other day." : "Exclude Saturday and Sunday completely."} Never assign Monday 00:00, 04:00 or 08:00—including an early third-candle high—to the previous week.`
       : `The required period start dates, in exact chronological order, are ${expectedPeriodDates.join(", ")}. Return exactly ${expectedPeriodDates.length} inventory rows using those dates at 00:00. Ignore every candle before ${expectedPeriodDates[0]} 00:00. The last row ends at the final visible candle. Never create an extra row and never move an older wick into one of these periods.`
     : "The exact fixed-period dates could not be calculated; set currentPeriodFrameVerified=false rather than inventing boundaries.";
   const inventoryRule = ["M1", "M5", "M15", "M30", "H1"].includes(focusedTimeframe)
-    ? `For ${focusedTimeframe}, treat each D1 candle inside the visible current trading week as one authoritative framework period. Return Monday, Tuesday, Wednesday, Thursday and Friday separately up to the final visible candle. Read each D1 candle's own high and low; do not replace them with smaller ${focusedTimeframe} swings.`
+    ? focusedTradesOnWeekends
+      ? `For ${focusedTimeframe}, treat each D1 candle inside the visible current trading week as one authoritative framework period. This instrument trades every day, so return Monday, Tuesday, Wednesday, Thursday, Friday, Saturday and Sunday separately up to the final visible candle. Read each D1 candle's own high and low; do not replace them with smaller ${focusedTimeframe} swings.`
+      : `For ${focusedTimeframe}, treat each D1 candle inside the visible current trading week as one authoritative framework period. Return Monday, Tuesday, Wednesday, Thursday and Friday separately up to the final visible candle. Read each D1 candle's own high and low; do not replace them with smaller ${focusedTimeframe} swings.`
     : focusedTimeframe === "H4"
     ? "For H4, treat each W1 candle inside the visible current calendar month as one authoritative framework period. Return W1, W2, W3, W4 and W5 when present, up to the final visible candle. Read each W1 candle's own high and low; do not move a Friday candle into the next week or a Monday candle into the previous week."
     : focusedTimeframe === "D1"
@@ -20182,13 +20195,14 @@ function applyCurrentFrameworkPeriodLifecycle({
   timeframe = "",
   cutoffDateTime = "",
   explicitlyComplete = null,
+  tradesOnWeekends = false,
 } = {}) {
   const inventory = Array.isArray(periods) ? periods : [];
   if (!inventory.length) return [];
   const cutoffDate = candleDateOnly(cutoffDateTime);
-  const expectedDates = expectedFrameworkPeriodDates(timeframe, cutoffDate || "");
+  const expectedDates = expectedFrameworkPeriodDates(timeframe, cutoffDate || "", tradesOnWeekends);
   const currentStartDate = expectedDates[expectedDates.length - 1] || null;
-  const profile = getSupportedCsaTimeframeProfile(timeframe);
+  const profile = { ...getSupportedCsaTimeframeProfile(timeframe), tradesOnWeekends };
   const currentComplete = typeof explicitlyComplete === "boolean"
     ? explicitlyComplete
     : isFrameworkPeriodCompleteAtCutoff({ cutoffDateTime, profile });
@@ -20268,7 +20282,7 @@ function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", 
     // reconstructed days are context-only until their sessions close.
     const periodsByDate = new Map(providerPeriods.map(period => [String(period.date || period.key), period]));
     if (["M1", "M5", "M15", "M30", "H1"].includes(tf)) {
-      const dates = expectedFrameworkPeriodDates(tf, cutoffDate || marketReference?.chartCutoff?.resolvedDate || "");
+      const dates = expectedFrameworkPeriodDates(tf, cutoffDate || marketReference?.chartCutoff?.resolvedDate || "", isCryptoSymbol(marketReference?.symbol || marketReference?.providerSymbol || ""));
       const candles = Array.isArray(marketReference?.timeframeCandles) ? marketReference.timeframeCandles : [];
       for (const date of dates) {
         if (periodsByDate.has(String(date))) continue;
@@ -20299,6 +20313,7 @@ function marketReferencePeriodInventory({ marketReference = {}, timeframe = "", 
         marketReference?.chartCutoff?.endDateTime ||
         `${cutoffDate || marketReference?.chartCutoff?.resolvedDate || ""} 23:59:59`,
       explicitlyComplete: marketReference?.currentFrameworkPeriodComplete,
+      tradesOnWeekends: isCryptoSymbol(marketReference?.symbol || marketReference?.providerSymbol || ""),
     });
   }
   return [];
@@ -30137,7 +30152,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           : []);
       const deterministicPeriodDates = expectedFrameworkPeriodDates(
         timeframe,
-        chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || ""
+        chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "",
+        isCryptoSymbol(normalizedSymbol || submittedInstrument || "")
       );
       // The raster path must not disappear merely because the focused vision
       // response was malformed or marked unusable. D1 month dates are known
@@ -30223,12 +30239,14 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         visibleDate: chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "",
         periodInventory:
           periodMappingAudit.periods,
+        tradesOnWeekends: isCryptoSymbol(normalizedSymbol || submittedInstrument || ""),
         ...finalVisibleCandle,
       });
       const chartReconciledPeriodInventory = reconcileFinalPeriodWithVisibleCandle({
         timeframe,
         visibleDate: chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "",
         periodInventory: chartPeriodMappingAudit.periods,
+        tradesOnWeekends: isCryptoSymbol(normalizedSymbol || submittedInstrument || ""),
         ...finalVisibleCandle,
       });
       // Do not mix chart/broker OHLC into provider extrema and then call the
@@ -30252,6 +30270,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         candles: marketReference?.timeframeCandles || [],
         chartCutoff,
         axisCalibration: chartDetection?.timestampAudit || null,
+        tradesOnWeekends: isCryptoSymbol(normalizedSymbol || submittedInstrument || ""),
       });
       const chartPeriodMapVerified = chartPeriodMap.canSelectEntries === true;
       // A partial OANDA endpoint means the chart's latest visible period is
@@ -30266,11 +30285,13 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       const lifecycleComplete = oandaEndpointIsProvisional
         ? false
         : marketReference?.currentFrameworkPeriodComplete;
+      const periodLifecycleTradesOnWeekends = isCryptoSymbol(normalizedSymbol || submittedInstrument || "");
       const focusedPeriodInventory = applyCurrentFrameworkPeriodLifecycle({
         periods: focusedReconciledPeriodInventory,
         timeframe,
         cutoffDateTime: lifecycleCutoffDateTime,
         explicitlyComplete: lifecycleComplete,
+        tradesOnWeekends: periodLifecycleTradesOnWeekends,
       });
       const chartPeriodInventory = applyCurrentFrameworkPeriodLifecycle({
         periods: chartReconciledPeriodInventory,
@@ -30290,12 +30311,14 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           marketReference?.chartDataMatch?.status === "matched_reference"
             ? lifecycleComplete
             : null,
+        tradesOnWeekends: periodLifecycleTradesOnWeekends,
       });
       const marketPeriodInventory = applyCurrentFrameworkPeriodLifecycle({
         periods: marketReconciledPeriodInventory,
         timeframe,
         cutoffDateTime: lifecycleCutoffDateTime,
         explicitlyComplete: lifecycleComplete,
+        tradesOnWeekends: periodLifecycleTradesOnWeekends,
       });
       const inventoryDate =
         chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "";
@@ -30488,6 +30511,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         periodOpen: selectedPeriodInventory[0]?.open ?? mergedChartNativeFallback?.currentPeriodOpen,
         authority: marketInventoryVerified ? "provider_aligned" : chartOnlyInventoryVerified ? "chart_verified" : "estimate",
         calendarMappingVerified: marketInventoryVerified || chartOnlyInventoryVerified,
+        tradesOnWeekends: isCryptoSymbol(normalizedSymbol || submittedInstrument || ""),
       });
       const fixedPeriodBias = sharedFramework.bias;
       const fallbackDirection = fixedPeriodBias?.direction || null;
