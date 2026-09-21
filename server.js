@@ -3798,13 +3798,27 @@ async function fetchTwelveDataStructureLevels({
         });
         const allNativeExtremesAccepted =
           highResolution.acceptedNative && lowResolution.acceptedNative;
+        // The native bar's open/close belong to its own session boundary. When
+        // either extreme was rejected as a session mismatch and replaced with
+        // the cutoff-safe UTC-day reconstruction, keeping the native open/close
+        // produces a logically impossible candle (e.g. an open above the new,
+        // reconstructed high) that fails downstream integrity checks and
+        // discards the whole period. Use the reconstruction's own open/close
+        // too, so the OHLC stays internally consistent with whichever high/low
+        // actually won.
+        const openValue = allNativeExtremesAccepted
+          ? (Number.isFinite(Number(best.bar.open)) ? Number(best.bar.open) : Number(level.open))
+          : Number(level.open);
+        const closeValue = allNativeExtremesAccepted
+          ? (Number.isFinite(Number(best.bar.close)) ? Number(best.bar.close) : Number(level.close))
+          : Number(level.close);
 
         resolved.push({
           ...level,
-          open: Number.isFinite(Number(best.bar.open)) ? Number(best.bar.open) : Number(level.open),
+          open: openValue,
           high: highResolution.value,
           low: lowResolution.value,
-          close: Number.isFinite(Number(best.bar.close)) ? Number(best.bar.close) : Number(level.close),
+          close: closeValue,
           candleCount: 1,
           source: allNativeExtremesAccepted
             ? (isDaily ? "native_D1_extremes_integrity_pass" : "native_W1_extremes_integrity_pass")
