@@ -217,11 +217,14 @@
     var biasCode = String(bias.biasCode || "").toLowerCase();
     var phase = bias.cutoffPhase && bias.cutoffPhase.phase ? phaseText(bias.cutoffPhase.phase) : "";
     var cutoff = a.finalDateUsed || a.detectedLatestVisibleDate || "";
-    var entryText = entries.length ? entries.length + " entr" + (entries.length === 1 ? "y" : "ies") : "No entry";
+    var anyEntryUnverified = entries.some(function (e) { return e.verified !== true; });
+    var entryText = entries.length
+      ? entries.length + " entr" + (entries.length === 1 ? "y" : "ies") + (anyEntryUnverified ? " (needs review)" : "")
+      : "No entry";
     var reasons = (overlay && overlay.reasons) || [];
     if (item.status === "error") reasons = [item.error || "Analysis failed"].concat(reasons);
     var entryList = entries.map(function (e) {
-      return "<li><b>" + esc(e.id) + "</b> " + esc(e.label) + (e.verified ? "" : " <i>(unverified)</i>") + "</li>";
+      return "<li><b>" + esc(e.id) + "</b> " + esc(e.label) + (e.verified ? "" : " <i>(unverified — needs manual review)</i>") + "</li>";
     }).join("");
     return '' +
       '<article class="cb-card" data-index="' + index + '">' +
@@ -231,7 +234,7 @@
           '<span class="cb-bias cb-' + esc(biasCode || "none") + '">' + esc(bias.bias || "Bias n/a") + (bias.provisional ? " (provisional)" : "") + '</span>' +
           (phase ? '<span class="cb-phase">' + esc(phase) + '</span>' : '') +
           statusBadge(overlay) +
-          '<span class="cb-entries' + (entries.length ? " cb-has" : "") + '">' + esc(entryText) + '</span>' +
+          '<span class="cb-entries' + (entries.length ? " cb-has" : "") + (anyEntryUnverified ? " cb-needs-review" : "") + '">' + esc(entryText) + '</span>' +
           '<button type="button" class="cb-download">Download</button>' +
         '</header>' +
         '<div class="cb-canvas"><p class="cb-loading">Drawing chart…</p></div>' +

@@ -22,6 +22,7 @@ body.chart-first .chart-audit-gallery { display: none; }
 .cb-none { color: var(--muted); }
 .cb-entries { color: var(--muted); font-size: 12px; }
 .cb-entries.cb-has { color: var(--amber); font-weight: 750; }
+.cb-entries.cb-needs-review { color: var(--red); font-weight: 750; }
 .cb-download { margin-left: auto; border: 0; border-radius: 9px; padding: 8px 14px; font: inherit; font-size: 12px; font-weight: 750; background: #24313b; color: var(--text); cursor: pointer; }
 .cb-download:hover { background: #2e3d49; }
 
