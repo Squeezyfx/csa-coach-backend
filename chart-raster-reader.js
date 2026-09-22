@@ -391,6 +391,80 @@ export function priceAtCalibratedY(calibration, y) {
   return firstPrice + (Number(y) - firstY) / (lastY - firstY) * (lastPrice - firstPrice);
 }
 
+/**
+ * Reads each period's high/low directly from candle wick pixels instead of
+ * trusting a vision estimate, which can snap to the nearest printed axis
+ * label (USOIL's Monday low landing on the tick price 88.70 exactly, not a
+ * real wick). Requires the time axis to already give each period's exact
+ * pixel x-range (candle-index based, from chart-period-map.js's verified
+ * periodStarts) and the price axis to already be calibrated. Reuses the
+ * same dark-pixel-only wick detection already proven in
+ * extractMt4PngMonthlyInventory, so a red zig-zag overlay can't corrupt it.
+ */
+export function readPeriodWickExtremesFromPixels({
+  imageBase64,
+  priceAxisCalibration,
+  candleStep,
+  periods = [],
+} = {}) {
+  if (!(Number(candleStep) > 0) || !Array.isArray(periods) || !periods.length) return null;
+  const calibration = priceAxisCalibration;
+  if (!calibration || !Number.isFinite(calibration.firstY) || !Number.isFinite(calibration.lastY)) return null;
+  let image;
+  try {
+    image = decodePng8(Buffer.from(String(imageBase64 || ""), "base64"));
+  } catch {
+    return null;
+  }
+  if (!image) return null;
+  const { width, height } = image;
+  const plotBottom = Math.min(height - 1, Math.round(Number(calibration.plotBottom) || Math.max(calibration.firstY, calibration.lastY) + 10));
+  const topLimit = Math.max(2, Math.round(Math.min(calibration.firstY, calibration.lastY) - 8));
+  const scanRight = Math.min(width - 1, Math.round(periods.at(-1).x2 ?? periods.at(-1).x1 + candleStep));
+
+  // Rows that are dark across almost the full scanned width are chart chrome
+  // (borders/gridlines), not a candle wick - exclude them so a horizontal
+  // gridline can never be mistaken for a wick extreme.
+  const excludedRows = new Set();
+  for (let y = topLimit; y < plotBottom; y += 1) {
+    let count = 0;
+    for (let x = 1; x <= scanRight; x += 1) if (dark(pixel(image, x, y))) count += 1;
+    if (count > scanRight * 0.45) excludedRows.add(y);
+  }
+  const wickExtremesAt = (x) => {
+    const ys = [];
+    for (let dx = -1; dx <= 1; dx += 1) {
+      const px = x + dx;
+      if (px < 0 || px >= width) continue;
+      for (let y = topLimit; y < plotBottom; y += 1) {
+        if (!excludedRows.has(y) && dark(pixel(image, px, y))) ys.push(y);
+      }
+    }
+    return ys.length ? { highY: Math.min(...ys), lowY: Math.max(...ys) } : null;
+  };
+
+  return periods.map((period) => {
+    const x1 = Math.max(0, Math.round(period.x1));
+    const x2 = Math.min(width, Math.round(period.x2 ?? x1 + candleStep));
+    if (!(x2 > x1)) return { key: period.key, high: null, low: null };
+    let highY = null, lowY = null;
+    for (let x = x1; x < x2; x += candleStep) {
+      const extremes = wickExtremesAt(Math.round(x));
+      if (!extremes) continue;
+      if (highY === null || extremes.highY < highY) highY = extremes.highY;
+      if (lowY === null || extremes.lowY > lowY) lowY = extremes.lowY;
+    }
+    if (highY === null || lowY === null) return { key: period.key, high: null, low: null };
+    return {
+      key: period.key,
+      high: priceAtCalibratedY(calibration, highY),
+      low: priceAtCalibratedY(calibration, lowY),
+      highY,
+      lowY,
+    };
+  });
+}
+
 export function extractMt4PngMonthlyInventory({
   imageBase64,
   mimeType = "",

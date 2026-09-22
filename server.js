@@ -48,7 +48,7 @@ import {
   shouldMergeQualifiedSupplyDemandCluster,
 } from "./csa-entry-policy.js";
 import { buildVisiblePeriodFibonacciFrame, resolveCalendarPeriodDirection } from "./benchmark/weekly-fibonacci-policy.js";
-import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration } from "./chart-raster-reader.js";
+import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodWickExtremesFromPixels } from "./chart-raster-reader.js";
 import { buildChartOverlay } from "./chart-overlay.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
@@ -30253,16 +30253,76 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
               : period;
           })
         : rawFocusedPeriodInventory;
+      // extractMt4PngMonthlyInventory's raster correction above only covers
+      // D1-candles-in-a-month charts. Intraday charts (H1 etc.) have their
+      // own per-day periods that need the same treatment: without it, a
+      // period's high/low comes straight from vision and can snap to the
+      // nearest printed price-axis tick label instead of the real wick
+      // (USOIL's Monday low landing on exactly 88.70, not the actual 90.92
+      // wick). Once the time axis is candle-index verified and the price
+      // axis is calibrated, read each period's real wick extremes from
+      // pixels and let them win over the vision estimate, the same way the
+      // D1 raster correction already does above.
+      const intradayWickPeriodMap = ["M1", "M5", "M15", "M30", "H1"].includes(String(timeframe).toUpperCase())
+        ? buildChartPeriodMap({
+            timeframe,
+            candles: marketReference?.timeframeCandles || [],
+            chartCutoff,
+            axisCalibration: chartDetection?.timestampAudit || null,
+            tradesOnWeekends: isCryptoSymbol(normalizedSymbol || submittedInstrument || ""),
+          })
+        : null;
+      const intradayWickInventory = intradayWickPeriodMap?.status === "verified" &&
+        chartDetection?.priceAxisCalibration &&
+        Number.isFinite(chartDetection.priceAxisCalibration.firstY) &&
+        Number.isFinite(chartDetection.priceAxisCalibration.lastY) &&
+        Number(intradayWickPeriodMap.axisCalibration?.candleStep) > 0
+        ? readPeriodWickExtremesFromPixels({
+            imageBase64,
+            priceAxisCalibration: chartDetection.priceAxisCalibration,
+            candleStep: Number(intradayWickPeriodMap.axisCalibration.candleStep),
+            periods: intradayWickPeriodMap.periodStarts
+              .filter((period) => Number.isFinite(period.screenX))
+              .map((period, index, arr) => ({
+                key: period.key,
+                x1: period.screenX,
+                x2: Number.isFinite(arr[index + 1]?.screenX)
+                  ? arr[index + 1].screenX
+                  : Number(intradayWickPeriodMap.axisCalibration.lastCandleX) + Number(intradayWickPeriodMap.axisCalibration.candleStep),
+              })),
+          })
+        : null;
+      const intradayWickByDate = new Map(
+        (intradayWickInventory || [])
+          .filter((period) => Number.isFinite(period.high) && Number.isFinite(period.low) && period.high > period.low)
+          .map((period) => [String(period.key), period])
+      );
+      const intradayWickCorrectedPeriodInventory = intradayWickByDate.size
+        ? rasterCorrectedPeriodInventory.map((period) => {
+            const wickPeriod = intradayWickByDate.get(String(period?.date));
+            return wickPeriod
+              ? {
+                  ...period,
+                  high: wickPeriod.high,
+                  low: wickPeriod.low,
+                  highDate: null,
+                  lowDate: null,
+                  source: "deterministic_mt4_png_intraday_wick_raster",
+                  rasterPriceScaleVerified: true,
+                }
+              : period;
+          })
+        : rasterCorrectedPeriodInventory;
       // Validate the screenshot's own calendar mapping independently. A
       // provider disagreement must remain visible without erasing an otherwise
       // complete chart-derived inventory.
       const chartPeriodMappingAudit = reconcilePeriodMapping({
-        periods: rasterCorrectedPeriodInventory,
+        periods: intradayWickCorrectedPeriodInventory,
         references: [],
         tolerance: getCleanBreakTolerance(normalizedSymbol) * 2,
       });
       const periodMappingAudit = reconcilePeriodMapping({
-        periods: rasterCorrectedPeriodInventory,
+        periods: intradayWickCorrectedPeriodInventory,
         references: completedPeriodReferences.periods,
         tolerance: getCleanBreakTolerance(normalizedSymbol) * 2,
       });
