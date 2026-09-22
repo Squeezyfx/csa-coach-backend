@@ -97,9 +97,26 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
   // normal tolerance.
   const weekdaySessionLag = timeframe === "D1" &&
     cutoffDay >= 1 && cutoffDay <= 5 && lagDays === 1;
-  if (providerDate !== cutoffDate && !weekendSessionLag && !weekdaySessionLag) {
+  // An intraday chart (M1-H4) captured seconds after a new calendar day
+  // begins is the normal case, not a data failure: the provider simply has
+  // not posted the brand-new day's still-forming candle yet, while every
+  // completed prior period (the actual source of bias/fib/entries) is
+  // already present in the fetched history. Comparing calendar DATES alone
+  // (as the D1 exceptions above do) cannot tell that apart from a genuinely
+  // stale/misdated chart, so this checks the real elapsed gap instead: a
+  // normal FX/CFD weekend closure is at most ~54h (Friday evening close to
+  // Sunday evening reopen plus buffer), comfortably covered, while a truly
+  // wrong chart date (e.g. an old screenshot from a different year) is off
+  // by orders of magnitude more and still hard-fails.
+  const lastCandleMs = Date.parse(String(last.datetime).replace(" ", "T") + "Z");
+  const lagHours = Number.isFinite(lastCandleMs) && Number.isFinite(cutoffMs)
+    ? (cutoffMs - lastCandleMs) / 3600000
+    : null;
+  const intradaySessionLag = timeframe !== "D1" &&
+    lagHours !== null && lagHours >= 0 && lagHours <= 54;
+  if (providerDate !== cutoffDate && !weekendSessionLag && !weekdaySessionLag && !intradaySessionLag) {
     return result("mismatch", "Provider history does not reach the chart date", {
-      providerCoverage: { lastProviderCandleDate: providerDate, requestedCutoffDate: cutoffDate, lagDays, weekendSessionLag, weekdaySessionLag },
+      providerCoverage: { lastProviderCandleDate: providerDate, requestedCutoffDate: cutoffDate, lagDays, weekendSessionLag, weekdaySessionLag, intradaySessionLag },
     });
   }
   const forexLimit = forexComparisonTolerance(symbol);
