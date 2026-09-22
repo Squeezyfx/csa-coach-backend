@@ -29512,10 +29512,17 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // The final visible date must be derived from candle spacing for every
     // instrument, not only OANDA FX pairs. This is what distinguishes a
     // Thursday chart (with completed Wednesday data) from a Wednesday chart.
-    // Use the axis/bar-count reader whenever the chart does not contain an
-    // explicit timestamp attached to the final candle.
-    if (["M1", "M5", "M15", "M30", "H1", "H4"].includes(String(timeframe || "").toUpperCase()) &&
-      chartDetection?.latestVisibleDateEvidence !== "explicit_final_candle_timestamp") {
+    // Always attempt the geometric axis/bar-count reader, even when the
+    // initial vision pass already tagged the chart "explicit_final_candle_
+    // timestamp" - that tag has turned out to just mean vision found a
+    // printed axis label near the final candle, not a genuinely authoritative
+    // header timestamp (USOIL's "explicit" 11:00 was the last printed label
+    // with 3 more candles drawn after it). The geometric reader is strictly
+    // more rigorous, so let it override "explicit" the same way it already
+    // overrides "inferred_axis"/"unknown" - it only replaces chartDetection
+    // when it actually succeeds, so a chart with a genuinely correct explicit
+    // timestamp is unaffected if the axis reader can't independently verify it.
+    if (["M1", "M5", "M15", "M30", "H1", "H4"].includes(String(timeframe || "").toUpperCase())) {
       // Crypto trades through the weekend; the axis/bar-count readers must not
       // skip Sat/Sun when counting bars for a crypto chart or every anchor
       // pair spanning a weekend fails validation (see chart-time-reader.js).
