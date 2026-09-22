@@ -3260,10 +3260,21 @@ async function fetchTwelveDataStructureLevels({
 
     for (const providerSymbol of orderedCandidates) {
       const params = buildTwelveParams({ interval, startDate, providerSymbol });
-      const response = await fetch(
-        `${TWELVE_DATA_BASE_URL}?${params.toString()}`
-      );
-      const data = await response.json();
+      // Twelve Data's free/low tiers cap requests per minute, and a 7-chart
+      // benchmark batch (several requests each) can trip that limit on a
+      // single chart with otherwise-fine data (BNBUSD: "9 API credits used,
+      // limit 8"). A short, bounded retry lets the per-minute window clear
+      // instead of permanently losing that chart's period data to a
+      // transient throttle.
+      const maxRateLimitAttempts = 3;
+      let response, data;
+      for (let attempt = 1; attempt <= maxRateLimitAttempts; attempt += 1) {
+        response = await fetch(`${TWELVE_DATA_BASE_URL}?${params.toString()}`);
+        data = await response.json();
+        const rateLimited = classifyProviderError(data.message || data.error || "", response.status) === "rate_limit";
+        if (!rateLimited || attempt === maxRateLimitAttempts) break;
+        await new Promise((resolve) => setTimeout(resolve, attempt * 5000));
+      }
 
       if (response.ok && data.status !== "error" && Array.isArray(data.values) && data.values.length) {
         const metadataError = validateProviderMetadata(data.meta, providerSymbol, interval);
