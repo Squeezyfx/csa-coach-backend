@@ -2308,8 +2308,6 @@ function filterCandlesToStructureRange(
     }
 
     if (
-      profile?.structureMode ===
-      "daily-in-week" &&
       profile?.tradesOnWeekends !== true
     ) {
       const date =
@@ -2348,7 +2346,14 @@ function buildStructureLevelsFromCandles(candles, structureRange, profile) {
     const date = new Date(`${dateOnly}T00:00:00.000Z`);
     if (Number.isNaN(date.getTime())) return;
     if (dateOnly < structureRange.startDate || dateOnly > structureRange.endDate) return;
-    if (profile.structureMode === "daily-in-week" && profile.tradesOnWeekends !== true) { const dayNum = date.getUTCDay(); if (dayNum < 1 || dayNum > 5) return; }
+    // Weekend exclusion must apply to every intraday-sourced structure mode
+    // (H4's "weekly-in-month" included), not just "daily-in-week" (H1/M-
+    // timeframes). H4's own week boundary is Monday 00:00, so a stray
+    // Saturday/Sunday provider bar (a thin pre-open candle some feeds emit)
+    // is exactly as invalid there as it is for a daily framework, and left
+    // unfiltered it silently shifts every later chart-period-map candle
+    // index by one, compounding week over week.
+    if (profile.tradesOnWeekends !== true) { const dayNum = date.getUTCDay(); if (dayNum < 1 || dayNum > 5) return; }
     const open = safeNumber(bar.open), high = safeNumber(bar.high), low = safeNumber(bar.low), close = safeNumber(bar.close);
     if ([open, high, low, close].some((v) => v === null)) return;
     const period = getPeriodKeyAndLabel(date, profile);
