@@ -30450,13 +30450,27 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       // even when Twelve Data has no matching CFD symbol. In that narrow case,
       // retain a complete focused inventory for diagnosis instead of returning
       // no bias/period data at all. It remains explicitly human-review-only.
+      // A period with no high/low yet (typically today's still-forming
+      // period, which the vision reader can mis-tag "completed" with null
+      // values instead of omitting it) has no data to validate - it isn't
+      // corrupt, it's just absent. Letting .every() fail the whole array
+      // over that one entry threw away otherwise-good completed-period data
+      // (USA100: Monday/Tuesday/Wednesday were all valid, but one null
+      // "Thursday" entry zeroed out every structural candidate for the
+      // chart). Missing-data periods are skipped; only periods that do
+      // report a high/low must have it make sense.
+      const hasHighLow = (period) =>
+        period?.high !== null && period?.high !== undefined &&
+        period?.low !== null && period?.low !== undefined;
       const chartOnlyInventoryUsable =
         marketInventoryVerified !== true &&
         chartPeriodInventory.length > 0 &&
+        chartPeriodInventory.some(hasHighLow) &&
         chartPeriodInventory.every((period) =>
-          Number.isFinite(Number(period?.high)) &&
-          Number.isFinite(Number(period?.low)) &&
-          Number(period.high) > Number(period.low)
+          !hasHighLow(period) ||
+          (Number.isFinite(Number(period.high)) &&
+            Number.isFinite(Number(period.low)) &&
+            Number(period.high) > Number(period.low))
         );
       // A provisional OANDA reference can contain fewer (or differently
       // mapped) periods than the uploaded chart.  Once the chart reader has
