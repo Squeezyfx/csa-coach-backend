@@ -12,7 +12,7 @@ const runnerSource = readFileSync(
   "utf8"
 );
 const uiSource = readFileSync(
-  fileURLToPath(new URL("./public/app.js", import.meta.url)),
+  fileURLToPath(new URL("./public/csa-benchmark-app.js", import.meta.url)),
   "utf8"
 );
 const htmlSource = readFileSync(

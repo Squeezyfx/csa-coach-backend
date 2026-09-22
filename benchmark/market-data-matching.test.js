@@ -93,7 +93,7 @@ test("rejected provider direction and numeric anchors are removed, diagnostics r
 });
 test("server gates inventory approval and UI exposes source failures", () => {
   const server = readFileSync(new URL("../server.js", import.meta.url), "utf8");
-  const ui = readFileSync(new URL("./public/app.js", import.meta.url), "utf8");
+  const ui = readFileSync(new URL("./public/csa-benchmark-app.js", import.meta.url), "utf8");
   assert.match(server, /map\(\(candidate\) => providerSymbol\(candidate\)\)/);
   assert.match(server, /validateProviderMetadata\(data.meta, providerSymbol, interval\)/);
   assert.match(server, /providerCoverage/);

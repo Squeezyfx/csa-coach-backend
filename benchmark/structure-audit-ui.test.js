@@ -4,7 +4,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const appSource = readFileSync(
-  fileURLToPath(new URL("./public/app.js", import.meta.url)),
+  fileURLToPath(new URL("./public/csa-benchmark-app.js", import.meta.url)),
   "utf8"
 );
 
