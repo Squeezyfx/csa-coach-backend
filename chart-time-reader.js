@@ -130,6 +130,32 @@ export function resolveAxisTimestamp({anchors=[],lastCandleX,candleStep,timefram
  const droppedLeadingAnchor=rows!==allRows;
  return {timestamp,evidence:anySessionGap?'verified_axis_bar_count_with_session_gap':'verified_axis_bar_count',candlesAfterLastLabel:n,anchorCount:rows.length,candleStep,lastCandleX,anchors:rows.map(({x,timestamp})=>({x,timestamp})),...(anySessionGap?{trailingSessionGapMinutes:lastGapMinutes}:{}),...(droppedLeadingAnchor?{droppedLeadingAnchor:true}:{})};
 }
+// A printed axis year is easy for a vision model to misread or hallucinate -
+// MT4 usually prints it only once, often in a corner easy to miscount - but
+// the pixel-verified candle spacing between labels already encodes the real
+// weekday pattern (via the weekend-skip gap math in validateAnchorChain).
+// Shifting every anchor's year by the same small delta and re-validating
+// lets the TRUE year be recovered from that pixel evidence alone, without
+// ever trusting vision's OCR of the year digits. Deltas are tried smallest
+// magnitude first so the least invasive correction wins if more than one
+// happens to validate.
+function shiftAnchorYears(anchors,delta){
+ return anchors.map(a=>{
+  const m=String(a.timestamp).match(/^(\d{4})(-\d{2}-\d{2} \d{2}:\d{2}:\d{2})$/);
+  return m?{...a,timestamp:`${Number(m[1])+delta}${m[2]}`}:a;
+ });
+}
+function resolveAxisTimestampWithYearCorrection(params){
+ const direct=resolveAxisTimestamp(params);
+ if(direct)return direct;
+ for(let d=1;d<=12;d++){
+  for(const delta of [-d,d]){
+   const attempt=resolveAxisTimestamp({...params,anchors:shiftAnchorYears(params.anchors,delta)});
+   if(attempt)return {...attempt,yearCorrected:true,yearDelta:delta};
+  }
+ }
+ return null;
+}
 // Measures candle/time-axis geometry only. No price values or distances are read.
 export function readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps=[],tradesOnWeekends=false}={}){
  if(!MINUTES[timeframe]||timeAxisTimestamps.length<3)return null;
@@ -139,8 +165,19 @@ export function readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps=
  const ticks=[];
  for(let x=2;x<=last;x++){let n=0;for(let y=bottom;y<Math.min(h,bottom+6);y++)if(dark(x,y))n++;if(n>=4)ticks.push(x);}
  const positions=groups(ticks).map(g=>g[0]);
- if(positions.length!==timeAxisTimestamps.length)return null;
- const anchors=positions.map((x,i)=>({x,timestamp:timeAxisTimestamps[i]})).filter(a=>/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:00$/.test(a.timestamp||''));
+ // MT4 frequently prints no distinct tick mark for the leftmost axis label -
+ // there is no room to its left for the usual tick+text pairing - so the
+ // pixel scan below the axis line can legitimately find exactly one fewer
+ // tick than there are printed date labels. Drop that unmatched leading
+ // label rather than failing outright: the same edge-unreliability already
+ // handled for the anchor CHAIN inside resolveAxisTimestamp, just applied
+ // one step earlier, before any anchor is even built.
+ let labels=timeAxisTimestamps;
+ if(positions.length!==timeAxisTimestamps.length){
+  if(positions.length===timeAxisTimestamps.length-1)labels=timeAxisTimestamps.slice(1);
+  else return null;
+ }
+ const anchors=positions.map((x,i)=>({x,timestamp:labels[i]})).filter(a=>/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:00$/.test(a.timestamp||''));
  if((last-first)%step!==0)return null;
- return resolveAxisTimestamp({anchors,lastCandleX:last,candleStep:step,timeframe,tradesOnWeekends});
+ return resolveAxisTimestampWithYearCorrection({anchors,lastCandleX:last,candleStep:step,timeframe,tradesOnWeekends});
 }
