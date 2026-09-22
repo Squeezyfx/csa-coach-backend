@@ -30546,11 +30546,23 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         providerChartMismatch ||
         chartPeriodInventory.length >= marketPeriodInventory.length
       );
+      // extractMt4PngMonthlyInventory (D1-candles-in-a-month) and
+      // readPeriodWickExtremesFromPixels (intraday day-in-a-week, wired in
+      // above as intradayWickInventory) are two independent deterministic
+      // raster readers for two different chart granularities - a chart only
+      // ever uses one of them, so "the raster reading is complete" means
+      // either one fully covering every period, not specifically the D1 one.
+      // Gating this on rasterInventory alone left every intraday chart
+      // permanently unable to reach the verified tier even when its wick
+      // reading succeeded cleanly for every period.
+      const rasterCoverageComplete = rasterInventory?.chartPriceScaleVerified === true &&
+        rasterByDate.size === rawFocusedPeriodInventory.length;
+      const intradayWickCoverageComplete = intradayWickByDate.size > 0 &&
+        intradayWickByDate.size === rawFocusedPeriodInventory.length;
       const chartOnlyInventoryVerified =
         chartOnlyInventoryUsable &&
         chartPeriodMapVerified &&
-        rasterInventory?.chartPriceScaleVerified === true &&
-        rasterByDate.size === rawFocusedPeriodInventory.length &&
+        (rasterCoverageComplete || intradayWickCoverageComplete) &&
         chartPeriodInventory.length === rawFocusedPeriodInventory.length &&
         chartPeriodInventory.every((period) => period?.rasterPriceScaleVerified === true);
       const inventoryUsable = marketInventoryVerified || marketInventoryProvisional || chartOnlyInventoryUsable;
