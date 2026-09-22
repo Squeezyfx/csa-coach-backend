@@ -8,6 +8,7 @@
 import { calendarMapping, normalizeFrameworkTimeframe } from "./framework-calendar.js";
 
 const INTRADAY = new Set(["M1", "M5", "M15", "M30", "H1", "H4"]);
+const CANDLE_MINUTES = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240 };
 const iso = (value) => String(value || "").replace("T", " ").slice(0, 19);
 const instant = (value) => {
   const text = iso(value);
@@ -38,6 +39,26 @@ function periodLabel(timeframe, key) {
 
 function startTimestamp(timeframe, key) {
   return `${key} 00:00:00`;
+}
+
+// Steps forward from `fromIso` by whole candle intervals until `toIso` is
+// reached exactly, skipping weekend calendar days the same way the chart's
+// own candles do. Used only to extrapolate a boundary's pixel position when
+// its very first candle has not been posted by the data provider yet - the
+// current framework period's start is still a fixed, known instant even
+// though the provider hasn't caught up to it, so it should not have to wait
+// on a candle that may not exist for minutes.
+function candleStepsBetween(fromIso, toIso, minutes, tradesOnWeekends) {
+  let t = instant(fromIso);
+  const target = instant(toIso);
+  if (!Number.isFinite(t) || !Number.isFinite(target) || !(minutes > 0) || target <= t) return null;
+  let steps = 0;
+  while (t < target) {
+    do { t += minutes * 60000; } while (!tradesOnWeekends && [0, 6].includes(new Date(t).getUTCDay()));
+    steps += 1;
+    if (steps > 20000) return null;
+  }
+  return t === target ? steps : null;
 }
 
 /**
@@ -105,24 +126,41 @@ export function buildChartPeriodMap({
     reasons.push("one or more chart time anchors did not match the fetched selected-timeframe candles");
   }
   const usableCalibration = reasons.length === 0;
+  const minutes = CANDLE_MINUTES[tf] || null;
   const screenXFor = (timestamp) => {
     const row = byTimestamp.get(iso(timestamp));
     const reference = anchorIndexes.find((anchor) => anchor.row);
-    if (!row || !reference || !usableCalibration) return null;
-    return Number(reference.x) + (row.index - reference.row.index) * Number(calibration.candleStep);
+    if (!reference || !usableCalibration) return null;
+    if (row) return Number(reference.x) + (row.index - reference.row.index) * Number(calibration.candleStep);
+    // No provider candle at this exact timestamp - most commonly the very
+    // first candle of a period that has only just begun. Extrapolate from
+    // the latest available candle instead of leaving the boundary
+    // unpositioned; candleStepsBetween only succeeds for a timestamp after
+    // that candle, so this never fires for a genuinely missing/invalid one.
+    const lastBar = bars.at(-1);
+    const lastRow = lastBar ? byTimestamp.get(lastBar._timestamp) : null;
+    if (!lastRow || !minutes) return null;
+    const steps = candleStepsBetween(lastBar._timestamp, timestamp, minutes, tradesOnWeekends);
+    if (steps === null) return null;
+    return Number(reference.x) + (lastRow.index + steps - reference.row.index) * Number(calibration.candleStep);
   };
   const keys = map?.dates || [];
   const periodStarts = keys.map((key) => {
     const expectedStart = startTimestamp(tf, key);
     const first = bars.find((candle) => periodKey(tf, candle._timestamp) === key) || null;
     const isCurrent = key === keys.at(-1);
+    // The current period's own start is a fixed instant regardless of
+    // whether its first candle has posted yet; fall back to that expected
+    // boundary so a brand-new period still gets a chart overlay position.
+    const positionTimestamp = first?._timestamp || (isCurrent ? expectedStart : null);
+    const resolvedScreenX = positionTimestamp ? screenXFor(positionTimestamp) : null;
     return {
       period: periodLabel(tf, key), key, startTimestamp: first?._timestamp || expectedStart,
       expectedStartTimestamp: expectedStart,
-      screenX: first ? screenXFor(first._timestamp) : null,
+      screenX: resolvedScreenX,
       status: isCurrent ? "in_progress" : "completed",
       candleIndex: first ? byTimestamp.get(first._timestamp)?.index ?? null : null,
-      mapped: Boolean(first && screenXFor(first._timestamp) !== null),
+      mapped: Boolean(resolvedScreenX !== null),
       selectable: usableCalibration && !isCurrent && Boolean(first),
     };
   });
