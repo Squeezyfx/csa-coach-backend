@@ -87,13 +87,21 @@ export function buildChartPeriodMap({
       })
     : anchors;
   const terminalCalibration = calibration?.terminalAnchor === true && usableAnchors.length === 1;
-  if (usableAnchors.length < 3 && !terminalCalibration) reasons.push("at least three timestamped x-axis anchors are required");
+  // The three-anchor confidence bar is about the axis calibration itself
+  // (how many pixel-verified tick-to-timestamp mappings the chart reader
+  // found), so it must use the full anchor count. A chart with a long
+  // printed history (BNBUSD's H4 chart spans ~7 weeks) can easily have all
+  // but one or two of those anchors fall before the current framework's
+  // fetch window - that's expected narrowing, not a weak calibration, and
+  // must not fail this bar just because usableAnchors ended up small too.
+  if (anchors.length < 3 && !terminalCalibration) reasons.push("at least three timestamped x-axis anchors are required");
   if (!(Number(calibration?.candleStep) > 0)) reasons.push("candle spacing could not be calibrated");
   if (!bars.length) reasons.push("no provider candles were available at or before the cutoff");
+  else if (anchors.length && !usableAnchors.length) reasons.push("no printed axis anchor falls within the fetched candle range");
 
   const byTimestamp = new Map(bars.map((candle, index) => [candle._timestamp, { candle, index }]));
   const anchorIndexes = usableAnchors.map((anchor) => ({ ...anchor, row: byTimestamp.get(iso(anchor.timestamp)) || null }));
-  if ((usableAnchors.length >= 3 || terminalCalibration) && anchorIndexes.some((anchor) => !anchor.row)) {
+  if (usableAnchors.length > 0 && anchorIndexes.some((anchor) => !anchor.row)) {
     reasons.push("one or more chart time anchors did not match the fetched selected-timeframe candles");
   }
   const usableCalibration = reasons.length === 0;
