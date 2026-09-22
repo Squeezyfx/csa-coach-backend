@@ -75,10 +75,10 @@ function pairGapMinutes(t1,t2,n,days,minutes,tradesOnWeekends){
  const gap=(t2-withoutGap)/60000/days;
  return Number.isInteger(gap)&&gap>=0&&gap<=480?gap:null;
 }
-export function resolveAxisTimestamp({anchors=[],lastCandleX,candleStep,timeframe,tradesOnWeekends=false}={}){
- const minutes=MINUTES[timeframe];if(!minutes||!(candleStep>0)||anchors.length<3)return null;
- const rows=anchors.map(a=>({...a,t:Date.parse(String(a.timestamp).replace(' ','T')+'Z')}));
- if(rows.some(a=>!Number.isFinite(a.t)||!Number.isFinite(a.x)))return null;
+// Validates one candidate anchor chain in full; null means some pair in it
+// is not explainable by candle-index spacing plus a plausible session gap.
+function validateAnchorChain(rows,candleStep,minutes,tradesOnWeekends){
+ if(rows.length<3)return null;
  for(const row of rows){if((row.x-rows[0].x)%candleStep!==0)return null;}
  const pixelRows=rows.map(row=>({...row,n:(row.x-rows[0].x)/candleStep}));
  let lastGapMinutes=0,anySessionGap=false;
@@ -91,6 +91,27 @@ export function resolveAxisTimestamp({anchors=[],lastCandleX,candleStep,timefram
   lastGapMinutes=gap;
   if(gap>0)anySessionGap=true;
  }
+ return {lastGapMinutes,anySessionGap};
+}
+export function resolveAxisTimestamp({anchors=[],lastCandleX,candleStep,timeframe,tradesOnWeekends=false}={}){
+ const minutes=MINUTES[timeframe];if(!minutes||!(candleStep>0)||anchors.length<3)return null;
+ const allRows=anchors.map(a=>({...a,t:Date.parse(String(a.timestamp).replace(' ','T')+'Z')}));
+ if(allRows.some(a=>!Number.isFinite(a.t)||!Number.isFinite(a.x)))return null;
+ // MT4 often prints only a bare date (no clock time) for the leftmost axis
+ // label, since there is no room to its left for the usual "date HH:MM"
+ // format. When a vision model is asked to always supply a time, it can
+ // invent one (commonly 00:00) for that single label, which is otherwise
+ // indistinguishable from a correctly read anchor. Rather than let one bad
+ // edge anchor fail the whole chain, drop it and retry if everything else
+ // validates cleanly — the same edge-unreliability already handled for
+ // pixel geometry in detectMt4CandleGeometry.
+ let rows=allRows,result=validateAnchorChain(rows,candleStep,minutes,tradesOnWeekends);
+ if(!result&&allRows.length>3){
+  rows=allRows.slice(1);
+  result=validateAnchorChain(rows,candleStep,minutes,tradesOnWeekends);
+ }
+ if(!result)return null;
+ const{lastGapMinutes,anySessionGap}=result;
  // The trailing segment beyond the last printed label has no "next" anchor
  // to derive its own gap from, so it uses the most recently observed one —
  // the best available estimate for what the chart is doing right now.
@@ -106,7 +127,8 @@ export function resolveAxisTimestamp({anchors=[],lastCandleX,candleStep,timefram
   }
  }
  const timestamp=new Date(finalTime).toISOString().slice(0,19).replace('T',' ');
- return {timestamp,evidence:anySessionGap?'verified_axis_bar_count_with_session_gap':'verified_axis_bar_count',candlesAfterLastLabel:n,anchorCount:rows.length,candleStep,lastCandleX,anchors,...(anySessionGap?{trailingSessionGapMinutes:lastGapMinutes}:{})};
+ const droppedLeadingAnchor=rows!==allRows;
+ return {timestamp,evidence:anySessionGap?'verified_axis_bar_count_with_session_gap':'verified_axis_bar_count',candlesAfterLastLabel:n,anchorCount:rows.length,candleStep,lastCandleX,anchors:rows.map(({x,timestamp})=>({x,timestamp})),...(anySessionGap?{trailingSessionGapMinutes:lastGapMinutes}:{}),...(droppedLeadingAnchor?{droppedLeadingAnchor:true}:{})};
 }
 // Measures candle/time-axis geometry only. No price values or distances are read.
 export function readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps=[],tradesOnWeekends=false}={}){
