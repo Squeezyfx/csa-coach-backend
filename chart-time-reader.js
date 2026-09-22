@@ -48,18 +48,65 @@ export function readMt4CandleGeometry({imageBase64,timeframe}={}){
  const geometry=detectMt4CandleGeometry(im);if(!geometry)return null;
  return {candleStep:geometry.step,firstCandleX:geometry.first,lastCandleX:geometry.last,candleCount:geometry.centerCount};
 }
+// Number of trading-day boundaries crossed strictly after t1's calendar date
+// up to and including t2's, i.e. how many times a once-per-day session gap
+// (see below) would have occurred between two anchors.
+function tradingDaysBetween(t1,t2,tradesOnWeekends){
+ let cursor=Date.UTC(new Date(t1).getUTCFullYear(),new Date(t1).getUTCMonth(),new Date(t1).getUTCDate())+86400000;
+ const end=Date.UTC(new Date(t2).getUTCFullYear(),new Date(t2).getUTCMonth(),new Date(t2).getUTCDate());
+ let days=0;
+ while(cursor<=end){if(tradesOnWeekends||![0,6].includes(new Date(cursor).getUTCDay()))days++;cursor+=86400000;}
+ return days;
+}
+// CFDs/commodities/indices commonly have a short daily maintenance halt (a
+// broker/exchange rollover window), unlike continuous spot forex or crypto,
+// and the halt itself can vary in length day to day (for example a holiday
+// session). advance() alone assumes every trading day has exactly
+// 24h/H1-step of real candles, so any such chart fails a naive bar-count
+// check. Rather than assuming one fixed gap for the whole chart, each
+// consecutive anchor PAIR already gives us its own exact before/after
+// timestamps, so its own gap (if any) is derived directly and verified
+// on its own — never assumed equal to any other pair's. advance() already
+// skips weekend calendar time correctly, so comparing against its
+// gap-free prediction isolates just the session-gap minutes.
+function pairGapMinutes(t1,t2,n,days,minutes,tradesOnWeekends){
+ const withoutGap=advance(t1,n,minutes,tradesOnWeekends);
+ if(days<=0)return withoutGap===t2?0:null;
+ const gap=(t2-withoutGap)/60000/days;
+ return Number.isInteger(gap)&&gap>=0&&gap<=480?gap:null;
+}
 export function resolveAxisTimestamp({anchors=[],lastCandleX,candleStep,timeframe,tradesOnWeekends=false}={}){
  const minutes=MINUTES[timeframe];if(!minutes||!(candleStep>0)||anchors.length<3)return null;
  const rows=anchors.map(a=>({...a,t:Date.parse(String(a.timestamp).replace(' ','T')+'Z')}));
  if(rows.some(a=>!Number.isFinite(a.t)||!Number.isFinite(a.x)))return null;
+ for(const row of rows){if((row.x-rows[0].x)%candleStep!==0)return null;}
+ const pixelRows=rows.map(row=>({...row,n:(row.x-rows[0].x)/candleStep}));
+ let lastGapMinutes=0,anySessionGap=false;
  for(let i=1;i<rows.length;i++){
-  const n=(rows[i].x-rows[i-1].x)/candleStep;
-  if(!Number.isInteger(n)||n<=0||n>10000||advance(rows[i-1].t,n,minutes,tradesOnWeekends)!==rows[i].t)return null;
+  const n=pixelRows[i].n-pixelRows[i-1].n;
+  if(n<=0||n>10000)return null;
+  const days=tradingDaysBetween(rows[i-1].t,rows[i].t,tradesOnWeekends);
+  const gap=pairGapMinutes(rows[i-1].t,rows[i].t,n,days,minutes,tradesOnWeekends);
+  if(gap===null)return null;
+  lastGapMinutes=gap;
+  if(gap>0)anySessionGap=true;
  }
+ // The trailing segment beyond the last printed label has no "next" anchor
+ // to derive its own gap from, so it uses the most recently observed one —
+ // the best available estimate for what the chart is doing right now.
  const last=rows.at(-1),n=(lastCandleX-last.x)/candleStep;
  if(!Number.isInteger(n)||n<0||n>1000)return null;
- const timestamp=new Date(advance(last.t,n,minutes,tradesOnWeekends)).toISOString().slice(0,19).replace('T',' ');
- return {timestamp,evidence:'verified_axis_bar_count',candlesAfterLastLabel:n,anchorCount:rows.length,candleStep,lastCandleX,anchors};
+ let finalTime=advance(last.t,n,minutes,tradesOnWeekends);
+ if(lastGapMinutes>0){
+  for(let guard=0;guard<5;guard++){
+   const days=tradingDaysBetween(last.t,finalTime,tradesOnWeekends);
+   const next=advance(last.t,n,minutes,tradesOnWeekends)+days*lastGapMinutes*60000;
+   if(next===finalTime)break;
+   finalTime=next;
+  }
+ }
+ const timestamp=new Date(finalTime).toISOString().slice(0,19).replace('T',' ');
+ return {timestamp,evidence:anySessionGap?'verified_axis_bar_count_with_session_gap':'verified_axis_bar_count',candlesAfterLastLabel:n,anchorCount:rows.length,candleStep,lastCandleX,anchors,...(anySessionGap?{trailingSessionGapMinutes:lastGapMinutes}:{})};
 }
 // Measures candle/time-axis geometry only. No price values or distances are read.
 export function readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps=[],tradesOnWeekends=false}={}){
