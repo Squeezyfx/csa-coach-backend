@@ -30258,23 +30258,32 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       const rasterByDate = new Map(
         (rasterInventory?.inventory || []).map((period) => [String(period.date), period])
       );
-      const rasterCorrectedPeriodInventory = rasterByDate.size === rawFocusedPeriodInventory.length
-        ? rawFocusedPeriodInventory.map((period) => {
-            const rasterPeriod = rasterByDate.get(String(period?.date));
-            return rasterPeriod
-              ? {
-                  ...period,
-                  high: rasterPeriod.high,
-                  low: rasterPeriod.low,
-                  highDate: null,
-                  lowDate: null,
-                  source: rasterInventory.source,
-                  rasterPriceScaleVerified: true,
-                  rasterBoundaryAmbiguous: rasterPeriod.boundaryAmbiguous === true,
-                }
-              : period;
-          })
-        : rawFocusedPeriodInventory;
+      // Apply the raster reading per period, not all-or-nothing. Requiring
+      // every single period to be raster-matched before trusting ANY of them
+      // is the same anti-pattern already fixed elsewhere in this file (one
+      // null "Thursday" entry used to zero out an entire otherwise-valid
+      // USA100 candidate array) - here it meant a D1 chart where the raster
+      // reader recovered 7 of 9 months still fell back to vision's null
+      // high/low for ALL nine, leaving periodStructureAudit completely empty
+      // and cascading into "no Fib frame, no entries" for the whole chart.
+      // The per-period fallback below (raster hit -> raster data, raster
+      // miss -> the original seeded/vision period) already handles a partial
+      // match correctly; it only needs to run unconditionally.
+      const rasterCorrectedPeriodInventory = rawFocusedPeriodInventory.map((period) => {
+        const rasterPeriod = rasterByDate.get(String(period?.date));
+        return rasterPeriod
+          ? {
+              ...period,
+              high: rasterPeriod.high,
+              low: rasterPeriod.low,
+              highDate: null,
+              lowDate: null,
+              source: rasterInventory.source,
+              rasterPriceScaleVerified: true,
+              rasterBoundaryAmbiguous: rasterPeriod.boundaryAmbiguous === true,
+            }
+          : period;
+      });
       // extractMt4PngMonthlyInventory's raster correction above only covers
       // D1-candles-in-a-month charts. Intraday charts (H1 etc.) have their
       // own per-day periods that need the same treatment: without it, a
