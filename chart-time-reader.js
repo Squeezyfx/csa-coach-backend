@@ -179,5 +179,31 @@ export function readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps=
  }
  const anchors=positions.map((x,i)=>({x,timestamp:labels[i]})).filter(a=>/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:00$/.test(a.timestamp||''));
  if((last-first)%step!==0)return null;
- return resolveAxisTimestampWithYearCorrection({anchors,lastCandleX:last,candleStep:step,timeframe,tradesOnWeekends});
+ return resolveAxisTimestampWithYearCorrection({anchors,lastCandleX:last,candleStep:step,timeframe,tradesOnWeekends})
+  || resolveSingleAnchorTail(anchors,last,step,MINUTES[timeframe],tradesOnWeekends);
+}
+// When the full anchor chain cannot be validated - a real closed-day
+// irregularity somewhere in the printed history (a genuine occasional
+// broker/data quirk, not a misread) is enough to fail every pair-by-pair
+// check above - the only remaining fallback used to trust vision's own
+// guess of how many candles trail the last printed label
+// (resolveVisibleTimestampFromAxisCount). Counting upwards of a dozen
+// individual daily candles by eye on a compressed D1 chart is exactly the
+// kind of thing vision undercounts: confirmed against a real EURHUF D1
+// chart, where vision's guess landed 12 candles (about 2.5 weeks) short of
+// the true final candle, wrongly leaving a completed month stuck
+// "in progress". The last anchor's own pixel position plus the actual
+// measured gap to the final candle is pixel-exact and needs no chain-wide
+// agreement - only the LAST leg has to hold, which is both the shortest
+// extrapolation available and the one closest to "now".
+function resolveSingleAnchorTail(anchors,lastCandleX,candleStep,minutes,tradesOnWeekends){
+ const anchor=anchors.at(-1);
+ if(!anchor||!minutes)return null;
+ const anchorTime=Date.parse(String(anchor.timestamp).replace(' ','T')+'Z');
+ if(!Number.isFinite(anchorTime))return null;
+ const n=(lastCandleX-anchor.x)/candleStep;
+ if(!Number.isInteger(n)||n<0||n>1000)return null;
+ const finalTime=advance(anchorTime,n,minutes,tradesOnWeekends);
+ const timestamp=new Date(finalTime).toISOString().slice(0,19).replace('T',' ');
+ return {timestamp,evidence:'verified_single_anchor_pixel_count',candlesAfterLastLabel:n,anchorCount:1,candleStep,lastCandleX,anchors:[{x:anchor.x,timestamp:anchor.timestamp}]};
 }

@@ -2993,7 +2993,7 @@ function resolveTwelveDataChartCutoff({
   const usableDetectedTime =
     /^([01]\d|2[0-3]):[0-5]\d$/.test(detectedTime) &&
     detectedTimeConfidence === "high" &&
-    ["explicit_final_candle_timestamp", "verified_axis_bar_count", "verified_multi_anchor_axis_count"].includes(timeEvidence);
+    ["explicit_final_candle_timestamp", "verified_axis_bar_count", "verified_single_anchor_pixel_count", "verified_multi_anchor_axis_count"].includes(timeEvidence);
 
   const selected =
     /^\d{4}-\d{2}-\d{2}$/.test(String(selectedDateText || "").trim())
@@ -4400,7 +4400,7 @@ async function synchronizeFinalVisibleMarketReference({
   // axis_count, one candle off) on the next run of the same chart, and the
   // second evidence type skipped this check entirely, letting the wrong hour
   // through uncorrected.
-  const EXACT_TIME_EVIDENCE = ["explicit_final_candle_timestamp", "verified_axis_bar_count", "verified_multi_anchor_axis_count"];
+  const EXACT_TIME_EVIDENCE = ["explicit_final_candle_timestamp", "verified_axis_bar_count", "verified_single_anchor_pixel_count", "verified_multi_anchor_axis_count"];
   if (!EXACT_TIME_EVIDENCE.includes(chartDetection?.latestVisibleDateEvidence)) {
     return unchanged("date_unverified_no_price_based_date_shift");
   }
@@ -29554,7 +29554,14 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       const timeAxisTimestamps = rawTimeAxisTimestamps.map((value, index) =>
         value || (timeAxisDatesOnly[index] ? `${timeAxisDatesOnly[index]} 00:00:00` : null));
       const axisTime = readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps,tradesOnWeekends});
-      if (axisTime) chartDetection = {...chartDetection, latestVisibleDate:axisTime.timestamp.slice(0,10), latestVisibleTime:axisTime.timestamp.slice(11,16), dateConfidence:"high", latestVisibleTimeConfidence:"high", latestVisibleDateEvidence:"verified_axis_bar_count", timestampAudit:axisTime};
+      // Every sub-tier inside readMt4ForexTimestamp except the newest
+      // (single-anchor pixel tail, used when no full chain of anchors can
+      // be cross-validated) collapses to "verified_axis_bar_count" here, as
+      // before. That new tier only cross-checks its one, most-recent leg -
+      // still pixel-measured rather than a vision guess, but a genuinely
+      // weaker claim than the full chain - so it keeps its own honest label
+      // instead of borrowing the top tier's.
+      if (axisTime) chartDetection = {...chartDetection, latestVisibleDate:axisTime.timestamp.slice(0,10), latestVisibleTime:axisTime.timestamp.slice(11,16), dateConfidence:"high", latestVisibleTimeConfidence:"high", latestVisibleDateEvidence: axisTime.evidence === "verified_single_anchor_pixel_count" ? "verified_single_anchor_pixel_count" : "verified_axis_bar_count", timestampAudit:axisTime};
       if (!axisTime) {
         const inferredAxisTime = resolveVisibleTimestampFromAxisCount({
           timeframe,

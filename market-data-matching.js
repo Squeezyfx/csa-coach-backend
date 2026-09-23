@@ -49,7 +49,7 @@ export function classifyProviderError(message = "", status = 0) {
 
 export function assessChartDataMatch({ candles = [], detection = {}, cutoff = "", tolerance = 0, timeframe = "D1", symbol = "", source = "Twelve Data", alignmentCandle = null }) {
   const result = (status, reason, extra = {}) => ({ status, reason, brokerVerified: false, source, alignmentScope: "final_visible_candle_only", ...extra });
-  const dateVerified = ["explicit_final_candle_timestamp", "verified_axis_bar_count"].includes(detection.latestVisibleDateEvidence) && detection.dateConfidence === "high" && detection.latestVisibleDate === cutoff.slice(0, 10);
+  const dateVerified = ["explicit_final_candle_timestamp", "verified_axis_bar_count", "verified_single_anchor_pixel_count"].includes(detection.latestVisibleDateEvidence) && detection.dateConfidence === "high" && detection.latestVisibleDate === cutoff.slice(0, 10);
   const price = Number(detection.latestVisiblePrice ?? detection.latestVisibleClose);
   if (!(price > 0) || !["high", "medium"].includes(String(detection.latestVisiblePriceConfidence).toLowerCase())) {
     return result("unverified", "Readable chart price required to check provider alignment");
