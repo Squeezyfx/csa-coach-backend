@@ -205,5 +205,11 @@ function resolveSingleAnchorTail(anchors,lastCandleX,candleStep,minutes,tradesOn
  if(!Number.isInteger(n)||n<0||n>1000)return null;
  const finalTime=advance(anchorTime,n,minutes,tradesOnWeekends);
  const timestamp=new Date(finalTime).toISOString().slice(0,19).replace('T',' ');
- return {timestamp,evidence:'verified_single_anchor_pixel_count',candlesAfterLastLabel:n,anchorCount:1,candleStep,lastCandleX,anchors:[{x:anchor.x,timestamp:anchor.timestamp}]};
+ // terminalAnchor tells chart-period-map.js this single anchor (a real,
+ // provider-matched historical candle, not a guess) is enough to calibrate
+ // the whole map on its own - the same trust it already extends to the
+ // other single-anchor fallback (resolveVisibleTimestampFromAxisCount).
+ // Without it, this result's lone anchor fails the ">=3 anchors" bar and
+ // the map goes unverified even though the date itself is now correct.
+ return {timestamp,evidence:'verified_single_anchor_pixel_count',candlesAfterLastLabel:n,anchorCount:1,candleStep,lastCandleX,terminalAnchor:true,anchors:[{x:anchor.x,timestamp:anchor.timestamp}]};
 }
