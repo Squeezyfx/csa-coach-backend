@@ -7,8 +7,13 @@
  */
 import { calendarMapping, normalizeFrameworkTimeframe } from "./framework-calendar.js";
 
-const INTRADAY = new Set(["M1", "M5", "M15", "M30", "H1", "H4"]);
-const CANDLE_MINUTES = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240 };
+// Every timeframe this map supports, plus the candle length it needs for
+// the current-period extrapolation fallback below. D1 follows the exact
+// same "map by candle index" approach H4 already uses one level up (H4's
+// candles are 4h and its periods are weeks; D1's candles are 1 day and its
+// periods are months) - not a separate mechanism, just a different grouping.
+const SUPPORTED = new Set(["M1", "M5", "M15", "M30", "H1", "H4", "D1"]);
+const CANDLE_MINUTES = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440 };
 const iso = (value) => String(value || "").replace("T", " ").slice(0, 19);
 const instant = (value) => {
   const text = iso(value);
@@ -21,7 +26,9 @@ const monday = (date) => {
   day.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7));
   return day.toISOString().slice(0, 10);
 };
+const monthStart = (date) => `${date.slice(0, 7)}-01`;
 const weekLabel = (date) => `Week of ${monday(date)}`;
+const monthLabel = (date) => new Date(`${date}T00:00:00Z`).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
 const sameMoment = (a, b) => Number.isFinite(instant(a)) && instant(a) === instant(b);
 
 function periodKey(timeframe, timestamp) {
@@ -29,11 +36,13 @@ function periodKey(timeframe, timestamp) {
   if (!date) return null;
   if (["M1", "M5", "M15", "M30", "H1"].includes(timeframe)) return date;
   if (timeframe === "H4") return monday(date);
+  if (timeframe === "D1") return monthStart(date);
   return null;
 }
 
 function periodLabel(timeframe, key) {
   if (timeframe === "H4") return weekLabel(key);
+  if (timeframe === "D1") return monthLabel(key);
   return new Date(`${key}T00:00:00Z`).toLocaleString("en-US", { weekday: "long", timeZone: "UTC" });
 }
 
@@ -91,7 +100,7 @@ export function buildChartPeriodMap({
   const lastIncluded = bars.at(-1) || null;
   const map = calendarMapping(tf, dateOnly(cutoff), {tradesOnWeekends});
   const reasons = [];
-  if (!INTRADAY.has(tf)) reasons.push("period-map currently applies to intraday M1–H4 charts only");
+  if (!SUPPORTED.has(tf)) reasons.push("period-map currently applies to M1–H4 and D1 charts only");
   if (!exactCutoff) reasons.push("exact cutoff timestamp is missing or not chart-verified");
   // The chart's printed axis labels span its full visible history (often
   // several weeks), but the fetched provider candles are deliberately

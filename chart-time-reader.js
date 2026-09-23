@@ -1,5 +1,5 @@
 import {decodePng8} from './chart-raster-reader.js';
-const MINUTES={M1:1,M5:5,M15:15,M30:30,H1:60,H4:240};
+const MINUTES={M1:1,M5:5,M15:15,M30:30,H1:60,H4:240,D1:1440};
 const groups=xs=>{const out=[];for(const x of xs){if(!out.length||x>out.at(-1).at(-1)+1)out.push([x]);else out.at(-1).push(x);}return out;};
 // Forex/CFD/index charts never print weekend candles, so skipping Sat/Sun
 // keeps bar counts aligned with the visible axis. Crypto trades every day,

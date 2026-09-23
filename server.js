@@ -29538,17 +29538,27 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // overrides "inferred_axis"/"unknown" - it only replaces chartDetection
     // when it actually succeeds, so a chart with a genuinely correct explicit
     // timestamp is unaffected if the axis reader can't independently verify it.
-    if (["M1", "M5", "M15", "M30", "H1", "H4"].includes(String(timeframe || "").toUpperCase())) {
+    if (["M1", "M5", "M15", "M30", "H1", "H4", "D1"].includes(String(timeframe || "").toUpperCase())) {
       // Crypto trades through the weekend; the axis/bar-count readers must not
       // skip Sat/Sun when counting bars for a crypto chart or every anchor
       // pair spanning a weekend fails validation (see chart-time-reader.js).
       const tradesOnWeekends = isCryptoSymbol(normalizedSymbol || submittedInstrument || "");
-      const axisTime = readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps:chartDetection?.timeAxisTimestamps || [],tradesOnWeekends});
+      // D1 charts print a bare date per axis tick (e.g. "9 Jul 2025"), never
+      // a clock time, so vision correctly returns null for timeAxisTimestamps
+      // there (see the "use null when time is not printed" instruction).
+      // Every D1 candle already aligns to a day boundary, so falling back to
+      // the separately transcribed plain date at 00:00:00 recovers the same
+      // anchor the way an explicit HH:mm would for an intraday chart.
+      const rawTimeAxisTimestamps = chartDetection?.timeAxisTimestamps || [];
+      const timeAxisDatesOnly = chartDetection?.timeAxisDates || [];
+      const timeAxisTimestamps = rawTimeAxisTimestamps.map((value, index) =>
+        value || (timeAxisDatesOnly[index] ? `${timeAxisDatesOnly[index]} 00:00:00` : null));
+      const axisTime = readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps,tradesOnWeekends});
       if (axisTime) chartDetection = {...chartDetection, latestVisibleDate:axisTime.timestamp.slice(0,10), latestVisibleTime:axisTime.timestamp.slice(11,16), dateConfidence:"high", latestVisibleTimeConfidence:"high", latestVisibleDateEvidence:"verified_axis_bar_count", timestampAudit:axisTime};
       if (!axisTime) {
         const inferredAxisTime = resolveVisibleTimestampFromAxisCount({
           timeframe,
-          timeAxisTimestamps: chartDetection?.timeAxisTimestamps || [],
+          timeAxisTimestamps,
           visibleCandlesAfterLastPrintedDate: chartDetection?.visibleCandlesAfterLastPrintedDate,
           tradesOnWeekends,
         });
