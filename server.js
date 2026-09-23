@@ -3612,6 +3612,19 @@ async function fetchTwelveDataStructureLevels({
     executionFrameworkRawCandlesSample: executionFrameworkRawCandles.slice(0, 5),
     timeframeCandlesCount: timeframeCandles.length,
     structureMode: profile?.structureMode || null,
+    // GBPCAD D1: the native monthly candle buildStructureLevelsFromCandles
+    // grouped under "April" turned out to hold May's real aggregate OHLC
+    // (candleCount:1, high/low matching May's independently-reconstructed
+    // values exactly) - meaning the mislabeling happens before grouping,
+    // in what the provider fetch itself returns/dates for "1month"
+    // granularity. filteredFrameworkSourceCandles is that raw series
+    // (pre structureRange-filtering); for monthly-in-year this is at most
+    // ~12-17 rows (with the 45-day over-fetch buffer), small enough to
+    // dump in full rather than guess again from a derived aggregate.
+    filteredFrameworkSourceCandlesForMonthlyDebug:
+      profile?.structureMode === "monthly-in-year"
+        ? filteredFrameworkSourceCandles.map((c) => ({ datetime: c.datetime, open: c.open, high: c.high, low: c.low, close: c.close }))
+        : undefined,
   };
 
   // V4.9.0 â€” NATIVE HIGHER-TIMEFRAME AUTHORITY
