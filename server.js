@@ -2279,10 +2279,40 @@ function getImpulseContextRangeForProfile(
   };
 }
 
+// Universal forex-market closures: every retail/institutional FX venue is
+// closed on these calendar dates regardless of year or broker, unlike
+// regional bank holidays (Good Friday, Labour Day, Canada Day, etc.), which
+// vary by country and do NOT close the FX market as a whole - so only these
+// two are safe to treat as globally excluded rather than broker-specific.
+// A provider that still emits a dated candle for one of these (some feeds
+// carry forward a stale/thin placeholder bar) must not have it treated as a
+// real trading day: it would misplace a period's start (2026-01-01 is a
+// real Thursday, not a weekend, so weekend-exclusion alone does not catch
+// it - confirmed via user report that MT4's own January period line starts
+// 2026-01-02, not 2026-01-01) and could pollute that period's high/low.
+const MARKET_HOLIDAY_MM_DD = new Set(["01-01", "12-25"]);
+function isUniversalMarketHoliday(dateOnly) {
+  const mmdd = String(dateOnly || "").slice(5);
+  return MARKET_HOLIDAY_MM_DD.has(mmdd);
+}
+
 function filterCandlesToStructureRange(
   candles = [],
   structureRange = null,
-  profile = getSupportedCsaTimeframeProfile("H1")
+  profile = getSupportedCsaTimeframeProfile("H1"),
+  // Whether the CANDLES BEING PASSED IN are day/week granular (so a stray
+  // Saturday/Sunday timestamp is a genuine artifact) rather than
+  // month-or-larger granular (see buildStructureLevelsFromCandles for why
+  // those must NOT be weekend-filtered). This is a property of the candle
+  // series itself, not of profile.structureMode: for D1, the SAME profile
+  // (structureMode "monthly-in-year") is used both to filter D1's own daily
+  // execution candles (day-granular, must filter) and D1's native monthly
+  // framework candles (month-granular, must not filter) - inferring this
+  // from structureMode alone silently stopped filtering D1's own daily
+  // candles too (confirmed: GBPCAD's raw D1 candles included a Sunday,
+  // "2026-01-04"). Defaults to the old structureMode-based inference so any
+  // caller that hasn't been updated keeps its previous behavior.
+  candlesAreDayGranular = ["daily-in-week", "weekly-in-month"].includes(profile?.structureMode)
 ) {
   if (
     !Array.isArray(candles) ||
@@ -2307,16 +2337,8 @@ function filterCandlesToStructureRange(
       return false;
     }
 
-    // See buildStructureLevelsFromCandles for why this is restricted to
-    // day/week-granular structure modes: a native monthly-or-larger candle
-    // (OANDA labels these by ~month-end, not month-start) lands on whatever
-    // weekday its own month happens to end on, and excluding it here on
-    // that basis throws away a real month's worth of native provider data
-    // (confirmed for GBPCAD: May 31 2026 is a Saturday).
-    const weekendSensitiveMode =
-      ["daily-in-week", "weekly-in-month"].includes(profile?.structureMode);
     if (
-      weekendSensitiveMode &&
+      candlesAreDayGranular &&
       profile?.tradesOnWeekends !== true
     ) {
       const date =
@@ -2341,13 +2363,29 @@ function filterCandlesToStructureRange(
       ) {
         return false;
       }
+
+      if (isUniversalMarketHoliday(dateOnly)) {
+        return false;
+      }
     }
 
     return true;
   });
 }
 
-function buildStructureLevelsFromCandles(candles, structureRange, profile) {
+function buildStructureLevelsFromCandles(
+  candles,
+  structureRange,
+  profile,
+  // See filterCandlesToStructureRange: whether the CANDLES BEING PASSED IN
+  // are day/week granular, not a property of profile.structureMode. Weekend
+  // exclusion must apply to D1's own daily execution candles (day-granular)
+  // but not to D1's native monthly framework candles (month-granular, and
+  // OANDA labels those by ~month-end so ~2 in 7 land on a Saturday/Sunday by
+  // calendar coincidence - confirmed for GBPCAD: May 31 2026 is a Saturday).
+  // Defaults to the old structureMode-based inference for unmigrated callers.
+  candlesAreDayGranular = ["daily-in-week", "weekly-in-month"].includes(profile.structureMode)
+) {
   const grouped = new Map();
   candles.forEach((bar) => {
     const dateOnly = candleDateOnly(bar.datetime);
@@ -2355,20 +2393,7 @@ function buildStructureLevelsFromCandles(candles, structureRange, profile) {
     const date = new Date(`${dateOnly}T00:00:00.000Z`);
     if (Number.isNaN(date.getTime())) return;
     if (dateOnly < structureRange.startDate || dateOnly > structureRange.endDate) return;
-    // Weekend exclusion applies to daily-in-week (H1/M-timeframes) and
-    // weekly-in-month (H4): those candles are day/week granular, so a stray
-    // Saturday/Sunday timestamp (a thin pre-open bar some feeds emit) is a
-    // genuine data artifact, and left unfiltered it silently shifts every
-    // later chart-period-map candle index by one, compounding week over
-    // week. It must NOT apply to monthly-or-larger structure modes: OANDA
-    // labels its native monthly candles by (close to) month-END, not
-    // month-start, so a real month's own candle lands on whatever weekday
-    // that month happens to end on - roughly 2 months in 7 land on a
-    // Saturday or Sunday purely by calendar coincidence (confirmed for
-    // GBPCAD: May 31 2026 is a Saturday), and excluding those threw away an
-    // entire real month of native provider data, not an artifact.
-    const weekendSensitiveMode = ["daily-in-week", "weekly-in-month"].includes(profile.structureMode);
-    if (weekendSensitiveMode && profile.tradesOnWeekends !== true) { const dayNum = date.getUTCDay(); if (dayNum < 1 || dayNum > 5) return; }
+    if (candlesAreDayGranular && profile.tradesOnWeekends !== true) { const dayNum = date.getUTCDay(); if (dayNum < 1 || dayNum > 5) return; if (isUniversalMarketHoliday(dateOnly)) return; }
     const open = safeNumber(bar.open), high = safeNumber(bar.high), low = safeNumber(bar.low), close = safeNumber(bar.close);
     if ([open, high, low, close].some((v) => v === null)) return;
     const period = getPeriodKeyAndLabel(date, profile);
@@ -3556,7 +3581,11 @@ async function fetchTwelveDataStructureLevels({
     filterCandlesToStructureRange(
       filteredCandles,
       structureRange,
-      profile
+      profile,
+      // filteredCandles is always the selected-timeframe (execution) series
+      // - day-or-finer granular for every CSA timeframe including D1 - so a
+      // weekend timestamp here is always an artifact, never a real period.
+      true
     );
 
   const cutoffDateOnly = candleDateOnly(endDateTime);
@@ -3576,7 +3605,11 @@ async function fetchTwelveDataStructureLevels({
     filterCandlesToStructureRange(
       filteredFrameworkSourceCandles,
       structureRange,
-      profile
+      profile,
+      // filteredFrameworkSourceCandles is the NATIVE higher-timeframe series
+      // (D1 for H1, W1 for H4, MN for D1) - day/week granular except when
+      // frameworkInterval is "1month", where it must not be weekend-filtered.
+      frameworkInterval !== "1month"
     );
 
   const frameworkRawCandles = currentFrameworkPeriodComplete
@@ -3689,12 +3722,17 @@ async function fetchTwelveDataStructureLevels({
   const providerFrameworkLevels = buildStructureLevelsFromCandles(
     monthShiftedFrameworkRawCandles,
     structureRange,
-    profile
+    profile,
+    // Native higher-timeframe series - see sourceFrameworkCandlesInRange above.
+    frameworkInterval !== "1month"
   );
   const executionReconstructedLevels = buildStructureLevelsFromCandles(
     executionFrameworkRawCandles,
     structureRange,
-    profile
+    profile,
+    // Always the selected-timeframe (execution) series - always day-or-finer
+    // granular, see executionFrameworkRawCandles above.
+    true
   );
 
   const nativeSourceBars = normalizeMarketCandles(
