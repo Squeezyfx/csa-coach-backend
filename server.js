@@ -3972,6 +3972,30 @@ async function fetchTwelveDataStructureLevels({
 
   if (Array.isArray(alignedNative.resolved)) {
     dailyLevels = alignedNative.resolved;
+  } else if (profile?.structureMode === "monthly-in-year") {
+    // D1 specifically: prefer the reconstruction (built directly from real,
+    // calendar-exact D1 candles) over the native OANDA monthly candle, not
+    // the other way around. GBPCAD exposed why: OANDA's native "1month"
+    // candle boundaries do not align precisely to true calendar months (a
+    // real D1 candle's high/low exceeded the reported native monthly
+    // range for two separate months - auditPeriodInventory correctly
+    // refused to certify those, exactly as it should), even after fixing
+    // which month a native candle's content actually belongs to. The
+    // reconstruction has no such boundary ambiguity: it groups the exact
+    // same D1 candles auditPeriodInventory itself checks against, by
+    // calendar date. Native is now the fallback, used only when the
+    // reconstruction itself has no data for a key.
+    const reconstructedLevelMap = new Map(
+      executionReconstructedLevels.map((level) => [String(level.key), level])
+    );
+    for (const level of providerFrameworkLevels) {
+      const key = String(level.key);
+      if (!reconstructedLevelMap.has(key)) {
+        reconstructedLevelMap.set(key, level);
+      }
+    }
+    dailyLevels = Array.from(reconstructedLevelMap.values())
+      .sort((a, b) => String(a.key).localeCompare(String(b.key)));
   } else {
     // D1/W1/MN analysis modes: provider higher-timeframe periods remain
     // authoritative for completed periods. The pre-existing safe fallback is
