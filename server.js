@@ -2307,7 +2307,16 @@ function filterCandlesToStructureRange(
       return false;
     }
 
+    // See buildStructureLevelsFromCandles for why this is restricted to
+    // day/week-granular structure modes: a native monthly-or-larger candle
+    // (OANDA labels these by ~month-end, not month-start) lands on whatever
+    // weekday its own month happens to end on, and excluding it here on
+    // that basis throws away a real month's worth of native provider data
+    // (confirmed for GBPCAD: May 31 2026 is a Saturday).
+    const weekendSensitiveMode =
+      ["daily-in-week", "weekly-in-month"].includes(profile?.structureMode);
     if (
+      weekendSensitiveMode &&
       profile?.tradesOnWeekends !== true
     ) {
       const date =
@@ -2346,14 +2355,20 @@ function buildStructureLevelsFromCandles(candles, structureRange, profile) {
     const date = new Date(`${dateOnly}T00:00:00.000Z`);
     if (Number.isNaN(date.getTime())) return;
     if (dateOnly < structureRange.startDate || dateOnly > structureRange.endDate) return;
-    // Weekend exclusion must apply to every intraday-sourced structure mode
-    // (H4's "weekly-in-month" included), not just "daily-in-week" (H1/M-
-    // timeframes). H4's own week boundary is Monday 00:00, so a stray
-    // Saturday/Sunday provider bar (a thin pre-open candle some feeds emit)
-    // is exactly as invalid there as it is for a daily framework, and left
-    // unfiltered it silently shifts every later chart-period-map candle
-    // index by one, compounding week over week.
-    if (profile.tradesOnWeekends !== true) { const dayNum = date.getUTCDay(); if (dayNum < 1 || dayNum > 5) return; }
+    // Weekend exclusion applies to daily-in-week (H1/M-timeframes) and
+    // weekly-in-month (H4): those candles are day/week granular, so a stray
+    // Saturday/Sunday timestamp (a thin pre-open bar some feeds emit) is a
+    // genuine data artifact, and left unfiltered it silently shifts every
+    // later chart-period-map candle index by one, compounding week over
+    // week. It must NOT apply to monthly-or-larger structure modes: OANDA
+    // labels its native monthly candles by (close to) month-END, not
+    // month-start, so a real month's own candle lands on whatever weekday
+    // that month happens to end on - roughly 2 months in 7 land on a
+    // Saturday or Sunday purely by calendar coincidence (confirmed for
+    // GBPCAD: May 31 2026 is a Saturday), and excluding those threw away an
+    // entire real month of native provider data, not an artifact.
+    const weekendSensitiveMode = ["daily-in-week", "weekly-in-month"].includes(profile.structureMode);
+    if (weekendSensitiveMode && profile.tradesOnWeekends !== true) { const dayNum = date.getUTCDay(); if (dayNum < 1 || dayNum > 5) return; }
     const open = safeNumber(bar.open), high = safeNumber(bar.high), low = safeNumber(bar.low), close = safeNumber(bar.close);
     if ([open, high, low, close].some((v) => v === null)) return;
     const period = getPeriodKeyAndLabel(date, profile);
@@ -3646,8 +3661,33 @@ async function fetchTwelveDataStructureLevels({
   // This prevents a completed D1/W1/MN high/low from being redefined by an
   // arbitrary UTC aggregation while still preventing future-candle leakage.
 
+  // OANDA's native "1month" granularity labels a candle by (close to) the
+  // START of the period it covers, and a calendar month's start naturally
+  // lands on day 28-31 of the PRECEDING month (its content runs from there
+  // to the same day next month) - so a candle timestamped "2026-04-30"
+  // actually covers Apr30 through May30, i.e. it is overwhelmingly MAY's
+  // data, not April's. Keying it by its own raw date's month therefore
+  // mislabels every native monthly candle one month early. Confirmed for
+  // GBPCAD across three independent months: the raw candles dated
+  // 2026-01-31 / 04-30 / 07-31 have OHLC that exactly matches February's /
+  // May's / August's independently-reconstructed (from real daily candles)
+  // values, not January's / April's / July's. Nudging the date 15 days
+  // forward before grouping - safely inside the true content month
+  // regardless of which day (28-31) the raw timestamp lands on, without
+  // touching the OHLC itself - fixes the key without needing to know
+  // OANDA's exact boundary convention. Scoped to native "1month" candles
+  // only; D1/weekly candles are unaffected.
+  const monthShiftedFrameworkRawCandles = frameworkInterval === "1month"
+    ? frameworkRawCandles.map((bar) => {
+        const dateOnly = candleDateOnly(bar?.datetime);
+        const shifted = dateOnly ? addDays(new Date(`${dateOnly}T00:00:00.000Z`), 15) : null;
+        return shifted && !Number.isNaN(shifted.getTime())
+          ? { ...bar, datetime: `${formatDateOnly(shifted)} 00:00:00` }
+          : bar;
+      })
+    : frameworkRawCandles;
   const providerFrameworkLevels = buildStructureLevelsFromCandles(
-    frameworkRawCandles,
+    monthShiftedFrameworkRawCandles,
     structureRange,
     profile
   );
