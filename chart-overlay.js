@@ -90,17 +90,31 @@ export function buildChartOverlay({ chartDetection = {}, analysisFacts = {}, mar
     const x1 = num(starts[index].screenX);
     const next = starts[index + 1];
     const x2 = next ? num(next.screenX) - step : (Number.isFinite(cutoffX) ? cutoffX : plotRight);
-    return { x1, x2, startIndex: num(starts[index].candleIndex) };
+    const startIndex = num(starts[index].candleIndex);
+    const endIndex = next && finite(next.candleIndex) ? num(next.candleIndex) - 1 : candles.length - 1;
+    return { x1, x2, startIndex, endIndex };
   };
-  // Candle index (in the map's own ordering) where the period's high or low was made.
-  const extremeIndex = (date, price, kind) => {
-    const inDay = candles
-      .map((c, index) => ({ c, index }))
-      .filter(({ c }) => c._t.slice(0, 10) === date);
-    if (!inDay.length) return null;
+  // Candle index (in the map's own ordering) where the period's high or low
+  // was made. period.date is the PERIOD'S OWN identity key - for H4/D1 that
+  // is the week's Monday / the month's 1st, not necessarily the day the
+  // extreme actually happened on, so matching candles by date string here
+  // (as this used to) only ever found April/June/September's handful of
+  // extremes that coincidentally landed on day 1 of their period and left
+  // every other period's tick spanning its full width with no exact
+  // candle to anchor to. Scanning the period's own verified candle-index
+  // range (already established by chart-period-map.js) for the candle
+  // whose real high/low matches the recorded price finds the true one
+  // regardless of which day within the period it fell on.
+  const extremeIndex = (span, price, kind) => {
+    if (!span || !Number.isFinite(span.startIndex) || !Number.isFinite(span.endIndex)) return null;
     const tolerance = Math.abs(num(price)) * 0.00002;
-    const hit = inDay.find(({ c }) => Math.abs(num(kind === "high" ? c.high : c.low) - num(price)) <= tolerance);
-    return hit ? hit.index : null;
+    for (let i = span.startIndex; i <= span.endIndex && i < candles.length; i++) {
+      const c = candles[i];
+      if (!c) continue;
+      const value = num(kind === "high" ? c.high : c.low);
+      if (Number.isFinite(value) && Math.abs(value - num(price)) <= tolerance) return i;
+    }
+    return null;
   };
 
   const allPrices = [
@@ -143,7 +157,13 @@ export function buildChartOverlay({ chartDetection = {}, analysisFacts = {}, mar
     });
   }
 
-  // 2. Period highs / lows.
+  // 2. Period highs / lows. A short tick right at the candle that made the
+  // extreme, not a dash spanning the whole period - the point is to show
+  // exactly which wick the level came from. Falls back to the full-period
+  // span only when that candle couldn't be pinned down (extremeIndex found
+  // no matching wick), and that fallback case is marked unverified so the
+  // frontend greys it out instead of drawing an imprecise line as fact.
+  const tickWidth = step > 0 ? step : 12;
   for (const period of periods) {
     const span = spanOf(period.date);
     for (const kind of ["high", "low"]) {
@@ -151,14 +171,15 @@ export function buildChartOverlay({ chartDetection = {}, analysisFacts = {}, mar
       if (!Number.isFinite(price)) continue;
       const y = yOf(price);
       if (y === null) continue;
-      const x1 = span?.x1 ?? 0;
-      const x2 = span?.x2 ?? plotRight;
-      const index = span ? extremeIndex(period.date, price, kind) : null;
+      const index = span ? extremeIndex(span, price, kind) : null;
       const extremeX = index !== null ? xOfIndex(index) : null;
+      const pinned = Number.isFinite(extremeX);
+      const x1 = pinned ? extremeX : (span?.x1 ?? 0);
+      const x2 = pinned ? extremeX + tickWidth : (span?.x2 ?? plotRight);
       elements.push({
         type: "period_level", kind, period: period.period, date: period.date, lifecycle: period.lifecycle,
-        price, y, x1, x2, extremeX: Number.isFinite(extremeX) ? extremeX : null, label: fmt(price),
-        verified: Boolean(span) && period[`${kind}Verified`] !== false,
+        price, y, x1, x2, extremeX: pinned ? extremeX : null, label: fmt(price),
+        verified: pinned && period[`${kind}Verified`] !== false,
       });
     }
   }
