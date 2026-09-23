@@ -30645,6 +30645,18 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           marketInventoryFrameVerified: marketInventoryFrame?.currentPeriodFrameVerified === true,
           marketInventoryFrame,
           marketPeriodInventoryDates: marketPeriodInventory.map((p) => ({ date: p?.date, lifecycle: p?.periodLifecycle })),
+          // August still fails auditPeriodInventory's cross-check even
+          // though the exported dailyLevels/timeframeCandles show no
+          // violation by hand - meaning the audit itself is checking
+          // against a different value/candle set than what ends up in the
+          // export. Its own per-period evidence (checked candle count and
+          // which candle matched each extreme) should show exactly what it
+          // actually compared, plus the exact August period object passed
+          // into it (integrityPeriods, not the possibly-different
+          // marketReference.dailyLevels by the time this JSON is built).
+          marketPeriodIntegrityEvidence: marketPeriodIntegrity.evidence,
+          integrityPeriodsAugust: integrityPeriods.find((p) => String(p?.date || "").startsWith("2026-08")) || null,
+          timeframeCandlesCount: Array.isArray(marketReference?.timeframeCandles) ? marketReference.timeframeCandles.length : null,
         },
       };
 
