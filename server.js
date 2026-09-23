@@ -30136,8 +30136,21 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // allow the focused chart/raster reader to build a clearly provisional
     // chart-only inventory. This keeps broker/server details out of the user
     // workflow while preserving the provider warning and authority boundary.
+    //
+    // "partial_reference" used to count as "aligns" here too, but it does
+    // not: marketInventoryVerified (the thing this bypass assumes will cover
+    // the chart instead) only ever accepts "matched_reference" or a separate
+    // providerInventoryAuthoritative check - never "partial_reference". A
+    // chart landing on partial_reference (the ordinary state for a live
+    // chart whose current candle is still forming - confirmed for
+    // AUDCHF/GBPCAD, both showing "Final close comparison deferred...
+    // candle completion is unknown") had its raster/vision fallback skipped
+    // here on the assumption the provider path would cover it, then failed
+    // that stricter provider check too - leaving it with neither path and a
+    // completely empty inventory. Only "matched_reference" is a strong
+    // enough signal to skip the fallback reader.
     const providerOnlyForex = marketReference?.dataProvider === "OANDA" &&
-      ["matched_reference", "partial_reference"].includes(marketReference?.chartDataMatch?.status);
+      marketReference?.chartDataMatch?.status === "matched_reference";
     { // Every supported timeframe reconciles its evidence through the shared engine.
       const focusedFallbackStartedAt = csaNowMs();
       const [
