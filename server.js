@@ -30286,6 +30286,20 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       const rasterByDate = new Map(
         (rasterInventory?.inventory || []).map((period) => [String(period.date), period])
       );
+      // Surface exactly why the raster reader did or didn't produce data,
+      // on chartDetection since that already reliably reaches the benchmark
+      // export - AUDCHF/GBPCAD kept coming back with an empty inventory
+      // across several rounds of fixes with no way to see which of the
+      // reader's many internal checks was actually failing for those two
+      // specific charts.
+      chartDetection = {
+        ...chartDetection,
+        rasterDiagnostics: rasterInventory
+          ? rasterInventory.ok === false
+            ? { ok: false, reason: rasterInventory.reason, ...rasterInventory }
+            : { ok: true, periodsRecovered: rasterInventory.periodsRecovered, periodsRequested: rasterInventory.periodsRequested, verifiedRangesUsed: rasterInventory.verifiedRangesUsed, chartPriceScaleVerified: rasterInventory.chartPriceScaleVerified, priceCalibrationSource: rasterInventory.priceCalibrationSource }
+          : { ok: false, reason: providerOnlyForex ? "provider_only_forex_raster_skipped" : "raster_reader_returned_null" },
+      };
       // Apply the raster reading per period, not all-or-nothing. Requiring
       // every single period to be raster-matched before trusting ANY of them
       // is the same anti-pattern already fixed elsewhere in this file (one

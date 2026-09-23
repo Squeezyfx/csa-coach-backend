@@ -479,24 +479,36 @@ export function extractMt4PngMonthlyInventory({
   latestVisibleDate = "",
   instrument = "",
 } = {}) {
-  if (String(timeframe).toUpperCase() !== "D1" || !/png/i.test(String(mimeType))) return null;
+  // Diagnostic reason tracking: this function used to return bare null on
+  // every failure, which was indistinguishable from any other failure once
+  // it reached the export - AUDCHF/GBPCAD kept coming back with an empty
+  // inventory across several fixes because there was no way to tell WHICH
+  // of the many early exits below was actually firing for those specific
+  // charts without a pixel-identical reference screenshot to hand-test
+  // against (which the benchmark's own re-captures never quite are). Every
+  // failure path now returns {ok:false, reason, ...} instead of bare null;
+  // callers that only ever used `?.` optional chaining or falsy checks on
+  // the result are unaffected, since {ok:false} still reads as "no usable
+  // data" everywhere it's consumed.
+  const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
+  if (String(timeframe).toUpperCase() !== "D1" || !/png/i.test(String(mimeType))) return fail("not_a_d1_png_chart");
   const dates = (Array.isArray(timeAxisDates) ? timeAxisDates : []).map(parseDate).filter(Number.isFinite);
   // Keep the complete OCR scale list. A boxed live-price label can be a valid
   // scale anchor even though it is not an ordinary tick; dropping it without
   // detecting its pixel position would shift the remaining labels.
   const prices = (Array.isArray(priceAxisTicks) ? priceAxisTicks : []).map(Number).filter(Number.isFinite);
-  if (prices.length >= 3 && prices[0] <= prices.at(-1)) return null;
+  if (prices.length >= 3 && prices[0] <= prices.at(-1)) return fail("price_axis_ticks_not_descending", { prices });
   let image;
   try {
     image = decodePng8(Buffer.from(String(imageBase64 || ""), "base64"));
-  } catch {
-    return null;
+  } catch (error) {
+    return fail("png_decode_failed", { error: error?.message || String(error) });
   }
-  if (!image || image.width < 500 || image.height < 250) return null;
+  if (!image || image.width < 500 || image.height < 250) return fail("image_too_small", { width: image?.width, height: image?.height });
 
   const { width, height } = image;
   const frame = detectPlotFrame(image);
-  if (!frame) return null;
+  if (!frame) return fail("plot_frame_not_detected");
   const { plotRight, plotBottom } = frame;
 
   // The MT4 screenshots used by the benchmark often contain a continuous
@@ -515,7 +527,7 @@ export function extractMt4PngMonthlyInventory({
   const candleGroups = groupConsecutive(candleColumns);
   const candleCenters = candleGroups.map((group) => Math.round((group[0] + group.at(-1)) / 2));
   const candleStep = modePositive(candleCenters.slice(1).map((value, index) => value - candleCenters[index]), 2, 12);
-  if (!candleStep || candleCenters.length < 40) return null;
+  if (!candleStep || candleCenters.length < 40) return fail("candle_geometry_not_detected", { candleStep, candleCenterCount: candleCenters.length });
   const firstCandleX = candleCenters[0];
   const lastCandleX = candleCenters.at(-1);
 
@@ -563,7 +575,7 @@ export function extractMt4PngMonthlyInventory({
     }
     if (ys.length) candles.push({ x, highY: Math.min(...ys), lowY: Math.max(...ys) });
   }
-  if (candles.length < candleCenters.length * 0.75) return null;
+  if (candles.length < candleCenters.length * 0.75) return fail("wick_detection_incomplete", { candlesFound: candles.length, candleCentersExpected: candleCenters.length });
 
   // Price-axis labels are transcribed before this deterministic raster pass.
   // A single OCR error (for example Cocoa's 2921 bottom tick read as 2018)
@@ -599,7 +611,7 @@ export function extractMt4PngMonthlyInventory({
   const priceAtY = useHeaderCalibration
     ? (y) => headerHigh + (y - finalCandle.highY) * headerPricePerPixel
     : axisPriceAtY;
-  if (typeof priceAtY !== "function") return null;
+  if (typeof priceAtY !== "function") return fail("no_price_calibration_available", { headerValuesUsable, hasAxisPriceAtY: typeof axisPriceAtY === "function" });
   const chartPriceScaleVerified = axisMatchesHeader || useHeaderCalibration || inferredAxisCalibration;
   const priceCalibrationSource = useHeaderCalibration
     ? "exact_final_candle_header_ohlc"
@@ -610,7 +622,7 @@ export function extractMt4PngMonthlyInventory({
     : "unverified_price_axis";
 
   const starts = (Array.isArray(periodDates) ? periodDates : []).map((date) => ({ date, timestamp: parseDate(date) })).filter((item) => Number.isFinite(item.timestamp));
-  if (!starts.length) return null;
+  if (!starts.length) return fail("no_period_dates_supplied");
   const includesWeekends = isCryptoSymbol(instrument);
   let finalTimestamp = parseDate(latestVisibleDate);
   // A non-crypto D1 chart whose last visible date is inferred as Saturday or
@@ -681,7 +693,8 @@ export function extractMt4PngMonthlyInventory({
   // inventory per period and keeps its own original data for any date
   // missing here, so a short inventory is fine; only a genuinely inverted
   // high/low is a real error worth discarding.
-  if (!inventory.length || inventory.some((period) => !(period.high > period.low))) return null;
+  if (!inventory.length) return fail("no_period_found_any_owned_candles", { periodsRequested: starts.length, verifiedRangesSupplied: pixelRangesByDate.size });
+  if (inventory.some((period) => !(period.high > period.low))) return fail("inverted_high_low_in_inventory", { periodsRecovered: inventory.length, periodsRequested: starts.length });
   const lastStartDate = starts.at(-1)?.date;
   const final = inventory.at(-1)?.date === lastStartDate ? inventory.at(-1) : null;
   if (final) {
@@ -689,7 +702,11 @@ export function extractMt4PngMonthlyInventory({
     if (Number(latestVisibleLow) > 0) final.low = Math.min(final.low, Number(latestVisibleLow));
   }
   return {
+    ok: true,
     inventory,
+    periodsRecovered: inventory.length,
+    periodsRequested: starts.length,
+    verifiedRangesUsed: pixelRangesByDate.size,
     source: "deterministic_mt4_png_wick_raster",
     chartPriceScaleVerified,
     priceCalibrationSource,
