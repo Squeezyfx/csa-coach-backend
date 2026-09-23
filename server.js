@@ -30604,6 +30604,25 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         marketInventoryFrame?.currentPeriodFrameVerified === true &&
         (marketReference?.chartDataMatch?.status === "matched_reference" ||
           providerInventoryAuthoritative);
+      // GBPCAD D1: dailyLevels now has all 9 correct, distinct native months
+      // (the month-mislabeling and weekend-exclusion fixes both landed), yet
+      // periodStructureAudit is still empty - meaning marketInventoryVerified
+      // is still false for a reason neither of those fixes touched. Rather
+      // than keep tracing through more nested lifecycle/calendar-matching
+      // functions by hand, surface its actual inputs directly.
+      chartDetection = {
+        ...chartDetection,
+        marketInventoryDiagnostics: {
+          marketInventoryVerified,
+          marketReferenceOk: marketReference?.ok === true,
+          chartDataMatchStatus: marketReference?.chartDataMatch?.status || null,
+          marketPeriodIntegrityPassed: marketPeriodIntegrity.passed,
+          marketPeriodIntegrityIssues: marketPeriodIntegrity.issues,
+          marketInventoryFrameVerified: marketInventoryFrame?.currentPeriodFrameVerified === true,
+          marketInventoryFrame,
+          marketPeriodInventoryDates: marketPeriodInventory.map((p) => ({ date: p?.date, lifecycle: p?.periodLifecycle })),
+        },
+      };
 
       console.log("[inventory-authority] " + JSON.stringify({
         symbol: normalizedSymbol, timeframe,
