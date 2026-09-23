@@ -110,10 +110,28 @@ export function buildChartPeriodMap({
   // inside the fetched candle range are required to match one.
   const barsStartMs = bars.length ? instant(bars[0]._timestamp) : NaN;
   const barsEndMs = bars.length ? instant(bars.at(-1)._timestamp) : NaN;
+  const lastBar = bars.at(-1) || null;
+  const minutes = CANDLE_MINUTES[tf] || null;
+  // A terminal anchor (the single "last visible candle" reference used when
+  // the chart's printed history far exceeds the fetch window - see
+  // terminalCalibration below) is, by definition, the chart's CURRENT candle.
+  // It can legitimately sit just past barsEndMs when that candle has only
+  // just begun and the provider has not posted it yet - the exact same gap
+  // screenXFor's own fallback extrapolates past further down. Accepting it
+  // here too (bounded to a handful of candle-steps, never an unbounded
+  // window) lets it still anchor the whole calibration instead of emptying
+  // usableAnchors and failing the map outright over a candle that simply
+  // has not arrived yet.
+  const stepsPastHistory = (timestamp) => lastBar && minutes
+    ? candleStepsBetween(lastBar._timestamp, timestamp, minutes, tradesOnWeekends)
+    : null;
   const usableAnchors = Number.isFinite(barsStartMs) && Number.isFinite(barsEndMs)
     ? anchors.filter((anchor) => {
         const t = instant(anchor.timestamp);
-        return Number.isFinite(t) && t >= barsStartMs && t <= barsEndMs;
+        if (!Number.isFinite(t)) return false;
+        if (t >= barsStartMs && t <= barsEndMs) return true;
+        const steps = stepsPastHistory(anchor.timestamp);
+        return steps !== null && steps <= 10;
       })
     : anchors;
   const terminalCalibration = calibration?.terminalAnchor === true && usableAnchors.length === 1;
@@ -130,12 +148,22 @@ export function buildChartPeriodMap({
   else if (anchors.length && !usableAnchors.length) reasons.push("no printed axis anchor falls within the fetched candle range");
 
   const byTimestamp = new Map(bars.map((candle, index) => [candle._timestamp, { candle, index }]));
-  const anchorIndexes = usableAnchors.map((anchor) => ({ ...anchor, row: byTimestamp.get(iso(anchor.timestamp)) || null }));
+  const anchorIndexes = usableAnchors.map((anchor) => {
+    const row = byTimestamp.get(iso(anchor.timestamp));
+    if (row) return { ...anchor, row };
+    // Matched via stepsPastHistory above, not an exact fetched candle:
+    // synthesize the same virtual index screenXFor would derive for it.
+    const steps = stepsPastHistory(anchor.timestamp);
+    if (steps !== null && lastBar) {
+      const lastRow = byTimestamp.get(lastBar._timestamp);
+      if (lastRow) return { ...anchor, row: { candle: null, index: lastRow.index + steps } };
+    }
+    return { ...anchor, row: null };
+  });
   if (usableAnchors.length > 0 && anchorIndexes.some((anchor) => !anchor.row)) {
     reasons.push("one or more chart time anchors did not match the fetched selected-timeframe candles");
   }
   const usableCalibration = reasons.length === 0;
-  const minutes = CANDLE_MINUTES[tf] || null;
   const screenXFor = (timestamp) => {
     const row = byTimestamp.get(iso(timestamp));
     const reference = anchorIndexes.find((anchor) => anchor.row);
@@ -144,13 +172,11 @@ export function buildChartPeriodMap({
     // No provider candle at this exact timestamp - most commonly the very
     // first candle of a period that has only just begun. Extrapolate from
     // the latest available candle instead of leaving the boundary
-    // unpositioned; candleStepsBetween only succeeds for a timestamp after
+    // unpositioned; stepsPastHistory only succeeds for a timestamp after
     // that candle, so this never fires for a genuinely missing/invalid one.
-    const lastBar = bars.at(-1);
     const lastRow = lastBar ? byTimestamp.get(lastBar._timestamp) : null;
-    if (!lastRow || !minutes) return null;
-    const steps = candleStepsBetween(lastBar._timestamp, timestamp, minutes, tradesOnWeekends);
-    if (steps === null) return null;
+    const steps = stepsPastHistory(timestamp);
+    if (!lastRow || steps === null) return null;
     return Number(reference.x) + (lastRow.index + steps - reference.row.index) * Number(calibration.candleStep);
   };
   const keys = map?.dates || [];
