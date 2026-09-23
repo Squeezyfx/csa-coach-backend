@@ -654,10 +654,23 @@ export function extractMt4PngMonthlyInventory({
       boundaryAmbiguous,
     };
   }).filter(Boolean);
-  if (inventory.length !== starts.length || inventory.some((period) => !(period.high > period.low))) return null;
-  const final = inventory.at(-1);
-  if (Number(latestVisibleHigh) > 0) final.high = Math.max(final.high, Number(latestVisibleHigh));
-  if (Number(latestVisibleLow) > 0) final.low = Math.min(final.low, Number(latestVisibleLow));
+  // A period with zero owned candles (owned.length === 0, usually one whose
+  // interpolated start/end x lands slightly off because of an axis-label
+  // irregularity elsewhere on the chart) used to discard the ENTIRE
+  // inventory here, not just that one period - so one bad month meant this
+  // reader contributed nothing at all for the whole chart, even though
+  // every other month's wick data was read correctly. The caller
+  // (rasterCorrectedPeriodInventory in server.js) already applies this
+  // inventory per period and keeps its own original data for any date
+  // missing here, so a short inventory is fine; only a genuinely inverted
+  // high/low is a real error worth discarding.
+  if (!inventory.length || inventory.some((period) => !(period.high > period.low))) return null;
+  const lastStartDate = starts.at(-1)?.date;
+  const final = inventory.at(-1)?.date === lastStartDate ? inventory.at(-1) : null;
+  if (final) {
+    if (Number(latestVisibleHigh) > 0) final.high = Math.max(final.high, Number(latestVisibleHigh));
+    if (Number(latestVisibleLow) > 0) final.low = Math.min(final.low, Number(latestVisibleLow));
+  }
   return {
     inventory,
     source: "deterministic_mt4_png_wick_raster",
