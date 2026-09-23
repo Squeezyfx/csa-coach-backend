@@ -148,8 +148,39 @@ export function buildChartPeriodMap({
   else if (anchors.length && !usableAnchors.length) reasons.push("no printed axis anchor falls within the fetched candle range");
 
   const byTimestamp = new Map(bars.map((candle, index) => [candle._timestamp, { candle, index }]));
+  // A broker's chart server clock and the market-data provider's clock can
+  // sit a few whole hours apart (e.g. GMT+2 vs GMT+3, or a provider that
+  // aligns its own candle grid to UTC while the broker doesn't) - the
+  // anchor's DATE is unaffected (periodKey matching below only ever
+  // compares dates, not times), but its exact HH:MM:SS never matches a
+  // real fetched candle, even though both sides are individually correct.
+  // Confirmed against a real H4 chart: axis anchors at "...20:00:00" while
+  // every fetched candle sat at "...21:00:00" - a consistent 1h shift that
+  // failed every single anchor. Detecting one consistent whole-hour offset
+  // that makes EVERY usable anchor match, and applying it uniformly, fixes
+  // this without weakening the exact-match requirement for a genuinely
+  // wrong anchor (no single consistent offset would rescue those).
+  const brokerOffsetMinutes = (() => {
+    if (!usableAnchors.length) return 0;
+    for (let hours = 0; hours <= 12; hours += 1) {
+      for (const sign of hours === 0 ? [1] : [1, -1]) {
+        const offset = sign * hours * 60;
+        const allMatch = usableAnchors.every((anchor) => {
+          const t = instant(anchor.timestamp);
+          if (!Number.isFinite(t)) return false;
+          return byTimestamp.has(iso(new Date(t + offset * 60000).toISOString()));
+        });
+        if (allMatch) return offset;
+      }
+    }
+    return 0;
+  })();
   const anchorIndexes = usableAnchors.map((anchor) => {
-    const row = byTimestamp.get(iso(anchor.timestamp));
+    const t = instant(anchor.timestamp);
+    const lookupTimestamp = Number.isFinite(t) && brokerOffsetMinutes
+      ? iso(new Date(t + brokerOffsetMinutes * 60000).toISOString())
+      : iso(anchor.timestamp);
+    const row = byTimestamp.get(lookupTimestamp);
     if (row) return { ...anchor, row };
     // Matched via stepsPastHistory above, not an exact fetched candle:
     // synthesize the same virtual index screenXFor would derive for it.
