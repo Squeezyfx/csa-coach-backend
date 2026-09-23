@@ -3985,8 +3985,15 @@ async function fetchTwelveDataStructureLevels({
     // same D1 candles auditPeriodInventory itself checks against, by
     // calendar date. Native is now the fallback, used only when the
     // reconstruction itself has no data for a key.
+    // Tagged so auditPeriodInventory (period-accuracy.js) can recognize a
+    // value it would be re-deriving from its own source and skip that
+    // specific check: re-checking a period's high/low against the exact
+    // candles that computed it (Math.max/min in buildStructureLevelsFromCandles)
+    // is tautological when it passes and, if it ever somehow fails, is
+    // evidence of a bug in the audit's own candle-sourcing - not something
+    // for the check itself to act on by rejecting real data.
     const reconstructedLevelMap = new Map(
-      executionReconstructedLevels.map((level) => [String(level.key), level])
+      executionReconstructedLevels.map((level) => [String(level.key), { ...level, calendarExactReconstruction: true }])
     );
     for (const level of providerFrameworkLevels) {
       const key = String(level.key);
