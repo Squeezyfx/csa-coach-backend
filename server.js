@@ -30238,11 +30238,39 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         : focusedOutputPeriodInventory.length
         ? focusedOutputPeriodInventory
         : seededFrameworkInventory;
+      // Built here (earlier than the rest of this section historically
+      // needed it) specifically so the raster wick reader below can use its
+      // already-verified per-period pixel positions directly, instead of
+      // re-deriving its own separate date-to-pixel mapping from scratch.
+      // chartPeriodMap positions candles by REAL fetched-candle index once
+      // it has one verified anchor - it never assumes a weekday pattern the
+      // way the raster reader's own dateAnchors/datedCandles fallback does,
+      // which is exactly the gap that kept leaving some D1 months unread.
+      const chartPeriodMap = buildChartPeriodMap({
+        timeframe,
+        candles: marketReference?.timeframeCandles || [],
+        chartCutoff,
+        axisCalibration: chartDetection?.timestampAudit || null,
+        tradesOnWeekends: isCryptoSymbol(normalizedSymbol || submittedInstrument || ""),
+      });
+      const chartPeriodMapVerified = chartPeriodMap.canSelectEntries === true;
+      const verifiedPeriodPixelRanges = chartPeriodMapVerified
+        ? (chartPeriodMap.periodStarts || [])
+            .filter((period) => period.mapped && Number.isFinite(Number(period.screenX)))
+            .map((period, index, mapped) => ({
+              date: period.key,
+              x1: Number(period.screenX),
+              x2: Number.isFinite(Number(mapped[index + 1]?.screenX))
+                ? Number(mapped[index + 1].screenX)
+                : Number(chartPeriodMap.axisCalibration?.lastCandleX) || Number(period.screenX) + 1,
+            }))
+        : [];
       const rasterInventory = providerOnlyForex ? null : extractMt4PngMonthlyInventory({
         imageBase64,
         mimeType,
         timeframe,
         periodDates: rawFocusedPeriodInventory.map((period) => period?.date).filter(Boolean),
+        periodPixelRanges: verifiedPeriodPixelRanges,
         timeAxisDates: mergedChartNativeFallback?.timeAxisDates?.length
           ? mergedChartNativeFallback.timeAxisDates
           : chartDetection?.timeAxisDates || [],
@@ -30383,19 +30411,9 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       const lifecycleCutoffDateTime =
         chartCutoff?.endDateTime ||
         `${chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || ""} 23:59:59`;
-      // This is the missing authority layer: derive Monday/Tuesday/etc. (or
-      // H4 W1/W2) start positions from timestamped chart anchors and selected
-      // timeframe candle indices.  It is intentionally separate from price
-      // extraction.  A calendar-looking provider period without this map can
-      // remain visible in diagnostics, but can never become Fib or an entry.
-      const chartPeriodMap = buildChartPeriodMap({
-        timeframe,
-        candles: marketReference?.timeframeCandles || [],
-        chartCutoff,
-        axisCalibration: chartDetection?.timestampAudit || null,
-        tradesOnWeekends: isCryptoSymbol(normalizedSymbol || submittedInstrument || ""),
-      });
-      const chartPeriodMapVerified = chartPeriodMap.canSelectEntries === true;
+      // chartPeriodMap / chartPeriodMapVerified were already built earlier in
+      // this section (above the raster reader call), from the same inputs -
+      // reused here rather than rebuilt.
       // A partial OANDA endpoint means the chart's latest visible period is
       // still live, even when the provider's framework response labels its
       // aggregate candle complete. Keep that endpoint available for the Fib

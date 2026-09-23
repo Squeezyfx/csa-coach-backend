@@ -470,6 +470,7 @@ export function extractMt4PngMonthlyInventory({
   mimeType = "",
   timeframe = "",
   periodDates = [],
+  periodPixelRanges = [],
   timeAxisDates = [],
   priceAxisTicks = [],
   latestVisibleHigh = null,
@@ -628,11 +629,27 @@ export function extractMt4PngMonthlyInventory({
   }
   const decimals = precisionFor({ latestVisibleClose: Number(latestVisibleClose), priceTicks: prices });
   const round = (value) => Number(Number(value).toFixed(decimals));
+  // chartPeriodMap positions each period by real fetched-candle index once it
+  // has one verified anchor - it never assumes a weekday pattern the way
+  // dateAnchors/datedCandles below do. When the caller supplies its already-
+  // verified pixel range for a date, use it directly instead of re-deriving
+  // a separate, weaker estimate; only dates it doesn't cover (or when it
+  // isn't verified at all) fall back to this reader's own axis detection.
+  const pixelRangesByDate = new Map(
+    (Array.isArray(periodPixelRanges) ? periodPixelRanges : [])
+      .filter((range) => range && String(range.date || "") && Number.isFinite(Number(range.x1)) && Number.isFinite(Number(range.x2)))
+      .map((range) => [String(range.date), { x1: Number(range.x1), x2: Number(range.x2) }])
+  );
   const inventory = starts.map((start, index) => {
     const endTimestamp = starts[index + 1]?.timestamp ??
       (dateAnchors.at(-1)?.timestamp ?? finalTimestamp ?? start.timestamp) + 45 * 86400000;
-    const startX = dateAnchors.length >= 2 ? interpolateDailySessionX(start.timestamp, dateAnchors, candleStep) : null;
-    const endX = dateAnchors.length >= 2 ? interpolateDailySessionX(endTimestamp, dateAnchors, candleStep) : null;
+    const verifiedRange = pixelRangesByDate.get(start.date);
+    const startX = verifiedRange
+      ? verifiedRange.x1
+      : dateAnchors.length >= 2 ? interpolateDailySessionX(start.timestamp, dateAnchors, candleStep) : null;
+    const endX = verifiedRange
+      ? verifiedRange.x2
+      : dateAnchors.length >= 2 ? interpolateDailySessionX(endTimestamp, dateAnchors, candleStep) : null;
     const owned = Number.isFinite(startX) && Number.isFinite(endX)
       ? candles.filter((candle) => candle.x >= startX - candleStep * 0.5 && candle.x < endX - candleStep * 0.5)
       : datedCandles.filter((candle) => candle.timestamp >= start.timestamp && candle.timestamp < endTimestamp);
