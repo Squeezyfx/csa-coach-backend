@@ -157,13 +157,14 @@ export function buildChartOverlay({ chartDetection = {}, analysisFacts = {}, mar
     });
   }
 
-  // 2. Period highs / lows. A short tick right at the candle that made the
-  // extreme, not a dash spanning the whole period - the point is to show
-  // exactly which wick the level came from. Falls back to the full-period
-  // span only when that candle couldn't be pinned down (extremeIndex found
-  // no matching wick), and that fallback case is marked unverified so the
+  // 2. Period highs / lows. A line starting exactly at the candle that made
+  // the extreme and running to the end of that period - like a support/
+  // resistance ray, so it visibly starts at the real wick tip (not the
+  // period's start, and not a bare 1-candle tick) rather than crossing
+  // through unrelated candles before it. Falls back to the full-period span
+  // only when that candle couldn't be pinned down (extremeIndex found no
+  // matching wick), and that fallback case is marked unverified so the
   // frontend greys it out instead of drawing an imprecise line as fact.
-  const tickWidth = step > 0 ? step : 12;
   for (const period of periods) {
     const span = spanOf(period.date);
     for (const kind of ["high", "low"]) {
@@ -175,7 +176,7 @@ export function buildChartOverlay({ chartDetection = {}, analysisFacts = {}, mar
       const extremeX = index !== null ? xOfIndex(index) : null;
       const pinned = Number.isFinite(extremeX);
       const x1 = pinned ? extremeX : (span?.x1 ?? 0);
-      const x2 = pinned ? extremeX + tickWidth : (span?.x2 ?? plotRight);
+      const x2 = span?.x2 ?? plotRight;
       elements.push({
         type: "period_level", kind, period: period.period, date: period.date, lifecycle: period.lifecycle,
         price, y, x1, x2, extremeX: pinned ? extremeX : null, label: fmt(price),
