@@ -5740,6 +5740,57 @@ function isUsableChartDateDetection(detection) {
   return confidence === "high" || confidence === "medium";
 }
 
+// A printed axis year is easy for a vision model to misread, but pixel-only
+// self-consistency (candle spacing between axis labels) can only catch it
+// when the misread happens to change whether the visible window crosses a
+// weekend - the same trick chart-time-reader.js's own year correction
+// relies on. An intraday chart showing only a day or two of history rarely
+// crosses one, so a wrong year there validates just as cleanly as the right
+// one and slips straight through (confirmed: an AUDJPY M5 chart read as
+// 2024 instead of 2026 - both a plausible self-consistent axis chain - only
+// surfaced once its price was compared to real market data: chart ~111,
+// provider's actual 2024-09-24 candle ~98.7, an 11% gap no single-candle
+// broker/feed divergence explains). Real market price is a signal vision
+// cannot misread the same way it misreads a year digit, so once a provider
+// mismatch is implausibly large for ordinary broker/feed noise, retry the
+// whole date resolution with the axis year shifted and let a real provider
+// candle - not another pixel read - confirm or reject the correction.
+function shiftDateOnlyYear(dateOnly, delta) {
+  const match = String(dateOnly || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${Number(match[1]) + delta}-${match[2]}-${match[3]}` : dateOnly;
+}
+
+function shiftTimestampYear(timestamp, delta) {
+  const match = String(timestamp || "").match(/^(\d{4})(-\d{2}-\d{2} \d{2}:\d{2}:\d{2})$/);
+  return match ? `${Number(match[1]) + delta}${match[2]}` : timestamp;
+}
+
+function shiftChartDetectionYear(chartDetection, delta) {
+  const shifted = { ...(chartDetection || {}) };
+  if (shifted.latestVisibleDate) shifted.latestVisibleDate = shiftDateOnlyYear(shifted.latestVisibleDate, delta);
+  if (shifted.latestPrintedAxisDate) shifted.latestPrintedAxisDate = shiftDateOnlyYear(shifted.latestPrintedAxisDate, delta);
+  if (shifted.timestampAudit) {
+    shifted.timestampAudit = {
+      ...shifted.timestampAudit,
+      timestamp: shiftTimestampYear(shifted.timestampAudit.timestamp, delta),
+      anchors: Array.isArray(shifted.timestampAudit.anchors)
+        ? shifted.timestampAudit.anchors.map((a) => ({ ...a, timestamp: shiftTimestampYear(a.timestamp, delta) }))
+        : shifted.timestampAudit.anchors,
+    };
+  }
+  return shifted;
+}
+
+// Only a gap far beyond ordinary broker/feed price divergence (which the
+// existing pip/percent tolerance in assessChartDataMatch already absorbs)
+// is worth the extra provider round-trips a year-shift retry costs.
+function chartDataMatchCloseGapRatio(chartDataMatch) {
+  const close = (Array.isArray(chartDataMatch?.comparisons) ? chartDataMatch.comparisons : [])
+    .find((c) => c.field === "close");
+  if (!close || !(Math.abs(Number(close.chart)) > 0) || !Number.isFinite(Number(close.provider))) return null;
+  return Math.abs(Number(close.chart) - Number(close.provider)) / Math.abs(Number(close.chart));
+}
+
 function chooseFinalChartDate({
   selectedDate,
   detection,
@@ -29716,7 +29767,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       console.warn("[price-axis-calibration] skipped:", error?.message || error);
     }
 
-    const dateDecision = chooseFinalChartDate({
+    let dateDecision = chooseFinalChartDate({
       selectedDate,
       detection: chartDetection,
       analysisType: mode,
@@ -29826,6 +29877,81 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         alignmentCandle: marketReference.oandaAlignmentCandle || null,
         tolerance: getCleanBreakTolerance(normalizedSymbol),
       });
+
+      // A misread axis YEAR (not day/month) on a short intraday history
+      // validates against pixel self-consistency just as cleanly as the
+      // right year would (see shiftChartDetectionYear above), so it only
+      // ever surfaces here, as an implausibly large price gap against real
+      // provider data. Retry date resolution with the year shifted and let
+      // a real provider candle confirm which year actually matches before
+      // falling through to the ordinary mismatch/alternate-provider paths.
+      if (chartDataMatch.status === "mismatch" && chartDataMatchCloseGapRatio(chartDataMatch) > 0.01) {
+        yearCorrectionSearch:
+        for (let magnitude = 1; magnitude <= 3; magnitude++) {
+          for (const delta of [-magnitude, magnitude]) {
+            const shiftedDetection = shiftChartDetectionYear(chartDetection, delta);
+            const shiftedDateDecision = chooseFinalChartDate({
+              selectedDate,
+              detection: shiftedDetection,
+              analysisType: mode,
+              cutoffMode: normalizedRequestedCutoffMode,
+            });
+            const shiftedCutoff = resolveTwelveDataChartCutoff({
+              chartDetection: shiftedDetection,
+              dateDecision: shiftedDateDecision,
+              selectedDateText,
+              cutoffMode: normalizedRequestedCutoffMode,
+              cutoffTime,
+              timeframe,
+              analysisType: mode,
+            });
+            if (!shiftedCutoff.endDateTime || !shiftedCutoff.resolvedDate) continue;
+            let shiftedReference;
+            try {
+              shiftedReference = await fetchTwelveDataStructureLevels({
+                symbol: normalizedSymbol,
+                chartDate: parseISODateOnly(shiftedCutoff.resolvedDate),
+                timeframe,
+                timezone: resolvedTimezone,
+                analysisType: mode,
+                chartCutoff: shiftedCutoff,
+              });
+            } catch (error) {
+              continue;
+            }
+            if (!shiftedReference.ok) continue;
+            const shiftedMatch = assessChartDataMatch({
+              candles: shiftedReference.impulseCandles?.length ? shiftedReference.impulseCandles : shiftedReference.timeframeCandles,
+              detection: shiftedDetection,
+              cutoff: shiftedCutoff.endDateTime,
+              timeframe,
+              symbol: normalizedSymbol,
+              source: shiftedReference.dataProvider || "Twelve Data",
+              alignmentCandle: shiftedReference.oandaAlignmentCandle || null,
+              tolerance: getCleanBreakTolerance(normalizedSymbol),
+            });
+            if (["mismatch", "date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(shiftedMatch.status)) continue;
+            chartDetection = shiftedDetection;
+            dateDecision = shiftedDateDecision;
+            chartCutoff = shiftedCutoff;
+            marketReference = shiftedReference;
+            chartDataMatch = { ...shiftedMatch, yearCorrected: true, yearCorrectionDelta: delta };
+            completedPeriodReferences = buildCompletedPeriodReferences({
+              periods: ["D1", "H4"].includes(timeframe)
+                ? marketReferencePeriodInventory({ marketReference, timeframe, cutoffDate: chartCutoff.resolvedDate })
+                : marketReference.dailyLevels || [],
+              candles: marketReference.timeframeCandles || [],
+              timeframe,
+              visibleDateFloor: chartDetection?.latestPrintedAxisDate && chartDetection.latestPrintedAxisDate <= chartCutoff.resolvedDate
+                ? chartDetection.latestPrintedAxisDate : "",
+              providerAvailable: marketReference.ok === true,
+              tolerance: getCleanBreakTolerance(normalizedSymbol, (chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice)),
+            });
+            completedPeriodReferences.source = marketReference.dataProvider || "Twelve Data";
+            break yearCorrectionSearch;
+          }
+        }
+      }
 
       // OANDA is the primary FX source. If its endpoint is reachable but the
       // screenshot OHLC does not align, try Twelve Data only when a key is
