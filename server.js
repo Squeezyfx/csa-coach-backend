@@ -2421,18 +2421,26 @@ function buildStructureLevelsFromCandles(
 // and zero gap before Monday's UTC candle - matching a broker-native
 // reference indicator within 0.3 pips, while our UTC-midnight-bounded
 // Monday bucket topped out at 0.99640, a 29-pip miss on the real low.
-// Applies to every period, not only the range's first: any period right
-// after a closure (a weekend, or a holiday like the ones
-// isUniversalMarketHoliday excludes) can have the same gap. Only ever
-// widens a period's high/low with real candles that already exist in the
-// provider's own history; never invents or moves a candle.
+//
+// The lag is measured ONCE, from the range's first period, which is the
+// only one guaranteed to sit right after a real, unambiguous closure gap
+// (a weekend, or a holiday like the ones isUniversalMarketHoliday
+// excludes). An earlier version of this walked backward independently
+// per period looking for "the nearest gap," which was wrong: Monday's own
+// hours have no internal gap, so Tuesday's walk sailed straight through
+// all of Monday and out the other side, attributing Monday's low to
+// Tuesday too (caught before shipping: AUDCAD H1's Tuesday low came back
+// as 0.99316, identical to Monday's, with a null structural role). The
+// fixed, bounded lag measured from the one genuine gap avoids that: it
+// pulls only that many hours of real pre-boundary history into every
+// period, never an unrelated adjacent period's own range.
 function extendPeriodsAcrossSessionBoundary(levels, widerCandles, profile) {
   // Continuously-traded instruments (crypto) never have the weekend/holiday
-  // closure this is meant to bridge, so there is no bounded gap to find -
-  // walking back through their candles looking for one could scan
-  // unboundedly far into history for nothing.
+  // closure this is meant to bridge, so there is no gap to measure a lag
+  // from.
   if (profile?.tradesOnWeekends === true) return levels;
   if (!["daily-in-week", "weekly-in-month"].includes(profile?.structureMode)) return levels;
+  if (!levels.length) return levels;
   const sorted = (Array.isArray(widerCandles) ? widerCandles : [])
     .map((c) => ({
       ms: Date.parse(String(c?.datetime || "").replace(" ", "T") + "Z"),
@@ -2443,29 +2451,37 @@ function extendPeriodsAcrossSessionBoundary(levels, widerCandles, profile) {
     .sort((a, b) => a.ms - b.ms);
   if (!sorted.length) return levels;
 
+  // No real broker server clock runs more than 12h off UTC, so anything
+  // found beyond that bound is a genuine multi-day closure, not a session
+  // lag. A gap at or above 16h can only be a real closure (ordinary H1/H4
+  // spacing is at most a couple of hours), so a shorter internal gap found
+  // while measuring marks the true, narrower session start instead.
+  const MAX_LAG_HOURS = 12;
+  const CLOSURE_GAP_HOURS = 16;
+  const firstBoundaryMs = Date.parse(`${levels[0].key}T00:00:00.000Z`);
+  let lagHours = 0;
+  if (Number.isFinite(firstBoundaryMs)) {
+    const nearby = sorted.filter((c) => c.ms < firstBoundaryMs && (firstBoundaryMs - c.ms) / 3600000 <= MAX_LAG_HOURS);
+    if (nearby.length) {
+      lagHours = (firstBoundaryMs - nearby[0].ms) / 3600000;
+      for (let i = nearby.length - 1; i > 0; i--) {
+        const gapHours = (nearby[i].ms - nearby[i - 1].ms) / 3600000;
+        if (gapHours >= CLOSURE_GAP_HOURS) {
+          lagHours = (firstBoundaryMs - nearby[i].ms) / 3600000;
+          break;
+        }
+      }
+    }
+  }
+  if (!(lagHours > 0)) return levels;
+  const lagMs = lagHours * 3600000;
+
   return levels.map((level) => {
     if (!Number.isFinite(Number(level?.high)) || !Number.isFinite(Number(level?.low))) return level;
     const boundaryMs = Date.parse(`${level.key}T00:00:00.000Z`);
     if (!Number.isFinite(boundaryMs)) return level;
-    const before = sorted.filter((c) => c.ms < boundaryMs);
-    if (!before.length) return level;
-
-    // Only extend when the nearest earlier candle is close enough to be
-    // plausibly the same trading session (ordinary H1/H4 spacing is at
-    // most a couple of hours); a real closure right at the boundary means
-    // there is nothing to rescue.
-    let cursor = before.length - 1;
-    if ((boundaryMs - before[cursor].ms) / 3600000 > 6) return level;
-
-    let sessionStartIndex = cursor;
-    while (cursor > 0 && (boundaryMs - before[cursor - 1].ms) / 3600000 <= 96) {
-      const gapHours = (before[cursor].ms - before[cursor - 1].ms) / 3600000;
-      if (gapHours >= 16) break;
-      cursor -= 1;
-      sessionStartIndex = cursor;
-    }
-
-    const extra = before.slice(sessionStartIndex);
+    const extra = sorted.filter((c) => c.ms >= boundaryMs - lagMs && c.ms < boundaryMs);
+    if (!extra.length) return level;
     let high = Number(level.high);
     let low = Number(level.low);
     let extended = false;
@@ -2480,6 +2496,7 @@ function extendPeriodsAcrossSessionBoundary(levels, widerCandles, profile) {
       low,
       candleCount: (level.candleCount || 0) + extra.length,
       sessionBoundaryExtended: true,
+      sessionBoundaryLagHours: lagHours,
     };
   });
 }
