@@ -2410,6 +2410,80 @@ function buildStructureLevelsFromCandles(
   return Array.from(grouped.values()).sort((a, b) => String(a.key).localeCompare(String(b.key)));
 }
 
+// Some brokers run their trading day/week a few hours ahead of UTC
+// midnight (their own server-time rollover), so the sharp reopen move
+// after a weekend or holiday close - often the period's real extreme -
+// lands in the last few hours of the PRECEDING UTC calendar day, outside
+// our UTC-midnight-aligned period, even though it is part of the exact
+// same uninterrupted trading session as that period's own earliest
+// candle. Confirmed on AUDCAD H1: our own wider-lookback candle set
+// already had a real 0.99316 low at 2026-09-20 21:00 UTC - three hours
+// and zero gap before Monday's UTC candle - matching a broker-native
+// reference indicator within 0.3 pips, while our UTC-midnight-bounded
+// Monday bucket topped out at 0.99640, a 29-pip miss on the real low.
+// Applies to every period, not only the range's first: any period right
+// after a closure (a weekend, or a holiday like the ones
+// isUniversalMarketHoliday excludes) can have the same gap. Only ever
+// widens a period's high/low with real candles that already exist in the
+// provider's own history; never invents or moves a candle.
+function extendPeriodsAcrossSessionBoundary(levels, widerCandles, profile) {
+  // Continuously-traded instruments (crypto) never have the weekend/holiday
+  // closure this is meant to bridge, so there is no bounded gap to find -
+  // walking back through their candles looking for one could scan
+  // unboundedly far into history for nothing.
+  if (profile?.tradesOnWeekends === true) return levels;
+  if (!["daily-in-week", "weekly-in-month"].includes(profile?.structureMode)) return levels;
+  const sorted = (Array.isArray(widerCandles) ? widerCandles : [])
+    .map((c) => ({
+      ms: Date.parse(String(c?.datetime || "").replace(" ", "T") + "Z"),
+      high: safeNumber(c?.high),
+      low: safeNumber(c?.low),
+    }))
+    .filter((c) => Number.isFinite(c.ms))
+    .sort((a, b) => a.ms - b.ms);
+  if (!sorted.length) return levels;
+
+  return levels.map((level) => {
+    if (!Number.isFinite(Number(level?.high)) || !Number.isFinite(Number(level?.low))) return level;
+    const boundaryMs = Date.parse(`${level.key}T00:00:00.000Z`);
+    if (!Number.isFinite(boundaryMs)) return level;
+    const before = sorted.filter((c) => c.ms < boundaryMs);
+    if (!before.length) return level;
+
+    // Only extend when the nearest earlier candle is close enough to be
+    // plausibly the same trading session (ordinary H1/H4 spacing is at
+    // most a couple of hours); a real closure right at the boundary means
+    // there is nothing to rescue.
+    let cursor = before.length - 1;
+    if ((boundaryMs - before[cursor].ms) / 3600000 > 6) return level;
+
+    let sessionStartIndex = cursor;
+    while (cursor > 0 && (boundaryMs - before[cursor - 1].ms) / 3600000 <= 96) {
+      const gapHours = (before[cursor].ms - before[cursor - 1].ms) / 3600000;
+      if (gapHours >= 16) break;
+      cursor -= 1;
+      sessionStartIndex = cursor;
+    }
+
+    const extra = before.slice(sessionStartIndex);
+    let high = Number(level.high);
+    let low = Number(level.low);
+    let extended = false;
+    for (const c of extra) {
+      if (Number.isFinite(c.high) && c.high > high) { high = c.high; extended = true; }
+      if (Number.isFinite(c.low) && c.low < low) { low = c.low; extended = true; }
+    }
+    if (!extended) return level;
+    return {
+      ...level,
+      high,
+      low,
+      candleCount: (level.candleCount || 0) + extra.length,
+      sessionBoundaryExtended: true,
+    };
+  });
+}
+
 function buildCsaAreas(levels = [], symbol = "", profile = getSupportedCsaTimeframeProfile("H1")) {
   /*
    * V4.8.3 â€” AUTHORITATIVE HIERARCHICAL S/R vs S/D + PRIOR S/R MEMORY
@@ -4086,6 +4160,8 @@ async function fetchTwelveDataStructureLevels({
             level?.partialPeriod === true ? "in_progress" : "completed",
         };
   });
+
+  dailyLevels = extendPeriodsAcrossSessionBoundary(dailyLevels, impulseCandles, profile);
 
   const sourceIntegrityWarnings = dailyLevels
     .filter((level) => level?.sourceIntegrityWarning === true)
