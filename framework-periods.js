@@ -50,10 +50,22 @@ const MONTH = ["January", "February", "March", "April", "May", "June",
 /** Which framework period frames the Fib, and which sub-period yields extremes. */
 export function frameworkScope(timeframe) {
   switch (String(timeframe || "").toUpperCase()) {
-    case "H1": return { frame: "week", period: "day" };
+    // M1-H1 all share the same daily-in-week framework (see
+    // getSupportedCsaTimeframeProfile in server.js): the authoritative
+    // period highs/lows are each weekday's D1 candle regardless of which of
+    // these is the selected/execution timeframe. Only "H1" was listed here,
+    // so M1/M5/M15/M30 fell through to null and buildPeriodInventory
+    // returned an empty array for every intraday chart below H1 - the
+    // provider-inventory same-instrument fallback (server.js's
+    // providerInventoryAuthoritative) could then never engage for them.
+    case "M1": case "M5": case "M15": case "M30": case "H1": return { frame: "week", period: "day" };
     case "H4": return { frame: "month", period: "week" };
     case "D1": return { frame: "year", period: "month" };
     case "W1": return { frame: "year", period: "quarter" };
+    // MN's frame is the selected year plus the previous 4 (structureMode
+    // "yearly-in-multi-year" in server.js), each year's own high/low as the
+    // period extreme.
+    case "MN": return { frame: "multi-year", period: "year" };
     default: return null;
   }
 }
@@ -81,6 +93,7 @@ function periodKey(date, period) {
     case "week": return mondayOf(d).toISOString().slice(0, 10);
     case "month": return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
     case "quarter": return `${d.getUTCFullYear()}-Q${Math.floor(d.getUTCMonth() / 3) + 1}`;
+    case "year": return `${d.getUTCFullYear()}`;
     default: throw new Error(`unknown period: ${period}`);
   }
 }
@@ -92,6 +105,7 @@ function periodLabel(date, period) {
     case "week": return `w/c ${d.getUTCDate()} ${MONTH[d.getUTCMonth()].slice(0, 3)}`;
     case "month": return MONTH[d.getUTCMonth()];
     case "quarter": return `Q${Math.floor(d.getUTCMonth() / 3) + 1}`;
+    case "year": return `${d.getUTCFullYear()}`;
     default: return "";
   }
 }
@@ -122,6 +136,11 @@ export function currentFrameBounds(timeframe, latest) {
   }
   if (scope.frame === "year") {
     return { start: new Date(Date.UTC(d.getUTCFullYear(), 0, 1)), end, frame: "year" };
+  }
+  if (scope.frame === "multi-year") {
+    // Matches structureLabel "Yearly highs/lows across selected year plus
+    // previous 4 years" (server.js's MN profile): 5 years total.
+    return { start: new Date(Date.UTC(d.getUTCFullYear() - 4, 0, 1)), end, frame: "multi-year" };
   }
   return null;
 }
@@ -380,7 +399,7 @@ export function describeEntries(analysis) {
 
 // ------------------------------------------------- provider inventory rows
 
-const SOURCE_UNIT = { day: "D1", week: "W1", month: "MN", quarter: "MN" };
+const SOURCE_UNIT = { day: "D1", week: "W1", month: "MN", quarter: "MN", year: "MN" };
 
 /**
  * Convert an analysis into rows shaped for normalizeChartNativeEntryFallback.
