@@ -30039,25 +30039,32 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
               alignmentCandle: shiftedReference.oandaAlignmentCandle || null,
               tolerance: getCleanBreakTolerance(normalizedSymbol),
             });
-            // A genuinely wrong year showed an ~11% price gap (AUDJPY: chart
-            // ~111 vs a real 2024 candle ~98.7). A right year on a fine
-            // M1/M5 candle can still fail assessChartDataMatch's own tight
-            // pip tolerance purely from real intra-candle movement between
-            // the chart's exact capture second and a stale replay's only
-            // recoverable comparison (the now-complete candle, see
-            // fetchOandaSeries) - confirmed on the same AUDJPY M5 chart:
-            // once the OANDA staleness bug above was fixed, a correctly
-            // year-shifted candidate still came back "mismatch" by the
-            // 3-pip tolerance, but its gap was ~0.2%, nothing like a wrong
-            // year's order-of-magnitude difference. Treat a small enough
-            // gap as year-confirmed even when the strict status itself
-            // isn't "verified" - the year is a magnitude question, not a
-            // pip-tolerance one, and getting Monday-Thursday's dates right
-            // matters even when the final still-forming candle's exact
-            // price stays provisional.
+            // A genuinely wrong year showed an ~11% price gap on AUDJPY
+            // (chart ~111 vs a real 2024 candle ~98.7), so a small gap
+            // originally seemed like a safe stand-in for "year confirmed."
+            // It isn't, for every instrument: USDDKK (DKK pegged to EUR
+            // under ERM II, so it trades in a narrow band year over year)
+            // showed only a ~1.3% gap against a candidate a full two years
+            // off from the real one - comfortably under the old <2%
+            // leniency, so the search happily "confirmed" 2024 and stopped
+            // there instead of continuing on to the real 2026. Price
+            // magnitude alone cannot carry this: it depends on how much a
+            // given instrument's price actually moves year to year, which
+            // varies by orders of magnitude across symbols.
+            // A chart's real year is essentially never anything other than
+            // the current real-world year (a trader reviews recent charts,
+            // and even this benchmark's stale replays are still from today
+            // or very recently) - so restrict the small-gap leniency to
+            // exactly that year. Every other candidate year still needs to
+            // clear assessChartDataMatch's own full verification to be
+            // accepted, which a genuinely wrong year like 2024-when-it's-
+            // 2026 was always going to fail regardless of this leniency.
             const shiftedGapRatio = chartDataMatchCloseGapRatio(shiftedMatch);
-            const yearConfirmed = !["mismatch", "date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(shiftedMatch.status) ||
-              (shiftedGapRatio !== null && shiftedGapRatio < 0.02);
+            const shiftedYear = String(shiftedCutoff.resolvedDate || "").slice(0, 4);
+            const currentRealYear = String(new Date().getUTCFullYear());
+            const cleanlyVerified = !["mismatch", "date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(shiftedMatch.status);
+            const yearConfirmed = cleanlyVerified ||
+              (shiftedYear === currentRealYear && shiftedGapRatio !== null && shiftedGapRatio < 0.02);
             if (!yearConfirmed) continue;
             chartDetection = shiftedDetection;
             dateDecision = shiftedDateDecision;
