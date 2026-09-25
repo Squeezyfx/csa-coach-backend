@@ -89,6 +89,23 @@ export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,ti
  if(end<=start)throw fail('Empty historical window','history_unavailable');
  const origin=environment==='live'?'https://api-fxtrade.oanda.com':'https://api-fxpractice.oanda.com';
  const values=new Map();let cursor=start,includeFirst=true,finished=false,alignmentCandle=null;
+ // A candle whose own natural end extends past our requested cutoff is
+ // genuinely still forming ONLY when that cutoff is close to the real
+ // present moment - the live-analysis case this guards against look-ahead
+ // for (a chart uploaded moments after being captured, mid-candle). For an
+ // older chart analyzed well after the fact (this benchmark's normal
+ // case), that same window closed for real hours or days ago: OANDA now
+ // reports it complete=true, but this check alone still flagged it as
+ // in-progress and diverted its OHLC to alignmentCandle instead of
+ // values - and by the time it's queried, OANDA's live-price plumbing no
+ // longer holds the transient partial-tick state that existed exactly at
+ // the historical cutoff, so alignmentCandle ended up holding an
+ // unrelated, much-later snapshot (confirmed on AUDJPY M5, one real day
+ // stale: alignmentCandle's open==close==111.289 didn't match ANY actual
+ // candle in the fetched history, while the chart itself read 111.083).
+ // Once the cutoff is safely in the past, complete=true alone is the
+ // correct, and only recoverable, signal.
+ const isLiveWindow=Date.now()-end<6*3600000;
  for(let page=0;page<maxPages;page++){
   const params=new URLSearchParams({granularity,price,from:new Date(cursor).toISOString(),count:'5000',includeFirst:String(includeFirst),smooth:'false',dailyAlignment:'0',alignmentTimezone:timezone,weeklyAlignment:'Monday'});
   const response=await fetchImpl(`${origin}/v3/instruments/${instrument}/candles?${params}`,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(30000)});
@@ -106,7 +123,7 @@ export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,ti
    if(![row.open,row.high,row.low,row.close].every(n=>Number.isFinite(n)&&n>0)||row.low>Math.min(row.open,row.close)||row.high<Math.max(row.open,row.close)||row.high<row.low)throw fail('Invalid OANDA OHLC');
    // An overlapping candle is comparison-only. Its full later range never
    // enters the historical computation array.
-   if(c.complete!==true||endOfCandle(time,granularity,timezone)>end) {
+   if(c.complete!==true||(isLiveWindow&&endOfCandle(time,granularity,timezone)>end)) {
      if(!alignmentCandle||row.datetime>alignmentCandle.datetime)alignmentCandle=row;
      continue;
    }
