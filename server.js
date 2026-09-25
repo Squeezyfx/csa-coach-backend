@@ -30023,7 +30023,26 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
               alignmentCandle: shiftedReference.oandaAlignmentCandle || null,
               tolerance: getCleanBreakTolerance(normalizedSymbol),
             });
-            if (["mismatch", "date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(shiftedMatch.status)) continue;
+            // A genuinely wrong year showed an ~11% price gap (AUDJPY: chart
+            // ~111 vs a real 2024 candle ~98.7). A right year on a fine
+            // M1/M5 candle can still fail assessChartDataMatch's own tight
+            // pip tolerance purely from real intra-candle movement between
+            // the chart's exact capture second and a stale replay's only
+            // recoverable comparison (the now-complete candle, see
+            // fetchOandaSeries) - confirmed on the same AUDJPY M5 chart:
+            // once the OANDA staleness bug above was fixed, a correctly
+            // year-shifted candidate still came back "mismatch" by the
+            // 3-pip tolerance, but its gap was ~0.2%, nothing like a wrong
+            // year's order-of-magnitude difference. Treat a small enough
+            // gap as year-confirmed even when the strict status itself
+            // isn't "verified" - the year is a magnitude question, not a
+            // pip-tolerance one, and getting Monday-Thursday's dates right
+            // matters even when the final still-forming candle's exact
+            // price stays provisional.
+            const shiftedGapRatio = chartDataMatchCloseGapRatio(shiftedMatch);
+            const yearConfirmed = !["mismatch", "date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(shiftedMatch.status) ||
+              (shiftedGapRatio !== null && shiftedGapRatio < 0.02);
+            if (!yearConfirmed) continue;
             chartDetection = shiftedDetection;
             dateDecision = shiftedDateDecision;
             chartCutoff = shiftedCutoff;
@@ -30052,7 +30071,14 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       // aligns; otherwise the original provider conflict remains review-only.
       const fallbackEnabled = String(process.env.FOREX_DATA_PROVIDER_FALLBACK || "auto").toLowerCase() !== "off";
       const fallbackStatuses = new Set(["mismatch", "partial_or_unknown_candle", "date_unverified", "time_unverified"]);
-      if (marketReference.dataProvider === "OANDA" && fallbackEnabled && process.env.TWELVE_DATA_API_KEY && fallbackStatuses.has(chartDataMatch.status)) {
+      // Once the year-correction search above has confirmed the real year
+      // (chartDataMatch.yearCorrected), trying an alternate provider here
+      // would refetch using resolvedAnalysisDate/dateDecision's original,
+      // still-wrong-year values below - undoing the correction for no
+      // benefit, since the remaining "mismatch" is already known to be a
+      // small, real gap on the current candle, not a data problem an
+      // alternate provider could fix.
+      if (marketReference.dataProvider === "OANDA" && fallbackEnabled && process.env.TWELVE_DATA_API_KEY && chartDataMatch.yearCorrected !== true && fallbackStatuses.has(chartDataMatch.status)) {
         const primaryAttempt = {
           provider: "OANDA",
           symbol: marketReference.providerSymbol || marketReference.symbol || normalizedSymbol,
@@ -30168,7 +30194,12 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         }
       }
 
-      if (chartDataMatch.status === "mismatch") {
+      // A "mismatch" that the year-correction search above already confirmed
+      // (chartDataMatch.yearCorrected) is a small, real gap on the current
+      // still-forming candle, not a reason to distrust the whole reference -
+      // wiping completedPeriodReferences here would throw away the very
+      // Monday-Thursday period dates that search just fixed.
+      if (chartDataMatch.status === "mismatch" && chartDataMatch.yearCorrected !== true) {
         completedPeriodReferences.status = "chart_mismatch";
         completedPeriodReferences.periods = [];
       }
@@ -30178,7 +30209,8 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       // frameworkCandleCount: 0 despite a full execution series.
       const retainCompletedOandaReference = ["OANDA", "Twelve Data"].includes(marketReference.dataProvider || "Twelve Data") &&
         completedPeriodReferences.periods.length > 0 &&
-        ["date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(chartDataMatch.status);
+        (chartDataMatch.yearCorrected === true ||
+          ["date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(chartDataMatch.status));
       if (!["matched_reference", "partial_reference"].includes(chartDataMatch.status) && !retainCompletedOandaReference) {
         // Do not pass mismatched prices to downstream AI or deterministic selection.
         marketReference = clearRejectedProviderData({ ...marketReference, error: chartDataMatch.reason,
