@@ -29971,6 +29971,22 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         tolerance: getCleanBreakTolerance(normalizedSymbol),
       });
 
+      // Same leniency as the year-correction search below (see its own
+      // comment), but for the far more common case: the year was already
+      // read correctly, no retry ever ran, yet a fine M1/M5 candle still
+      // fails assessChartDataMatch's tight pip tolerance purely from real
+      // intra-candle movement in a stale replay (confirmed on AUDJPY M5:
+      // right year both times, gap ~0.3%, nothing like a real data
+      // problem). Tagging it here - not only inside the retry - means the
+      // downstream "mismatch" handling treats this gently regardless of
+      // whether a year correction was ever needed.
+      if (chartDataMatch.status === "mismatch") {
+        const primaryGapRatio = chartDataMatchCloseGapRatio(chartDataMatch);
+        if (primaryGapRatio !== null && primaryGapRatio < 0.02) {
+          chartDataMatch = { ...chartDataMatch, smallResidualGap: true };
+        }
+      }
+
       // A misread axis YEAR (not day/month) on a short intraday history
       // validates against pixel self-consistency just as cleanly as the
       // right year would (see shiftChartDetectionYear above), so it only
@@ -30072,13 +30088,15 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       const fallbackEnabled = String(process.env.FOREX_DATA_PROVIDER_FALLBACK || "auto").toLowerCase() !== "off";
       const fallbackStatuses = new Set(["mismatch", "partial_or_unknown_candle", "date_unverified", "time_unverified"]);
       // Once the year-correction search above has confirmed the real year
-      // (chartDataMatch.yearCorrected), trying an alternate provider here
-      // would refetch using resolvedAnalysisDate/dateDecision's original,
-      // still-wrong-year values below - undoing the correction for no
-      // benefit, since the remaining "mismatch" is already known to be a
-      // small, real gap on the current candle, not a data problem an
+      // (chartDataMatch.yearCorrected), or the primary check already tagged
+      // a small residual gap (chartDataMatch.smallResidualGap - a fine
+      // M1/M5 candle's real intra-candle movement in a stale replay, no
+      // year issue involved at all), trying an alternate provider here
+      // would refetch using resolvedAnalysisDate/dateDecision's original
+      // values below, gaining nothing since the remaining "mismatch" is
+      // already known to be a small, real gap, not a data problem an
       // alternate provider could fix.
-      if (marketReference.dataProvider === "OANDA" && fallbackEnabled && process.env.TWELVE_DATA_API_KEY && chartDataMatch.yearCorrected !== true && fallbackStatuses.has(chartDataMatch.status)) {
+      if (marketReference.dataProvider === "OANDA" && fallbackEnabled && process.env.TWELVE_DATA_API_KEY && chartDataMatch.yearCorrected !== true && chartDataMatch.smallResidualGap !== true && fallbackStatuses.has(chartDataMatch.status)) {
         const primaryAttempt = {
           provider: "OANDA",
           symbol: marketReference.providerSymbol || marketReference.symbol || normalizedSymbol,
@@ -30194,12 +30212,15 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         }
       }
 
-      // A "mismatch" that the year-correction search above already confirmed
-      // (chartDataMatch.yearCorrected) is a small, real gap on the current
-      // still-forming candle, not a reason to distrust the whole reference -
-      // wiping completedPeriodReferences here would throw away the very
-      // Monday-Thursday period dates that search just fixed.
-      if (chartDataMatch.status === "mismatch" && chartDataMatch.yearCorrected !== true) {
+      // A "mismatch" already confirmed as a known-small gap - either the
+      // year-correction search fixed the year (chartDataMatch.yearCorrected)
+      // or the primary check tagged a small residual gap with no year issue
+      // at all (chartDataMatch.smallResidualGap, see its own comment above)
+      // - is not a reason to distrust the whole reference. Wiping
+      // completedPeriodReferences here would throw away real, correctly
+      // dated period data over a gap that's already known to be small.
+      const knownSmallGap = chartDataMatch.yearCorrected === true || chartDataMatch.smallResidualGap === true;
+      if (chartDataMatch.status === "mismatch" && !knownSmallGap) {
         completedPeriodReferences.status = "chart_mismatch";
         completedPeriodReferences.periods = [];
       }
@@ -30209,7 +30230,7 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       // frameworkCandleCount: 0 despite a full execution series.
       const retainCompletedOandaReference = ["OANDA", "Twelve Data"].includes(marketReference.dataProvider || "Twelve Data") &&
         completedPeriodReferences.periods.length > 0 &&
-        (chartDataMatch.yearCorrected === true ||
+        (knownSmallGap ||
           ["date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(chartDataMatch.status));
       if (!["matched_reference", "partial_reference"].includes(chartDataMatch.status) && !retainCompletedOandaReference) {
         // Do not pass mismatched prices to downstream AI or deterministic selection.
