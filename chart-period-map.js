@@ -195,9 +195,33 @@ export function buildChartPeriodMap({
     reasons.push("one or more chart time anchors did not match the fetched selected-timeframe candles");
   }
   const usableCalibration = reasons.length === 0;
+  // A single anchor's timestamp can match a real candle (so it isn't
+  // dropped by the check above) while its recorded PIXEL position is still
+  // wrong - MT4 frequently mis-renders or crops the leftmost axis
+  // label/tick, and reading it can get the x right but the timestamp
+  // wrong, or vice versa. Confirmed on a real M5 chart: one anchor's
+  // implied step against every other anchor was 1.3px/candle while every
+  // other pair agreed exactly on 4px/candle - using that one anchor as
+  // screenXFor's reference threw every boundary off by however far it sat
+  // from the rest, worst for whichever boundary was furthest from it (the
+  // current day's own start line, landing far right of its real candles).
+  // Cross-check every anchor's implied step against every other one and
+  // only trust it as a reference if a majority of the others agree.
+  const consistentAnchorIndexes = anchorIndexes.filter((anchor) => {
+    if (!anchor.row) return false;
+    const others = anchorIndexes.filter((other) => other !== anchor && other.row && other.row.index !== anchor.row.index);
+    if (!others.length) return true;
+    const step = Number(calibration.candleStep);
+    if (!(step > 0)) return true;
+    const agreeing = others.filter((other) => {
+      const impliedStep = (Number(anchor.x) - Number(other.x)) / (anchor.row.index - other.row.index);
+      return Math.abs(impliedStep - step) <= Math.max(1, step * 0.25);
+    });
+    return agreeing.length >= Math.ceil(others.length / 2);
+  });
   const screenXFor = (timestamp) => {
     const row = byTimestamp.get(iso(timestamp));
-    const reference = anchorIndexes.find((anchor) => anchor.row);
+    const reference = consistentAnchorIndexes.find((anchor) => anchor.row) || anchorIndexes.find((anchor) => anchor.row);
     if (!reference || !usableCalibration) return null;
     if (row) return Number(reference.x) + (row.index - reference.row.index) * Number(calibration.candleStep);
     // No provider candle at this exact timestamp - most commonly the very
@@ -262,6 +286,8 @@ export function buildChartPeriodMap({
       includedCandleCount: bars.length,
       matchedAnchorCount: anchorIndexes.filter((anchor) => anchor.row).length,
       allAnchorsMatchProviderCandles: anchors.length > 0 && anchorIndexes.every((anchor) => anchor.row),
+      consistentAnchorCount: consistentAnchorIndexes.length,
+      inconsistentAnchorsDropped: anchorIndexes.filter((a) => a.row).length - consistentAnchorIndexes.length,
       terminalCalibration,
       weekendSafe: true,
     },
