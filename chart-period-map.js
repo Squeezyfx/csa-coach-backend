@@ -226,7 +226,7 @@ export function buildChartPeriodMap({
   // OTHER side - is the natural suspect.
   const consistentAnchorIndexes = (() => {
     const withRows = anchorIndexes.filter((a) => a.row).sort((a, b) => a.row.index - b.row.index);
-    const step = Number(calibration.candleStep);
+    const step = Number(calibration?.candleStep);
     if (withRows.length < 3 || !(step > 0)) return withRows;
     const tolerance = Math.max(1, step * 0.25);
     const pairAgrees = (a, b) => {
