@@ -197,28 +197,49 @@ export function buildChartPeriodMap({
   const usableCalibration = reasons.length === 0;
   // A single anchor's timestamp can match a real candle (so it isn't
   // dropped by the check above) while its recorded PIXEL position is still
-  // wrong - MT4 frequently mis-renders or crops the leftmost axis
-  // label/tick, and reading it can get the x right but the timestamp
-  // wrong, or vice versa. Confirmed on a real M5 chart: one anchor's
-  // implied step against every other anchor was 1.3px/candle while every
-  // other pair agreed exactly on 4px/candle - using that one anchor as
-  // screenXFor's reference threw every boundary off by however far it sat
-  // from the rest, worst for whichever boundary was furthest from it (the
-  // current day's own start line, landing far right of its real candles).
-  // Cross-check every anchor's implied step against every other one and
-  // only trust it as a reference if a majority of the others agree.
-  const consistentAnchorIndexes = anchorIndexes.filter((anchor) => {
-    if (!anchor.row) return false;
-    const others = anchorIndexes.filter((other) => other !== anchor && other.row && other.row.index !== anchor.row.index);
-    if (!others.length) return true;
+  // wrong - MT4 frequently mis-renders or crops the leftmost/rightmost axis
+  // label/tick, and reading it can get the timestamp right but the x
+  // wrong, or vice versa. Confirmed on a real M5 chart: the leftmost
+  // anchor's step against its immediate neighbor was 1.3px/candle while
+  // every OTHER consecutive pair agreed exactly on 4px/candle - using that
+  // one anchor as screenXFor's reference threw every boundary off by
+  // however far it sat from the rest, worst for whichever boundary was
+  // furthest from it (the current day's own start line, landing far right
+  // of its real candles).
+  //
+  // Comparing every anchor against every OTHER anchor (not just neighbors)
+  // doesn't reliably catch this: a single bad anchor's error gets diluted
+  // as the index gap to a farther anchor grows, so its implied step drifts
+  // asymptotically toward the true value and can cross an all-pairs
+  // majority threshold anyway (confirmed: the leftmost anchor above
+  // "agreed" with 5 of its 10 others once diluted by distance - a coin
+  // flip against a threshold that needed only that many). A real
+  // corrupted-tick error is a roughly FIXED pixel offset, so it shows up
+  // starkly against the NEAREST neighbor and gets progressively hidden by
+  // averaging over longer distances - meaning nearest-neighbor pairs, not
+  // all-pairs, are what actually isolates it.
+  //
+  // An interior anchor is cross-validated by two neighbors, so it only
+  // needs to agree with one of them to be trusted. An endpoint anchor has
+  // just one neighbor; if that single pairing disagrees, the endpoint -
+  // not its neighbor, which is very likely still corroborated from its
+  // OTHER side - is the natural suspect.
+  const consistentAnchorIndexes = (() => {
+    const withRows = anchorIndexes.filter((a) => a.row).sort((a, b) => a.row.index - b.row.index);
     const step = Number(calibration.candleStep);
-    if (!(step > 0)) return true;
-    const agreeing = others.filter((other) => {
-      const impliedStep = (Number(anchor.x) - Number(other.x)) / (anchor.row.index - other.row.index);
-      return Math.abs(impliedStep - step) <= Math.max(1, step * 0.25);
+    if (withRows.length < 3 || !(step > 0)) return withRows;
+    const tolerance = Math.max(1, step * 0.25);
+    const pairAgrees = (a, b) => {
+      if (a.row.index === b.row.index) return true;
+      const impliedStep = (Number(b.x) - Number(a.x)) / (b.row.index - a.row.index);
+      return Math.abs(impliedStep - step) <= tolerance;
+    };
+    return withRows.filter((anchor, i) => {
+      const prevOk = i > 0 ? pairAgrees(withRows[i - 1], anchor) : null;
+      const nextOk = i < withRows.length - 1 ? pairAgrees(anchor, withRows[i + 1]) : null;
+      return prevOk === true || nextOk === true;
     });
-    return agreeing.length >= Math.ceil(others.length / 2);
-  });
+  })();
   const screenXFor = (timestamp) => {
     const row = byTimestamp.get(iso(timestamp));
     const reference = consistentAnchorIndexes.find((anchor) => anchor.row) || anchorIndexes.find((anchor) => anchor.row);
