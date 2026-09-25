@@ -49,7 +49,13 @@ export function classifyProviderError(message = "", status = 0) {
 
 export function assessChartDataMatch({ candles = [], detection = {}, cutoff = "", tolerance = 0, timeframe = "D1", symbol = "", source = "Twelve Data", alignmentCandle = null }) {
   const result = (status, reason, extra = {}) => ({ status, reason, brokerVerified: false, source, alignmentScope: "final_visible_candle_only", ...extra });
-  const dateVerified = ["explicit_final_candle_timestamp", "verified_axis_bar_count", "verified_single_anchor_pixel_count"].includes(detection.latestVisibleDateEvidence) && detection.dateConfidence === "high" && detection.latestVisibleDate === cutoff.slice(0, 10);
+  // Kept in sync with EXACT_TIME_EVIDENCE in server.js, which already
+  // trusts verified_multi_anchor_axis_count at this same strength - it was
+  // simply missing here, so a chart resolved through that path (confirmed
+  // on AUDJPY M5: axis read 2026-09-24 correctly, price agreed with the
+  // provider within 0.2%) was falling through to date_unverified even
+  // though its date evidence was exactly as strong as the other tiers.
+  const dateVerified = ["explicit_final_candle_timestamp", "verified_axis_bar_count", "verified_single_anchor_pixel_count", "verified_multi_anchor_axis_count"].includes(detection.latestVisibleDateEvidence) && detection.dateConfidence === "high" && detection.latestVisibleDate === cutoff.slice(0, 10);
   const price = Number(detection.latestVisiblePrice ?? detection.latestVisibleClose);
   if (!(price > 0) || !["high", "medium"].includes(String(detection.latestVisiblePriceConfidence).toLowerCase())) {
     return result("unverified", "Readable chart price required to check provider alignment");
