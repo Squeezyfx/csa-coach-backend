@@ -208,19 +208,29 @@ export function buildChartOverlay({ chartDetection = {}, analysisFacts = {}, mar
     reasons.push("no Fib frame: the Fib high/low was not verified for this chart");
   }
 
-  // 5. Entries E1, E2, E3 … (selected only).
+  // 5. Entries E1, E2, E3 … (selected only). A qualified entry can reference
+  // a period from earlier in the framework week than the uploaded
+  // screenshot actually shows (a trader who screenshots only the last day
+  // or two of an M-timeframe chart still has the whole Monday-Friday week
+  // as the CSA frame) - its price can then fall outside the chart's own
+  // visible/calibrated price axis, so yOf has nothing to draw a line at.
+  // That's a drawing limitation, not a reason to drop the entry: it's
+  // still pushed, tagged offChart, with no y/line position, so the trader
+  // still reads "E1: Tuesday high 6.53999 @ 50.0%" even though this
+  // particular screenshot has nothing at that height to point at.
   const entries = decisions.filter((d) => d?.selected === true && finite(d?.price));
   for (const entry of entries) {
     const y = yOf(entry.price);
-    if (y === null) continue;
     const ratio = finite(entry.nearestFibRatio) ? `${(num(entry.nearestFibRatio) * 100).toFixed(1)}%` : "";
     const zoneLowY = finite(entry.zoneLow) ? yOf(entry.zoneLow) : null;
     const zoneHighY = finite(entry.zoneHigh) ? yOf(entry.zoneHigh) : null;
+    const offChart = y === null;
     elements.push({
       type: "entry", id: `E${entry.entry}`, price: num(entry.price), y,
-      yTop: zoneHighY ?? y, yBottom: zoneLowY ?? y,
+      yTop: offChart ? null : (zoneHighY ?? y), yBottom: offChart ? null : (zoneLowY ?? y),
       x1: 0, x2: finite(cutoffX) ? cutoffX : plotRight,
       label: `${entry.period} ${entry.extreme} ${fmt(entry.price)}${ratio ? ` @ ${ratio}` : ""}`,
+      offChart,
       verified: mapVerified && fib?.verified === true,
     });
   }

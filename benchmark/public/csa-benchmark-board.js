@@ -96,8 +96,12 @@
       box(ctx, 2, e.y - 15, e.label + suffix(e), color, "#ffffff");
     });
 
-    // Entries.
+    // Entries. An offChart entry (qualified, but its price falls outside
+    // this screenshot's own visible/calibrated price range - see
+    // chart-overlay.js) has no y to draw at; it still appears in the
+    // card's entry count/list, just not on the canvas.
     by("entry").forEach(function (e, i) {
+      if (e.offChart || e.y === null || e.y === undefined) return;
       var color = tone(e, COLORS.entry);
       var top = Math.min(e.yTop, e.yBottom), height = Math.abs(e.yBottom - e.yTop);
       if (height >= 2) {
@@ -224,7 +228,10 @@
     var reasons = (overlay && overlay.reasons) || [];
     if (item.status === "error") reasons = [item.error || "Analysis failed"].concat(reasons);
     var entryList = entries.map(function (e) {
-      return "<li><b>" + esc(e.id) + "</b> " + esc(e.label) + (e.verified ? "" : " <i>(unverified — needs manual review)</i>") + "</li>";
+      var note = e.offChart
+        ? " <i>(outside this screenshot's visible range — not drawn on the chart)</i>"
+        : (e.verified ? "" : " <i>(unverified — needs manual review)</i>");
+      return "<li><b>" + esc(e.id) + "</b> " + esc(e.label) + note + "</li>";
     }).join("");
     return '' +
       '<article class="cb-card" data-index="' + index + '">' +
