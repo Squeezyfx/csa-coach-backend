@@ -31977,11 +31977,14 @@ ${(visualReview?.strategyMissingInformation || []).length
           ? error.message
           : "Something went wrong while analyzing or saving the chart.",
       errorType: error.errorType || null,
-      details: error.message,
-      // Temporary: this benchmark tool is private, not a public API, and the
-      // "Invalid time value" GBPJPY W1 crash has no other way to locate its
-      // throw site without Render's own server logs. Remove once found.
-      debugStack: error.stack || null,
+      // Temporary: the benchmark tool's exported result only surfaces this
+      // "details" field (confirmed: its own "error" column already shows
+      // "Invalid time value", which is error.message, not the generic text
+      // two lines up) - a separate debugStack field added nothing because
+      // nothing reads it. Folding the stack into this same field guarantees
+      // it actually reaches the exported JSON. Revert to plain error.message
+      // once the "Invalid time value" GBPJPY W1 crash's throw site is found.
+      details: error.stack || error.message,
     });
   }
 });
