@@ -85,7 +85,16 @@ export function buildChartOverlay({ chartDetection = {}, analysisFacts = {}, mar
   };
   const spanOf = (date) => {
     if (!mapVerified) return null;
-    const index = starts.findIndex((p) => p.key === date);
+    // p.key is a real date for M1-H4/D1 (Monday / month-1st), so the direct
+    // match already worked for those. W1's key is the quarter label
+    // "2026-Q1" (see chart-period-map.js's externalKey), while period.date
+    // here is always the real quarter-start date "2026-01-01" - falling
+    // back to expectedStartTimestamp's own date portion matches W1 (and MN)
+    // without needing a timeframe-specific label conversion here. Without
+    // this, spanOf always returned null for W1, so every period_level tick
+    // fell back to spanning the chart's full width instead of just its own
+    // period, and rendered unverified/grey.
+    const index = starts.findIndex((p) => p.key === date || String(p.expectedStartTimestamp || "").slice(0, 10) === date);
     if (index < 0) return null;
     const x1 = num(starts[index].screenX);
     const next = starts[index + 1];
