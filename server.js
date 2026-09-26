@@ -30706,6 +30706,24 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         axisCalibration: chartDetection?.timestampAudit || null,
         tradesOnWeekends: isCryptoSymbol(normalizedSymbol || submittedInstrument || ""),
       });
+      // Diagnostic only: chartPeriodMap.diagnostics.providerCandleCount
+      // reflects marketReference.timeframeCandles.length at THIS exact call.
+      // XAUUSD W1 came back with providerCandleCount: 0 here despite
+      // structureRangeDiagnostics.timeframeCandlesCount: 37 captured right
+      // after the initial fetch - something between those two points
+      // replaced marketReference with a version whose candles were lost.
+      // Surfacing both side by side instead of guessing which of the several
+      // marketReference reassignments above (year-correction retry,
+      // alternate-provider fallback, final-visible-candle sync) did it.
+      if (chartPeriodMap.diagnostics) {
+        chartPeriodMap.diagnostics.marketReferenceAtBuildTime = {
+          ok: marketReference?.ok === true,
+          dataProvider: marketReference?.dataProvider || null,
+          error: marketReference?.error || null,
+          timeframeCandlesLength: Array.isArray(marketReference?.timeframeCandles) ? marketReference.timeframeCandles.length : null,
+          structureRangeDiagnosticsTimeframeCandlesCount: marketReference?.structureRangeDiagnostics?.timeframeCandlesCount ?? null,
+        };
+      }
       const chartPeriodMapVerified = chartPeriodMap.canSelectEntries === true;
       const verifiedPeriodPixelRanges = chartPeriodMapVerified
         ? (chartPeriodMap.periodStarts || [])
