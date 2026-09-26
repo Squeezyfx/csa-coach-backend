@@ -10,7 +10,16 @@ const groups=xs=>{const out=[];for(const x of xs){if(!out.length||x>out.at(-1).a
 // keeps bar counts aligned with the visible axis. Crypto trades every day,
 // so that skip must be disabled per-instrument (tradesOnWeekends) or every
 // anchor pair spanning a weekend fails validation and returns null.
-function advance(time,bars,minutes,tradesOnWeekends){for(let n=0;n<bars;n++){do{time+=minutes*60000;}while(!tradesOnWeekends&&[0,6].includes(new Date(time).getUTCDay()));}return time;}
+// A whole-week-or-longer step (minutes>=10080, i.e. W1) must never apply
+// this skip regardless of the caller's tradesOnWeekends: advancing exactly
+// one week always lands back on the SAME weekday, so if that weekday is a
+// Sat/Sun (OANDA's GBPJPY W1 candles are timestamped on Sunday, confirmed
+// against a real chart), the loop can never find a non-weekend day and
+// runs until the time value overflows to Infinity - new
+// Date(Infinity).toISOString() then throws "Invalid time value" wherever
+// the result is later formatted. A weekly candle landing on a Sunday
+// isn't a gap to skip; it's just the day the provider posts it.
+function advance(time,bars,minutes,tradesOnWeekends){const skip=!tradesOnWeekends&&minutes<10080;for(let n=0;n<bars;n++){do{time+=minutes*60000;}while(skip&&[0,6].includes(new Date(time).getUTCDay()));}return time;}
 function parseTimestamp(value){const text=String(value||"").replace("T"," ").slice(0,19);return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text)?Date.parse(text.replace(" ","T")+"Z"):NaN;}
 function barsBetween(start,end,minutes,tradesOnWeekends){let time=start,count=0;while(time<end&&count<10000){time=advance(time,1,minutes,tradesOnWeekends);count++;}return time===end?count:null;}
 // Validates three or more printed axis labels, then advances by the few
@@ -177,6 +186,17 @@ function resolveAxisTimestampWithYearCorrection(params){
 // Measures candle/time-axis geometry only. No price values or distances are read.
 export function readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps=[],tradesOnWeekends=false}={}){
  if(!MINUTES[timeframe]||timeAxisTimestamps.length<3)return null;
+ // advance()'s weekend-skip loop adds a full candle-step and checks again,
+ // which makes sense for daily/intraday candles (skip past Sat/Sun to the
+ // next real trading day) but not for W1: a 7-day step always lands back
+ // on the SAME weekday, so if that weekday happens to be Sat/Sun (OANDA's
+ // GBPJPY W1 candles are timestamped on Sunday, confirmed against a real
+ // chart), the loop never finds a non-weekend day and runs until the time
+ // value overflows to Infinity - new Date(Infinity).toISOString() then
+ // throws "Invalid time value". A weekly candle landing on a Sunday isn't
+ // a gap to skip; it's just the day the provider posts it. Force the
+ // weekend-agnostic path for W1 regardless of the instrument.
+ const effectiveTradesOnWeekends=timeframe==='W1'?true:tradesOnWeekends;
  const im=decodePng8(Buffer.from(imageBase64||'','base64'));if(!im)return null;
  const geometry=detectMt4CandleGeometry(im);if(!geometry)return null;
  const {h,bottom,dark,step,first,last}=geometry;
@@ -197,8 +217,8 @@ export function readMt4ForexTimestamp({imageBase64,timeframe,timeAxisTimestamps=
  }
  const anchors=positions.map((x,i)=>({x,timestamp:labels[i]})).filter(a=>/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:00$/.test(a.timestamp||''));
  if((last-first)%step!==0)return null;
- return resolveAxisTimestampWithYearCorrection({anchors,lastCandleX:last,candleStep:step,timeframe,tradesOnWeekends})
-  || resolveSingleAnchorTail(anchors,last,step,MINUTES[timeframe],tradesOnWeekends);
+ return resolveAxisTimestampWithYearCorrection({anchors,lastCandleX:last,candleStep:step,timeframe,tradesOnWeekends:effectiveTradesOnWeekends})
+  || resolveSingleAnchorTail(anchors,last,step,MINUTES[timeframe],effectiveTradesOnWeekends);
 }
 // When the full anchor chain cannot be validated - a real closed-day
 // irregularity somewhere in the printed history (a genuine occasional
