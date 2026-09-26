@@ -25,7 +25,15 @@ const SUPPORTED = new Set(["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN
 const CANDLE_MINUTES = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440, W1: 10080, MN: 43200 };
 const iso = (value) => String(value || "").replace("T", " ").slice(0, 19);
 const instant = (value) => {
-  const text = iso(value);
+  let text = iso(value);
+  // Twelve Data's daily-and-longer candles (confirmed on XAUUSD W1) come
+  // back as a bare "YYYY-MM-DD", not "YYYY-MM-DD HH:MM:SS" - OANDA always
+  // includes a time component, which is why this only ever surfaced on a
+  // Twelve-Data-primary symbol. Without this, every candle silently failed
+  // the shape check below and buildChartPeriodMap saw providerCandleCount:
+  // 0 despite a non-empty candles array, so no anchor could ever match and
+  // no period boundary/tick could be positioned.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) text = `${text} 00:00:00`;
   if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text)) return NaN;
   return Date.parse(`${text.replace(" ", "T")}Z`);
 };
