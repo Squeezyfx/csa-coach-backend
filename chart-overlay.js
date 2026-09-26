@@ -136,12 +136,15 @@ export function buildChartOverlay({ chartDetection = {}, analysisFacts = {}, mar
   // the period length itself: M1-H1's periods are daily, framed by the week
   // (structureLabel "...inside the selected Monday-to-Friday week"); H4's
   // periods are weekly, framed by the month; D1's periods are monthly,
-  // framed by the year ("...inside the selected calendar year"). D1 was
-  // previously unreachable here (chart-period-map.js excluded it entirely),
-  // so this fell through to the WEEK default and every D1 chart's frame
-  // line was mislabeled "WEEK HIGH/LOW" for what is really a year's worth
-  // of monthly highs and lows.
-  const frameUnit = timeframe === "H4" ? "MONTH" : timeframe === "D1" ? "YEAR" : "WEEK";
+  // framed by the year; W1's periods are quarterly, framed by the year too;
+  // MN's periods are yearly, framed by the selected year plus the previous
+  // 4 ("...inside the selected calendar year" / "...across selected year
+  // plus previous 4 years" in getSupportedCsaTimeframeProfile). D1 and W1
+  // were previously unreachable here at all (chart-period-map.js excluded
+  // them entirely), so each fell through to the WEEK default and had its
+  // frame line mislabeled "WEEK HIGH/LOW" for what is really a year's
+  // worth of higher-period highs and lows.
+  const frameUnit = timeframe === "H4" ? "MONTH" : ["D1", "W1"].includes(timeframe) ? "YEAR" : timeframe === "MN" ? "5-YEAR" : "WEEK";
   const frameHigh = finite(fib?.swingHigh) ? num(fib.swingHigh) : Math.max(...periods.map((p) => num(p.high)).filter(Number.isFinite));
   const frameLow = finite(fib?.swingLow) ? num(fib.swingLow) : Math.min(...periods.map((p) => num(p.low)).filter(Number.isFinite));
   for (const [kind, price] of [["high", frameHigh], ["low", frameLow]]) {

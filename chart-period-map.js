@@ -201,9 +201,15 @@ export function buildChartPeriodMap({
   // that makes EVERY usable anchor match, and applying it uniformly, fixes
   // this without weakening the exact-match requirement for a genuinely
   // wrong anchor (no single consistent offset would rescue those).
+  // The search extends to 24h (not just 12) for W1: confirmed on a real
+  // GBPJPY chart that MT4 labels its weekly candles by their Sunday
+  // session-open, a full day before OANDA's own weekly grid, which we
+  // fetch aligned to Monday (weeklyAlignment in oanda-data.js) - a
+  // consistent whole-DAY difference, the same class of broker-vs-provider
+  // labeling gap as H4's whole-hour one, just one level up in scale.
   const brokerOffsetMinutes = (() => {
     if (!usableAnchors.length) return 0;
-    for (let hours = 0; hours <= 12; hours += 1) {
+    for (let hours = 0; hours <= 24; hours += 1) {
       for (const sign of hours === 0 ? [1] : [1, -1]) {
         const offset = sign * hours * 60;
         const allMatch = usableAnchors.every((anchor) => {
