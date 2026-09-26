@@ -126,6 +126,18 @@ function quarterKeyStart(value) {
   return m ? new Date(Date.UTC(Number(m[1]), (Number(m[2]) - 1) * 3, 1)) : null;
 }
 
+// Used by auditPeriodInventory below, which is shared by both D1/H4/etc's
+// real "YYYY-MM-DD" period dates and W1's "YYYY-Qn" quarter labels - turns a
+// quarter label into its start date so ordering/cutoff/candle-ownership
+// comparisons work the same way regardless of which format came in.
+function normalizePeriodDateForCompare(value) {
+  const raw = String(value || "").slice(0, 10);
+  const m = QUARTER_KEY_RE.exec(raw);
+  if (!m) return raw;
+  const month = String((Number(m[2]) - 1) * 3 + 1).padStart(2, "0");
+  return `${m[1]}-${month}-01`;
+}
+
 // Read-only reference inventory. This never supplies selector authority or Fib.
 export function buildCompletedPeriodReferences({ periods = [], candles = [], timeframe = "D1", visibleDateFloor = "", providerAvailable = false, tolerance = 0 } = {}) {
   const output = { status: "unavailable", source: "Twelve Data", chartVerified: false,
@@ -182,9 +194,15 @@ export function auditPeriodInventory({ periods = [], candles = [], tolerance = 0
   const evidence = [];
   for (let index = 0; index < periods.length; index += 1) {
     const period = periods[index];
-    const date = String(period.date || "").slice(0, 10);
-    const nextDate = String(periods[index + 1]?.date || "9999-12-31").slice(0, 10);
-    const fail = (reason) => issues.push({ period: period.periodLabel || date, date,
+    const rawDate = String(period.date || "").slice(0, 10);
+    // W1's period.date is "YYYY-Qn" (see quarterKeyStart above), not a real
+    // date - normalize it to its quarter's start date for every comparison
+    // below (ordering, cutoff, candle-ownership), while keeping rawDate as
+    // the label surfaced in issues/evidence so it still matches the "2026-Q1"
+    // key the rest of the system uses for W1 periods.
+    const date = normalizePeriodDateForCompare(rawDate);
+    const nextDate = normalizePeriodDateForCompare(String(periods[index + 1]?.date || "9999-12-31").slice(0, 10));
+    const fail = (reason) => issues.push({ period: period.periodLabel || rawDate, date: rawDate,
       extreme: "period_integrity", requiresReview: true, resolution: reason });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || seen.has(date) || date >= nextDate) {
       fail("Missing, duplicate or out-of-order period start date");
@@ -211,7 +229,7 @@ export function auditPeriodInventory({ periods = [], candles = [], tolerance = 0
     if (period.authoritativeSourceMissing === true && period.partialPeriod !== true) {
       fail("Provider period authority is incomplete or has an integrity warning");
     } else if (period.sourceIntegrityWarning === true) {
-      advisories.push({ period: period.periodLabel || date, date, extreme: "period_integrity",
+      advisories.push({ period: period.periodLabel || rawDate, date: rawDate, extreme: "period_integrity",
         requiresReview: false, advisory: true,
         resolution: "Native provider candle did not reconcile against the cutoff-safe reconstruction; using the reconstruction. Other integrity checks for this period passed." });
     }
@@ -239,7 +257,7 @@ export function auditPeriodInventory({ periods = [], candles = [], tolerance = 0
       owned.some((candle) => Number(candle.high) > Number(period.high) + tolerance ||
         Number(candle.low) < Number(period.low) - tolerance);
     if (escaped) fail("A dated source candle exceeds the reported period range; do not certify this inventory");
-    evidence.push({ date, checkedCandleCount: owned.length,
+    evidence.push({ date: rawDate, checkedCandleCount: owned.length,
       highCandleDate: owned.find(c => Math.abs(Number(c.high) - Number(period.high)) <= tolerance)?.datetime || null,
       lowCandleDate: owned.find(c => Math.abs(Number(c.low) - Number(period.low)) <= tolerance)?.datetime || null });
   }
