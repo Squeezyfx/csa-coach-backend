@@ -31978,6 +31978,10 @@ ${(visualReview?.strategyMissingInformation || []).length
           : "Something went wrong while analyzing or saving the chart.",
       errorType: error.errorType || null,
       details: error.message,
+      // Temporary: this benchmark tool is private, not a public API, and the
+      // "Invalid time value" GBPJPY W1 crash has no other way to locate its
+      // throw site without Render's own server logs. Remove once found.
+      debugStack: error.stack || null,
     });
   }
 });
