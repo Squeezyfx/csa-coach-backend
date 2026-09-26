@@ -114,6 +114,18 @@ export function reconcilePeriodMapping({ periods = [], references = [], toleranc
   return { periods:mapped, rejected, verified:false };
 }
 
+// W1's own period key (chart-period-map.js's externalKey / server.js's
+// getPeriodKeyAndLabel quarterly-in-year branch) is "YYYY-Qn", not a real
+// date - every other supported timeframe's period.date already is one.
+// Kept separate from the real date used for endDate/owned-candle math so
+// the original label still comes back out in output.periods (matching
+// what chart-overlay.js and everything else already key periods by).
+const QUARTER_KEY_RE = /^(\d{4})-Q([1-4])$/;
+function quarterKeyStart(value) {
+  const m = QUARTER_KEY_RE.exec(String(value || ""));
+  return m ? new Date(Date.UTC(Number(m[1]), (Number(m[2]) - 1) * 3, 1)) : null;
+}
+
 // Read-only reference inventory. This never supplies selector authority or Fib.
 export function buildCompletedPeriodReferences({ periods = [], candles = [], timeframe = "D1", visibleDateFloor = "", providerAvailable = false, tolerance = 0 } = {}) {
   const output = { status: "unavailable", source: "Twelve Data", chartVerified: false,
@@ -121,26 +133,33 @@ export function buildCompletedPeriodReferences({ periods = [], candles = [], tim
   const floor = new Date(`${visibleDateFloor}T00:00:00Z`);
   if (!providerAvailable || !/^\d{4}-\d{2}-\d{2}$/.test(visibleDateFloor) ||
       !Number.isFinite(floor.getTime()) || floor.toISOString().slice(0,10) !== visibleDateFloor) return output;
-  if (!["D1", "H4", "H1", "M30", "M15", "M5", "M1"].includes(timeframe)) return output;
+  if (!["D1", "H4", "H1", "M30", "M15", "M5", "M1", "W1"].includes(timeframe)) return output;
+  const isQuarterly = timeframe === "W1";
   const counts = new Map();
   for (const p of periods) counts.set(p.date, (counts.get(p.date) || 0) + 1);
   for (const period of periods) {
     const date = String(period.date || "");
-    const start = new Date(`${date}T00:00:00Z`);
+    const start = isQuarterly ? quarterKeyStart(date) : new Date(`${date}T00:00:00Z`);
     const reject = (reason, details = {}) => output.rejected.push({ date, reason, ...details });
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(start.getTime()) || start.toISOString().slice(0,10) !== date || counts.get(period.date) !== 1) { reject("invalid_or_duplicate_date"); continue; }
+    const validLabel = isQuarterly
+      ? start !== null
+      : /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(start.getTime()) && start.toISOString().slice(0,10) === date;
+    if (!validLabel || counts.get(period.date) !== 1) { reject("invalid_or_duplicate_date"); continue; }
     const end = new Date(start);
     if (timeframe === "D1") {
       if (start.getUTCDate() !== 1) { reject("not_month_start"); continue; }
       end.setUTCMonth(end.getUTCMonth() + 1);
+    } else if (isQuarterly) {
+      end.setUTCMonth(end.getUTCMonth() + 3);
     } else end.setUTCDate(end.getUTCDate() + (timeframe === "H4" ? 7 : 1));
     // Strictly before an actually printed date; never extrapolate a final day.
     // A period whose exclusive end is exactly the visible date is complete:
     // e.g. Tuesday ends when Wednesday begins. Only periods extending beyond
     // the visible date (the current/incomplete period) remain provisional.
     if (end > floor || period.partialPeriod === true || period.periodLifecycle === "in_progress") { reject("completion_not_established"); continue; }
+    const startDate = start.toISOString().slice(0,10);
     const endDate = end.toISOString().slice(0,10);
-    const owned = candles.filter(c => String(c.datetime || c.date || "").slice(0,10) >= date && String(c.datetime || c.date || "").slice(0,10) < endDate);
+    const owned = candles.filter(c => String(c.datetime || c.date || "").slice(0,10) >= startDate && String(c.datetime || c.date || "").slice(0,10) < endDate);
     const audit = auditPeriodInventory({periods:[period], candles:owned, tolerance, cutoffDate:visibleDateFloor});
     // Surface the actual issue, not just the generic label: "period_integrity_failed"
     // alone gave no way to tell a genuine data problem from a rounding-scale
