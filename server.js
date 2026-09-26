@@ -29804,7 +29804,13 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
     // overrides "inferred_axis"/"unknown" - it only replaces chartDetection
     // when it actually succeeds, so a chart with a genuinely correct explicit
     // timestamp is unaffected if the axis reader can't independently verify it.
-    if (["M1", "M5", "M15", "M30", "H1", "H4", "D1"].includes(String(timeframe || "").toUpperCase())) {
+    // MN excluded: its candle length varies (28-31 days), which breaks the
+    // fixed-interval assumption chart-time-reader.js's MINUTES map (and the
+    // anchor-chain validation built on it) relies on for every other
+    // timeframe here - it needs its own, calendar-aware validation, not
+    // this one applied unchanged. W1's candle is a true fixed 7-day
+    // interval, so it behaves exactly like H4/D1 and is included below.
+    if (["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"].includes(String(timeframe || "").toUpperCase())) {
       // Crypto trades through the weekend; the axis/bar-count readers must not
       // skip Sat/Sun when counting bars for a crypto chart or every anchor
       // pair spanning a weekend fails validation (see chart-time-reader.js).

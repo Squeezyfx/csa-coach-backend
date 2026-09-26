@@ -12,8 +12,17 @@ import { calendarMapping, normalizeFrameworkTimeframe } from "./framework-calend
 // same "map by candle index" approach H4 already uses one level up (H4's
 // candles are 4h and its periods are weeks; D1's candles are 1 day and its
 // periods are months) - not a separate mechanism, just a different grouping.
-const SUPPORTED = new Set(["M1", "M5", "M15", "M30", "H1", "H4", "D1"]);
-const CANDLE_MINUTES = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440 };
+// W1/MN follow it one level further up again (W1's candles are 1 week and
+// its periods are quarters; MN's candles are 1 month and its periods are
+// years) - framework-calendar.js's calendarMapping already produces the
+// quarter-start/year-start keys for both, this was purely missing here.
+// MN's own candle length varies (28-31 days); 43200 (a nominal 30 days) is
+// only ever used by the rare stepsPastHistory extrapolation fallback below
+// (the current period's own first candle not having posted yet), never by
+// the primary exact-candle-index lookup, so the imprecision there doesn't
+// reach the normal path.
+const SUPPORTED = new Set(["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"]);
+const CANDLE_MINUTES = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440, W1: 10080, MN: 43200 };
 const iso = (value) => String(value || "").replace("T", " ").slice(0, 19);
 const instant = (value) => {
   const text = iso(value);
@@ -27,9 +36,37 @@ const monday = (date) => {
   return day.toISOString().slice(0, 10);
 };
 const monthStart = (date) => `${date.slice(0, 7)}-01`;
+const quarterStart = (date) => {
+  const d = new Date(`${date}T00:00:00Z`);
+  return new Date(Date.UTC(d.getUTCFullYear(), Math.floor(d.getUTCMonth() / 3) * 3, 1)).toISOString().slice(0, 10);
+};
+const yearStart = (date) => `${date.slice(0, 4)}-01-01`;
 const weekLabel = (date) => `Week of ${monday(date)}`;
 const monthLabel = (date) => new Date(`${date}T00:00:00Z`).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+const quarterLabel = (key) => {
+  const d = new Date(`${key}T00:00:00Z`);
+  return `Q${Math.floor(d.getUTCMonth() / 3) + 1} ${d.getUTCFullYear()}`;
+};
+const yearLabel = (key) => key.slice(0, 4);
 const sameMoment = (a, b) => Number.isFinite(instant(a)) && instant(a) === instant(b);
+// server.js's own period keying (getPeriodKeyAndLabel) is the format every
+// OTHER consumer (chart-overlay.js's spanOf, periodStructureAudit) matches
+// periods by: for quarterly-in-year (W1) that's a "YYYY-Qn" label, not a
+// real date, while for yearly-in-multi-year (MN) it's the bare year - only
+// D1/H4/daily-in-week already agree with framework-calendar.js's own
+// date-string keys, which W1 does not. periodKey()/keys above stay
+// date-based since that is what matching a real candle's timestamp needs;
+// this converts only the final key handed back to callers, so the two
+// systems refer to the same period by the same string.
+function externalKey(timeframe, key) {
+  if (timeframe === "W1") return `${key.slice(0, 4)}-${quarterLabelCode(key)}`;
+  if (timeframe === "MN") return yearLabel(key);
+  return key;
+}
+function quarterLabelCode(key) {
+  const d = new Date(`${key}T00:00:00Z`);
+  return `Q${Math.floor(d.getUTCMonth() / 3) + 1}`;
+}
 
 function periodKey(timeframe, timestamp) {
   const date = dateOnly(timestamp);
@@ -37,12 +74,16 @@ function periodKey(timeframe, timestamp) {
   if (["M1", "M5", "M15", "M30", "H1"].includes(timeframe)) return date;
   if (timeframe === "H4") return monday(date);
   if (timeframe === "D1") return monthStart(date);
+  if (timeframe === "W1") return quarterStart(date);
+  if (timeframe === "MN") return yearStart(date);
   return null;
 }
 
 function periodLabel(timeframe, key) {
   if (timeframe === "H4") return weekLabel(key);
   if (timeframe === "D1") return monthLabel(key);
+  if (timeframe === "W1") return quarterLabel(key);
+  if (timeframe === "MN") return yearLabel(key);
   return new Date(`${key}T00:00:00Z`).toLocaleString("en-US", { weekday: "long", timeZone: "UTC" });
 }
 
@@ -100,7 +141,7 @@ export function buildChartPeriodMap({
   const lastIncluded = bars.at(-1) || null;
   const map = calendarMapping(tf, dateOnly(cutoff), {tradesOnWeekends});
   const reasons = [];
-  if (!SUPPORTED.has(tf)) reasons.push("period-map currently applies to M1–H4 and D1 charts only");
+  if (!SUPPORTED.has(tf)) reasons.push("period-map currently applies to M1-H4, D1, W1 and MN charts only");
   if (!exactCutoff) reasons.push("exact cutoff timestamp is missing or not chart-verified");
   // The chart's printed axis labels span its full visible history (often
   // several weeks), but the fetched provider candles are deliberately
@@ -266,7 +307,7 @@ export function buildChartPeriodMap({
     const positionTimestamp = first?._timestamp || (isCurrent ? expectedStart : null);
     const resolvedScreenX = positionTimestamp ? screenXFor(positionTimestamp) : null;
     return {
-      period: periodLabel(tf, key), key, startTimestamp: first?._timestamp || expectedStart,
+      period: periodLabel(tf, key), key: externalKey(tf, key), startTimestamp: first?._timestamp || expectedStart,
       expectedStartTimestamp: expectedStart,
       screenX: resolvedScreenX,
       status: isCurrent ? "in_progress" : "completed",
