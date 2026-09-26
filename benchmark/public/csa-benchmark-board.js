@@ -72,11 +72,13 @@
       ctx.restore();
     });
 
-    // Fib guide lines (thin, behind everything else).
+    // Fib guide lines (thin, behind everything else). Extended to the plot's
+    // right edge (not just e.x2, the last candle) so the line visually
+    // reaches the relocated tag below instead of leaving it floating.
     by("fib_level").forEach(function (e) {
       ctx.save();
       ctx.globalAlpha = 0.55;
-      line(ctx, e.x1, e.y, e.x2, tone(e, COLORS.fib), 1, [6, 4]);
+      line(ctx, e.x1, e.y, right, tone(e, COLORS.fib), 1, [6, 4]);
       ctx.restore();
     });
 
@@ -115,13 +117,16 @@
       box(ctx, Math.round(right * 0.32), e.y - 16, e.label + suffix(e), color, COLORS.entryText, FONT, e.id);
     });
 
-    // Fib tags on the right edge (drawn last so they stay readable).
+    // Fib tags in the margin past the last candle (drawn last so they stay
+    // readable). Anchored to the plot's right edge rather than the fib
+    // line's own end (e.x2, which sits right at the last candle) so the
+    // label sits in the empty margin instead of overlapping candles.
     by("fib_level").forEach(function (e) {
       ctx.save();
       ctx.font = FONT;
       var w = ctx.measureText(e.tag).width + 8;
       ctx.restore();
-      var x = Math.min(right - w - 1, e.x2 - w + 14);
+      var x = right - w - 1;
       box(ctx, x, e.y - 7, e.tag + suffix(e), tone(e, COLORS.fib), "#ffffff");
     });
   }
