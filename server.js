@@ -30651,10 +30651,43 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
             low: null,
             structures: [],
           }))
+        : String(timeframe).toUpperCase() === "W1"
+        // Unlike D1/M1-H1 above, W1 never seeded deterministic period-start
+        // dates - the vision model's own free-form date guess for each
+        // quarter's swing extreme (e.g. "2026-01-31") was used as-is, which
+        // reconcilePeriodMapping then rejected as "not a real quarter start",
+        // nulling out every high/low and leaving the whole chart unverified.
+        ? deterministicPeriodDates.map((date) => {
+            const start = new Date(`${date}T00:00:00Z`);
+            return {
+              periodLabel: `Q${Math.floor(start.getUTCMonth() / 3) + 1} ${start.getUTCFullYear()}`,
+              sourceUnit: "W1",
+              date,
+              high: null,
+              low: null,
+              structures: [],
+            };
+          })
         : [];
       const focusedByDate = new Map(focusedOutputPeriodInventory.map((period) => [String(period?.date || ""), period]));
+      const seedIsQuarterly = String(timeframe).toUpperCase() === "W1";
       const rawFocusedPeriodInventory = seededFrameworkInventory.length
-        ? seededFrameworkInventory.map((seed) => focusedByDate.get(String(seed.date)) || seed)
+        ? seededFrameworkInventory.map((seed, index) => {
+            // D1/M1-H1 seeds line up with an exact model-returned date, so a
+            // direct lookup is enough. The model has no reason to know a W1
+            // quarter's exact calendar start, so instead find whichever of
+            // its estimates falls inside this quarter and re-date it onto
+            // the deterministic quarter start rather than dropping it.
+            if (!seedIsQuarterly) return focusedByDate.get(String(seed.date)) || seed;
+            const nextSeedDate = String(seededFrameworkInventory[index + 1]?.date || "9999-12-31");
+            const bucketed = focusedOutputPeriodInventory.find((period) => {
+              const periodDate = String(period?.date || "");
+              return periodDate >= seed.date && periodDate < nextSeedDate;
+            });
+            return bucketed
+              ? { ...bucketed, date: seed.date, periodLabel: seed.periodLabel, sourceUnit: seed.sourceUnit }
+              : seed;
+          })
         : focusedOutputPeriodInventory.length
         ? focusedOutputPeriodInventory
         : seededFrameworkInventory;
@@ -30813,11 +30846,13 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
         periods: intradayWickCorrectedPeriodInventory,
         references: [],
         tolerance: getCleanBreakTolerance(normalizedSymbol) * 2,
+        timeframe,
       });
       const periodMappingAudit = reconcilePeriodMapping({
         periods: intradayWickCorrectedPeriodInventory,
         references: completedPeriodReferences.periods,
         tolerance: getCleanBreakTolerance(normalizedSymbol) * 2,
+        timeframe,
       });
       const focusedReconciledPeriodInventory = reconcileFinalPeriodWithVisibleCandle({
         timeframe,

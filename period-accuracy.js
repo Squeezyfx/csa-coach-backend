@@ -75,11 +75,17 @@ const positive = (value) => value !== null && value !== undefined && value !== "
   Number.isFinite(Number(value)) && Number(value) > 0;
 
 // Calendar identity is authoritative; never move a price to another month to fit it.
-export function reconcilePeriodMapping({ periods = [], references = [], tolerance = 0 } = {}) {
-  const referenceByDate = new Map(references.map(p => [p.date, p]));
+export function reconcilePeriodMapping({ periods = [], references = [], tolerance = 0, timeframe = "" } = {}) {
+  // References for W1 come from completedPeriodReferences, keyed by the
+  // "2026-Q1" quarter label (see buildCompletedPeriodReferences above);
+  // chart-side periods here are keyed by a real quarter-start date -
+  // normalize both onto the same real-date key so the cross-check below
+  // can actually find a match instead of silently comparing against nothing.
+  const referenceByDate = new Map(references.map(p => [normalizePeriodDateForCompare(p.date), p]));
   const counts = new Map();
   for (const p of periods) counts.set(p.date, (counts.get(p.date) || 0) + 1);
   const rejected = [];
+  const isQuarterly = timeframe === "W1";
   const mapped = periods.map(period => {
     const p = { ...period };
     const date = String(p.date || "");
@@ -89,9 +95,12 @@ export function reconcilePeriodMapping({ periods = [], references = [], toleranc
       rejected.push({date, reason:"invalid_or_duplicate_period_date"});
       return {...p, high:null, low:null, open:null, close:null, structures:[], mappingUnverified:true};
     }
-    const monthly = p.sourceUnit === "MN";
+    const monthly = !isQuarterly && p.sourceUnit === "MN";
     const end = new Date(start);
-    if (monthly) {
+    if (isQuarterly) {
+      end.setUTCMonth(end.getUTCMonth() + 3);
+      p.periodLabel = `Q${Math.floor(start.getUTCMonth() / 3) + 1} ${start.getUTCFullYear()}`;
+    } else if (monthly) {
       end.setUTCMonth(end.getUTCMonth()+1);
       p.periodLabel = start.toLocaleString("en-US", {month:"long",timeZone:"UTC"});
     } else end.setUTCDate(end.getUTCDate()+(p.sourceUnit === "W1" ? 7 : 1));
@@ -99,7 +108,8 @@ export function reconcilePeriodMapping({ periods = [], references = [], toleranc
     const reference = referenceByDate.get(date);
     for (const extreme of ["high","low"]) {
       const evidenceDate = p[`${extreme}Date`];
-      const wrongDate = monthly && start.getUTCDate() !== 1 || evidenceDate && (!/^\d{4}-\d{2}-\d{2}$/.test(evidenceDate) || evidenceDate < date || evidenceDate >= next);
+      const wrongStart = isQuarterly ? (start.getUTCDate() !== 1 || start.getUTCMonth() % 3 !== 0) : monthly && start.getUTCDate() !== 1;
+      const wrongDate = wrongStart || evidenceDate && (!/^\d{4}-\d{2}-\d{2}$/.test(evidenceDate) || evidenceDate < date || evidenceDate >= next);
       const disagrees = reference && positive(reference[extreme]) && positive(p[extreme]) && Math.abs(Number(reference[extreme])-Number(p[extreme])) > Math.max(0,Number(tolerance)||0);
       if (wrongDate || disagrees) {
         rejected.push({date, extreme, chartEstimate:p[extreme], providerReference:reference?.[extreme] ?? null,
