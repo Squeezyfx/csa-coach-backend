@@ -118,11 +118,21 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
   const lagHours = Number.isFinite(lastCandleMs) && Number.isFinite(cutoffMs)
     ? (cutoffMs - lastCandleMs) / 3600000
     : null;
-  const intradaySessionLag = timeframe !== "D1" &&
+  const intradaySessionLag = !["D1", "W1"].includes(timeframe) &&
     lagHours !== null && lagHours >= 0 && lagHours <= 54;
-  if (providerDate !== cutoffDate && !weekendSessionLag && !weekdaySessionLag && !intradaySessionLag) {
+  // W1's own candle-alignment convention gap, not a data failure: MT4
+  // labels a weekly candle by its Sunday session-open, while the fetched
+  // provider history is aligned to Monday (weeklyAlignment in
+  // oanda-data.js, matched to chart-period-map.js's own brokerOffsetMinutes
+  // fix for the same gap) - confirmed on a real GBPJPY W1 chart, a 6-day
+  // lag purely from that one-week-grid offset, not a stale or wrong chart.
+  // Bounded to 7 days so a genuinely wrong/stale chart (off by weeks or
+  // years) still hard-fails.
+  const weeklySessionLag = timeframe === "W1" &&
+    lagDays !== null && lagDays >= 0 && lagDays <= 7;
+  if (providerDate !== cutoffDate && !weekendSessionLag && !weekdaySessionLag && !intradaySessionLag && !weeklySessionLag) {
     return result("mismatch", "Provider history does not reach the chart date", {
-      providerCoverage: { lastProviderCandleDate: providerDate, requestedCutoffDate: cutoffDate, lagDays, weekendSessionLag, weekdaySessionLag, intradaySessionLag },
+      providerCoverage: { lastProviderCandleDate: providerDate, requestedCutoffDate: cutoffDate, lagDays, weekendSessionLag, weekdaySessionLag, intradaySessionLag, weeklySessionLag },
     });
   }
   const forexLimit = forexComparisonTolerance(symbol);
