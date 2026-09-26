@@ -153,6 +153,19 @@ function shiftAnchorYears(anchors,delta){
 function resolveAxisTimestampWithYearCorrection(params){
  const direct=resolveAxisTimestamp(params);
  if(direct)return direct;
+ // Weekly candles are always exactly 7 days apart, so advancing whole
+ // candle-steps preserves weekday identically no matter which year is
+ // assumed - unlike daily/intraday data, where a year change genuinely
+ // does move which calendar dates land on a weekend, this gap math has NO
+ // real signal to tell a correct year from a wrong one for W1: it only
+ // reports whether the pixel-implied candle count happens to add up
+ // exactly, which can and does happen for an arbitrary wrong year too.
+ // Confirmed on a real GBPJPY W1 chart: shifting by -4 years "validated"
+ // with the same high-confidence evidence tier, landing on a year with no
+ // actual relationship to the chart - the real year was 4 later. Trusting
+ // this shift for W1 turns a silent no-op into a confident wrong answer,
+ // so a direct-validation failure is left as a genuine failure instead.
+ if(params?.timeframe==='W1')return null;
  for(let d=1;d<=12;d++){
   for(const delta of [-d,d]){
    const attempt=resolveAxisTimestamp({...params,anchors:shiftAnchorYears(params.anchors,delta)});
