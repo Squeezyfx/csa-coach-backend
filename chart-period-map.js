@@ -23,17 +23,20 @@ import { calendarMapping, normalizeFrameworkTimeframe } from "./framework-calend
 // reach the normal path.
 const SUPPORTED = new Set(["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"]);
 const CANDLE_MINUTES = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440, W1: 10080, MN: 43200 };
-const iso = (value) => String(value || "").replace("T", " ").slice(0, 19);
+// Twelve Data's daily-and-longer candles (confirmed on XAUUSD W1) come back
+// as a bare "YYYY-MM-DD", not "YYYY-MM-DD HH:MM:SS" - OANDA always includes
+// a time component, which is why this only ever surfaced on a
+// Twelve-Data-primary symbol. Normalized here, at the single shared string
+// form every candle/anchor timestamp in this file passes through, so the
+// candle-index lookup map (byTimestamp, keyed by this exact string) and an
+// axis anchor's own full timestamp always land in the same format instead
+// of a bare-date candle key silently never matching a "... 00:00:00" anchor.
+const iso = (value) => {
+  const text = String(value || "").replace("T", " ").slice(0, 19);
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? `${text} 00:00:00` : text;
+};
 const instant = (value) => {
-  let text = iso(value);
-  // Twelve Data's daily-and-longer candles (confirmed on XAUUSD W1) come
-  // back as a bare "YYYY-MM-DD", not "YYYY-MM-DD HH:MM:SS" - OANDA always
-  // includes a time component, which is why this only ever surfaced on a
-  // Twelve-Data-primary symbol. Without this, every candle silently failed
-  // the shape check below and buildChartPeriodMap saw providerCandleCount:
-  // 0 despite a non-empty candles array, so no anchor could ever match and
-  // no period boundary/tick could be positioned.
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) text = `${text} 00:00:00`;
+  const text = iso(value);
   if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text)) return NaN;
   return Date.parse(`${text.replace(" ", "T")}Z`);
 };
