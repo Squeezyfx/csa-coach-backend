@@ -3749,6 +3749,17 @@ async function fetchTwelveDataStructureLevels({
     // finite, so whichever of those is actually malformed has to be seen
     // directly. A small sample rather than the full 54 to keep this light.
     executionFrameworkRawCandlesSample: executionFrameworkRawCandles.slice(0, 5),
+    // XAUUSD W1: the chart's final visible candle's O/H/L matched the
+    // provider's exactly, but its close didn't (a ~2% gap), and got the
+    // lenient "candle completion unknown" treatment rather than a hard
+    // mismatch. The first-5 sample above never reaches this candle - it's
+    // the LAST rows of the raw provider response that matter here, to see
+    // its exact returned fields (Twelve Data has no explicit
+    // complete/closed flag the way OANDA does) and whether a later,
+    // already-in-progress row is present that a request timezone/end_date
+    // off-by-one might be blending into this one.
+    executionFrameworkRawCandlesLastSample: executionFrameworkRawCandles.slice(-5),
+    requestedEndDateTime: endDateTime,
     timeframeCandlesCount: timeframeCandles.length,
     structureMode: profile?.structureMode || null,
     // GBPCAD D1: the native monthly candle buildStructureLevelsFromCandles
