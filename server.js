@@ -30779,17 +30779,34 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
               structures: [],
             };
           })
+        : String(timeframe).toUpperCase() === "H4"
+        // Same class of gap as W1 above, just never hit in testing so far:
+        // H4's periods are weeks, and deterministicPeriodDates already gives
+        // their real Monday start dates (calendarMapping's own "week inside
+        // this month" logic - the same one chart-period-map.js's monday()
+        // helper agrees with), but nothing seeded them, so a chart-mismatch
+        // fallback would have relied entirely on the vision model's own date
+        // guess for each week with no calendar-verified floor underneath it.
+        ? deterministicPeriodDates.map((date) => ({
+            periodLabel: `Week of ${date}`,
+            sourceUnit: "W1",
+            date,
+            high: null,
+            low: null,
+            structures: [],
+          }))
         : [];
       const focusedByDate = new Map(focusedOutputPeriodInventory.map((period) => [String(period?.date || ""), period]));
-      const seedIsQuarterly = String(timeframe).toUpperCase() === "W1";
+      // W1's quarters and H4's weeks both need range-bucketing rather than an
+      // exact date match: the model has no way to know a quarter's or week's
+      // precise calendar start, so whichever of its estimates falls inside
+      // this period's own window gets re-dated onto the deterministic start.
+      const seedNeedsRangeBucketing = ["W1", "H4"].includes(String(timeframe).toUpperCase());
       const rawFocusedPeriodInventory = seededFrameworkInventory.length
         ? seededFrameworkInventory.map((seed, index) => {
             // D1/M1-H1 seeds line up with an exact model-returned date, so a
-            // direct lookup is enough. The model has no reason to know a W1
-            // quarter's exact calendar start, so instead find whichever of
-            // its estimates falls inside this quarter and re-date it onto
-            // the deterministic quarter start rather than dropping it.
-            if (!seedIsQuarterly) return focusedByDate.get(String(seed.date)) || seed;
+            // direct lookup is enough.
+            if (!seedNeedsRangeBucketing) return focusedByDate.get(String(seed.date)) || seed;
             const nextSeedDate = String(seededFrameworkInventory[index + 1]?.date || "9999-12-31");
             const bucketed = focusedOutputPeriodInventory.find((period) => {
               const periodDate = String(period?.date || "");
