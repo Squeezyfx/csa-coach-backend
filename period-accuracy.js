@@ -140,7 +140,7 @@ function quarterKeyStart(value) {
 // real "YYYY-MM-DD" period dates and W1's "YYYY-Qn" quarter labels - turns a
 // quarter label into its start date so ordering/cutoff/candle-ownership
 // comparisons work the same way regardless of which format came in.
-function normalizePeriodDateForCompare(value) {
+export function normalizePeriodDateForCompare(value) {
   const raw = String(value || "").slice(0, 10);
   const m = QUARTER_KEY_RE.exec(raw);
   if (!m) return raw;

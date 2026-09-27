@@ -8,7 +8,7 @@ import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
 import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData, isCryptoSymbol } from "./market-data-matching.js";
-import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences, reconcilePeriodMapping, buildNoEntryTransparencyAudit } from "./period-accuracy.js";
+import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences, reconcilePeriodMapping, buildNoEntryTransparencyAudit, normalizePeriodDateForCompare } from "./period-accuracy.js";
 import cors from "cors";
 import multer from "multer";
 import OpenAI from "openai";
@@ -20745,7 +20745,11 @@ function buildPeriodInventoryStructuralCandidates({
 
   const rejectedPeriodCandidates = [];
   const referenceExtremes = (Array.isArray(referencePeriods) ? referencePeriods : [])
-    .map((ref) => ({ high: asPositiveNumber(ref?.high), low: asPositiveNumber(ref?.low) }))
+    .map((ref) => ({
+      high: asPositiveNumber(ref?.high),
+      low: asPositiveNumber(ref?.low),
+      date: normalizePeriodDateForCompare(ref?.date ?? ref?.key ?? ""),
+    }))
     .filter((ref) => ref.high !== null && ref.low !== null);
   const filteredPeriodCandidates = periodCandidates.filter((candidate) => {
     const { _sourcePeriodIndex, ...rest } = candidate;
@@ -20764,7 +20768,18 @@ function buildPeriodInventoryStructuralCandidates({
     if (rest.price === null || !ownPeriod) return true;
     const tol = Math.abs(rest.price) * 0.00002;
     const ownOtherExtreme = rest.sourceExtreme === "high" ? ownPeriod.low : ownPeriod.high;
+    const ownDate = normalizePeriodDateForCompare(ownPeriod?.date ?? "");
     const collides = referenceExtremes.some((ref) => {
+      // A reference entry describing THIS SAME period (e.g. Q1's own raw,
+      // pre-integrity-check provider row) disagreeing on the other extreme
+      // just means two different estimates of the same period's high/low
+      // disagree - that's the reason the provider row failed its own
+      // integrity check in the first place, not evidence this candidate
+      // belongs to a different period. Only a reference for a DIFFERENT
+      // period counts as a collision (first surfaced as a false positive on
+      // EURCHF W1's own Q1 low, 0.89801, wrongly rejected against Q1's own
+      // rejected provider high, 0.92169).
+      if (ref.date && ownDate && ref.date === ownDate) return false;
       const matchesThisExtreme = Math.abs((rest.sourceExtreme === "high" ? ref.high : ref.low) - rest.price) <= tol;
       if (!matchesThisExtreme) return false;
       const refOtherExtreme = rest.sourceExtreme === "high" ? ref.low : ref.high;
