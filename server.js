@@ -2093,7 +2093,7 @@ function getStructureRangeForProfile(chartDate, profile, analysisType = "post-tr
   return getWeekRangeForDate(chartDate, useFull, profile.tradesOnWeekends === true);
 }
 
-function getPeriodKeyAndLabel(date, profile) {
+function getPeriodKeyAndLabel(date, profile, anchorDate = null) {
   const year = date.getUTCFullYear(), month = date.getUTCMonth();
   if (profile.structureMode === "daily-in-week") { const dateOnly = formatDateOnly(date); return { key: dateOnly, label: weekdayNameFromDate(dateOnly), date: dateOnly }; }
   if (profile.structureMode === "weekly-in-month") {
@@ -2109,21 +2109,6 @@ function getPeriodKeyAndLabel(date, profile) {
       if (weekday === 0) tradingDate.setUTCDate(tradingDate.getUTCDate() + 1);
       if (weekday === 6) tradingDate.setUTCDate(tradingDate.getUTCDate() + 2);
     }
-    const tradingYear = tradingDate.getUTCFullYear();
-    const tradingMonth = tradingDate.getUTCMonth();
-    const mondayWeeks = [];
-    const seen = new Set();
-    for (let day = 1; day <= tradingDate.getUTCDate(); day += 1) {
-      const cursor = new Date(Date.UTC(tradingYear, tradingMonth, day));
-      const cursorWeekday = cursor.getUTCDay();
-      if (cursorWeekday === 0 || cursorWeekday === 6) continue;
-      const monday = addDays(cursor, 1 - cursorWeekday);
-      const mondayKey = formatDateOnly(monday);
-      if (!seen.has(mondayKey)) {
-        seen.add(mondayKey);
-        mondayWeeks.push(mondayKey);
-      }
-    }
     // 1 - weekday only lands on the correct Monday for weekday 1-6; for
     // Sunday (0) it would add a day forward instead of subtracting six. That
     // was never reachable before crypto could skip the shift above (every
@@ -2132,9 +2117,29 @@ function getPeriodKeyAndLabel(date, profile) {
     const daysToMonday = tradingDate.getUTCDay() === 0 ? -6 : 1 - tradingDate.getUTCDay();
     const targetMonday = addDays(tradingDate, daysToMonday);
     const targetMondayKey = formatDateOnly(targetMonday);
-    const weekNumber = Math.max(1, mondayWeeks.indexOf(targetMondayKey) + 1);
+    // The framework month a date's week counts toward is normally the
+    // date's own month, but the opening week's Monday can fall in the
+    // PREVIOUS month whenever this month doesn't open on a Monday itself
+    // (September 2026 opens on a Tuesday, so its own W1 begins Monday
+    // Aug 31). This used to re-derive "which month" from the date being
+    // labeled via a day-by-day scan of that date's own month, so Aug 31 -
+    // grouped alongside August's own four Mondays - came out as "August's
+    // Week 5" instead of "September's Week 1", splitting that opening
+    // week's Monday into its own orphaned bucket nothing else joined
+    // (confirmed on USDCHF/ZARJPY H4: that week's real high/low was
+    // understated because Monday's candles never got counted with the rest
+    // of the week). anchorDate (the review's own cutoff, when the caller
+    // has one) fixes which month's numbering to use regardless of which
+    // month the date being labeled falls in; callers without one keep the
+    // old date-derived behavior.
+    const anchor = anchorDate instanceof Date && !Number.isNaN(anchorDate.getTime()) ? anchorDate : tradingDate;
+    const frameworkYear = anchor.getUTCFullYear();
+    const frameworkMonth = anchor.getUTCMonth();
+    const monthFirstMonday = new Date(Date.UTC(frameworkYear, frameworkMonth, 1));
+    monthFirstMonday.setUTCDate(monthFirstMonday.getUTCDate() - ((monthFirstMonday.getUTCDay() + 6) % 7));
+    const weekNumber = Math.max(1, Math.round((targetMonday - monthFirstMonday) / (7 * 24 * 60 * 60 * 1000)) + 1);
     return {
-      key: `${tradingYear}-${String(tradingMonth + 1).padStart(2, "0")}-W${weekNumber}`,
+      key: `${frameworkYear}-${String(frameworkMonth + 1).padStart(2, "0")}-W${weekNumber}`,
       label: `Week ${weekNumber}`,
       date: targetMondayKey,
     };
@@ -2412,7 +2417,7 @@ function buildStructureLevelsFromCandles(
     if (candlesAreDayGranular && profile.tradesOnWeekends !== true) { const dayNum = date.getUTCDay(); if (dayNum < 1 || dayNum > 5) return; if (isUniversalMarketHoliday(dateOnly)) return; }
     const open = safeNumber(bar.open), high = safeNumber(bar.high), low = safeNumber(bar.low), close = safeNumber(bar.close);
     if ([open, high, low, close].some((v) => v === null)) return;
-    const period = getPeriodKeyAndLabel(date, profile);
+    const period = getPeriodKeyAndLabel(date, profile, new Date(`${structureRange.endDate}T00:00:00.000Z`));
     if (!grouped.has(period.key)) {
       grouped.set(period.key, { key: period.key, date: period.date, day: period.label, periodLabel: period.label, open, high, low, close, candleCount: 1 });
     } else {
@@ -3696,10 +3701,12 @@ async function fetchTwelveDataStructureLevels({
     );
 
   const cutoffDateOnly = candleDateOnly(endDateTime);
+  const cutoffAnchorDate = cutoffDateOnly ? new Date(`${cutoffDateOnly}T00:00:00.000Z`) : null;
   const currentFrameworkPeriod = cutoffDateOnly
     ? getPeriodKeyAndLabel(
-        new Date(`${cutoffDateOnly}T00:00:00.000Z`),
-        profile
+        cutoffAnchorDate,
+        profile,
+        cutoffAnchorDate
       )
     : null;
   const currentFrameworkPeriodComplete =
@@ -3727,14 +3734,14 @@ async function fetchTwelveDataStructureLevels({
           if (!dateOnly || !currentFrameworkPeriod?.key) return true;
           const date = new Date(`${dateOnly}T00:00:00.000Z`);
           if (Number.isNaN(date.getTime())) return true;
-          return getPeriodKeyAndLabel(date, profile).key !== currentFrameworkPeriod.key;
+          return getPeriodKeyAndLabel(date, profile, cutoffAnchorDate).key !== currentFrameworkPeriod.key;
         }),
         ...executionFrameworkRawCandles.filter((bar) => {
           const dateOnly = candleDateOnly(bar?.datetime);
           if (!dateOnly || !currentFrameworkPeriod?.key) return false;
           const date = new Date(`${dateOnly}T00:00:00.000Z`);
           if (Number.isNaN(date.getTime())) return false;
-          return getPeriodKeyAndLabel(date, profile).key === currentFrameworkPeriod.key;
+          return getPeriodKeyAndLabel(date, profile, cutoffAnchorDate).key === currentFrameworkPeriod.key;
         }),
       ];
 
@@ -17038,7 +17045,10 @@ function getCandlesAfterFrameworkPeriod({
     const date = new Date(`${dateOnly}T00:00:00.000Z`);
     if (Number.isNaN(date.getTime())) return false;
 
-    const period = getPeriodKeyAndLabel(date, profile);
+    const cutoffAnchorDate = marketReference?.chartCutoff?.resolvedDate
+      ? new Date(`${marketReference.chartCutoff.resolvedDate}T00:00:00.000Z`)
+      : null;
+    const period = getPeriodKeyAndLabel(date, profile, cutoffAnchorDate);
     const candlePeriodIndex = indexByPeriodKey.get(
       String(period?.key || "")
     );
