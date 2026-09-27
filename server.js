@@ -20644,6 +20644,7 @@ function buildPeriodInventoryStructuralCandidates({
   symbol = "",
   timeframe = "H1",
   inventoryProvenanceVerified = true,
+  referencePeriods = [],
 } = {}) {
   const normalizedPeriods = (Array.isArray(periodInventory) ? periodInventory : [])
     .map((period, index) => ({
@@ -20738,8 +20739,49 @@ function buildPeriodInventoryStructuralCandidates({
       priceSource: inventoryProvenanceVerified
         ? "deterministic_period_high_low_inventory"
         : "unverified_chart_estimated_period_inventory",
+      _sourcePeriodIndex: periodIndex,
     };
   });
+
+  const rejectedPeriodCandidates = [];
+  const referenceExtremes = (Array.isArray(referencePeriods) ? referencePeriods : [])
+    .map((ref) => ({ high: asPositiveNumber(ref?.high), low: asPositiveNumber(ref?.low) }))
+    .filter((ref) => ref.high !== null && ref.low !== null);
+  const filteredPeriodCandidates = periodCandidates.filter((candidate) => {
+    const { _sourcePeriodIndex, ...rest } = candidate;
+    const ownPeriod = _sourcePeriodIndex >= 0 ? periods[_sourcePeriodIndex] : null;
+    // A period's estimated extreme is only trustworthy as ITS OWN if nothing
+    // else independently proves it actually belongs to a different period.
+    // Two different periods legitimately sharing one extreme by coincidence
+    // would also share the OTHER extreme (they'd just be duplicate rows);
+    // seeing the SAME price claimed for one period's high while a different,
+    // independently-referenced period's own (high, low) pair disagrees on
+    // the paired value is the signature of a mislabeled/misattributed
+    // estimate, not a genuine coincidence (confirmed on EURCHF W1: the
+    // fallback chart-estimate for "Q1 2026 high" was 0.9266, exactly Q2's
+    // own independently verified high, while Q1's own low, 0.89801, does not
+    // match Q2's low of 0.9096 at all).
+    if (rest.price === null || !ownPeriod) return true;
+    const tol = Math.abs(rest.price) * 0.00002;
+    const ownOtherExtreme = rest.sourceExtreme === "high" ? ownPeriod.low : ownPeriod.high;
+    const collides = referenceExtremes.some((ref) => {
+      const matchesThisExtreme = Math.abs((rest.sourceExtreme === "high" ? ref.high : ref.low) - rest.price) <= tol;
+      if (!matchesThisExtreme) return false;
+      const refOtherExtreme = rest.sourceExtreme === "high" ? ref.low : ref.high;
+      return Number.isFinite(ownOtherExtreme) && Math.abs(ownOtherExtreme - refOtherExtreme) > tol;
+    });
+    if (collides) {
+      rejectedPeriodCandidates.push({
+        ...rest,
+        provenanceVerified: false,
+        requiresReview: true,
+        rejectionReason:
+          "this price exactly matches a different, independently referenced period's own high/low, while this period's other extreme does not - likely a misattributed period-boundary estimate",
+      });
+      return false;
+    }
+    return true;
+  }).map(({ _sourcePeriodIndex, ...rest }) => rest);
 
   const independentlyReadPrices = (Array.isArray(visualReview?.visibleMarkedLevels)
     ? visualReview.visibleMarkedLevels
@@ -20815,7 +20857,7 @@ function buildPeriodInventoryStructuralCandidates({
   }));
 
   const seen = new Set();
-  const candidates = [...periodCandidates, ...admittedVisualCandidates]
+  const candidates = [...filteredPeriodCandidates, ...admittedVisualCandidates]
     .filter((candidate) => candidate?.price !== null)
     .filter((candidate) => {
       const key = `${String(candidate.areaType)}:${Number(candidate.price)}`;
@@ -20824,7 +20866,12 @@ function buildPeriodInventoryStructuralCandidates({
       return true;
     });
 
-  return { candidates, rejectedVisualCandidates, periods, inProgressPeriods };
+  return {
+    candidates,
+    rejectedVisualCandidates: [...rejectedVisualCandidates, ...rejectedPeriodCandidates],
+    periods,
+    inProgressPeriods,
+  };
 }
 
 function rankChartNativeFallbackAreas({
@@ -20925,6 +20972,11 @@ function rankChartNativeFallbackAreas({
     symbol,
     timeframe: frameTimeframe,
     inventoryProvenanceVerified: !chartOnlyInventoryUnverified,
+    // Independent, provider-sourced per-period high/low (unaudited, but from
+    // real candle data rather than a vision estimate) - used only to catch a
+    // chart-estimated period claiming a price that actually belongs to a
+    // DIFFERENT period (see the cross-period-collision check above).
+    referencePeriods: Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [],
   });
   if (inventoryAuthority === "provider_reference_provisional") {
     for (const candidate of authoritativeInventory.candidates) {
