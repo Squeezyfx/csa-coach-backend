@@ -20645,15 +20645,33 @@ function buildPeriodInventoryStructuralCandidates({
   timeframe = "H1",
   inventoryProvenanceVerified = true,
   referencePeriods = [],
+  verifiedReferencePeriods = [],
 } = {}) {
+  // Independently verified per-period high/low (passed its own integrity
+  // audit - see completedPeriodReferences) is strictly more trustworthy than
+  // this same period's own chart-vision estimate. Preferring it here, not
+  // just using it to catch a misattributed OTHER period's estimate below,
+  // is what lets a genuinely qualifying level (EURCHF W1's Q2 high, verified
+  // at 0.9266, sitting at the 38.2% Fib retracement) actually surface as an
+  // entry under its correct period instead of either using the less
+  // accurate 0.93486 vision guess or being silently unavailable.
+  const verifiedByDate = new Map(
+    (Array.isArray(verifiedReferencePeriods) ? verifiedReferencePeriods : [])
+      .map((ref) => [normalizePeriodDateForCompare(ref?.date ?? ref?.key ?? ""), ref])
+      .filter(([date, ref]) => date && asPositiveNumber(ref?.high) !== null && asPositiveNumber(ref?.low) !== null)
+  );
   const normalizedPeriods = (Array.isArray(periodInventory) ? periodInventory : [])
-    .map((period, index) => ({
-      ...period,
-      periodLabel: period?.periodLabel || `Period ${index + 1}`,
-      day: period?.periodLabel || `Period ${index + 1}`,
-      high: asPositiveNumber(period?.high),
-      low: asPositiveNumber(period?.low),
-    }))
+    .map((period, index) => {
+      const verified = verifiedByDate.get(normalizePeriodDateForCompare(period?.date ?? ""));
+      return {
+        ...period,
+        periodLabel: period?.periodLabel || `Period ${index + 1}`,
+        day: period?.periodLabel || `Period ${index + 1}`,
+        high: verified ? asPositiveNumber(verified.high) : asPositiveNumber(period?.high),
+        low: verified ? asPositiveNumber(verified.low) : asPositiveNumber(period?.low),
+        verifiedAgainstProvider: Boolean(verified),
+      };
+    })
     .filter((period) =>
       period.high !== null && period.low !== null && period.high >= period.low
     );
@@ -20714,6 +20732,11 @@ function buildPeriodInventoryStructuralCandidates({
       : /low/.test(String(area?.hierarchyClassification || ""))
       ? "low"
       : null;
+    // This specific period's own high/low may be independently provider-
+    // verified even when the overall inventory (other periods) is not -
+    // EURCHF W1's Q2 is the confirmed case. Trust that per-period signal
+    // over the blanket inventoryProvenanceVerified flag.
+    const periodVerified = inventoryProvenanceVerified || periods[periodIndex]?.verifiedAgainstProvider === true;
 
     return {
       price,
@@ -20723,10 +20746,10 @@ function buildPeriodInventoryStructuralCandidates({
       originalType,
       exactVisiblePrice: false,
       conversionBreakConfirmed: bearishSupportBroken || bullishResistanceBroken,
-      structuralEvidence: inventoryProvenanceVerified
+      structuralEvidence: periodVerified
         ? `${periodLabel} ${extreme || "extreme"} from deterministic higher-timeframe candle inventory`
         : `${periodLabel} ${extreme || "extreme"} from unverified chart-estimated candle inventory`,
-      independentEntryEvidence: inventoryProvenanceVerified,
+      independentEntryEvidence: periodVerified,
       reclaimRequired: false,
       sourceDate: area?.date || periods[periodIndex]?.date || null,
       sourceDay: periodLabel,
@@ -20734,9 +20757,9 @@ function buildPeriodInventoryStructuralCandidates({
       sourcePeriod: periodLabel,
       sourceExtreme: extreme,
       hierarchyClassification: area?.hierarchyClassification || null,
-      authoritativeFrameworkLevel: inventoryProvenanceVerified,
-      provenanceVerified: inventoryProvenanceVerified,
-      priceSource: inventoryProvenanceVerified
+      authoritativeFrameworkLevel: periodVerified,
+      provenanceVerified: periodVerified,
+      priceSource: periodVerified
         ? "deterministic_period_high_low_inventory"
         : "unverified_chart_estimated_period_inventory",
       _sourcePeriodIndex: periodIndex,
@@ -20992,6 +21015,16 @@ function rankChartNativeFallbackAreas({
     // chart-estimated period claiming a price that actually belongs to a
     // DIFFERENT period (see the cross-period-collision check above).
     referencePeriods: Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [],
+    // The AUDITED subset (passed its own integrity check - see
+    // completedPeriodReferences/auditPeriodInventory) - trustworthy enough to
+    // actually REPLACE a period's own vision-estimated high/low, not just
+    // flag a collision. dailyLevels above is deliberately not used for this:
+    // it still contains a period's raw pre-audit row even after that row
+    // failed integrity (Q1 in the EURCHF case), which would just substitute
+    // one untrustworthy number for another.
+    verifiedReferencePeriods: Array.isArray(fallback?.completedPeriodReferences?.periods)
+      ? fallback.completedPeriodReferences.periods
+      : [],
   });
   if (inventoryAuthority === "provider_reference_provisional") {
     for (const candidate of authoritativeInventory.candidates) {
