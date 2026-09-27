@@ -3782,6 +3782,19 @@ async function fetchTwelveDataStructureLevels({
     // already-in-progress row is present that a request timezone/end_date
     // off-by-one might be blending into this one.
     executionFrameworkRawCandlesLastSample: executionFrameworkRawCandles.slice(-5),
+    // ZARJPY H4 (2026-09-11) and USDSGD H4 (2026-09-21/23): user-reported
+    // period high/low values disagree with what the system computed, both
+    // pointing at the day's 20:00 candle specifically. H4's own framework
+    // range is small enough (~120-150 candles) to dump in full - trimmed to
+    // just the OHLC fields - rather than guess at a timezone/broker-offset
+    // theory from a 5-row sample that doesn't even cover these dates.
+    executionFrameworkRawCandlesFull: executionFrameworkRawCandles.map((c) => ({
+      datetime: c?.datetime ?? null,
+      open: c?.open ?? null,
+      high: c?.high ?? null,
+      low: c?.low ?? null,
+      close: c?.close ?? null,
+    })),
     requestedEndDateTime: endDateTime,
     timeframeCandlesCount: timeframeCandles.length,
     structureMode: profile?.structureMode || null,
