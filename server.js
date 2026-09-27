@@ -17478,9 +17478,19 @@ function buildFinalVisibleIndependentSupplyDemandCandidates({
     String(usable[usable.length - 1]?.datetime || "").slice(0, 10) ||
     "final visible period";
   const candidates = [];
+  // The pivot candle's own high/low becomes the entry price - it must come
+  // from a day that has already closed. Today (the cutoff's own date) is
+  // still in progress: its recorded high/low can still change before the
+  // day ends, the same reasoning that applies to any other timeframe's
+  // still-open period (see buildPeriodInventoryStructuralCandidates). Later
+  // candles from today are still fine to use for CONFIRMING an already-
+  // closed prior day's level held - only the pivot's own source day matters
+  // here, not every candle in the window.
+  const cutoffDate = String(marketReference?.chartCutoff?.resolvedDate || "").slice(0, 10);
 
   for (let index = 2; index < usable.length - 3; index += 1) {
     const candle = usable[index];
+    if (cutoffDate && String(candle.datetime || "").slice(0, 10) >= cutoffDate) continue;
     const previous = usable[index - 1];
     const next = usable[index + 1];
     const open = Number(candle.open);
@@ -17656,6 +17666,21 @@ function buildHistoricalTakeoverIntradayCandidateFromMainPipeline({
       ...logBase,
       result: "no_candidate",
       reason: "missing_resolved_cutoff_date",
+    });
+    return null;
+  }
+  // "selected_day"/"exact" mode reviews a specific calendar day, but that day
+  // is only guaranteed closed if it is strictly before today in the real
+  // world - a review anchored to today itself is still an in-progress day,
+  // and this function's entire search (the break and the base before it)
+  // happens inside dayCandles. Using today's own not-yet-final high/low as
+  // an entry source is exactly what must never happen, regardless of how
+  // many "confirming" candles from later today follow it.
+  if (resolvedDate >= new Date().toISOString().slice(0, 10)) {
+    console.log("CSA HISTORICAL TAKEOVER INTRADAY PIPELINE SCAN:", {
+      ...logBase,
+      result: "not_applicable",
+      reason: "resolved_date_not_yet_closed",
     });
     return null;
   }
