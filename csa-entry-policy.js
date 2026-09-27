@@ -1016,6 +1016,18 @@ export function aggregateH4CandlesIntoWeeklyInventory({
 
   const cutoffYear = cutoff.getUTCFullYear();
   const cutoffMonth = cutoff.getUTCMonth();
+  // The framework's opening week ("W1") can start on a Monday in the
+  // PREVIOUS month whenever this month doesn't open on a Monday itself
+  // (e.g. September 2026 opens on a Tuesday, so its own W1 begins Monday
+  // Aug 31) - same root cause already fixed in server.js's
+  // getStructureRangeForProfile/getPeriodKeyAndLabel. This function's own
+  // separate "candle's month/year must equal the cutoff's" filter had the
+  // same gap: Aug 31's own candle was excluded outright (not just
+  // mislabeled), understating W1's real high/low. Bounding by the opening
+  // Monday's actual date instead - not by whether the candle's OWN month
+  // matches - includes that opening week's earlier days correctly.
+  const openingMonday = new Date(Date.UTC(cutoffYear, cutoffMonth, 1));
+  openingMonday.setUTCDate(openingMonday.getUTCDate() - ((openingMonday.getUTCDay() + 6) % 7));
   const grouped = new Map();
 
   for (const candle of Array.isArray(candles) ? candles : []) {
@@ -1029,8 +1041,7 @@ export function aggregateH4CandlesIntoWeeklyInventory({
     if (
       Number.isNaN(candleDate.getTime()) ||
       candleDate > cutoff ||
-      candleDate.getUTCFullYear() !== cutoffYear ||
-      candleDate.getUTCMonth() !== cutoffMonth ||
+      candleDate < openingMonday ||
       !Number.isFinite(high) ||
       !Number.isFinite(low) ||
       high <= low
