@@ -2071,7 +2071,23 @@ function getStructureRangeForProfile(chartDate, profile, analysisType = "post-tr
   // Example: if the selected date is Tuesday, the review must not use Wednesday-Friday data.
   const useFull = false;
   if (profile.structureMode === "daily-in-week") return getWeekRangeForDate(chartDate, useFull, profile.tradesOnWeekends === true);
-  if (profile.structureMode === "weekly-in-month") return getMonthRangeForDate(chartDate, useFull);
+  if (profile.structureMode === "weekly-in-month") {
+    // H4's first framework week ("W1") is keyed by getPeriodKeyAndLabel to
+    // the Monday on/before the month's 1st, which can fall in the PREVIOUS
+    // month (September 2026 opens on a Tuesday, so W1 legitimately starts
+    // Monday Aug 31). getMonthRangeForDate's start is the literal 1st of
+    // the month - fetching/filtering candles from there silently drops that
+    // opening week's Monday (and any other pre-month days of that week)
+    // from the series entirely, not just mislabels them. Confirmed on
+    // ZARJPY H4: W1's mapped start landed on Tuesday Sep 1 at candleIndex 0
+    // - Monday Aug 31 was never in the fetched candles to begin with, which
+    // then also fed a wrong (missing-a-day) high/low for that week and put
+    // the drawn boundary line a day late.
+    const monthRange = getMonthRangeForDate(chartDate, useFull);
+    const openingMonday = new Date(monthRange.start);
+    openingMonday.setUTCDate(openingMonday.getUTCDate() - ((monthRange.start.getUTCDay() + 6) % 7));
+    return { ...monthRange, start: openingMonday, startDate: formatDateOnly(openingMonday) };
+  }
   if (["monthly-in-year", "quarterly-in-year"].includes(profile.structureMode)) return getYearRangeForDate(chartDate, useFull);
   if (profile.structureMode === "yearly-in-multi-year") return getMultiYearRangeForDate(chartDate, 4, useFull);
   return getWeekRangeForDate(chartDate, useFull, profile.tradesOnWeekends === true);
