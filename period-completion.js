@@ -15,18 +15,23 @@
  *    is that day's last candle.
  *
  * Last trading day: a period ending on Saturday/Sunday ends on the Friday
- * before (FX, metals, indices). On that Friday, every timeframe uses the
- * SAME real-world close threshold (22:00 UTC, a conservative estimate
- * covering DST variation) rather than each interval's own theoretical
- * last-candle-start time - a too-late theoretical time (M1-H1's 23:00) is
- * capped down to it, and a too-early one (H4's 20:00, which is merely when
- * that day's final candle OPENS, not when the market stops trading) is
- * raised up to it. See FRIDAY_CLOSE_THRESHOLD below.
+ * before (FX, metals, indices). Friday's last intraday candle can start as
+ * early as 20:00 UTC (FX close at 21:00 UTC in northern summer), so on
+ * Fridays that is the threshold.
  *
  * Known trade-off: a 24/7 instrument (crypto) whose chart ends Friday between
  * 20:00 and 22:59 UTC is treated as complete for that day. Every other case is
  * conservative: treating a complete period as live only reconstructs it from
  * execution candles up to the cutoff, which cannot leak future data.
+ *
+ * A same-day, briefly-tried "raise Friday's threshold to a fixed 22:00 for
+ * every timeframe" change was reverted: an interval's day-final candle
+ * start time is a structural ceiling that reporting can never exceed (H4's
+ * is always exactly 20:00, whatever real time the screenshot was actually
+ * taken), so requiring the DETECTED time to reach 22:00 made H4 Friday
+ * completion permanently unsatisfiable - worse than the asymmetry it was
+ * meant to fix, since it would mark a genuinely-closed week (confirmed:
+ * screenshots taken at the actual week's close) as still open forever.
  */
 
 const INTERVAL_MINUTES = {
@@ -36,32 +41,8 @@ const INTERVAL_MINUTES = {
 
 /** Latest end-of-day fallback time used by the server ("YYYY-MM-DD 23:59:59"). */
 const END_OF_DAY = "23:59";
-/**
- * The real-world Friday close, applied uniformly to every timeframe's
- * completion check - not just as a ceiling on an interval's own theoretical
- * last-candle-start time. FX/CFD markets close around 21:00-22:00 UTC on
- * Fridays (varies with DST); 22:00 is a safe, conservative estimate for
- * "the market has definitely stopped trading" year-round.
- *
- * The old FRIDAY_LAST_CANDLE_FLOOR ("20:00") only ever CAPPED a too-late
- * threshold down (right for M1-H1, whose day-final-candle start, 23:00, is
- * clearly later than any real close) - it had no way to RAISE a
- * too-EARLY one. H4's own last-candle-start is exactly 20:00, which the
- * old logic then used unmodified as "the week is done," even though the
- * market can still be trading for another 1-2 hours past that moment.
- * Confirmed on USDCHF H4: a chart whose final visible candle read
- * "20:00" (high confidence) was marked as a fully closed week, when it
- * was still that week's actively-forming final candle - which then
- * incorrectly qualified it to source an entry.
- *
- * Applying ONE real close-time threshold on Fridays, for every timeframe,
- * fixes both directions at once and keeps the rule uniform: a too-late
- * theoretical last candle (M1-H1) is still correctly capped down, and a
- * too-early one (H4) is correctly raised, instead of two different pieces
- * of logic disagreeing on what "Friday is over" means depending on which
- * timeframe asks.
- */
-const FRIDAY_CLOSE_THRESHOLD = "22:00";
+/** Earliest start of the final intraday candle on a Friday (FX summer close). */
+const FRIDAY_LAST_CANDLE_FLOOR = "20:00";
 
 function hhmm(totalMinutes) {
   const m = Math.max(0, Math.min(totalMinutes, 1439));
@@ -111,11 +92,8 @@ export function periodCompleteAtCutoff({ cutoffDate, cutoffTime = "00:00", perio
   if (time >= END_OF_DAY) return true;
   const last = lastCandleStart(interval);
   if (!last) return false;
-  // Friday uses the same real-world close threshold for every timeframe,
-  // regardless of the interval's own theoretical last-candle-start time -
-  // so a too-late theoretical time (M1-H1's 23:00) is capped down to the
-  // real close, and a too-early one (H4's 20:00) is correctly raised to
-  // it, instead of the old asymmetric logic that could only ever cap down.
-  const threshold = weekday(cutoffDate) === 5 ? FRIDAY_CLOSE_THRESHOLD : last;
+  const threshold = weekday(cutoffDate) === 5 && last > FRIDAY_LAST_CANDLE_FLOOR
+    ? FRIDAY_LAST_CANDLE_FLOOR
+    : last;
   return time >= threshold;
 }
