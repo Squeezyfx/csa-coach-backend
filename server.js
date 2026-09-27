@@ -2497,7 +2497,21 @@ function extendPeriodsAcrossSessionBoundary(levels, widerCandles, profile) {
   if (!(lagHours > 0)) return levels;
   const lagMs = lagHours * 3600000;
 
-  return levels.map((level) => {
+  // This lag is measured from levels[0]'s own boundary specifically because
+  // ONLY the first period of a fetched range can follow a genuine multi-hour
+  // closure (the weekend/holiday gap before a week's Monday, or before an
+  // H4 framework's first week). Every OTHER period in the array is a normal
+  // weekday-to-weekday (or week-to-week) transition with no such gap to
+  // recover from - applying the SAME lag there instead pulls in hours from
+  // the PRECEDING period's own candles. Confirmed on EURAUD H1: Friday's
+  // computed low (1.61657) didn't match its real low (~1.6197, confirmed
+  // independently by both the raster reader and the user) because a
+  // 12-hour lag legitimately measured for Monday's own weekend gap was
+  // also applied to Friday, contaminating it with ~12 hours of Thursday's
+  // candles. Restricted to levels[0] only; every other period returns
+  // unchanged.
+  return levels.map((level, index) => {
+    if (index !== 0) return level;
     if (!Number.isFinite(Number(level?.high)) || !Number.isFinite(Number(level?.low))) return level;
     const boundaryMs = Date.parse(`${level.key}T00:00:00.000Z`);
     if (!Number.isFinite(boundaryMs)) return level;
