@@ -20660,9 +20660,26 @@ function buildPeriodInventoryStructuralCandidates({
       .map((ref) => [normalizePeriodDateForCompare(ref?.date ?? ref?.key ?? ""), ref])
       .filter(([date, ref]) => date && asPositiveNumber(ref?.high) !== null && asPositiveNumber(ref?.low) !== null)
   );
+  // The vision-estimated periodInventory's own partialPeriod/periodLifecycle
+  // flags are not reliably set by the model (confirmed on ZARJPY H4: its
+  // current, still-forming week W4 - real dailyLevels row correctly tagged
+  // periodLifecycle: "in_progress" - came through periodInventory as an
+  // ordinary completed period and produced an entry from a period that
+  // hadn't closed yet). dailyLevels is tagged by applyCurrentFrameworkPeriod-
+  // Lifecycle, a dedicated, reliable function - use IT as the authoritative
+  // signal for "is this period still forming," not the vision estimate's
+  // own possibly-missing flag. The current period must never source an
+  // entry, full stop.
+  const authoritativeInProgressDates = new Set(
+    (Array.isArray(referencePeriods) ? referencePeriods : [])
+      .filter((ref) => ref?.partialPeriod === true || ref?.periodLifecycle === "in_progress")
+      .map((ref) => normalizePeriodDateForCompare(ref?.date ?? ref?.key ?? ""))
+      .filter(Boolean)
+  );
   const normalizedPeriods = (Array.isArray(periodInventory) ? periodInventory : [])
     .map((period, index) => {
       const verified = verifiedByDate.get(normalizePeriodDateForCompare(period?.date ?? ""));
+      const ownDate = normalizePeriodDateForCompare(period?.date ?? "");
       return {
         ...period,
         periodLabel: period?.periodLabel || `Period ${index + 1}`,
@@ -20670,6 +20687,10 @@ function buildPeriodInventoryStructuralCandidates({
         high: verified ? asPositiveNumber(verified.high) : asPositiveNumber(period?.high),
         low: verified ? asPositiveNumber(verified.low) : asPositiveNumber(period?.low),
         verifiedAgainstProvider: Boolean(verified),
+        partialPeriod: period?.partialPeriod === true || (ownDate && authoritativeInProgressDates.has(ownDate)),
+        periodLifecycle: period?.periodLifecycle === "in_progress" || (ownDate && authoritativeInProgressDates.has(ownDate))
+          ? "in_progress"
+          : period?.periodLifecycle,
       };
     })
     .filter((period) =>
