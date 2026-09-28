@@ -99,31 +99,58 @@ export function buildChartOverlay({ chartDetection = {}, analysisFacts = {}, mar
     const x1 = num(starts[index].screenX);
     const next = starts[index + 1];
     const x2 = next ? num(next.screenX) - step : (Number.isFinite(cutoffX) ? cutoffX : plotRight);
-    const startIndex = num(starts[index].candleIndex);
-    const endIndex = next && finite(next.candleIndex) ? num(next.candleIndex) - 1 : candles.length - 1;
-    return { x1, x2, startIndex, endIndex };
+    return {
+      x1, x2,
+      // Real timestamps, not chart-period-map.js's candleIndex: that index is
+      // only guaranteed valid against the candle array chart-period-map.js
+      // itself was built from, which may not be the exact same array/order
+      // marketReference.timeframeCandles has become by the time this runs
+      // (e.g. after a provider-fallback swap re-fetches it). Timestamps are
+      // self-contained and need no cross-array alignment to stay correct.
+      startTimestamp: starts[index].startTimestamp || starts[index].expectedStartTimestamp || null,
+      endTimestamp: next ? (next.startTimestamp || next.expectedStartTimestamp || null) : null,
+    };
   };
-  // Candle index (in the map's own ordering) where the period's high or low
-  // was made. period.date is the PERIOD'S OWN identity key - for H4/D1 that
-  // is the week's Monday / the month's 1st, not necessarily the day the
-  // extreme actually happened on, so matching candles by date string here
-  // (as this used to) only ever found April/June/September's handful of
-  // extremes that coincidentally landed on day 1 of their period and left
-  // every other period's tick spanning its full width with no exact
-  // candle to anchor to. Scanning the period's own verified candle-index
-  // range (already established by chart-period-map.js) for the candle
-  // whose real high/low matches the recorded price finds the true one
-  // regardless of which day within the period it fell on.
+  const toMs = (t) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(String(t || ""));
+    return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : NaN;
+  };
+  // The candle whose real high/low matches the period's recorded price,
+  // regardless of which day within the period it fell on (period.date is
+  // the PERIOD'S OWN identity key - for H4/D1 that's the week's Monday /
+  // the month's 1st, not necessarily the day the extreme actually happened
+  // on). Matched by real timestamp against the period's own start/end
+  // instant, not by array index, so it needs no assumption that this
+  // function's `candles` and chart-period-map.js's candle array share the
+  // same ordering/positions.
   const extremeIndex = (span, price, kind) => {
-    if (!span || !Number.isFinite(span.startIndex) || !Number.isFinite(span.endIndex)) return null;
+    if (!span) return null;
     const tolerance = Math.abs(num(price)) * 0.00002;
-    for (let i = span.startIndex; i <= span.endIndex && i < candles.length; i++) {
+    const startMs = toMs(span.startTimestamp);
+    const endMs = span.endTimestamp ? toMs(span.endTimestamp) : Infinity;
+    if (!Number.isFinite(startMs)) return null;
+    // A native higher-timeframe candle's own provider/session boundary can
+    // sit a few hours before this period's naive calendar-day start (see
+    // server.js's reconcileNativeExtreme, which already accepts this same
+    // "modest session extension" for the entry values themselves - EURAUD's
+    // Thursday 2026-09-24 low of 1.61518 is a confirmed real example, made
+    // by the 2026-09-23 21:00 UTC candle under a UTC+3 broker day boundary).
+    // Without this grace window a genuinely correct extreme like that one
+    // always falls back to an unverified grey line just because its candle
+    // sits in the adjacent naive-UTC-day bucket.
+    const graceMs = 4 * 60 * 60 * 1000;
+    let graceMatch = null;
+    for (let i = 0; i < candles.length; i++) {
       const c = candles[i];
       if (!c) continue;
+      const ts = toMs(c._t);
+      if (!Number.isFinite(ts) || ts < startMs - graceMs || ts >= endMs) continue;
       const value = num(kind === "high" ? c.high : c.low);
-      if (Number.isFinite(value) && Math.abs(value - num(price)) <= tolerance) return i;
+      if (!Number.isFinite(value) || Math.abs(value - num(price)) > tolerance) continue;
+      if (ts >= startMs) return i;
+      if (graceMatch === null) graceMatch = i;
     }
-    return null;
+    return graceMatch;
   };
 
   const allPrices = [
