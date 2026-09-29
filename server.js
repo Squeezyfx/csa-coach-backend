@@ -47,7 +47,7 @@ import {
   sequenceFibQualifiedAreas,
   shouldMergeQualifiedSupplyDemandCluster,
 } from "./csa-entry-policy.js";
-import { buildVisiblePeriodFibonacciFrame, resolveCalendarPeriodDirection } from "./benchmark/weekly-fibonacci-policy.js";
+import { buildVisiblePeriodFibonacciFrame, resolveCalendarPeriodDirection, resolveDeepRetracementDirectionOverride } from "./benchmark/weekly-fibonacci-policy.js";
 import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodWickExtremesFromPixels } from "./chart-raster-reader.js";
 import { buildChartOverlay } from "./chart-overlay.js";
 import crypto from "crypto";
@@ -25972,6 +25972,60 @@ function buildValidatedAnalysisFacts({
     currentStructureRegime.bearishBreakdown = calendarPeriodDirection === "bearish";
     currentStructureRegime.bullishRecoveryAfterBreakdown = calendarPeriodDirection === "bearish" && recentDirection === "bullish";
     currentStructureRegime.bearishPullbackAfterBreakout = calendarPeriodDirection === "bullish" && recentDirection === "bearish";
+  }
+
+  // A retracement past 61.8% of the completed-period framing swing
+  // invalidates the prior trend on its own, regardless of whether any of the
+  // narrower checks above (a specific swing-event level reclaimed and held,
+  // the current calendar period's own OHLC) have separately confirmed it.
+  // Confirmed on USDJPY H4: W1's high (160.40466) to W2's low (152.90794)
+  // framed the down-move; W4's high (159.02924) alone already retraces 81.6%
+  // of that range, but every check above kept calling it bearish because no
+  // single recent swing-break level had been reclaimed yet. This is
+  // deliberately the last word in this block - it wins over every signal
+  // above, the same way a trader treats a >61.8% retracement as a change of
+  // character regardless of which specific level has or hasn't reclaimed.
+  // Scoped to finalVisibleMode like calendarPeriodAuthority just above:
+  // effectiveBreakoutState/effectiveTransitionState below only pick up
+  // currentStructureRegime in that mode, and historicalPeriodDirectionLocked
+  // (above) already documents that a locked historical review's structure
+  // must stay immutable - this must not partially override direction there
+  // while leaving breakoutState/transitionState on the old value.
+  const deepRetracementOverride = finalVisibleMode
+    ? resolveDeepRetracementDirectionOverride({
+        periods: Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [],
+      })
+    : null;
+  if (deepRetracementOverride && deepRetracementOverride.direction !== direction) {
+    const recentDirection = ["bullish", "bearish"].includes(currentStructureRegime.direction)
+      ? currentStructureRegime.direction : null;
+    direction = deepRetracementOverride.direction;
+    currentStructureRegime.direction = deepRetracementOverride.direction;
+    currentStructureRegime.phase = deepRetracementOverride.direction === "bullish"
+      ? "bullish_reversal_past_618_retracement"
+      : "bearish_reversal_past_618_retracement";
+    currentStructureRegime.source = deepRetracementOverride.source;
+    currentStructureRegime.event = {
+      swingHigh: deepRetracementOverride.swingHigh,
+      swingLow: deepRetracementOverride.swingLow,
+      retracementRatio: deepRetracementOverride.retracementRatio,
+      swingHighKey: deepRetracementOverride.swingHighKey,
+      swingLowKey: deepRetracementOverride.swingLowKey,
+    };
+    currentStructureRegime.bullishBreakout = deepRetracementOverride.direction === "bullish";
+    currentStructureRegime.bearishBreakdown = deepRetracementOverride.direction === "bearish";
+    currentStructureRegime.bullishRecoveryAfterBreakdown = false;
+    currentStructureRegime.bearishPullbackAfterBreakout = false;
+    if (recentDirection && recentDirection !== deepRetracementOverride.direction) {
+      console.log("CSA DEEP RETRACEMENT DIRECTION OVERRIDE:", {
+        buildId: CSA_BUILD_ID,
+        symbol: submittedInstrument,
+        timeframe,
+        from: recentDirection,
+        to: deepRetracementOverride.direction,
+        retracementRatio: deepRetracementOverride.retracementRatio,
+      });
+    }
   }
 
   /*

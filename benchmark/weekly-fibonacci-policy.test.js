@@ -4,6 +4,7 @@ import {
   buildVisiblePeriodFibonacciFrame,
   buildVisibleWeekFibonacciFrame,
   resolveCalendarPeriodDirection,
+  resolveDeepRetracementDirectionOverride,
 } from "./weekly-fibonacci-policy.js";
 
 const candles = [
@@ -76,4 +77,61 @@ test("calendar-period OHLC overrides a conflicting recent direction", () => {
     phase: "bearish_pullback_after_bullish_structure",
   });
   assert.equal(resolveCalendarPeriodDirection({ frameVerified: false, periodDirection: "bullish" }), null);
+});
+
+test("deep retracement past 61.8% of the framing swing flips a bearish read to bullish (USDJPY H4)", () => {
+  const periods = [
+    { key: "2026-08-31", periodLabel: "W1", high: 160.40466, low: 155.2976, periodLifecycle: "completed" },
+    { key: "2026-09-07", periodLabel: "W2", high: 156.8, low: 152.90794, periodLifecycle: "completed" },
+    { key: "2026-09-14", periodLabel: "W3", high: 155.6, low: 153.1, periodLifecycle: "completed" },
+    { key: "2026-09-21", periodLabel: "W4", high: 159.02924, low: 156.59305, periodLifecycle: "completed" },
+    { key: "2026-09-28", periodLabel: "W5", high: 158.4, low: 157.1, periodLifecycle: "in_progress", partialPeriod: true },
+  ];
+  const result = resolveDeepRetracementDirectionOverride({ periods });
+  assert.equal(result.direction, "bullish");
+  assert.equal(result.swingHigh, 160.40466);
+  assert.equal(result.swingLow, 152.90794);
+  assert.equal(result.swingHighKey, "2026-08-31");
+  assert.equal(result.swingLowKey, "2026-09-07");
+  assert.ok(Math.abs(result.retracementRatio - 0.81656) < 0.0001);
+});
+
+test("deep retracement mirrors for an up-move pullback past 61.8%, flipping bullish to bearish", () => {
+  const periods = [
+    { key: "2026-08-31", periodLabel: "W1", high: 90, low: 80, periodLifecycle: "completed" },
+    { key: "2026-09-07", periodLabel: "W2", high: 120, low: 88, periodLifecycle: "completed" },
+    { key: "2026-09-14", periodLabel: "W3", high: 100, low: 90.72, periodLifecycle: "completed" },
+  ];
+  const result = resolveDeepRetracementDirectionOverride({ periods });
+  assert.equal(result.direction, "bearish");
+  assert.equal(result.swingHigh, 120);
+  assert.equal(result.swingLow, 80);
+  // recentTrough = min(W2.low=88, W3.low=90.72) = 88; (120-88)/(120-80) = 0.8
+  assert.ok(Math.abs(result.retracementRatio - 0.8) < 0.0001);
+});
+
+test("deep retracement stays null under the threshold, without a clear impulse, or with too little data", () => {
+  // Only retraced 50% of the 160->150 down-move (peak back to 155), short of
+  // the 61.8% threshold - distinct high/low periods, just not deep enough.
+  const shallow = [
+    { key: "2026-08-31", high: 160, low: 155, periodLifecycle: "completed" },
+    { key: "2026-09-07", high: 155, low: 150, periodLifecycle: "completed" },
+    { key: "2026-09-14", high: 155, low: 152, periodLifecycle: "completed" },
+  ];
+  assert.equal(resolveDeepRetracementDirectionOverride({ periods: shallow }), null);
+
+  // The same period made both the swing high and low - no chronological impulse to measure.
+  const samePeriod = [
+    { key: "2026-08-31", high: 160, low: 150, periodLifecycle: "completed" },
+  ];
+  assert.equal(resolveDeepRetracementDirectionOverride({ periods: samePeriod }), null);
+
+  // The in-progress current period must never source this signal.
+  const onlyInProgress = [
+    { key: "2026-08-31", high: 160, low: 150, periodLifecycle: "completed" },
+    { key: "2026-09-07", high: 159, low: 151.5, periodLifecycle: "in_progress", partialPeriod: true },
+  ];
+  assert.equal(resolveDeepRetracementDirectionOverride({ periods: onlyInProgress }), null);
+
+  assert.equal(resolveDeepRetracementDirectionOverride({ periods: [] }), null);
 });
