@@ -90,10 +90,19 @@ export function periodCompleteAtCutoff({ cutoffDate, cutoffTime = "00:00", perio
 
   const time = String(cutoffTime || "00:00").slice(0, 5);
   if (time >= END_OF_DAY) return true;
+  // The execution interval's own last-candle-start time is only a valid
+  // completion threshold on a Friday, where trading genuinely stops for the
+  // weekend once that candle has started (the whole reason this floor
+  // exists - see the module docstring). Every other weekday keeps trading
+  // right through midnight, so there is no early-stop event to floor
+  // against. Confirmed on EURUSD M30 at cutoff 23:36:59 on a Tuesday: M30's
+  // own last-candle-start (23:30) is 30 minutes before real midnight, so
+  // this branch was marking that Tuesday "complete" - and therefore not
+  // in_progress - a full 24 minutes before the day had actually ended,
+  // letting Tuesday's own high source a live entry mid-day.
+  if (weekday(cutoffDate) !== 5) return false;
   const last = lastCandleStart(interval);
   if (!last) return false;
-  const threshold = weekday(cutoffDate) === 5 && last > FRIDAY_LAST_CANDLE_FLOOR
-    ? FRIDAY_LAST_CANDLE_FLOOR
-    : last;
+  const threshold = last > FRIDAY_LAST_CANDLE_FLOOR ? FRIDAY_LAST_CANDLE_FLOOR : last;
   return time >= threshold;
 }
