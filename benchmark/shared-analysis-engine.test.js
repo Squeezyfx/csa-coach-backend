@@ -47,7 +47,7 @@ test('actual server guard cannot fall through for any timeframe in customer or b
  const start=server.indexOf('function rankRawEntryAreas(');
  const fn=server.slice(start,server.indexOf('\n}\n',start)+2);
  for(const benchmark of [false,true]) {
-  const ctx=vm.createContext({CSA_SELECTOR_VERSION:'test',BENCHMARK_DRY_RUN_ENABLED:benchmark,rankChartNativeFallbackAreas:()=>null,buildNoEntryTransparencyAudit:()=>({})});
+  const ctx=vm.createContext({CSA_SELECTOR_VERSION:'test',BENCHMARK_DRY_RUN_ENABLED:benchmark,rankChartNativeFallbackAreas:()=>null,buildNoEntryTransparencyAudit:()=>({}),resolveDeepRetracementDirectionOverride:()=>null});
   vm.runInContext(fn,ctx);
   for(const timeframe of [...Object.keys(profiles),'H2']) {
    const result=ctx.rankRawEntryAreas({timeframe,direction:'bullish'});

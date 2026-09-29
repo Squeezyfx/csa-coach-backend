@@ -1,4 +1,9 @@
-import { calendarMapping, frameworkProfile, resolveFrameworkBias } from "../framework-calendar.js";
+import { calendarMapping, frameworkProfile, resolveFrameworkBias, resolveDeepRetracementDirectionOverride } from "../framework-calendar.js";
+// Re-exported so server.js's existing import site keeps working - the
+// single implementation now lives in framework-calendar.js so
+// resolveFrameworkBias there (shared by every direction consumer, not just
+// this module's H1/H4 Fibonacci framing) applies the same override.
+export { resolveDeepRetracementDirectionOverride };
 const RATIOS = Object.freeze([0.382, 0.5, 0.618]);
 const INTRADAY_WEEKLY = new Set(["M1", "M5", "M15", "M30", "H1"]);
 
@@ -108,66 +113,3 @@ export function buildVisibleWeekFibonacciFrame(args = {}) {
     : null;
 }
 
-// A retracement past 61.8% of the completed period inventory's own framing
-// swing is treated as invalidating the prior trend on its own - independent
-// of whether a specific recent swing-event level has separately been
-// reclaimed and held (that's a stricter, additional signal computed
-// elsewhere; see server.js's confirmed_swing_event_sequence engine). Confirmed
-// on USDJPY H4: the down-move ran W1's high (160.40466) to W2's low
-// (152.90794); W4's high (159.02924) alone already retraces 81.6% of that
-// range, well past 61.8%, even though no single recent swing-break level had
-// been reclaimed - the swing-event engine kept calling it bearish on that
-// narrower basis alone.
-export function resolveDeepRetracementDirectionOverride({ periods = [], threshold = 0.618 } = {}) {
-  const completed = (Array.isArray(periods) ? periods : [])
-    .filter((p) => p?.periodLifecycle !== "in_progress" && p?.partialPeriod !== true)
-    .map((p) => ({ high: Number(p?.high), low: Number(p?.low), key: String(p?.key || p?.date || "") }))
-    .filter((p) => Number.isFinite(p.high) && Number.isFinite(p.low) && p.high > p.low && p.key)
-    .sort((a, b) => a.key.localeCompare(b.key));
-  if (completed.length < 2) return null;
-
-  let lowIndex = 0;
-  let highIndex = 0;
-  completed.forEach((p, i) => {
-    if (p.low < completed[lowIndex].low) lowIndex = i;
-    if (p.high > completed[highIndex].high) highIndex = i;
-  });
-  // Same period made both extremes, or the extremes don't establish a clear
-  // chronological impulse to measure a retracement against.
-  if (lowIndex === highIndex) return null;
-
-  const swingHigh = completed[highIndex].high;
-  const swingLow = completed[lowIndex].low;
-  const range = swingHigh - swingLow;
-  if (!(range > 0)) return null;
-
-  // The high came first: a down-move. A recovery back up past `threshold` of
-  // that range invalidates it.
-  if (highIndex < lowIndex) {
-    const recentPeak = Math.max(...completed.slice(lowIndex).map((p) => p.high));
-    const retracementRatio = (recentPeak - swingLow) / range;
-    if (retracementRatio < threshold) return null;
-    return {
-      direction: "bullish",
-      swingHigh, swingLow, retracementRatio,
-      retracementAnchor: recentPeak,
-      swingHighKey: completed[highIndex].key,
-      swingLowKey: completed[lowIndex].key,
-      source: "deep_retracement_past_threshold_of_framing_swing",
-    };
-  }
-
-  // The low came first: an up-move. A pullback back down past `threshold` of
-  // that range invalidates it.
-  const recentTrough = Math.min(...completed.slice(highIndex).map((p) => p.low));
-  const retracementRatio = (swingHigh - recentTrough) / range;
-  if (retracementRatio < threshold) return null;
-  return {
-    direction: "bearish",
-    swingHigh, swingLow, retracementRatio,
-    retracementAnchor: recentTrough,
-    swingHighKey: completed[highIndex].key,
-    swingLowKey: completed[lowIndex].key,
-    source: "deep_retracement_past_threshold_of_framing_swing",
-  };
-}

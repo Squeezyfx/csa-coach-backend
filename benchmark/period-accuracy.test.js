@@ -77,7 +77,7 @@ const server = readFileSync(new URL("../server.js", import.meta.url), "utf8");
 test("actual unresolved-direction return retains references and failure diagnostics", () => {
   const start = server.indexOf("function rankRawEntryAreas(");
   const source = server.slice(start,server.indexOf("\n}\n",start)+2);
-  const ctx = vm.createContext({buildNoEntryTransparencyAudit,CSA_SELECTOR_VERSION:"test",BENCHMARK_DRY_RUN_ENABLED:true,rankChartNativeFallbackAreas:()=>null});
+  const ctx = vm.createContext({buildNoEntryTransparencyAudit,CSA_SELECTOR_VERSION:"test",BENCHMARK_DRY_RUN_ENABLED:true,rankChartNativeFallbackAreas:()=>null,resolveDeepRetracementDirectionOverride:()=>null});
   vm.runInContext(source,ctx);
   const fallback={usable:false,completedPeriodReferences:{periods:[{date:"2026-01-01",high:.15656,low:.09461}]},providerFailure:{category:"date_unverified"},periodMappingAudit:{rejected:[{date:"2026-02-01"}]}};
   for (const direction of ["range","bullish"]) {
