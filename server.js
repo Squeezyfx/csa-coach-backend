@@ -21591,6 +21591,20 @@ function rankRawEntryAreas({
   if (visualReview?.chartNativeEntryFallback?.sharedFramework) {
     direction = visualReview.chartNativeEntryFallback.sharedFramework.bias?.direction || "range";
   }
+  // sharedFramework's bias is a standalone chart-read, computed independently
+  // of buildValidatedAnalysisFacts's own direction resolution - it does not
+  // inherit that function's deep-retracement override (see server.js's
+  // "CSA DEEP RETRACEMENT DIRECTION OVERRIDE" block), so without this check
+  // repeated here, an entry selector fed a corrected "bullish" direction
+  // could still silently be overwritten back to "bearish" right above and
+  // keep offering supply/resistance candidates instead of the demand/support
+  // ones the corrected structure actually calls for (confirmed on USDJPY H4).
+  const entrySelectorRetracementOverride = resolveDeepRetracementDirectionOverride({
+    periods: Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [],
+  });
+  if (entrySelectorRetracementOverride) {
+    direction = entrySelectorRetracementOverride.direction;
+  }
   if (!["bullish", "bearish"].includes(direction)) {
     return {
       areas: [],
