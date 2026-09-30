@@ -21634,6 +21634,7 @@ function rankRawEntryAreas({
   // ones the corrected structure actually calls for (confirmed on USDJPY H4).
   const entrySelectorRetracementOverride = resolveDeepRetracementDirectionOverride({
     periods: Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [],
+    currentPrice,
   });
   if (entrySelectorRetracementOverride) {
     direction = entrySelectorRetracementOverride.direction;
@@ -26097,6 +26098,8 @@ function buildValidatedAnalysisFacts({
   const deepRetracementOverride = finalVisibleMode
     ? resolveDeepRetracementDirectionOverride({
         periods: Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [],
+        currentPrice: nullablePositiveNumber(chartDetection?.latestVisibleClose)
+          ?? nullablePositiveNumber(chartDetection?.latestVisiblePrice),
       })
     : null;
   if (deepRetracementOverride && deepRetracementOverride.direction !== direction) {

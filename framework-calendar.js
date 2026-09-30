@@ -97,7 +97,7 @@ export function resolveFrameworkBias({periodInventory=[],periodOpen=null,periodC
   // sits in the range, so a deep multi-period recovery inside an overall red
   // month (open 160.109, close 157.318 on USDJPY H4) still reads "bearish"
   // by them even after price has already retraced 80%+ of the down-move.
-  const retracementOverride = resolveDeepRetracementDirectionOverride({periods: rows});
+  const retracementOverride = resolveDeepRetracementDirectionOverride({periods: rows, currentPrice: close});
   if (retracementOverride) {
     direction = retracementOverride.direction;
     basis = retracementOverride.source;
@@ -116,7 +116,7 @@ export function resolveFrameworkBias({periodInventory=[],periodOpen=null,periodC
 // resolveFrameworkBias above and by server.js's own direction resolution and
 // entry selector, so every consumer of period-inventory-derived direction
 // agrees once a deep retracement fires, instead of only some of them.
-export function resolveDeepRetracementDirectionOverride({periods=[],threshold=0.618}={}) {
+export function resolveDeepRetracementDirectionOverride({periods=[],threshold=0.618,currentPrice=null}={}) {
   // Re-sorted defensively by key/date rather than trusting array order:
   // some callers (server.js's marketReference.dailyLevels) sort before
   // passing periods in, but that is not a guaranteed contract here.
@@ -137,10 +137,18 @@ export function resolveDeepRetracementDirectionOverride({periods=[],threshold=0.
   const swingHigh=valid[highIndex].high,swingLow=valid[lowIndex].low,range=swingHigh-swingLow;
   if(!(range>0)) return null;
 
+  // The retracement anchor (recentPeak/recentTrough) only ever looks at
+  // completed periods, so it can be stale: a retracement that existed on a
+  // now-past candle but has since been given back as of the live price no
+  // longer describes the current structure. Require the live price to
+  // still clear the same threshold before the override is allowed to fire.
+  const live=Number.isFinite(Number(currentPrice))&&Number(currentPrice)>0?Number(currentPrice):null;
+
   if(highIndex<lowIndex) {
     const recentPeak=Math.max(...valid.slice(lowIndex).map(p=>p.high));
     const retracementRatio=(recentPeak-swingLow)/range;
     if(retracementRatio<threshold) return null;
+    if(live!==null&&(live-swingLow)/range<threshold) return null;
     return {direction:"bullish",swingHigh,swingLow,retracementRatio,retracementAnchor:recentPeak,
       swingHighKey:valid[highIndex].key,swingLowKey:valid[lowIndex].key,
       source:"deep_retracement_past_threshold_of_framing_swing"};
@@ -148,6 +156,7 @@ export function resolveDeepRetracementDirectionOverride({periods=[],threshold=0.
   const recentTrough=Math.min(...valid.slice(highIndex).map(p=>p.low));
   const retracementRatio=(swingHigh-recentTrough)/range;
   if(retracementRatio<threshold) return null;
+  if(live!==null&&(swingHigh-live)/range<threshold) return null;
   return {direction:"bearish",swingHigh,swingLow,retracementRatio,retracementAnchor:recentTrough,
     swingHighKey:valid[highIndex].key,swingLowKey:valid[lowIndex].key,
     source:"deep_retracement_past_threshold_of_framing_swing"};
