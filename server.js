@@ -20007,6 +20007,8 @@ function resolveFinalVisibleCurrentStructureRegime({
     false;
   let bearishPullbackAfterBreakout =
     false;
+  let latestEventFullyReversed =
+    false;
 
   if (
     latestEvent.direction ===
@@ -20032,6 +20034,16 @@ function resolveFinalVisibleCurrentStructureRegime({
           barsAfterEvent.length
         )
       ) > 0;
+
+    // V4.75: a "recovery" that has fully round-tripped back above the
+    // broken support (not merely pulled back toward it) means the
+    // breakdown itself failed. That is a confirmed bullish reversal, not
+    // still-bearish structure with a recovery in progress.
+    latestEventFullyReversed =
+      depth > 0 &&
+      latestClose >=
+        Number(latestEvent.level) +
+          tolerance;
   } else {
     const height =
       Number(postEventHigh) -
@@ -20053,13 +20065,34 @@ function resolveFinalVisibleCurrentStructureRegime({
           barsAfterEvent.length
         )
       ) < 0;
+
+    // V4.75: a "pullback" that has fully round-tripped back below the
+    // broken resistance (not merely pulled back toward it) means the
+    // breakout itself failed. That is a confirmed bearish reversal, not
+    // still-bullish structure with a pullback in progress.
+    latestEventFullyReversed =
+      height > 0 &&
+      latestClose <=
+        Number(latestEvent.level) -
+          tolerance;
+  }
+
+  if (latestEventFullyReversed) {
+    bullishRecoveryAfterBreakdown = false;
+    bearishPullbackAfterBreakout = false;
   }
 
   const direction =
-    latestEvent.direction;
+    latestEventFullyReversed
+      ? (latestEvent.direction === "bullish" ? "bearish" : "bullish")
+      : latestEvent.direction;
 
   const phase =
-    direction === "bullish"
+    latestEventFullyReversed
+      ? (latestEvent.direction === "bullish"
+          ? "bullish_breakout_failed_bearish_reversal"
+          : "bearish_breakdown_failed_bullish_reversal")
+      : direction === "bullish"
       ? bearishPullbackAfterBreakout
         ? "bearish_pullback_after_bullish_breakout"
         : "bullish_breakout"
@@ -24390,6 +24423,34 @@ function deriveHistoricalPhaseFromTimeframeCandles({
       };
     }
 
+    // A "recovery" that has fully round-tripped back above the broken
+    // support (not merely pulled back toward it) means the breakdown
+    // itself failed, even without a formally confirmed new pivot event yet.
+    // Staying "bearish" here would ignore price having already closed back
+    // past the level that defined the bearish structure.
+    const breakdownFullyReversed =
+      breakdownDepth > 0 &&
+      latestClose >= Number(latestEvent.level) + breakTolerance;
+
+    if (breakdownFullyReversed) {
+      return {
+        direction: "bullish",
+        phase: "bearish_breakdown_failed_bullish_reversal",
+        state: "bearish_breakdown_failed_bullish_reversal",
+        bullishBreakout: false,
+        bearishBreakdown: false,
+        bullishRecoveryAfterBreakdown: false,
+        bearishPullbackAfterBreakout: false,
+        confirmedReversal: true,
+        latestClose,
+        brokenLevel: latestEvent.level,
+        recoveryFrom: postEventLow,
+        recoveryRatio,
+        source: "cutoff_timeframe_swing_events",
+        diagnostics: eventDiagnostics,
+      };
+    }
+
     if (recoveryStrong) {
       return {
         direction: "bearish",
@@ -24454,6 +24515,34 @@ function deriveHistoricalPhaseFromTimeframeCandles({
       confirmedReversal: true,
       latestClose,
       brokenLevel: latestBearishEvent.level,
+      source: "cutoff_timeframe_swing_events",
+      diagnostics: eventDiagnostics,
+    };
+  }
+
+  // A "pullback" that has fully round-tripped back below the broken
+  // resistance (not merely pulled back toward it) means the breakout
+  // itself failed, even without a formally confirmed new pivot event yet.
+  // Staying "bullish" here would ignore price having already closed back
+  // past the level that defined the bullish structure.
+  const breakoutFullyReversed =
+    breakoutHeight > 0 &&
+    latestClose <= Number(latestEvent.level) - breakTolerance;
+
+  if (breakoutFullyReversed) {
+    return {
+      direction: "bearish",
+      phase: "bullish_breakout_failed_bearish_reversal",
+      state: "bullish_breakout_failed_bearish_reversal",
+      bullishBreakout: false,
+      bearishBreakdown: false,
+      bullishRecoveryAfterBreakdown: false,
+      bearishPullbackAfterBreakout: false,
+      confirmedReversal: true,
+      latestClose,
+      brokenLevel: latestEvent.level,
+      pullbackFrom: postEventHigh,
+      pullbackRatio,
       source: "cutoff_timeframe_swing_events",
       diagnostics: eventDiagnostics,
     };
