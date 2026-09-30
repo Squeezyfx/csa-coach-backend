@@ -29053,6 +29053,52 @@ app.get("/health", (req, res) =>
 );
 
 
+// Public, unauthenticated: the GoHighLevel-hosted front-end calls this
+// instead of the browser's own supabase-js client because a direct
+// client-side call to Supabase's auth API from inside that page was
+// failing (reported as a network-level "Failed to fetch", not a 4xx/5xx -
+// most likely GoHighLevel's own CSP/sandbox blocking a cross-origin request
+// straight to *.supabase.co). Routing it through this already-CORS-enabled
+// backend, which reaches Supabase server-side, avoids that restriction.
+app.post("/password-reset", async (req, res) => {
+  try {
+    if (!supabaseAdmin) {
+      return res.status(500).json({
+        success: false,
+        error: "Password reset is not configured on the server.",
+      });
+    }
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    if (!validEmail) {
+      return res.status(400).json({ success: false, error: "Enter a valid email address." });
+    }
+    const { error } = await supabaseAdmin.auth.resetPasswordForEmail(email, {
+      // Matches the emailRedirectTo used elsewhere in the front-end's own
+      // sign-up flow, so the recovery link lands back on the same page.
+      redirectTo: "https://training.csaforex.com/version2web",
+    });
+    // Supabase's own resetPasswordForEmail never reveals whether the email
+    // is registered - always report success for that case so this public
+    // endpoint can't be used to enumerate accounts. Only a genuine
+    // service-side failure (rate limit, SMTP misconfiguration) is surfaced.
+    if (error) {
+      console.warn("[password-reset] Supabase error:", error.message);
+      return res.status(502).json({
+        success: false,
+        error: "The password reset email could not be sent. Please try again shortly.",
+      });
+    }
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("[password-reset] failed:", error?.message || error);
+    return res.status(500).json({
+      success: false,
+      error: "The password reset email could not be sent.",
+    });
+  }
+});
+
 app.get("/account-entitlements", async (req, res) => {
   try {
     const requestAuth = await getRequestUser(req);
