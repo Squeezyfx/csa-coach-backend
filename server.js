@@ -28165,15 +28165,15 @@ function buildControlledFeedback({
 
       if (closeEnough) {
         strengths.push(
-          `You entered very close to the ${areaText}, which lines up well with where this setup was looking for a ${orderDirection}.`
+          `Your entry price lines up closely with the framework's own planned level around ${frameworkPrice}, which is exactly where this ${orderDirection} setup was looking for a reaction.`
         );
       } else if (betterPrice) {
         strengths.push(
-          `You got a better entry price than planned: you went ${orderDirection} at ${entryPrice}, versus the ${areaText} the framework was watching.`
+          `Your actual entry at ${entryPrice} was a better price than the framework's own planned level around ${frameworkPrice} - going ${orderDirection} there worked in your favor.`
         );
       } else {
         weaknesses.push(
-          `You went ${orderDirection} at ${entryPrice}, which is before price actually reached the ${areaText}. Entering early like this means there was less confirmation that the level would hold.`
+          `Your entry at ${entryPrice} happened before price actually reached the framework's planned level around ${frameworkPrice}. Entering early like this means there was less confirmation that the level would hold.`
         );
       }
     }
