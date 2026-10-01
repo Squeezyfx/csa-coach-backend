@@ -8722,6 +8722,44 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
   };
 }
 
+// MT4/MT5 draws an open or pending order as a dashed horizontal line labeled
+// with its ticket number, e.g. "#44111581 sell 0.01" for the entry and
+// "#44111581 sl" / "#44111581 tp" for its stop loss / target. The vision
+// model reliably transcribes these into platformLabel (confirmed on a real
+// EURUSD H1 chart) even when its own separate tradeVisibility/riskEvidence
+// judgment misses the connection and reports "not_visible" with an empty
+// reason. Detect the pattern deterministically from the already-extracted
+// labels instead of depending on the model to reason about it correctly.
+function detectTicketOrderMarkup(levels = []) {
+  const tickets = new Map();
+  for (const level of Array.isArray(levels) ? levels : []) {
+    const label = String(level?.platformLabel || "").trim();
+    const match = label.match(/^#(\d+)\s+(buy|sell|sl|tp)\b/i);
+    if (!match) continue;
+    const ticket = match[1];
+    const kind = match[2].toLowerCase();
+    const price =
+      nullablePositiveNumber(level?.displayedPrice) ||
+      extractNumericPriceFromLabel(level?.platformLabel) ||
+      extractNumericPriceFromLabel(level?.description);
+    if (!tickets.has(ticket)) tickets.set(ticket, { ticket });
+    const entry = tickets.get(ticket);
+    if (kind === "buy" || kind === "sell") {
+      entry.direction = kind;
+      entry.entryPrice = price;
+      entry.entryLabel = label;
+    } else if (kind === "sl") {
+      entry.stopPrice = price;
+      entry.stopLabel = label;
+    } else if (kind === "tp") {
+      entry.targetPrice = price;
+      entry.targetLabel = label;
+    }
+  }
+  const withEntry = [...tickets.values()].find((entry) => entry.direction);
+  return withEntry || null;
+}
+
 async function compareUploadedChartWithCsaFramework({
   imageBase64,
   mimeType,
@@ -9078,6 +9116,10 @@ Return exactly this JSON shape:
       normalizePreferredEntryAreaFromVisual(parsed);
     const normalizedActiveEntryAreas =
       normalizeActiveEntryAreasFromVisual(parsed);
+    const ticketOrder = detectTicketOrderMarkup([
+      ...(Array.isArray(parsed.visibleMarkedLevels) ? parsed.visibleMarkedLevels : []),
+      ...(Array.isArray(parsed.visibleHorizontalLines) ? parsed.visibleHorizontalLines : []),
+    ]);
 
     console.log("Visual review structured output:", {
       marketReferenceAvailable,
@@ -9090,6 +9132,7 @@ Return exactly this JSON shape:
         ? parsed.visibleHorizontalLines.slice(0, 16)
         : [],
       preferredEntryArea: normalizedPreferredEntryArea,
+      ticketOrder,
       visualQualityWarning,
     });
 
@@ -9176,16 +9219,33 @@ Return exactly this JSON shape:
           : null,
       visualSummary: safeUserText(parsed.visualSummary),
       chartMarkupAssessment: safeUserText(parsed.chartMarkupAssessment),
-      tradeVisibility: ["visible", "not_visible", "unclear"].includes(
-        String(parsed.tradeVisibility || "").toLowerCase()
-      )
+      tradeVisibility: ticketOrder
+        ? "visible"
+        : ["visible", "not_visible", "unclear"].includes(
+            String(parsed.tradeVisibility || "").toLowerCase()
+          )
         ? String(parsed.tradeVisibility).toLowerCase()
         : "unclear",
-      tradeVisibilityReason: String(
-        parsed.tradeVisibilityReason || ""
-      ).trim(),
-      entryEvidence: safeUserText(parsed.entryEvidence),
-      riskEvidence: safeUserText(parsed.riskEvidence),
+      tradeVisibilityReason: ticketOrder
+        ? `Order #${ticketOrder.ticket} (${ticketOrder.direction}) is plotted directly on the chart.`
+        : String(parsed.tradeVisibilityReason || "").trim(),
+      entryEvidence: ticketOrder
+        ? `A ${ticketOrder.direction} entry (order #${ticketOrder.ticket}) is marked at ${
+            ticketOrder.entryPrice ?? "the labeled line"
+          }.`
+        : safeUserText(parsed.entryEvidence),
+      riskEvidence: ticketOrder && (ticketOrder.stopPrice || ticketOrder.targetPrice)
+        ? [
+            ticketOrder.stopPrice
+              ? `The stop loss line is marked at ${ticketOrder.stopPrice} (order ${ticketOrder.stopLabel}).`
+              : "",
+            ticketOrder.targetPrice
+              ? `The target line is marked at ${ticketOrder.targetPrice} (order ${ticketOrder.targetLabel}).`
+              : "",
+          ].filter(Boolean).join(" ")
+        : ticketOrder
+        ? "No stop loss or target line is marked for this order."
+        : safeUserText(parsed.riskEvidence),
       chartNativeEntryFallback: promoteConfirmedBreakPassedExactLevels(
         replaceMisclassifiedZoneWithExactConvertedLines(
           normalizeChartNativeEntryFallback(parsed.internalChartNativeFallback || {}),
