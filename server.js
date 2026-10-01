@@ -31984,6 +31984,39 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       symbol: normalizedSymbol || submittedInstrument,
     });
 
+    // Ticket-labeled order lines (e.g. "#44111581 sl") can arrive from the
+    // dedicated independent line reader rather than the main visual-review
+    // call, after mergeDedicatedFrameworkPriceMapIntoVisualReview above - the
+    // earlier detection inside compareUploadedChartWithCsaFramework only
+    // sees that call's own raw output and misses labels added by this later
+    // merge. Re-check the fully merged list here, which is authoritative.
+    const finalTicketOrder = detectTicketOrderMarkup([
+      ...(Array.isArray(visualReview?.visibleMarkedLevels) ? visualReview.visibleMarkedLevels : []),
+      ...(Array.isArray(visualReview?.visibleHorizontalLines) ? visualReview.visibleHorizontalLines : []),
+    ]);
+
+    if (finalTicketOrder) {
+      visualReview = {
+        ...visualReview,
+        tradeVisibility: "visible",
+        tradeVisibilityReason: `Order #${finalTicketOrder.ticket} (${finalTicketOrder.direction}) is plotted directly on the chart.`,
+        entryEvidence: `A ${finalTicketOrder.direction} entry (order #${finalTicketOrder.ticket}) is marked at ${
+          finalTicketOrder.entryPrice ?? "the labeled line"
+        }.`,
+        riskEvidence:
+          finalTicketOrder.stopPrice || finalTicketOrder.targetPrice
+            ? [
+                finalTicketOrder.stopPrice
+                  ? `The stop loss line is marked at ${finalTicketOrder.stopPrice} (order ${finalTicketOrder.stopLabel}).`
+                  : "",
+                finalTicketOrder.targetPrice
+                  ? `The target line is marked at ${finalTicketOrder.targetPrice} (order ${finalTicketOrder.targetLabel}).`
+                  : "",
+              ].filter(Boolean).join(" ")
+            : "No stop loss or target line is marked for this order.",
+      };
+    }
+
     console.log("Final enriched visual review:", {
       direction: visualReview?.preferredEntryArea?.direction || null,
       areaType: visualReview?.preferredEntryArea?.areaType || null,
