@@ -26487,6 +26487,10 @@ function buildValidatedAnalysisFacts({
     submittedNotes,
   });
   const tradeVisible = tradeVisibility === "visible";
+  const executedOrder = detectTicketOrderMarkup([
+    ...(Array.isArray(visualReview?.visibleMarkedLevels) ? visualReview.visibleMarkedLevels : []),
+    ...(Array.isArray(visualReview?.visibleHorizontalLines) ? visualReview.visibleHorizontalLines : []),
+  ]);
 
   // Keep trader-owned evidence separate from coach-generated structure.
   // A deterministic Entry 1 is coaching guidance; it is not something the
@@ -26879,6 +26883,8 @@ function buildValidatedAnalysisFacts({
       visible: tradeVisible,
       outcome: tradeOutcome,
     },
+    executedOrder,
+    currentPrice,
     chartCutoff: {
       latestVisibleDate: chartDetection?.latestVisibleDate || null,
       latestVisibleTime: chartDetection?.latestVisibleTime || null,
@@ -28134,6 +28140,63 @@ function buildControlledFeedback({
       facts.convertedLevel.assessment ||
         "The broken level still needs an opposite-side retest before its new role is confirmed."
     );
+  }
+
+  // A visible, ticket-labeled order is the trader's own real decision, not
+  // framework guidance - compare it against the framework's own planned
+  // level and the current price, in plain beginner-friendly language.
+  if (facts.trade.visible && facts.executedOrder) {
+    const order = facts.executedOrder;
+    const entryPrice = Number(order.entryPrice);
+    const orderDirection = order.direction;
+
+    if (
+      hasValidatedArea &&
+      Number.isFinite(Number(area?.authoritativeCenter)) &&
+      Number.isFinite(entryPrice)
+    ) {
+      const frameworkPrice = Number(area.authoritativeCenter);
+      const closeEnough =
+        Math.abs(entryPrice - frameworkPrice) / frameworkPrice <= 0.0005;
+      const betterPrice =
+        orderDirection === "sell"
+          ? entryPrice > frameworkPrice
+          : entryPrice < frameworkPrice;
+
+      if (closeEnough) {
+        strengths.push(
+          `You entered very close to the ${areaText}, which lines up well with where this setup was looking for a ${orderDirection}.`
+        );
+      } else if (betterPrice) {
+        strengths.push(
+          `You got a better entry price than planned: you went ${orderDirection} at ${entryPrice}, versus the ${areaText} the framework was watching.`
+        );
+      } else {
+        weaknesses.push(
+          `You went ${orderDirection} at ${entryPrice}, which is before price actually reached the ${areaText}. Entering early like this means there was less confirmation that the level would hold.`
+        );
+      }
+    }
+
+    if (Number.isFinite(Number(facts.currentPrice)) && Number.isFinite(entryPrice)) {
+      const current = Number(facts.currentPrice);
+      const movedInFavor =
+        orderDirection === "sell" ? current < entryPrice : current > entryPrice;
+      const roughlyFlat =
+        Math.abs(current - entryPrice) / entryPrice <= 0.0005;
+
+      if (!roughlyFlat) {
+        if (movedInFavor) {
+          strengths.push(
+            `This trade is currently in profit: price has moved to ${current} since your ${orderDirection} entry at ${entryPrice}.`
+          );
+        } else {
+          weaknesses.push(
+            `This trade is currently showing a loss: price has moved to ${current} since your ${orderDirection} entry at ${entryPrice}.`
+          );
+        }
+      }
+    }
   }
 
   const lockedStrengths =
