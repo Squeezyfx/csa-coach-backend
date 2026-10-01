@@ -28109,10 +28109,20 @@ function buildControlledFeedback({
   }
 
   if (!facts.risk.assessable) {
+    const stopOnlyShown = facts.risk.stopShown && !facts.risk.targetShown;
+    const targetOnlyShown = !facts.risk.stopShown && facts.risk.targetShown;
     weaknesses.push(
       hasValidatedArea
-        ? `For the ${chartScope} plan, a stop loss and target are not both shown for the planned ${action} from the ${areaText}, so its risk cannot yet be fully assessed.`
-        : `For ${chartScope}, a stop loss and target are not both clearly shown, so the planned risk cannot yet be fully assessed.`
+        ? stopOnlyShown
+          ? `For the ${chartScope} plan, a stop loss is marked for the planned ${action} from the ${areaText}, but no take-profit/target level is shown, so the full risk-to-reward cannot yet be assessed.`
+          : targetOnlyShown
+          ? `For the ${chartScope} plan, a target is marked for the planned ${action} from the ${areaText}, but no stop-loss level is shown, so the downside risk cannot yet be assessed.`
+          : `For the ${chartScope} plan, a stop loss and target are not shown for the planned ${action} from the ${areaText}, so its risk cannot yet be fully assessed.`
+        : stopOnlyShown
+        ? "A stop loss is marked, but no take-profit/target level is clearly shown, so the full risk-to-reward cannot yet be assessed."
+        : targetOnlyShown
+        ? "A target is marked, but no stop-loss level is clearly shown, so the downside risk cannot yet be assessed."
+        : `For ${chartScope}, a stop loss and target are not shown, so the planned risk cannot yet be fully assessed.`
     );
   }
 
