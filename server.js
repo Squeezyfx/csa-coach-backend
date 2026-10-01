@@ -27811,6 +27811,48 @@ function buildEvidenceAwareDisplayLabels(scoreContext = {}) {
   };
 }
 
+// A plain-English phrase for each internal structural-phase slug, used in
+// place of a naive underscore-to-space replace. That naive version read
+// fine for simple phases ("bullish breakout") but produced an ungrammatical
+// fragment for compound ones ("bullish breakout failed bearish reversal" -
+// missing the words that make it a sentence a beginner can parse). Never
+// starts with "the" - callers already supply it.
+const STRUCTURAL_PHASE_PHRASES = {
+  bullish_breakout: "bullish breakout",
+  bearish_breakdown: "bearish breakdown",
+  bullish_recovery_after_bearish_breakdown:
+    "bullish recovery after the earlier bearish breakdown",
+  bearish_pullback_after_bullish_breakout:
+    "bearish pullback after the bullish breakout",
+  bullish_breakout_failed_bearish_reversal:
+    "failed bullish breakout, which reversed into a bearish move",
+  bearish_breakdown_failed_bullish_reversal:
+    "failed bearish breakdown, which reversed into a bullish move",
+  bullish_structure: "bullish structure",
+  bearish_structure: "bearish structure",
+  bearish_pullback_after_bullish_structure:
+    "bearish pullback within the bullish structure",
+  bullish_recovery_after_bearish_structure:
+    "bullish recovery within the bearish structure",
+  bullish_structure_after_reclaimed_internal_breakdown:
+    "bullish structure, confirmed after price reclaimed the earlier breakdown",
+  bearish_structure_after_reclaimed_internal_breakout:
+    "bearish structure, confirmed after price reclaimed the earlier breakout",
+  bullish_reversal_past_618_retracement:
+    "bullish reversal after a deep pullback",
+  bearish_reversal_past_618_retracement:
+    "bearish reversal after a deep pullback",
+  bullish_structure_takeover: "bullish structure",
+  bearish_structure_takeover: "bearish structure",
+  bullish_current_period_structure: "bullish structure for the current period",
+  bearish_current_period_structure: "bearish structure for the current period",
+};
+
+function phraseForStructuralPhase(phaseSlug = "") {
+  const key = String(phaseSlug || "").toLowerCase();
+  return STRUCTURAL_PHASE_PHRASES[key] || key.replace(/_/g, " ");
+}
+
 function buildControlledFeedback({
   facts,
   plan = "starter",
@@ -27933,7 +27975,7 @@ function buildControlledFeedback({
     .filter(Boolean)
     .join(" ") || "this chart";
   const structuralState = historicalPhaseName
-    ? historicalPhaseName.replace(/_/g, " ")
+    ? phraseForStructuralPhase(historicalPhaseName)
     : `${facts.direction || "resolved"} market structure`;
 
   const strengths = [];
@@ -27966,7 +28008,7 @@ function buildControlledFeedback({
     );
   } else if (hasValidatedArea) {
     strengths.push(
-      `On ${chartScope}, the ${structuralState} produced Entry 1 at the ${areaText} after the full structural and entry-quality checks.`
+      `On ${chartScope}, the ${structuralState} led to Entry 1 at the ${areaText} - this level passed every check the framework requires before being treated as a real entry.`
     );
   } else {
     strengths.push(
