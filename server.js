@@ -27225,19 +27225,37 @@ function applySelectedEntryNarrativeLockToVisualReview({
   };
 }
 
+// Secondary mentions of an area's type (outside the main formatRankedArea
+// label) still interpolated the raw areaType value directly, leaking
+// "converted resistance/support" as unexplained jargon in sentences like
+// "the previous converted resistance area has failed." Plain-language
+// version for those spots; formatRankedArea below has the fuller
+// confirmed/potential distinction for the primary, most-visible mention.
+function plainAreaTypeLabel(areaType = "") {
+  const type = String(areaType || "").toLowerCase();
+  if (type === "converted resistance") return "support-turned-resistance";
+  if (type === "converted support") return "resistance-turned-support";
+  return type || "entry";
+}
+
 function formatRankedArea(area, fallbackType = "entry") {
   if (!area) return "";
 
   const rawType = String(area.areaType || fallbackType);
   const normalizedType = rawType.toLowerCase();
 
+  // "Converted support/resistance" is accurate CSA terminology but opaque
+  // to a brand-new trader. Say what actually happened instead: which side
+  // the level used to be, and what it's acting as now.
   const base =
-    normalizedType === "converted support" &&
-    area?.conversionConfirmed !== true
-      ? "potential converted support"
-      : normalizedType === "converted resistance" &&
-        area?.conversionConfirmed !== true
-      ? "potential converted resistance"
+    normalizedType === "converted support"
+      ? area?.conversionConfirmed === true
+        ? "confirmed resistance-turned-support"
+        : "possible resistance-turned-support"
+      : normalizedType === "converted resistance"
+      ? area?.conversionConfirmed === true
+        ? "confirmed support-turned-resistance"
+        : "possible support-turned-resistance"
       : rawType;
 
   const exactLevel =
@@ -28000,7 +28018,7 @@ function buildControlledFeedback({
     hasValidatedArea
   ) {
     strengths.push(
-      `The marked ${area.areaType} area ${area.zoneText} agrees with the first ${action} area identified from the chart structure.`
+      `The marked ${plainAreaTypeLabel(area.areaType)} area ${area.zoneText} agrees with the first ${action} area identified from the chart structure.`
     );
   } else if (userEvidence.chartMarked) {
     strengths.push(
@@ -28090,7 +28108,7 @@ function buildControlledFeedback({
     );
   } else if (area.invalidated) {
     weaknesses.push(
-      `The previous ${area.areaType} area has failed and should no longer be used for the original ${action} idea.`
+      `The previous ${plainAreaTypeLabel(area.areaType)} area has failed and should no longer be used for the original ${action} idea.`
     );
   } else {
     if (!area.areaRetested) {
@@ -28099,7 +28117,7 @@ function buildControlledFeedback({
           ? `The ${areaText} has not yet been confirmed by a retest from below.`
           : area.areaType === "converted support"
           ? `The ${areaText} has not yet been confirmed by a retest from above.`
-          : `Price has not yet retested the planned ${area.areaType} area, so there is no confirmed entry yet.`
+          : `Price has not yet retested the planned ${plainAreaTypeLabel(area.areaType)} area, so there is no confirmed entry yet.`
       );
     }
 
@@ -28109,7 +28127,7 @@ function buildControlledFeedback({
           ? `No fresh bearish rejection is visible at the ${areaText} yet.`
           : area.areaType === "converted support"
           ? `No fresh bullish hold is visible at the ${areaText} yet.`
-          : `No fresh ${triggerSide} trigger is visible at the planned ${area.areaType} area yet.`
+          : `No fresh ${triggerSide} trigger is visible at the planned ${plainAreaTypeLabel(area.areaType)} area yet.`
       );
     }
   }
@@ -28340,10 +28358,10 @@ function buildControlledFeedback({
   } else if (area.invalidated) {
     if (facts.direction === "bearish") {
       nextAction =
-        `Do not reuse the failed ${area.areaType} area for another sell. Wait for a new supply or confirmed resistance area to form, then require a fresh bearish trigger before considering the next setup.`;
+        `Do not reuse the failed ${plainAreaTypeLabel(area.areaType)} area for another sell. Wait for a new supply or confirmed resistance area to form, then require a fresh bearish trigger before considering the next setup.`;
     } else if (facts.direction === "bullish") {
       nextAction =
-        `Do not reuse the failed ${area.areaType} area for another buy. Wait for a new demand or confirmed support area to form, then require a fresh bullish trigger before considering the next setup.`;
+        `Do not reuse the failed ${plainAreaTypeLabel(area.areaType)} area for another buy. Wait for a new demand or confirmed support area to form, then require a fresh bullish trigger before considering the next setup.`;
     } else {
       nextAction =
         "The previous area has failed. Wait for a new support or resistance area and a fresh valid trigger before considering another trade.";
