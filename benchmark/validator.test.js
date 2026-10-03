@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   applyBatchFeedbackDiversityChecks,
+  benchmarkValidatorInternals,
   validateBenchmarkResult,
 } from "./validator.js";
 
@@ -820,4 +821,18 @@ test("a verified one-entry baseline rejects an unnecessary Entry 2", () => {
     result.criticalFailures.some((check) => check.id === "expected_entry_count"),
     true
   );
+});
+
+test("plain-language wording satisfies required converted-level terms", () => {
+  const { feedbackMentionsTerm } = benchmarkValidatorInternals;
+  assert.equal(
+    feedbackMentionsTerm("Entry 1 is the possible support-turned-resistance around 1.13524.", "converted resistance"),
+    true
+  );
+  assert.equal(
+    feedbackMentionsTerm("Watch the resistance-turned-support level.", "converted support"),
+    true
+  );
+  assert.equal(feedbackMentionsTerm("Entry 1 is the converted support around 1.2.", "converted support"), true);
+  assert.equal(feedbackMentionsTerm("A plain resistance level.", "converted resistance"), false);
 });

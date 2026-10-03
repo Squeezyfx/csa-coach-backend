@@ -150,10 +150,23 @@ function formatExpectedZone(zone) {
   return zone ? `${zone.low}–${zone.high}` : "";
 }
 
+// Customer-facing feedback says "support-turned-resistance" instead of the
+// internal label "converted resistance" (and the reverse for support), so a
+// saved expectation that requires the internal term must accept the plain
+// wording too.
+const PLAIN_LANGUAGE_TERM_EQUIVALENTS = {
+  "converted resistance": ["support turned resistance"],
+  "converted support": ["resistance turned support"],
+};
+
 function feedbackMentionsTerm(text, term) {
   const normalizedText = normalizeText(text);
   const normalizedTerm = normalizeText(term);
-  return Boolean(normalizedTerm) && normalizedText.includes(normalizedTerm);
+  if (!normalizedTerm) return false;
+  if (normalizedText.includes(normalizedTerm)) return true;
+  return (PLAIN_LANGUAGE_TERM_EQUIVALENTS[normalizedTerm] || []).some((alternative) =>
+    normalizedText.includes(alternative)
+  );
 }
 
 function parsePriceExpectations(value) {
@@ -1006,8 +1019,8 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     ? result.dashboard.weaknesses
     : [];
 
-  addCheck(checks, "strength_limit", "Maximum four strengths", strengths.length <= 4, `${strengths.length} returned.`, false);
-  addCheck(checks, "weakness_limit", "Maximum four weaknesses", weaknesses.length <= 4, `${weaknesses.length} returned.`, false);
+  addCheck(checks, "strength_limit", "Maximum six strengths (one or two per review pillar)", strengths.length <= 6, `${strengths.length} returned.`, false);
+  addCheck(checks, "weakness_limit", "Maximum six weaknesses (one or two per review pillar)", weaknesses.length <= 6, `${weaknesses.length} returned.`, false);
   addCheck(checks, "duplicate_strengths", "No duplicate strengths", duplicateItems(strengths).length === 0, "Exact normalized duplicates are not allowed.", false);
   addCheck(checks, "duplicate_weaknesses", "No duplicate weaknesses", duplicateItems(weaknesses).length === 0, "Exact normalized duplicates are not allowed.", false);
   addCheck(checks, "hidden_fibonacci", "Fibonacci remains internal", !FIB_WORDS.test(feedbackText), "Customer-facing feedback must not mention Fibonacci.");

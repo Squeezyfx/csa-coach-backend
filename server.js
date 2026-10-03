@@ -50,6 +50,7 @@ import {
 import { buildVisiblePeriodFibonacciFrame, resolveCalendarPeriodDirection, resolveDeepRetracementDirectionOverride } from "./benchmark/weekly-fibonacci-policy.js";
 import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodWickExtremesFromPixels } from "./chart-raster-reader.js";
 import { buildChartOverlay } from "./chart-overlay.js";
+import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger } from "./trade-pillars.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -26491,6 +26492,14 @@ function buildValidatedAnalysisFacts({
     ...(Array.isArray(visualReview?.visibleMarkedLevels) ? visualReview.visibleMarkedLevels : []),
     ...(Array.isArray(visualReview?.visibleHorizontalLines) ? visualReview.visibleHorizontalLines : []),
   ]);
+  const entryTrigger =
+    executedOrder && Number.isFinite(Number(executedOrder.entryPrice))
+      ? detectEntryTrigger({
+          candles: marketReference?.timeframeCandles,
+          price: executedOrder.entryPrice,
+          direction: executedOrder.direction,
+        })
+      : null;
 
   // Keep trader-owned evidence separate from coach-generated structure.
   // A deterministic Entry 1 is coaching guidance; it is not something the
@@ -26884,6 +26893,7 @@ function buildValidatedAnalysisFacts({
       outcome: tradeOutcome,
     },
     executedOrder,
+    entryTrigger,
     currentPrice,
     chartCutoff: {
       latestVisibleDate: chartDetection?.latestVisibleDate || null,
@@ -27996,20 +28006,30 @@ function buildControlledFeedback({
     ? phraseForStructuralPhase(historicalPhaseName)
     : `${facts.direction || "resolved"} market structure`;
 
-  const strengths = [];
-
-  if (facts.historicalCutoff?.active) {
-    strengths.push(
-      `The historical review point is clearly defined at ${facts.historicalCutoff.selectedDate}, so later candles are excluded.`
-    );
-  }
+  // Feedback is organised around the five things that decide whether a trade
+  // was a good one: entry area, entry trigger, exit (stop loss / take profit),
+  // risk, and trade management. Every item is tagged with its pillar; the
+  // lists are compiled in that order further down (see trade-pillars.js).
+  const strengthItems = [];
+  const weaknessItems = [];
+  const addStrength = (pillar, text, extra = {}) =>
+    strengthItems.push({ pillar, text, priority: 1, ...extra });
+  const addWeakness = (pillar, text, extra = {}) =>
+    weaknessItems.push({ pillar, text, priority: 1, ...extra });
+  // When the trader's own order is visible, their entry and trigger are
+  // judged directly below. The framework's "not retested / no trigger yet"
+  // notes are about a level they did not enter at, so they only apply to a
+  // plan.
+  const hasExecutedOrder =
+    facts.trade.visible === true && Boolean(facts.executedOrder);
 
   if (
     userEvidence.claimedDirection &&
     userEvidence.claimedDirection === facts.direction
   ) {
-    strengths.push(
-      `The ${facts.direction} direction described in the trade notes agrees with the market structure at the review point.`
+    addStrength(
+      "entry",
+      `Your trade notes describe a ${facts.direction} idea, which matches the market's direction at the review point.`
     );
   }
 
@@ -28017,30 +28037,36 @@ function buildControlledFeedback({
     userEvidence.preferredAreaMarked &&
     hasValidatedArea
   ) {
-    strengths.push(
-      `The marked ${plainAreaTypeLabel(area.areaType)} area ${area.zoneText} agrees with the first ${action} area identified from the chart structure.`
+    addStrength(
+      "entry",
+      `The ${plainAreaTypeLabel(area.areaType)} area you marked ${area.zoneText} matches the first ${action} area the framework found.`
     );
   } else if (userEvidence.chartMarked) {
-    strengths.push(
-      "The chart includes visible support or resistance markings, which makes the price structure easier to review."
+    addStrength(
+      "entry",
+      "You marked support or resistance levels on the chart, which makes your trade easier to review."
     );
   } else if (hasValidatedArea) {
-    strengths.push(
-      `On ${chartScope}, the ${structuralState} led to Entry 1 at the ${areaText} - this level passed every check the framework requires before being treated as a real entry.`
+    addStrength(
+      "entry",
+      `The market structure (${structuralState}) points to Entry 1 at the ${areaText}, and this level passed every check the framework requires.`
     );
   } else {
-    strengths.push(
-      `The ${directionText.toLowerCase()} structure was resolved from the visible swing sequence, even though no entry area passed every structural and entry-quality check.`
+    addStrength(
+      "entry",
+      `The market direction was identified as "${directionText}" from the recent price swings, even though no entry area has passed every check yet.`
     );
   }
 
   if (selectedSecondaryArea && secondaryAreaText) {
-    strengths.push(
-      `The deeper ${secondaryAreaText} remains separate from Entry 1 and is only considered after the first area fails.`
+    addStrength(
+      "entry",
+      `A deeper ${secondaryAreaText} is kept as a backup and is only used if the first area fails.`
     );
   } else if (hasValidatedArea) {
-    strengths.push(
-      `For ${chartScope}, only the ${areaText} qualified as an entry; weaker or duplicate structures were kept out of this trade plan.`
+    addStrength(
+      "entry",
+      `Only the ${areaText} qualified as an entry, so weaker levels were kept out of the plan.`
     );
   }
 
@@ -28049,40 +28075,23 @@ function buildControlledFeedback({
     userEvidence.waitingForConfirmationClaimed &&
     !facts.trade.visible
   ) {
-    strengths.push(
-      "The trade notes show that confirmation is required before entry, which helps avoid entering too early."
+    addStrength(
+      "trigger",
+      "Your trade notes say you wait for confirmation before entering, which helps you avoid entering too early."
     );
   }
-
-  if (
-    facts.trade.visible &&
-    facts.risk.stopShown &&
-    facts.risk.targetShown
-  ) {
-    strengths.push(
-      "The visible stop loss and target make the trade risk possible to assess."
-    );
-  }
-
-  if (!strengths.length) {
-    strengths.push(
-      "The uploaded chart provides enough visible price history for a basic structure review."
-    );
-  }
-
-  const weaknesses = [];
 
   if (isPostTrade && !facts.trade.visible) {
-    weaknesses.push(
-      hasValidatedArea
-        ? `On ${chartScope}, no completed trade is visible at the ${areaText}, so execution accuracy at that specific structure cannot be assessed.`
-        : `On ${chartScope}, no completed trade or entry is visible, so execution accuracy cannot be assessed.`
+    addWeakness(
+      "trade",
+      "No placed trade (an entry line or stop loss line) is visible on this chart, so this review covers the setup plan only. Mark your entry, stop loss and take profit on the chart to get feedback on how you traded it."
     );
   }
 
   if (facts.entryAreaValidation?.passed === false) {
-    weaknesses.push(
-      "The entry-area validation gates rejected one or more contradictory or incorrectly ordered levels, so no unverified area should be used."
+    addWeakness(
+      "entry",
+      "The levels found on this chart did not pass the framework's checks, so none of them should be used as an entry yet."
     );
   }
 
@@ -28091,49 +28100,54 @@ function buildControlledFeedback({
     !bullishRecoveryContext &&
     !bearishPullbackContext
   ) {
-    weaknesses.push(
+    addWeakness(
+      "entry",
       facts.direction === "bearish"
         ? referenceAreasText
           ? hasSingleReferenceArea
-            ? `The ${referenceAreasText} remains a structural reference, but it does not currently qualify as a strong sell entry.`
-            : `The ${referenceAreasText} remain structural references, but neither currently qualifies as a strong sell entry.`
-          : "No sufficiently strong resistance or supply area has been validated for the planned sell yet."
+            ? `The ${referenceAreasText} is worth watching, but it is not strong enough to count as a sell entry yet.`
+            : `The ${referenceAreasText} are worth watching, but neither is strong enough to count as a sell entry yet.`
+          : "No strong resistance or supply area has been confirmed for a sell yet."
         : facts.direction === "bullish"
         ? referenceAreasText
           ? hasSingleReferenceArea
-            ? `The ${referenceAreasText} remains a structural reference, but it does not currently qualify as a strong buy entry.`
-            : `The ${referenceAreasText} remain structural references, but neither currently qualifies as a strong buy entry.`
-          : "No sufficiently strong support or demand area has been validated for the planned buy yet."
-        : "No sufficiently strong entry area has been validated yet."
+            ? `The ${referenceAreasText} is worth watching, but it is not strong enough to count as a buy entry yet.`
+            : `The ${referenceAreasText} are worth watching, but neither is strong enough to count as a buy entry yet.`
+          : "No strong support or demand area has been confirmed for a buy yet."
+        : "No strong entry area has been confirmed yet."
     );
   } else if (area.invalidated) {
-    weaknesses.push(
-      `The previous ${plainAreaTypeLabel(area.areaType)} area has failed and should no longer be used for the original ${action} idea.`
+    addWeakness(
+      "entry",
+      `The previous ${plainAreaTypeLabel(area.areaType)} area has failed (price broke through it), so it should no longer be used for the original ${action} idea.`
     );
   } else {
-    if (!area.areaRetested) {
-      weaknesses.push(
+    if (!area.areaRetested && !hasExecutedOrder) {
+      addWeakness(
+        "entry",
         area.areaType === "converted resistance"
-          ? `The ${areaText} has not yet been confirmed by a retest from below.`
+          ? `The ${areaText} is not confirmed yet: price still needs to come back up to it and be rejected (a retest from below).`
           : area.areaType === "converted support"
-          ? `The ${areaText} has not yet been confirmed by a retest from above.`
-          : `Price has not yet retested the planned ${plainAreaTypeLabel(area.areaType)} area, so there is no confirmed entry yet.`
+          ? `The ${areaText} is not confirmed yet: price still needs to come back down to it and hold (a retest from above).`
+          : `Price has not yet returned to the planned ${plainAreaTypeLabel(area.areaType)} area, so there is no confirmed entry yet.`
       );
     }
 
-    if (!area.triggerPresent) {
-      weaknesses.push(
+    if (!area.triggerPresent && !hasExecutedOrder) {
+      addWeakness(
+        "trigger",
         area.areaType === "converted resistance"
-          ? `No fresh bearish rejection is visible at the ${areaText} yet.`
+          ? `No bearish trigger candle has formed at the ${areaText} yet.`
           : area.areaType === "converted support"
-          ? `No fresh bullish hold is visible at the ${areaText} yet.`
-          : `No fresh ${triggerSide} trigger is visible at the planned ${plainAreaTypeLabel(area.areaType)} area yet.`
+          ? `No bullish trigger candle has formed at the ${areaText} yet.`
+          : `No ${triggerSide} trigger candle has formed at the planned ${plainAreaTypeLabel(area.areaType)} area yet.`
       );
     }
   }
 
   if (bullishRecoveryContext) {
-    weaknesses.push(
+    addWeakness(
+      "entry",
       areaText
         ? `The bullish recovery has not yet broken and held above the ${areaText}, so the broader bearish structure is not fully reversed.`
         : referenceAreaTexts[0]
@@ -28145,7 +28159,8 @@ function buildControlledFeedback({
         : "The bullish recovery has not yet broken and held above the main resistance, so the broader bearish structure is not fully reversed."
     );
   } else if (bearishPullbackContext) {
-    weaknesses.push(
+    addWeakness(
+      "entry",
       areaText
         ? `The bearish pullback has not yet broken and held below the ${areaText}, so the broader bullish structure is not fully reversed.`
         : referenceAreaTexts[0]
@@ -28162,33 +28177,17 @@ function buildControlledFeedback({
     facts.breakoutState?.extended &&
     facts.direction === "bullish"
   ) {
-    weaknesses.push(
-      "Price is already close to resistance after the sharp bullish move, so buying now may offer poor risk-to-reward."
+    addWeakness(
+      "risk",
+      "Price has already run up close to resistance, so buying now leaves little room to profit compared with the risk."
     );
   } else if (
     facts.breakoutState?.extended &&
     facts.direction === "bearish"
   ) {
-    weaknesses.push(
-      "Price is already close to support after the sharp bearish move, so selling now may offer poor risk-to-reward."
-    );
-  }
-
-  if (!facts.risk.assessable) {
-    const stopOnlyShown = facts.risk.stopShown && !facts.risk.targetShown;
-    const targetOnlyShown = !facts.risk.stopShown && facts.risk.targetShown;
-    weaknesses.push(
-      hasValidatedArea
-        ? stopOnlyShown
-          ? `For the ${chartScope} plan, a stop loss is marked for the planned ${action} from the ${areaText}, but no take-profit/target level is shown, so the full risk-to-reward cannot yet be assessed.`
-          : targetOnlyShown
-          ? `For the ${chartScope} plan, a target is marked for the planned ${action} from the ${areaText}, but no stop-loss level is shown, so the downside risk cannot yet be assessed.`
-          : `For the ${chartScope} plan, a stop loss and target are not shown for the planned ${action} from the ${areaText}, so its risk cannot yet be fully assessed.`
-        : stopOnlyShown
-        ? "A stop loss is marked, but no take-profit/target level is clearly shown, so the full risk-to-reward cannot yet be assessed."
-        : targetOnlyShown
-        ? "A target is marked, but no stop-loss level is clearly shown, so the downside risk cannot yet be assessed."
-        : `For ${chartScope}, a stop loss and target are not shown, so the planned risk cannot yet be fully assessed.`
+    addWeakness(
+      "risk",
+      "Price has already dropped close to support, so selling now leaves little room to profit compared with the risk."
     );
   }
 
@@ -28196,96 +28195,40 @@ function buildControlledFeedback({
     facts.convertedLevel.detected &&
     ["broken", "potential_conversion"].includes(facts.convertedLevel.state)
   ) {
-    weaknesses.push(
+    addWeakness(
+      "entry",
       facts.convertedLevel.assessment ||
-        "The broken level still needs an opposite-side retest before its new role is confirmed."
+        "A level that price just broke through still needs price to come back and test it from the other side before it counts as confirmed."
     );
   }
 
-  // A visible, ticket-labeled order is the trader's own real decision, not
-  // framework guidance - compare it against the framework's own planned
-  // level and the current price, in plain beginner-friendly language.
-  if (facts.trade.visible && facts.executedOrder) {
-    const order = facts.executedOrder;
-    const entryPrice = Number(order.entryPrice);
-    const orderDirection = order.direction;
+  // The trader's own placed order (entry, stop loss, take profit), when one
+  // is visible, is judged against the five pillars; with no placed trade the
+  // same pillars become a plan to follow.
+  const pillars = assessTradePillars({ facts, area, hasValidatedArea });
+  strengthItems.push(...pillars.strengths);
+  weaknessItems.push(...pillars.weaknesses);
 
-    if (
-      hasValidatedArea &&
-      Number.isFinite(Number(area?.authoritativeCenter)) &&
-      Number.isFinite(entryPrice)
-    ) {
-      const frameworkPrice = Number(area.authoritativeCenter);
-      const closeEnough =
-        Math.abs(entryPrice - frameworkPrice) / frameworkPrice <= 0.0005;
-      const betterPrice =
-        orderDirection === "sell"
-          ? entryPrice > frameworkPrice
-          : entryPrice < frameworkPrice;
+  let finalStrengths = cleanUserFeedbackItems(compilePillarItems(strengthItems));
 
-      if (closeEnough) {
-        strengths.push(
-          `Your entry price lines up closely with the framework's own planned level around ${frameworkPrice}, which is exactly where this ${orderDirection} setup was looking for a reaction.`
-        );
-      } else if (betterPrice) {
-        strengths.push(
-          `Your actual entry at ${entryPrice} was a better price than the framework's own planned level around ${frameworkPrice} - going ${orderDirection} there worked in your favor.`
-        );
-      } else {
-        weaknesses.push(
-          `Your entry at ${entryPrice} happened before price actually reached the framework's planned level around ${frameworkPrice}. Entering early like this means there was less confirmation that the level would hold.`
-        );
-      }
-    }
-
-    if (Number.isFinite(Number(facts.currentPrice)) && Number.isFinite(entryPrice)) {
-      const current = Number(facts.currentPrice);
-      const movedInFavor =
-        orderDirection === "sell" ? current < entryPrice : current > entryPrice;
-      const roughlyFlat =
-        Math.abs(current - entryPrice) / entryPrice <= 0.0005;
-
-      if (!roughlyFlat) {
-        if (movedInFavor) {
-          strengths.push(
-            `This trade is currently in profit: price has moved to ${current} since your ${orderDirection} entry at ${entryPrice}.`
-          );
-        } else {
-          weaknesses.push(
-            `This trade is currently showing a loss: price has moved to ${current} since your ${orderDirection} entry at ${entryPrice}.`
-          );
-        }
-      }
-    }
+  if (!finalStrengths.length) {
+    finalStrengths = [
+      "The uploaded chart provides enough visible price history for a basic review."
+    ];
   }
 
-  const lockedStrengths =
-    cleanUserFeedbackItems(
-      strengths
-    );
+  const coachStrengths = finalStrengths;
 
-  // Keep WHAT YOU DID WELL limited to trader-owned evidence. Deterministic
-  // Entry 1 / Entry 2 / Entry 3 areas belong in Next Action and Chart Levels, not in
-  // strengths, unless a matching trader marking was already credited above.
-  const canonicalStrengths = [
-    ...lockedStrengths,
-  ];
-
-  const finalStrengths =
-    removeSemanticFeedbackDuplicates(
-      cleanUserFeedbackItems(
-        canonicalStrengths
-      ),
-      4
-    );
-  let finalWeaknesses = prioritizeStarterWeaknesses(
-    removeSemanticFeedbackDuplicates(cleanUserFeedbackItems(weaknesses), 4)
+  let finalWeaknesses = cleanUserFeedbackItems(compilePillarItems(weaknessItems));
+  let coachWeaknesses = cleanUserFeedbackItems(
+    compilePillarItems(weaknessItems, { withWhy: true })
   );
 
   if (!finalWeaknesses.length) {
     finalWeaknesses = [
-      "No major weakness was confirmed from the visible information, but the entry, stop loss, and target should remain clearly marked."
+      "No major weakness was confirmed from the visible information. Keep marking your entry, stop loss and take profit clearly on the chart."
     ];
+    coachWeaknesses = finalWeaknesses;
   }
 
   let nextAction;
@@ -28403,6 +28346,40 @@ function buildControlledFeedback({
       `${nextAction} This review excludes candles formed after ${facts.historicalCutoff.selectedDate}.`;
   }
 
+  // Plain-language pass over the entry paragraph: the reward-to-risk check
+  // now lives in the Risk pillar, and "reference area only" wording becomes
+  // "a level to watch, not an entry".
+  nextAction = nextAction
+    .replace(
+      /\s*Make sure there is enough room to the next (?:support|resistance) for a reasonable risk-to-reward ratio\./g,
+      ""
+    )
+    .replace("Another important structural area is the", "Also keep an eye on the")
+    .replace(
+      "It remains a reference only and must not be treated as Entry 2 unless it later meets the full setup rules.",
+      "It is a level to watch, not an entry, unless it later meets the full setup rules."
+    )
+    .replace(
+      "These remain reference areas only and must not be treated as Entry 1 or Entry 2 unless they later meet the full setup rules.",
+      "These are levels to watch, not entries, unless they later meet the full setup rules."
+    )
+    .replace(
+      "but it is a reference area only and should not be treated as Entry 1 unless it later meets the full setup rules.",
+      "but it is a level to watch, not an entry, unless it later meets the full setup rules."
+    )
+    .replace(
+      "but they are reference areas only and should not be treated as Entry 1 or Entry 2 unless they later meet the full setup rules.",
+      "but they are levels to watch, not entries, unless they later meet the full setup rules."
+    );
+
+  // Next action follows the same five pillars. The paragraph above is the
+  // entry plan; the other pillars add what to wait for, where to exit, how
+  // much to risk and how to manage the trade.
+  const entryPlan = facts.trade.visible
+    ? `For your next setup: ${nextAction}`
+    : nextAction;
+  const nextSteps = buildPillarNextSteps({ entryPlan, next: pillars.next });
+
   const scores =
     controlledScores(facts);
 
@@ -28431,13 +28408,13 @@ function buildControlledFeedback({
     directionText,
     "",
     "WHAT YOU DID WELL:",
-    ...finalStrengths.map((item) => `- ${item}`),
+    ...coachStrengths.map((item) => `- ${item}`),
     "",
     "WHAT TO IMPROVE:",
-    ...finalWeaknesses.map((item) => `- ${item}`),
+    ...coachWeaknesses.map((item) => `- ${item}`),
     "",
     "NEXT ACTION:",
-    nextAction,
+    ...nextSteps.map((item) => `- ${item}`),
   ];
 
   const proSections = [
@@ -28465,12 +28442,6 @@ function buildControlledFeedback({
     `- Valid trigger present: ${area.triggerPresent ? "Yes" : "No"}.`,
     `- Stop shown: ${facts.risk.stopShown ? "Yes" : "No"}.`,
     `- Target shown: ${facts.risk.targetShown ? "Yes" : "No"}.`,
-    "",
-    "RISK & TRADE MANAGEMENT:",
-    facts.risk.assessable
-      ? "- The visible stop and target allow the planned risk to be reviewed."
-      : "- Add a clear invalidation point, target and position-risk plan before execution.",
-    "- First target should normally be the next opposing support or resistance area.",
   ];
 
   const eliteSections = [
@@ -28504,6 +28475,7 @@ function buildControlledFeedback({
     strengths: finalStrengths,
     weaknesses: finalWeaknesses,
     nextAction,
+    nextSteps,
     entry1: hasValidatedArea
       ? {
           areaType: area.areaType,
