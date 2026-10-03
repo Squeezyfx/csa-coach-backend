@@ -27962,7 +27962,29 @@ function buildControlledFeedback({
       )
     : referenceAreas;
 
-  const referenceAreaTexts = coachingReferenceAreas
+  // With no validated entry, a reference level on the wrong side of the bias
+  // (a resistance under a bullish bias, a support under a bearish one) is not
+  // somewhere to buy or sell from. It is a level price has to break first, so
+  // keep it out of the "watch for a bullish hold / bearish rejection" wording.
+  const wrongSideTypes =
+    facts.direction === "bullish"
+      ? ["resistance", "supply", "converted resistance"]
+      : facts.direction === "bearish"
+      ? ["support", "demand", "converted support"]
+      : [];
+  const isWrongSideReference = (reference) =>
+    !hasValidatedArea &&
+    wrongSideTypes.includes(String(reference?.areaType || "").toLowerCase());
+  const entryReferenceAreas = coachingReferenceAreas.filter(
+    (reference) => !isWrongSideReference(reference)
+  );
+  const wrongSideReference =
+    coachingReferenceAreas.find(isWrongSideReference) || null;
+  const wrongSideReferenceText = wrongSideReference
+    ? formatRankedArea(wrongSideReference, "level")
+    : "";
+
+  const referenceAreaTexts = entryReferenceAreas
     .slice(0, 2)
     .map((reference) =>
       formatRankedArea(
@@ -28138,6 +28160,15 @@ function buildControlledFeedback({
         : "No strong entry area found yet.",
       { short: "No strong entry level yet" }
     );
+    if (!referenceAreasText && wrongSideReferenceText) {
+      addWeakness(
+        "entry",
+        facts.direction === "bullish"
+          ? `The ${wrongSideReferenceText} is a level to break above, not a place to buy.`
+          : `The ${wrongSideReferenceText} is a level to break below, not a place to sell.`,
+        { short: "Nearby level is not an entry" }
+      );
+    }
   } else if (area.invalidated) {
     addWeakness(
       "entry",
@@ -28283,13 +28314,21 @@ function buildControlledFeedback({
           ? hasSingleReferenceArea
             ? `No strong sell entry is confirmed yet. The ${referenceAreasText} is the main structural area to watch, but it is a reference area only and should not be treated as Entry 1 unless it later meets the full setup rules. Avoid forcing a sell; wait for a stronger resistance or supply setup and a fresh bearish rejection.`
             : `No strong sell entry is confirmed yet. The ${referenceAreasText} are the main structural areas to watch, but they are reference areas only and should not be treated as Entry 1 or Entry 2 unless they later meet the full setup rules. Avoid forcing a sell; wait for a stronger resistance or supply setup and a fresh bearish rejection.`
-          : "No high-quality resistance or supply entry area is confirmed yet. Avoid forcing a sell location. Wait for price to retrace into a clearly validated resistance or supply zone, then require a fresh bearish rejection."
+          : `No high-quality resistance or supply entry area is confirmed yet. Avoid forcing a sell location. Wait for price to retrace into a clearly validated resistance or supply zone, then require a fresh bearish rejection.${
+              wrongSideReferenceText
+                ? ` The ${wrongSideReferenceText} is a level to break below, not a place to sell.`
+                : ""
+            }`
         : facts.direction === "bullish"
         ? referenceAreasText
           ? hasSingleReferenceArea
             ? `No strong buy entry is confirmed yet. The ${referenceAreasText} is the main structural area to watch, but it is a reference area only and should not be treated as Entry 1 unless it later meets the full setup rules. Avoid forcing a buy; wait for a stronger support or demand setup and a fresh bullish hold.`
             : `No strong buy entry is confirmed yet. The ${referenceAreasText} are the main structural areas to watch, but they are reference areas only and should not be treated as Entry 1 or Entry 2 unless they later meet the full setup rules. Avoid forcing a buy; wait for a stronger support or demand setup and a fresh bullish hold.`
-          : "No high-quality support or demand entry area is confirmed yet. Avoid forcing a buy location. Wait for price to return into a clearly validated support or demand zone, then require a fresh bullish hold."
+          : `No high-quality support or demand entry area is confirmed yet. Avoid forcing a buy location. Wait for price to return into a clearly validated support or demand zone, then require a fresh bullish hold.${
+              wrongSideReferenceText
+                ? ` The ${wrongSideReferenceText} is a level to break above, not a place to buy.`
+                : ""
+            }`
         : "No high-quality entry area is confirmed yet. Wait for a clearly validated support or resistance zone and a fresh trigger.";
   } else if (
     facts.transitionState?.bullishRecoveryAfterBreakdown &&
@@ -28412,6 +28451,10 @@ function buildControlledFeedback({
   if (!hasValidatedArea) {
     entryPlan = referenceAreasText
       ? `No strong entry yet. Watch the ${referenceAreasText} for a ${entryTriggerWord}.`
+      : wrongSideReferenceText && facts.direction === "bullish"
+      ? `No strong buy area yet. Wait for a clear support or demand level, or for price to break above the ${wrongSideReferenceText} and hold.`
+      : wrongSideReferenceText && facts.direction === "bearish"
+      ? `No strong sell area yet. Wait for a clear resistance or supply level, or for price to break below the ${wrongSideReferenceText} and hold.`
       : "No strong entry yet. Wait for a clear support or resistance level and a trigger.";
   } else if (area.invalidated) {
     entryPlan = "That level failed. Wait for a new level.";

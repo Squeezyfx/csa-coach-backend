@@ -85,10 +85,16 @@ export function collectStructuralLevels(facts = {}) {
 
   const prices = [];
   for (const item of sources) {
+    // Structural candidates that failed the framework's own checks are noise.
+    if (item?.structurallyValid === false) continue;
     const low = num(item?.zoneLow);
     const high = num(item?.zoneHigh);
+    // The selector reports candidates as chartReconciledPrice/frameworkPrice,
+    // entry areas as authoritativeCenter.
     const price =
       num(item?.price) ??
+      num(item?.chartReconciledPrice) ??
+      num(item?.frameworkPrice) ??
       num(item?.authoritativeCenter) ??
       (low !== null && high !== null ? (low + high) / 2 : null);
     if (price !== null && price > 0) prices.push(price);
@@ -195,6 +201,65 @@ const RISK_RULE =
 
 const PLAN_MANAGEMENT =
   "Plan ahead: move your stop to breakeven (your entry price), take some profit (a partial close), or trail your stop.";
+
+// ---------------------------------------------------------- take-profit ladder
+// The last take profit is the main swing in the trade's direction: the swing
+// low for a sell, the swing high for a buy. Key levels between the entry and
+// that swing become TP1, TP2 (at most two, spread out). Without a usable swing
+// the ladder is the single next key level, as before.
+
+// The main swing in the profit direction, if it lies beyond `origin`.
+export function finalSwingTarget(facts = {}, origin, isSell) {
+  const start = num(origin);
+  if (start === null) return null;
+  const fib = facts?.selectorDiagnostics?.fibonacci;
+  const swing = isSell ? num(fib?.swingLow) : num(fib?.swingHigh);
+  if (swing === null || swing <= 0) return null;
+  const gap = start * 0.0003;
+  return (isSell ? swing < start - gap : swing > start + gap) ? swing : null;
+}
+
+// [{ price, final }] ordered nearest to farthest, at most `maxIntermediate`
+// key levels plus the final swing target.
+export function buildTargetLadder({ levels = [], origin, isSell, finalTarget = null, maxIntermediate = 2 }) {
+  const start = num(origin);
+  if (start === null) return [];
+  const gap = start * 0.0003;
+  const beyond = levels
+    .filter((l) => (isSell ? l < start - gap : l > start + gap))
+    .sort((a, b) => (isSell ? b - a : a - b));
+
+  if (finalTarget === null) {
+    return beyond.length ? [{ price: beyond[0], final: false }] : [];
+  }
+
+  const between = beyond.filter((l) => Math.abs(l - finalTarget) > gap && (isSell ? l > finalTarget : l < finalTarget));
+  const picks = Math.min(maxIntermediate, between.length);
+  const chosen = [];
+  for (let k = 1; k <= picks; k++) {
+    const index = Math.min(between.length - 1, Math.max(0, Math.round((k * (between.length + 1)) / (picks + 1)) - 1));
+    if (!chosen.includes(between[index])) chosen.push(between[index]);
+  }
+  return [
+    ...chosen.map((price) => ({ price, final: false })),
+    { price: finalTarget, final: true },
+  ];
+}
+
+// "Take profit: ..." wording for a ladder (without the leading "Take profit(s):").
+function describeLadder(ladder, isSell) {
+  const swingWord = isSell ? "swing low" : "swing high";
+  const keyWord = isSell ? "key low" : "key high";
+  if (ladder.length === 1) {
+    return ladder[0].final
+      ? `Take profit: the main ${swingWord} at ${fmtPrice(ladder[0].price)}.`
+      : `Take profit: the next ${keyWord} at ${fmtPrice(ladder[0].price)}.`;
+  }
+  const parts = ladder.map((t, i) =>
+    t.final ? `final TP ${fmtPrice(t.price)} (the main ${swingWord})` : `TP${i + 1} ${fmtPrice(t.price)}`
+  );
+  return `Take profits: ${parts.join(", ")}.`;
+}
 
 // ---------------------------------------------------------------- account risk
 // How much of the account one trade puts at risk, from the account balance and
@@ -477,10 +542,31 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       .sort((a, b) => (isSell ? b - a : a - b));
     const tpSuggestion = suggestionLevels.length ? suggestionLevels[0] : null;
 
-    const addTpAdvice = () =>
-      `Add a take profit near the next key ${targetWord}${
+    // Suggested take profits: key levels on the way, ending at the main swing.
+    const suggestionLadder = buildTargetLadder({
+      levels,
+      origin: reference,
+      isSell,
+      finalTarget: finalSwingTarget(facts, reference, isSell),
+    });
+    const addTpAdvice = () => {
+      if (suggestionLadder.length > 1) {
+        const text = describeLadder(suggestionLadder, isSell);
+        return `Add ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+      }
+      if (suggestionLadder.length === 1 && suggestionLadder[0].final) {
+        return `Add a take profit at the main swing ${targetWord} (${fmtPrice(suggestionLadder[0].price)}).`;
+      }
+      return `Add a take profit near the next key ${targetWord}${
         tpSuggestion !== null ? ` (${fmtPrice(tpSuggestion)})` : ""
       }.`;
+    };
+
+    // A take profit is judged against the main swing when there is one, so
+    // aiming for the full move is not marked down for passing a nearer level.
+    const mainSwing = finalSwingTarget(facts, entry, isSell);
+    const tpLimit = mainSwing !== null ? mainSwing : nearestTarget;
+    const tpLimitName = mainSwing !== null ? `main swing ${targetWord}` : `next key ${targetWord}`;
 
     if (sl !== null) signals.stop = "present";
     if (tp !== null) signals.target = "present";
@@ -555,24 +641,24 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         });
         parts.push(addTpAdvice());
       } else if (tpOnProfitSide) {
-        if (nearestTarget !== null) {
-          const beyondLevel = isSell ? tp < nearestTarget : tp > nearestTarget;
+        if (tpLimit !== null) {
+          const beyondLevel = isSell ? tp < tpLimit : tp > tpLimit;
           if (beyondLevel) {
             signals.target = "beyond";
             add(
               weaknesses,
               "exit",
-              `Take profit at ${fmtPrice(tp)} is beyond the next key ${targetWord} (${fmtPrice(nearestTarget)}).`,
+              `Take profit at ${fmtPrice(tp)} is beyond the ${tpLimitName} (${fmtPrice(tpLimit)}).`,
               "Target past a key level",
               { priority: 0, why: WHY.targetBeyond }
             );
-            parts.push(`Consider taking some profit at the key ${targetWord} (${fmtPrice(nearestTarget)}).`);
+            parts.push(`Consider taking some profit at the ${tpLimitName} (${fmtPrice(tpLimit)}).`);
           } else {
             signals.target = "ok";
             add(
               strengths,
               "exit",
-              `Take profit at ${fmtPrice(tp)} sits at or before the next key ${targetWord} (${fmtPrice(nearestTarget)}).`,
+              `Take profit at ${fmtPrice(tp)} sits at or before the ${tpLimitName} (${fmtPrice(tpLimit)}).`,
               "Target at a key level",
               { priority: 0 }
             );
@@ -752,14 +838,17 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     // ----------------------------------------------------- no placed trade:
     // coach the plan instead
     const center = hasValidatedArea ? num(area?.authoritativeCenter) : null;
-    let planTarget = null;
+    // Take profits: key levels on the way, ending at the main swing.
+    let planLadder = [];
     if (center !== null) {
-      const small = center * 0.00005;
-      const candidates = levels
-        .filter((l) => (isSell ? l < center - small : l > center + small))
-        .sort((a, b) => (isSell ? b - a : a - b));
-      planTarget = candidates.length ? candidates[0] : null;
+      planLadder = buildTargetLadder({
+        levels,
+        origin: center,
+        isSell,
+        finalTarget: finalSwingTarget(facts, center, isSell),
+      });
     }
+    const planTarget = planLadder.length ? planLadder[planLadder.length - 1].price : null;
     // The stop goes just beyond the nearest key level on the wrong side of
     // the entry (a few pips away at least, so it is not inside the noise).
     let planStop = null;
@@ -772,12 +861,14 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     }
     next.exit = dir
       ? planStop !== null && planTarget !== null
-        ? `Stop loss: just ${isSell ? "above" : "below"} the key ${protectWord} at ${fmtPrice(planStop)}. Take profit: the next key ${targetWord} at ${fmtPrice(planTarget)}.`
+        ? `Stop loss: just ${isSell ? "above" : "below"} the key ${protectWord} at ${fmtPrice(planStop)}. ${describeLadder(planLadder, isSell)}`
+        : planLadder.length
+        ? `Put your stop just beyond the level that proves you wrong (${
+            isSell ? "above" : "below"
+          } your entry area). ${describeLadder(planLadder, isSell)}`
         : `Put your stop just beyond the level that proves you wrong (${
             isSell ? "above" : "below"
-          } your entry area) and your take profit at the next key ${targetWord}${
-            planTarget !== null ? ` (${fmtPrice(planTarget)})` : ""
-          }.`
+          } your entry area) and your take profit at the next key ${targetWord}.`
       : "Put your stop just beyond the level that proves you wrong and your take profit at the next key support or resistance.";
     if (planStop !== null && planTarget !== null) {
       const riskDist = Math.abs(planStop - center);
@@ -787,8 +878,9 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         rr >= 1.5
           ? "That meets the 1.5 to 2 times rule."
           : "That is under 1.5 times, so look for a further target or skip it.";
+      const atFinal = planLadder.length > 1 || planLadder[0]?.final ? " at the final target" : "";
       const rrText =
-        `At those levels you risk ${priceDistance(riskDist, symbol).text} to make ${priceDistance(rewardDist, symbol).text} (${rr.toFixed(1)} times your risk). ${verdict}`;
+        `At those levels you risk ${priceDistance(riskDist, symbol).text} to make ${priceDistance(rewardDist, symbol).text}${atFinal} (${rr.toFixed(1)} times your risk). ${verdict}`;
       const planRisk = accountRisk({ facts, distance: riskDist, price: center });
       if (planRisk) {
         const planned = describeAccountRisk(planRisk, { planned: true });

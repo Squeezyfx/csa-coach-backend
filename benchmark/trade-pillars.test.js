@@ -8,6 +8,7 @@ import {
   priceDistance,
   scoreFromSignals,
   estimateRiskUsd,
+  collectStructuralLevels,
 } from "../trade-pillars.js";
 
 const levels = (prices) => ({ structuralCandidates: prices.map((price) => ({ price })) });
@@ -416,4 +417,88 @@ test("a planned trade shows what the planned stop would risk", () => {
   assert.match(result.next.risk, /At that stop, 1 lots would risk \$190 \(19% of your account\)\. That is far too high\./);
   assert.match(result.next.risk, /Cut your lot size to about 0\.05/);
   assert.ok(has(compilePillarItems(result.weaknesses), "Risk: At that stop"));
+});
+
+const withSwing = (facts, swingLow, swingHigh) => ({
+  ...facts,
+  selectorDiagnostics: { ...facts.selectorDiagnostics, fibonacci: { swingLow, swingHigh } },
+});
+
+const planFacts = (prices, direction = "bearish") => ({
+  instrument: "EURUSD",
+  direction,
+  trade: { visible: false },
+  executedOrder: null,
+  risk: {},
+  selectorDiagnostics: levels(prices),
+});
+
+test("a sell plan ends its take profits at the main swing low", () => {
+  const facts = withSwing(planFacts([1.13907, 1.13524, 1.13714, 1.1311, 1.1286, 1.124]), 1.1215, 1.145);
+  const { next } = run(facts, eurusdArea);
+  assert.equal(
+    next.exit,
+    "Stop loss: just above the key high at 1.13714. Take profits: TP1 1.13110, TP2 1.12400, final TP 1.12150 (the main swing low)."
+  );
+  assert.match(next.risk, /to make 137 pips at the final target \(7\.2 times your risk\)/);
+});
+
+test("a buy plan ends its take profits at the main swing high", () => {
+  const facts = withSwing(planFacts([1.1, 1.1052, 1.1012, 1.1085], "bullish"), 1.09, 1.12);
+  const { next } = run(facts, { direction: "buy", authoritativeCenter: 1.1052 });
+  assert.match(next.exit, /^Stop loss: just below the key low at 1\.10120\./);
+  assert.match(next.exit, /Take profits: TP1 1\.10850, final TP 1\.12000 \(the main swing high\)\./);
+});
+
+test("with only the swing beyond the entry, the swing is the single take profit", () => {
+  const facts = withSwing(planFacts([1.13907, 1.13524, 1.13714]), 1.1215, 1.145);
+  const { next } = run(facts, eurusdArea);
+  assert.match(next.exit, /Take profit: the main swing low at 1\.12150\./);
+});
+
+test("a swing on the wrong side of the entry is ignored", () => {
+  // swing low sits above the entry, so it cannot be a sell target
+  const facts = withSwing(planFacts([1.13907, 1.13524, 1.13714, 1.1311]), 1.14, 1.145);
+  const { next } = run(facts, eurusdArea);
+  assert.match(next.exit, /Take profit: the next key low at 1\.13110\./);
+});
+
+test("candidates reported as frameworkPrice are used as key levels and invalid ones are not", () => {
+  const facts = {
+    instrument: "EURUSD",
+    direction: "bearish",
+    trade: { visible: false },
+    executedOrder: null,
+    risk: {},
+    selectorDiagnostics: {
+      structuralCandidates: [
+        { frameworkPrice: 1.1311, chartReconciledPrice: 1.13105, structurallyValid: true },
+        { frameworkPrice: 1.1286, structurallyValid: false },
+        { frameworkPrice: 1.13714, structurallyValid: true },
+      ],
+    },
+  };
+  assert.deepEqual(collectStructuralLevels(facts), [1.13105, 1.13714]);
+  const { next } = run(facts, eurusdArea);
+  assert.match(next.exit, /Take profit: the next key low at 1\.13105\./);
+});
+
+test("a take profit at the main swing is not marked down for passing a nearer level", () => {
+  const facts = withSwing(eurusdSell(), 1.1215, 1.145);
+  facts.executedOrder.targetPrice = 1.1225;
+  facts.risk.targetShown = true;
+  const result = run(facts, eurusdArea);
+  assert.ok(has(result.strengths, "Take profit at 1.12250 sits at or before the main swing low (1.12150)."));
+  assert.ok(!has(result.weaknesses, "Take profit at"));
+
+  facts.executedOrder.targetPrice = 1.119;
+  const beyond = run(facts, eurusdArea);
+  assert.ok(has(beyond.weaknesses, "Take profit at 1.11900 is beyond the main swing low (1.12150)."));
+});
+
+test("a missing take profit is suggested as a ladder ending at the main swing", () => {
+  const facts = withSwing(eurusdSell(), 1.1215, 1.145);
+  facts.selectorDiagnostics = { ...facts.selectorDiagnostics, ...levels([1.13907, 1.13524, 1.13714, 1.1311, 1.1286]), fibonacci: { swingLow: 1.1215 } };
+  const { next } = run(facts, eurusdArea);
+  assert.match(next.exit, /Add take profits: TP1 1\.13110, TP2 1\.12860, final TP 1\.12150 \(the main swing low\)\./);
 });
