@@ -27248,25 +27248,30 @@ function plainAreaTypeLabel(areaType = "") {
   return type || "entry";
 }
 
+// "Converted support/resistance" is accurate CSA terminology but opaque to a
+// brand-new trader. Say what actually happened instead: which side the level
+// used to be, and what it's acting as now.
+function plainAreaBaseLabel(area, fallbackType = "entry") {
+  const rawType = String(area?.areaType || fallbackType);
+  const normalizedType = rawType.toLowerCase();
+
+  return normalizedType === "converted support"
+    ? area?.conversionConfirmed === true
+      ? "confirmed resistance-turned-support"
+      : "possible resistance-turned-support"
+    : normalizedType === "converted resistance"
+    ? area?.conversionConfirmed === true
+      ? "confirmed support-turned-resistance"
+      : "possible support-turned-resistance"
+    : rawType;
+}
+
 function formatRankedArea(area, fallbackType = "entry") {
   if (!area) return "";
 
   const rawType = String(area.areaType || fallbackType);
   const normalizedType = rawType.toLowerCase();
-
-  // "Converted support/resistance" is accurate CSA terminology but opaque
-  // to a brand-new trader. Say what actually happened instead: which side
-  // the level used to be, and what it's acting as now.
-  const base =
-    normalizedType === "converted support"
-      ? area?.conversionConfirmed === true
-        ? "confirmed resistance-turned-support"
-        : "possible resistance-turned-support"
-      : normalizedType === "converted resistance"
-      ? area?.conversionConfirmed === true
-        ? "confirmed support-turned-resistance"
-        : "possible support-turned-resistance"
-      : rawType;
+  const base = plainAreaBaseLabel(area, fallbackType);
 
   const exactLevel =
     safeUserText(area.levelText || "") ||
@@ -27452,10 +27457,12 @@ function applyDeterministicEntryPlanToVisualReview({
         : ""
     );
 
+  // Short, plain-language wording: this text becomes the journal's verdict
+  // and "best area to watch", so it must read cleanly on its own.
   const preferredText = hasPreferred
     ? preferredExactText
-      ? `${preferred.areaType} around ${preferredExactText}`
-      : `${preferred.areaType} ${String(preferred.zoneText || "").replace(/^around\s+/i, "")}`
+      ? `${plainAreaBaseLabel(preferred)} around ${preferredExactText}`
+      : `${plainAreaBaseLabel(preferred)} ${String(preferred.zoneText || "").replace(/^around\s+/i, "")}`
           .replace(/\s+/g, " ")
           .trim()
     : "";
@@ -27464,7 +27471,7 @@ function applyDeterministicEntryPlanToVisualReview({
     activeEntryAreas.length > 1 ? activeEntryAreas[1] : null;
 
   const secondaryVisualText = secondaryVisualArea
-    ? `${secondaryVisualArea.areaType} ${
+    ? `${plainAreaBaseLabel(deterministicAreas[1] || secondaryVisualArea)} ${
         safeUserText(secondaryVisualArea.levelText || "")
           ? `around ${safeUserText(secondaryVisualArea.levelText)}`
           : String(secondaryVisualArea.zoneText || "").trim()
@@ -27473,16 +27480,13 @@ function applyDeterministicEntryPlanToVisualReview({
         .trim()
     : "";
 
+  const triggerWord = preferred.direction === "sell" ? "bearish" : "bullish";
+
   const bestAreaToWatch = hasPreferred
-    ? preferred.direction === "sell"
-      ? `Entry 1 is ${preferredText}. Wait for a fresh bearish trigger there before considering a sell.` +
-        (secondaryVisualText
-          ? ` If Entry 1 fails, Entry 2 is ${secondaryVisualText}; wait for a new bearish trigger there and do not add to a losing Entry 1.`
-          : "")
-      : `Entry 1 is ${preferredText}. Wait for a fresh bullish trigger there before considering a buy.` +
-        (secondaryVisualText
-          ? ` If Entry 1 fails, Entry 2 is ${secondaryVisualText}; wait for a new bullish trigger there and do not add to a losing Entry 1.`
-          : "")
+    ? `Entry 1: ${preferredText}. Wait for a ${triggerWord} trigger candle there before entering.` +
+      (secondaryVisualText
+        ? ` Backup (Entry 2): ${secondaryVisualText}, only if Entry 1 fails.`
+        : "")
     : facts.direction === "bearish"
     ? "No strong resistance or supply entry area has passed the internal quality checks yet."
     : facts.direction === "bullish"
@@ -27490,15 +27494,10 @@ function applyDeterministicEntryPlanToVisualReview({
     : "No strong entry area has been confirmed yet.";
 
   const coachVerdict = hasPreferred
-    ? preferred.direction === "sell"
-      ? `Entry 1 is ${preferredText}. Wait for a fresh bearish trigger there and avoid chasing price.` +
-        (secondaryVisualText
-          ? ` If Entry 1 fails, Entry 2 is ${secondaryVisualText}; require a new bearish trigger before considering it.`
-          : "")
-      : `Entry 1 is ${preferredText}. Wait for a fresh bullish trigger there and avoid chasing price.` +
-        (secondaryVisualText
-          ? ` If Entry 1 fails, Entry 2 is ${secondaryVisualText}; require a new bullish trigger before considering it.`
-          : "")
+    ? `Entry 1: ${preferredText}. Wait for a ${triggerWord} trigger candle there. Don't chase price.` +
+      (secondaryVisualText
+        ? ` Backup (Entry 2): ${secondaryVisualText}, only with a new trigger.`
+        : "")
     : "No strong entry area is confirmed yet, so avoid forcing a trade.";
 
   return {
