@@ -6,6 +6,7 @@ import {
   buildPillarNextSteps,
   detectEntryTrigger,
   priceDistance,
+  scoreFromSignals,
 } from "../trade-pillars.js";
 
 const levels = (prices) => ({ structuralCandidates: prices.map((price) => ({ price })) });
@@ -197,4 +198,83 @@ test("too few candles gives no verdict either way", () => {
   const result = detectEntryTrigger({ candles: filler().slice(0, 3), price: 1.1364, direction: "sell" });
   assert.equal(result.found, false);
   assert.equal(result.candlesChecked, 3);
+});
+
+test("summary boxes get short headlines while coaching keeps the full bullets", () => {
+  const facts = eurusdSell();
+  facts.entryTrigger = { found: true, type: "engulfing", candlesChecked: 48 };
+  const result = assessTradePillars({ facts, area: eurusdArea, hasValidatedArea: true });
+
+  const shortStrengths = compilePillarItems(result.strengths, { short: true });
+  assert.deepEqual(shortStrengths, [
+    "Entry area: With the trend",
+    "Entry area: Better price than planned",
+    "Entry trigger: Trigger candle at your entry",
+    "Exit: Stop beyond a key level",
+    "Trade management: In profit (29 pips)",
+  ]);
+
+  const shortWeaknesses = compilePillarItems(result.weaknesses, { short: true });
+  assert.deepEqual(shortWeaknesses, ["Exit: No take profit", "Risk: Reward unknown (no target)"]);
+
+  const full = compilePillarItems(result.strengths);
+  assert.ok(full.every((line, index) => line !== shortStrengths[index]));
+});
+
+test("a placed trade exposes the signals its score is built from", () => {
+  const { signals } = assessTradePillars({ facts: eurusdSell(), area: eurusdArea, hasValidatedArea: true });
+  assert.deepEqual(signals, {
+    trend: "with",
+    plan: "better",
+    trigger: "missing",
+    stop: "beyond",
+    target: "none",
+    rr: null,
+  });
+
+  const plan = assessTradePillars({
+    facts: { instrument: "EURUSD", direction: "bearish", trade: { visible: false }, executedOrder: null, risk: {} },
+    area: eurusdArea,
+    hasValidatedArea: true,
+  });
+  assert.equal(plan.signals, null);
+  assert.equal(scoreFromSignals(plan.signals), null);
+});
+
+test("entry and risk scores follow the pillar findings", () => {
+  const strong = scoreFromSignals({
+    trend: "with",
+    plan: "better",
+    trigger: "found",
+    stop: "beyond",
+    target: "none",
+    rr: null,
+  });
+  assert.equal(strong.entry, 90);
+  assert.equal(strong.risk, 65);
+  assert.equal(strong.entrySummary, "Strong entry: with the trend, at a good price, with a trigger candle.");
+  assert.equal(strong.riskSummary, "Partly covered: stop placed beyond a key level, but no take profit.");
+
+  const weak = scoreFromSignals({
+    trend: "against",
+    plan: "early",
+    trigger: "missing",
+    stop: "none",
+    target: "none",
+    rr: null,
+  });
+  assert.equal(weak.entry, 20);
+  assert.equal(weak.risk, 30);
+  assert.equal(weak.riskSummary, "Weak risk plan: no stop loss, no take profit.");
+
+  const full = scoreFromSignals({
+    trend: "with",
+    plan: "close",
+    trigger: "found",
+    stop: "beyond",
+    target: "ok",
+    rr: 2.5,
+  });
+  assert.equal(full.risk, 95);
+  assert.ok(full.risk > strong.risk && strong.risk > weak.risk);
 });

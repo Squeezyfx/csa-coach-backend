@@ -50,7 +50,7 @@ import {
 import { buildVisiblePeriodFibonacciFrame, resolveCalendarPeriodDirection, resolveDeepRetracementDirectionOverride } from "./benchmark/weekly-fibonacci-policy.js";
 import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodWickExtremesFromPixels } from "./chart-raster-reader.js";
 import { buildChartOverlay } from "./chart-overlay.js";
-import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger } from "./trade-pillars.js";
+import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals } from "./trade-pillars.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -28008,9 +28008,10 @@ function buildControlledFeedback({
 
   // Feedback is organised around the five things that decide whether a trade
   // was a good one: entry area, entry trigger, exit (stop loss / take profit),
-  // risk, and trade management. Every item is tagged with its pillar; the
-  // lists are compiled in that order further down (see trade-pillars.js).
-  // Style rule: one short bullet per idea, about one line each.
+  // risk, and trade management. Every item is tagged with its pillar and has
+  // two forms: a 2-5 word headline for the summary boxes (`short`) and the
+  // full one-line bullet for the coaching sections. The lists are compiled in
+  // pillar order further down (see trade-pillars.js).
   const strengthItems = [];
   const weaknessItems = [];
   const addStrength = (pillar, text, extra = {}) =>
@@ -28030,7 +28031,8 @@ function buildControlledFeedback({
   ) {
     addStrength(
       "entry",
-      `Your notes match the market direction (${facts.direction}).`
+      `Your notes match the market direction (${facts.direction}).`,
+      { short: "Notes match the direction" }
     );
   }
 
@@ -28040,34 +28042,40 @@ function buildControlledFeedback({
   ) {
     addStrength(
       "entry",
-      `You marked the ${plainAreaTypeLabel(area.areaType)} area ${area.zoneText}, matching the framework's first area.`
+      `You marked the ${plainAreaTypeLabel(area.areaType)} area ${area.zoneText}, matching the framework's first area.`,
+      { short: "Your marked area matches" }
     );
   } else if (userEvidence.chartMarked) {
     addStrength(
       "entry",
-      "You marked levels on the chart, which makes review easier."
+      "You marked levels on the chart, which makes review easier.",
+      { short: "Levels marked on chart" }
     );
   } else if (hasValidatedArea) {
     addStrength(
       "entry",
-      `Entry 1 is the ${areaText}. It passed all the framework's checks.`
+      `Entry 1 is the ${areaText}. It passed all the framework's checks.`,
+      { short: "Valid entry area found" }
     );
   } else {
     addStrength(
       "entry",
-      `The direction is clear (${directionText}), but no entry area has passed the checks yet.`
+      `The direction is clear (${directionText}), but no entry area has passed the checks yet.`,
+      { short: "Direction clear" }
     );
   }
 
   if (selectedSecondaryArea && secondaryAreaText) {
     addStrength(
       "entry",
-      `Backup area: ${secondaryAreaText}. Used only if the first fails.`
+      `Backup area: ${secondaryAreaText}. Used only if the first fails.`,
+      { short: "Backup area ready" }
     );
   } else if (hasValidatedArea) {
     addStrength(
       "entry",
-      `Only the ${areaText} qualified. Weaker levels were left out.`
+      `Only the ${areaText} qualified. Weaker levels were left out.`,
+      { short: "One clean entry area" }
     );
   }
 
@@ -28078,21 +28086,24 @@ function buildControlledFeedback({
   ) {
     addStrength(
       "trigger",
-      "Your notes say you wait for confirmation before entering."
+      "Your notes say you wait for confirmation before entering.",
+      { short: "Waits for confirmation" }
     );
   }
 
   if (isPostTrade && !facts.trade.visible) {
     addWeakness(
       "trade",
-      "No trade is marked on this chart. Add your entry, stop loss and take profit to get feedback on your trade."
+      "No trade is marked on this chart. Add your entry, stop loss and take profit to get feedback on your trade.",
+      { short: "No trade marked on chart" }
     );
   }
 
   if (facts.entryAreaValidation?.passed === false) {
     addWeakness(
       "entry",
-      "No level passed the framework's checks, so none is safe to enter yet."
+      "No level passed the framework's checks, so none is safe to enter yet.",
+      { short: "No level passed the checks" }
     );
   }
 
@@ -28115,12 +28126,14 @@ function buildControlledFeedback({
             ? `The ${referenceAreasText} is worth watching, but too weak to buy from yet.`
             : `The ${referenceAreasText} are worth watching, but too weak to buy from yet.`
           : "No strong support or demand level found for a buy yet."
-        : "No strong entry area found yet."
+        : "No strong entry area found yet.",
+      { short: "No strong entry level yet" }
     );
   } else if (area.invalidated) {
     addWeakness(
       "entry",
-      `The ${plainAreaTypeLabel(area.areaType)} area failed (price broke through it). Don't reuse it.`
+      `The ${plainAreaTypeLabel(area.areaType)} area failed (price broke through it). Don't reuse it.`,
+      { short: "Entry area failed" }
     );
   } else {
     if (!area.areaRetested && !hasExecutedOrder) {
@@ -28130,7 +28143,8 @@ function buildControlledFeedback({
           ? `The ${areaText} isn't confirmed: price must return up to it and be rejected.`
           : area.areaType === "converted support"
           ? `The ${areaText} isn't confirmed: price must return down to it and hold.`
-          : `Price hasn't returned to the planned ${plainAreaTypeLabel(area.areaType)} area yet.`
+          : `Price hasn't returned to the planned ${plainAreaTypeLabel(area.areaType)} area yet.`,
+        { short: "Entry area not confirmed yet" }
       );
     }
 
@@ -28141,7 +28155,8 @@ function buildControlledFeedback({
           ? `No bearish trigger candle at the ${areaText} yet.`
           : area.areaType === "converted support"
           ? `No bullish trigger candle at the ${areaText} yet.`
-          : `No ${triggerSide} trigger candle at the planned ${plainAreaTypeLabel(area.areaType)} area yet.`
+          : `No ${triggerSide} trigger candle at the planned ${plainAreaTypeLabel(area.areaType)} area yet.`,
+        { short: "No trigger candle yet" }
       );
     }
   }
@@ -28153,7 +28168,8 @@ function buildControlledFeedback({
         ? `The bullish recovery hasn't broken above the ${areaText} yet, so the downtrend isn't reversed.`
         : referenceAreaTexts[0]
         ? `The bullish recovery is still below ${referenceAreaTexts[0]}.`
-        : "The bullish recovery hasn't broken above the main resistance yet."
+        : "The bullish recovery hasn't broken above the main resistance yet.",
+      { short: "Downtrend not reversed yet" }
     );
   } else if (bearishPullbackContext) {
     addWeakness(
@@ -28162,7 +28178,8 @@ function buildControlledFeedback({
         ? `The bearish pullback hasn't broken below the ${areaText} yet, so the uptrend isn't reversed.`
         : referenceAreaTexts[0]
         ? `The bearish pullback is still above ${referenceAreaTexts[0]}.`
-        : "The bearish pullback hasn't broken below the main support yet."
+        : "The bearish pullback hasn't broken below the main support yet.",
+      { short: "Uptrend not reversed yet" }
     );
   }
 
@@ -28172,7 +28189,8 @@ function buildControlledFeedback({
   ) {
     addWeakness(
       "risk",
-      "Price already ran up near resistance, so buying now leaves little room to profit."
+      "Price already ran up near resistance, so buying now leaves little room to profit.",
+      { short: "Little room left to profit" }
     );
   } else if (
     facts.breakoutState?.extended &&
@@ -28180,7 +28198,8 @@ function buildControlledFeedback({
   ) {
     addWeakness(
       "risk",
-      "Price already dropped near support, so selling now leaves little room to profit."
+      "Price already dropped near support, so selling now leaves little room to profit.",
+      { short: "Little room left to profit" }
     );
   }
 
@@ -28191,7 +28210,8 @@ function buildControlledFeedback({
     addWeakness(
       "entry",
       facts.convertedLevel.assessment ||
-        "A broken level must be retested from the other side before it counts."
+        "A broken level must be retested from the other side before it counts.",
+      { short: "Broken level not retested" }
     );
   }
 
@@ -28202,26 +28222,31 @@ function buildControlledFeedback({
   strengthItems.push(...pillars.strengths);
   weaknessItems.push(...pillars.weaknesses);
 
-  let finalStrengths = cleanUserFeedbackItems(compilePillarItems(strengthItems));
+  // Summary boxes get the short headlines; the coaching sections get the
+  // full bullets (weaknesses with their one-line "why"), so the two never
+  // repeat the same sentence.
+  let finalStrengths = cleanUserFeedbackItems(
+    compilePillarItems(strengthItems, { short: true })
+  );
+  let coachStrengths = cleanUserFeedbackItems(compilePillarItems(strengthItems));
 
   if (!finalStrengths.length) {
-    finalStrengths = [
-      "The chart has enough price history for a basic review."
-    ];
+    finalStrengths = ["Chart is readable"];
+    coachStrengths = ["The chart has enough price history for a basic review."];
   }
 
-  const coachStrengths = finalStrengths;
-
-  let finalWeaknesses = cleanUserFeedbackItems(compilePillarItems(weaknessItems));
+  let finalWeaknesses = cleanUserFeedbackItems(
+    compilePillarItems(weaknessItems, { short: true })
+  );
   let coachWeaknesses = cleanUserFeedbackItems(
     compilePillarItems(weaknessItems, { withWhy: true })
   );
 
   if (!finalWeaknesses.length) {
-    finalWeaknesses = [
-      "No major weakness found. Keep marking your entry, stop loss and take profit on the chart."
+    finalWeaknesses = ["No major weakness found"];
+    coachWeaknesses = [
+      "No major weakness found. Keep marking your entry, stop loss and take profit on the chart.",
     ];
-    coachWeaknesses = finalWeaknesses;
   }
 
   let nextAction;
@@ -28407,8 +28432,21 @@ function buildControlledFeedback({
   }
   const nextSteps = buildPillarNextSteps({ entryPlan, next: pillars.next });
 
-  const scores =
-    controlledScores(facts);
+  // For a placed trade, Entry Accuracy and Risk Management come from the same
+  // pillar findings the bullets are written from, so the grade cannot
+  // disagree with the feedback. Setup Quality (the chart plan) is unchanged.
+  const baseScores = controlledScores(facts);
+  const pillarScores = scoreFromSignals(pillars.signals);
+  const scores = pillarScores
+    ? {
+        ...baseScores,
+        entryAccuracy: pillarScores.entry,
+        riskManagement: pillarScores.risk,
+        overall: Math.round(
+          (baseScores.setupQuality + pillarScores.entry + pillarScores.risk) / 3
+        ),
+      }
+    : baseScores;
 
   const scoreContext = {
     scoringModelVersion:
@@ -28610,9 +28648,10 @@ function buildControlledFeedback({
         ),
       summary:
         facts?.trade?.visible === true
-          ? area.triggerPresent
-            ? "A valid trigger is visible at the planned area."
-            : "The visible entry still needs stronger confirmation at the planned area."
+          ? pillarScores?.entrySummary ||
+            (area.triggerPresent
+              ? "A valid trigger is visible at the planned area."
+              : "The visible entry still needs stronger confirmation at the planned area.")
           : area.triggerPresent
           ? "No executed trade is clearly visible; this score reflects entry readiness, and a valid trigger is visible at the planned area."
           : "No executed trade is clearly visible; this score reflects entry readiness rather than execution accuracy.",
@@ -28630,9 +28669,10 @@ function buildControlledFeedback({
         ),
       summary:
         facts?.trade?.visible === true
-          ? facts.risk.assessable
-            ? "The stop and target are visible enough to review risk."
-            : "The stop and target are not both visible, so executed-trade risk is incomplete."
+          ? pillarScores?.riskSummary ||
+            (facts.risk.assessable
+              ? "The stop and target are visible enough to review risk."
+              : "The stop and target are not both visible, so executed-trade risk is incomplete.")
           : facts.risk.assessable
           ? "No executed trade is clearly visible; the stop and target make the planned risk assessable."
           : "No executed trade is clearly visible; this score reflects risk-plan completeness, not realized trade management.",
