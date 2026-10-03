@@ -38,16 +38,16 @@ const has = (list, text) => list.some((item) => item.includes(text));
 test("a visible sell is reviewed against all five pillars", () => {
   const { strengths, weaknesses, next } = run(eurusdSell(), eurusdArea);
 
-  assert.ok(has(strengths, "Entry area: Your sell matches the market's bearish direction"));
-  assert.ok(has(strengths, "got a better price than the level the framework was watching"));
-  assert.ok(has(strengths, "Exit: Your stop loss at 1.13890 sits above the nearest key high"));
-  assert.ok(has(strengths, "Trade management: The trade is currently in profit by about 29 pips"));
+  assert.ok(has(strengths, "Entry area: Your sell matches the bearish trend"));
+  assert.ok(has(strengths, "beat the planned level"));
+  assert.ok(has(strengths, "Exit: Stop loss at 1.13890 sits above the nearest key high"));
+  assert.ok(has(strengths, "Trade management: In profit by 29 pips"));
 
-  assert.ok(has(weaknesses, "Entry trigger: No clear rejection candle"));
-  assert.ok(has(weaknesses, "Exit: No take profit target is marked"));
-  assert.ok(has(weaknesses, "Risk: You are risking about 25 pips"));
+  assert.ok(has(weaknesses, "Entry trigger: No clear trigger candle"));
+  assert.ok(has(weaknesses, "Exit: No take profit marked"));
+  assert.ok(has(weaknesses, "Risk: Risking 25 pips"));
 
-  assert.match(next.exit, /next key low around 1\.13110/);
+  assert.match(next.exit, /next key low \(1\.13110\)/);
   assert.match(next.management, /breakeven/);
 });
 
@@ -56,33 +56,33 @@ test("stop loss and take profit give a risk-to-reward verdict", () => {
   facts.executedOrder.targetPrice = 1.1264;
   facts.risk.targetShown = true;
   const { strengths } = run(facts, eurusdArea);
-  assert.ok(has(strengths, "Risk: You are risking about 25 pips to make about 100 pips (roughly 4.0 times your risk)"));
+  assert.ok(has(strengths, "Risk: Risking 25 pips to make 100 pips (4.0 times your risk)"));
 
   facts.executedOrder.targetPrice = 1.1355;
   const thin = run(facts, eurusdArea);
-  assert.ok(has(thin.weaknesses, "Risk: You are risking about 25 pips to make about 9 pips"));
+  assert.ok(has(thin.weaknesses, "Risk: Risking 25 pips to make 9 pips"));
 });
 
 test("a stop loss placed before the nearest key level is flagged", () => {
   const facts = eurusdSell();
   facts.executedOrder.stopPrice = 1.1368;
   const { weaknesses, next } = run(facts, eurusdArea);
-  assert.ok(has(weaknesses, "Exit: Your stop loss at 1.13680 sits before the nearest key high"));
-  assert.match(next.exit, /just beyond the key high around 1\.13714/);
+  assert.ok(has(weaknesses, "Exit: Stop loss at 1.13680 sits before the nearest key high"));
+  assert.match(next.exit, /just beyond the key high \(1\.13714\)/);
 });
 
 test("trading against the trend is a weakness", () => {
   const facts = eurusdSell();
   facts.direction = "bullish";
   const { weaknesses } = run(facts, eurusdArea);
-  assert.ok(has(weaknesses, "Your sell goes against the market's bullish direction"));
+  assert.ok(has(weaknesses, "Your sell goes against the bullish trend"));
 });
 
 test("a losing trade says how far it is from the stop and not to widen it", () => {
   const facts = eurusdSell();
   facts.currentPrice = 1.1377;
   const { weaknesses, next } = run(facts, eurusdArea);
-  assert.ok(has(weaknesses, "Trade management: The trade is currently against you by about 13 pips (about 52% of the way to your stop loss)"));
+  assert.ok(has(weaknesses, "Trade management: Against you by 13 pips (52% of the way to your stop)"));
   assert.match(next.management, /do not move it further away/);
 });
 
@@ -90,7 +90,7 @@ test("a stop moved to the entry price is credited as breakeven management", () =
   const facts = eurusdSell();
   facts.executedOrder.stopPrice = 1.1364;
   const { strengths } = run(facts, eurusdArea);
-  assert.ok(has(strengths, "moved your stop loss to your entry price (breakeven)"));
+  assert.ok(has(strengths, "Stop moved to breakeven"));
 });
 
 test("with no stop loss, management advice starts with adding one", () => {
@@ -98,7 +98,7 @@ test("with no stop loss, management advice starts with adding one", () => {
   delete facts.executedOrder.stopPrice;
   facts.risk.stopShown = false;
   const { weaknesses, next } = run(facts, eurusdArea);
-  assert.ok(has(weaknesses, "Exit: No stop loss or take profit is marked"));
+  assert.ok(has(weaknesses, "Exit: No stop loss or take profit marked"));
   assert.match(next.management, /^First add a stop loss/);
 });
 
@@ -115,8 +115,8 @@ test("with no placed trade the five pillars become a plan", () => {
   assert.deepEqual(strengths, []);
   assert.deepEqual(weaknesses, []);
   assert.match(next.trigger, /bearish engulfing candle/);
-  assert.match(next.exit, /take profit at the next key low around 1\.13110/);
-  assert.match(next.risk, /1\.5 to 2 times your risk/);
+  assert.match(next.exit, /take profit at the next key low \(1\.13110\)/);
+  assert.match(next.risk, /1\.5 to 2 times more reward than risk/);
   assert.match(next.management, /partial close/);
 });
 

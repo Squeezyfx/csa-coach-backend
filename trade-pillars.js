@@ -8,6 +8,9 @@
 // Pure functions only: no I/O, no model calls. Every figure is computed from
 // facts the engine already verified (the placed order read from the chart,
 // structural levels, current price, candles).
+//
+// Style rule: every line is one short bullet, one idea, about one line long,
+// so a brand-new trader can scan it in seconds.
 
 export const PILLAR_ORDER = ["trade", "entry", "trigger", "exit", "risk", "management"];
 
@@ -21,24 +24,15 @@ export const PILLAR_LABELS = {
 };
 
 const WHY = {
-  noStop:
-    "A stop loss is your safety net: it closes the trade for you if you are wrong, so one bad trade can't do serious damage.",
-  stopInside:
-    "Price often pokes into a level and then reverses, so a stop placed before the level can end a trade that was still valid.",
-  noTarget:
-    "Without a target you don't know where to take profit, and you can't tell whether the trade is worth the risk.",
-  targetBeyond:
-    "Price often stalls or bounces at key levels, so a target placed beyond one is less likely to be reached.",
-  rewardRisk:
-    "A simple rule: aim to make at least 1.5 to 2 times what you risk, so you can be wrong fairly often and still come out ahead.",
-  trend:
-    "Trading with the trend gives you better odds; trading against it needs a much stronger reason.",
-  trigger:
-    "A trigger candle is your confirmation that the level is actually holding. Entering before it appears is one of the most common beginner mistakes.",
-  loss:
-    "Losing trades are normal. What matters is sticking to your stop loss and not moving it further away to avoid taking the loss.",
-  early:
-    "Entering before price reaches the level means there is less confirmation that the level will hold.",
+  noStop: "It limits your loss if you are wrong.",
+  stopInside: "Price often pokes into a level, then reverses.",
+  noTarget: "Without a target you can't judge the trade.",
+  targetBeyond: "Price often stalls at key levels.",
+  rewardRisk: "Aim for 1.5 to 2 times more reward than risk.",
+  trend: "Trading with the trend gives better odds.",
+  trigger: "A trigger candle confirms the level is holding.",
+  loss: "Stick to your stop and don't widen it.",
+  early: "Early entries have less confirmation.",
 };
 
 const num = (value) => {
@@ -186,25 +180,24 @@ export function detectEntryTrigger({ candles = [], price, direction, lookback = 
 
 function triggerExplanation(dir) {
   if (dir === "sell") {
-    return "Wait for a trigger candle at the level before you sell: a candle that pushes up into the level and closes back down with a long upper wick, or a bearish engulfing candle (a big down candle that fully covers the previous up candle). It is your confirmation that sellers are stepping in.";
+    return "Wait for a trigger candle at the level: a long upper wick that closes back down, or a bearish engulfing candle (a big down candle).";
   }
   if (dir === "buy") {
-    return "Wait for a trigger candle at the level before you buy: a candle that pushes down into the level and closes back up with a long lower wick, or a bullish engulfing candle (a big up candle that fully covers the previous down candle). It is your confirmation that buyers are stepping in.";
+    return "Wait for a trigger candle at the level: a long lower wick that closes back up, or a bullish engulfing candle (a big up candle).";
   }
-  return "Wait for a trigger candle at the level before entering, such as a rejection wick or an engulfing candle. It is your confirmation that the level is holding.";
+  return "Wait for a trigger candle at the level, such as a rejection wick or an engulfing candle.";
 }
 
 const RISK_RULE =
-  "Before entering, check that the reward is at least 1.5 to 2 times your risk, and risk only a small fixed share of your account on any one trade (many traders use 1%).";
+  "Aim for at least 1.5 to 2 times more reward than risk. Risk only a small share of your account (many use 1%).";
 
 const RISK_RULE_NEXT =
-  "For future trades, check before you enter that the reward is at least 1.5 to 2 times your risk, and risk only a small fixed share of your account on any one trade (many traders use 1%).";
+  "Aim for at least 1.5 to 2 times more reward than risk. Risk only a small share of your account (many use 1%).";
 
 const PLAN_MANAGEMENT =
-  "Decide before you enter how you will manage the trade: when to move your stop loss to breakeven (your entry price), whether to take part of the profit early (a partial close), and whether to trail your stop (move it behind price as the trade moves in your favor). If you do any of these, mention it in Trade Notes so the coach can review it.";
+  "Plan ahead: move your stop to breakeven (your entry price), take some profit (a partial close), or trail your stop.";
 
-const tradeNotesHint =
-  " If you scaled out or moved your stop earlier, mention it in Trade Notes so the coach can review it.";
+const TRADE_NOTES_HINT = "";
 
 export function assessTradePillars({ facts = {}, area = null, hasValidatedArea = false } = {}) {
   const strengths = [];
@@ -231,7 +224,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
 
   next.trigger = triggerExplanation(dir);
   next.risk = order ? RISK_RULE_NEXT : RISK_RULE;
-  next.management = PLAN_MANAGEMENT;
+  next.management = PLAN_MANAGEMENT + TRADE_NOTES_HINT;
 
   const entry = order ? num(order.entryPrice) : null;
 
@@ -249,19 +242,12 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     // 1. Entry area -------------------------------------------------------
     if (biasDir) {
       if (biasDir === orderDir) {
-        add(
-          strengths,
-          "entry",
-          `Your ${word} matches the market's ${facts.direction} direction, so you were trading with the trend.`,
-          { priority: 0 }
-        );
+        add(strengths, "entry", `Your ${word} matches the ${facts.direction} trend.`, { priority: 0 });
       } else {
-        add(
-          weaknesses,
-          "entry",
-          `Your ${word} goes against the market's ${facts.direction} direction, so you were trading against the trend.`,
-          { priority: 0, why: WHY.trend }
-        );
+        add(weaknesses, "entry", `Your ${word} goes against the ${facts.direction} trend.`, {
+          priority: 0,
+          why: WHY.trend,
+        });
       }
     }
 
@@ -273,21 +259,21 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         add(
           strengths,
           "entry",
-          `Your entry at ${fmtPrice(entry)} lines up closely with the level the framework was watching (around ${fmtPrice(frameworkPrice)}).`,
+          `Entry at ${fmtPrice(entry)} is right at the planned level (${fmtPrice(frameworkPrice)}).`,
           { priority: 0 }
         );
       } else if (betterPrice) {
         add(
           strengths,
           "entry",
-          `Your entry at ${fmtPrice(entry)} got a better price than the level the framework was watching (around ${fmtPrice(frameworkPrice)}).`,
+          `Entry at ${fmtPrice(entry)} beat the planned level (${fmtPrice(frameworkPrice)}).`,
           { priority: 0 }
         );
       } else {
         add(
           weaknesses,
           "entry",
-          `Your entry at ${fmtPrice(entry)} came before price reached the level the framework was watching (around ${fmtPrice(frameworkPrice)}).`,
+          `Entry at ${fmtPrice(entry)} came before price reached the planned level (${fmtPrice(frameworkPrice)}).`,
           { priority: 0, why: WHY.early }
         );
       }
@@ -299,24 +285,17 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       const what =
         trigger.type === "engulfing"
           ? isSell
-            ? "a bearish engulfing candle (a down candle that fully covers the previous up candle)"
-            : "a bullish engulfing candle (an up candle that fully covers the previous down candle)"
+            ? "A bearish engulfing candle (big down candle)"
+            : "A bullish engulfing candle (big up candle)"
           : isSell
-          ? "a bearish rejection candle (a long upper wick showing buyers were pushed back)"
-          : "a bullish rejection candle (a long lower wick showing sellers were pushed back)";
-      add(
-        strengths,
-        "trigger",
-        `The chart shows ${what} at your entry level around ${fmtPrice(entry)}, the kind of candle that supports a ${word} there.`,
-        { priority: 0 }
-      );
+          ? "A bearish rejection candle (long upper wick)"
+          : "A bullish rejection candle (long lower wick)";
+      add(strengths, "trigger", `${what} formed at your entry level.`, { priority: 0 });
     } else if (trigger && trigger.candlesChecked >= 5) {
-      add(
-        weaknesses,
-        "trigger",
-        `No clear rejection candle or candle pattern shows up at your entry level around ${fmtPrice(entry)} in the recent candles, so this entry may have been taken before a trigger appeared.`,
-        { priority: 0, why: WHY.trigger }
-      );
+      add(weaknesses, "trigger", "No clear trigger candle at your entry level.", {
+        priority: 0,
+        why: WHY.trigger,
+      });
     }
 
     // 3. Exit -------------------------------------------------------------
@@ -346,27 +325,26 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       .sort((a, b) => (isSell ? b - a : a - b));
     const tpSuggestion = suggestionLevels.length ? suggestionLevels[0] : null;
 
-    if (sl === null && tp === null) {
-      add(weaknesses, "exit", "No stop loss or take profit is marked on this trade.", {
-        priority: 0,
-        why: WHY.noStop,
-      });
-      next.exit = `Add a stop loss before anything else. For a ${word}, place it just beyond the nearest key ${protectWord} ${
-        isSell ? "above" : "below"
-      } your entry${nearestProtect !== null ? ` (around ${fmtPrice(nearestProtect)})` : ""}, so you are only stopped out if your idea is truly wrong. Then add a take profit at the next key ${targetWord}${
-        tpSuggestion !== null ? ` around ${fmtPrice(tpSuggestion)}` : ""
+    const addTpAdvice = () =>
+      `Add a take profit near the next key ${targetWord}${
+        tpSuggestion !== null ? ` (${fmtPrice(tpSuggestion)})` : ""
       }.`;
+
+    if (sl === null && tp === null) {
+      add(weaknesses, "exit", "No stop loss or take profit marked.", { priority: 0, why: WHY.noStop });
+      next.exit = `Add a stop loss just ${isSell ? "above" : "below"} the nearest key ${protectWord}${
+        nearestProtect !== null ? ` (${fmtPrice(nearestProtect)})` : ""
+      }. ${addTpAdvice()}`;
     } else {
-      let exitNext = "";
+      const parts = [];
 
       if (sl === null) {
-        add(weaknesses, "exit", "No stop loss is marked on this trade.", {
-          priority: 0,
-          why: WHY.noStop,
-        });
-        exitNext = `Add a stop loss before anything else, just beyond the nearest key ${protectWord}${
-          nearestProtect !== null ? ` (around ${fmtPrice(nearestProtect)})` : ""
-        }, so you are only stopped out if your idea is truly wrong.`;
+        add(weaknesses, "exit", "No stop loss marked.", { priority: 0, why: WHY.noStop });
+        parts.push(
+          `Add a stop loss just ${isSell ? "above" : "below"} the nearest key ${protectWord}${
+            nearestProtect !== null ? ` (${fmtPrice(nearestProtect)})` : ""
+          }.`
+        );
       } else if (slOnRiskSide) {
         if (nearestProtect !== null) {
           const beyond = isSell ? sl > nearestProtect : sl < nearestProtect;
@@ -374,42 +352,37 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
             add(
               strengths,
               "exit",
-              `Your stop loss at ${fmtPrice(sl)} sits ${isSell ? "above" : "below"} the nearest key ${protectWord} (around ${fmtPrice(nearestProtect)}), so a small push into that level won't stop you out.`,
+              `Stop loss at ${fmtPrice(sl)} sits ${isSell ? "above" : "below"} the nearest key ${protectWord} (${fmtPrice(nearestProtect)}).`,
               { priority: 0 }
             );
-            exitNext = "Keep your stop loss where it is: it sits beyond the nearest key level, so it protects your idea.";
+            parts.push("Keep your stop where it is.");
           } else {
             add(
               weaknesses,
               "exit",
-              `Your stop loss at ${fmtPrice(sl)} sits before the nearest key ${protectWord} (around ${fmtPrice(nearestProtect)}).`,
+              `Stop loss at ${fmtPrice(sl)} sits before the nearest key ${protectWord} (${fmtPrice(nearestProtect)}).`,
               { priority: 0, why: WHY.stopInside }
             );
-            exitNext = `Consider placing your stop loss just beyond the key ${protectWord} around ${fmtPrice(nearestProtect)}, so a normal push into that level doesn't end the trade early.`;
+            parts.push(`Move your stop just beyond the key ${protectWord} (${fmtPrice(nearestProtect)}).`);
           }
         } else {
           add(
             strengths,
             "exit",
-            `A stop loss is marked at ${fmtPrice(sl)}, so the most you can lose on this trade is limited.`,
+            `Stop loss marked at ${fmtPrice(sl)}, so your loss is limited.`,
             { priority: 0 }
           );
-          exitNext = "Keep your stop loss in place so your loss stays limited.";
+          parts.push("Keep your stop in place.");
         }
       } else if (slAtBreakeven) {
-        exitNext = "Your stop loss is at your entry price (breakeven), so this trade can no longer turn into a loss.";
+        parts.push("Your stop is at your entry price (breakeven).");
       } else if (slLockedProfit) {
-        exitNext = "Your stop loss is already beyond your entry price, so some profit is locked in.";
+        parts.push("Your stop is past your entry, so some profit is locked in.");
       }
 
       if (tp === null) {
-        add(weaknesses, "exit", "No take profit target is marked on this trade.", {
-          priority: 0,
-          why: WHY.noTarget,
-        });
-        exitNext += ` Add a take profit at the next key ${targetWord}${
-          tpSuggestion !== null ? ` around ${fmtPrice(tpSuggestion)}` : ""
-        }, so you know in advance where you will take your profit.`;
+        add(weaknesses, "exit", "No take profit marked.", { priority: 0, why: WHY.noTarget });
+        parts.push(addTpAdvice());
       } else if (tpOnProfitSide) {
         if (nearestTarget !== null) {
           const beyondLevel = isSell ? tp < nearestTarget : tp > nearestTarget;
@@ -417,26 +390,24 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
             add(
               weaknesses,
               "exit",
-              `Your take profit at ${fmtPrice(tp)} is beyond the next key ${targetWord} (around ${fmtPrice(nearestTarget)}), where price often stalls or bounces.`,
+              `Take profit at ${fmtPrice(tp)} is beyond the next key ${targetWord} (${fmtPrice(nearestTarget)}).`,
               { priority: 0, why: WHY.targetBeyond }
             );
-            exitNext += ` Consider taking at least part of your profit at the key ${targetWord} around ${fmtPrice(nearestTarget)}.`;
+            parts.push(`Consider taking some profit at the key ${targetWord} (${fmtPrice(nearestTarget)}).`);
           } else {
             add(
               strengths,
               "exit",
-              `Your take profit at ${fmtPrice(tp)} sits at or before the next key ${targetWord} (around ${fmtPrice(nearestTarget)}), a realistic place for price to reach.`,
+              `Take profit at ${fmtPrice(tp)} sits at or before the next key ${targetWord} (${fmtPrice(nearestTarget)}).`,
               { priority: 0 }
             );
           }
         } else {
-          add(strengths, "exit", `A take profit is marked at ${fmtPrice(tp)}, so you know where you plan to get out.`, {
-            priority: 0,
-          });
+          add(strengths, "exit", `Take profit marked at ${fmtPrice(tp)}.`, { priority: 0 });
         }
       }
 
-      next.exit = exitNext.trim();
+      next.exit = parts.join(" ").trim();
     }
 
     // 4. Risk -------------------------------------------------------------
@@ -450,33 +421,33 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
           add(
             strengths,
             "risk",
-            `You are risking about ${riskText} to make about ${rewardText} (roughly ${rrText} times your risk), a healthy balance.`,
+            `Risking ${riskText} to make ${rewardText} (${rrText} times your risk).`,
             { priority: 0 }
           );
         } else if (rr < 1) {
           add(
             weaknesses,
             "risk",
-            `You are risking about ${riskText} to make about ${rewardText} (only ${rrText} times your risk), which is more risk than reward.`,
+            `Risking ${riskText} to make ${rewardText}: more risk than reward.`,
             { priority: 0, why: WHY.rewardRisk }
           );
         } else {
           add(
             weaknesses,
             "risk",
-            `Your reward is only about ${rrText} times your risk (${riskText} risked to make ${rewardText}), which is on the thin side.`,
+            `Reward is only ${rrText} times your risk (${riskText} risked, ${rewardText} to gain).`,
             { priority: 0, why: WHY.rewardRisk }
           );
         }
-        next.risk = `Your reward-to-risk on this trade is about ${rrText} to 1. ${RISK_RULE_NEXT}`;
+        next.risk = RISK_RULE_NEXT;
       } else if (tp === null) {
         add(
           weaknesses,
           "risk",
-          `You are risking about ${riskText} on this trade, but with no take profit you can't tell whether the reward is worth it.`,
+          `Risking ${riskText}, but with no take profit the reward is unknown.`,
           { priority: 0, why: WHY.rewardRisk }
         );
-        next.risk = `You are risking about ${riskText} on this trade. ${RISK_RULE_NEXT}`;
+        next.risk = RISK_RULE_NEXT;
       }
     }
 
@@ -485,18 +456,18 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       add(
         strengths,
         "management",
-        "You moved your stop loss to your entry price (breakeven), so this trade can no longer turn into a loss.",
+        "Stop moved to breakeven, so this trade can't turn into a loss.",
         { priority: 0 }
       );
-      next.management = `Your stop is already protecting the trade. Decide where you will take profit, or keep trailing your stop behind price (a trailing stop) to follow the move.${tradeNotesHint}`;
+      next.management = `Your stop is protecting the trade. Decide where to take profit, or trail your stop behind price.${TRADE_NOTES_HINT}`;
     } else if (slLockedProfit) {
       add(
         strengths,
         "management",
-        "You moved your stop loss past your entry price, so some profit is already locked in.",
+        "Stop moved past your entry, so some profit is locked in.",
         { priority: 0 }
       );
-      next.management = `Your stop is already locking in profit. Decide where you will take the rest, or keep trailing your stop behind price (a trailing stop) to follow the move.${tradeNotesHint}`;
+      next.management = `Your stop is locking in profit. Decide where to take the rest, or trail your stop behind price.${TRADE_NOTES_HINT}`;
     } else if (current !== null) {
       const move = isSell ? entry - current : current - entry;
       if (Math.abs(move) > flatTol) {
@@ -506,64 +477,53 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
           add(
             strengths,
             "management",
-            `The trade is currently in profit by about ${dist}${
-              multiple !== null ? ` (roughly ${multiple.toFixed(1)} times your risk)` : ""
-            }: price is at ${fmtPrice(current)} versus your ${word} entry at ${fmtPrice(entry)}.`,
+            `In profit by ${dist}${
+              multiple !== null ? ` (${multiple.toFixed(1)} times your risk)` : ""
+            }.`,
             { priority: 0 }
           );
           next.management =
             multiple !== null && multiple >= 1
-              ? `The trade is about ${multiple.toFixed(1)} times your risk in profit. Consider moving your stop loss to breakeven (your entry price) so it can't turn into a loss, and think about closing part of the position (a partial close) at your first target while letting the rest run.${tradeNotesHint}`
-              : `Let the trade work. Once price has moved in your favor by about the size of your risk, consider moving your stop loss to breakeven (your entry price).${tradeNotesHint}`;
+              ? `Consider moving your stop to breakeven (your entry price) and taking some profit (a partial close).${TRADE_NOTES_HINT}`
+              : `Let it run. Once you are up about the size of your risk, move your stop to breakeven (your entry price).${TRADE_NOTES_HINT}`;
         } else {
           const usedPct =
             riskDist !== null ? Math.min(100, Math.round((Math.abs(move) / riskDist) * 100)) : null;
           add(
             weaknesses,
             "management",
-            `The trade is currently against you by about ${dist}${
-              usedPct !== null ? ` (about ${usedPct}% of the way to your stop loss)` : ""
-            }: price is at ${fmtPrice(current)} versus your ${word} entry at ${fmtPrice(entry)}.`,
+            `Against you by ${dist}${
+              usedPct !== null ? ` (${usedPct}% of the way to your stop)` : ""
+            }.`,
             { priority: 0, why: WHY.loss }
           );
           next.management =
-            "Keep your original stop loss and do not move it further away to give the trade more room. If your idea is proven wrong, accept the small loss and move on.";
+            "Keep your original stop and do not move it further away. If you are wrong, accept the small loss.";
         }
       }
     }
 
     // Without a stop loss there is nothing to move to breakeven yet.
     if (sl === null) {
-      next.management = `First add a stop loss (see Exit). Once the trade has moved in your favor by about the size of your risk, move that stop to breakeven (your entry price) so it can't turn into a loss.${tradeNotesHint}`;
+      next.management = `First add a stop loss (see Exit). Then, once you are up about the size of your risk, move it to breakeven (your entry price).${TRADE_NOTES_HINT}`;
     }
   } else if (order) {
     // ------------------------------------------------------------ a trade is
     // visible, but no readable entry price: judge what is marked, no numbers
     if (!stopShown && !targetShown) {
-      add(weaknesses, "exit", "No stop loss or take profit is marked on this trade.", {
-        priority: 0,
-        why: WHY.noStop,
-      });
+      add(weaknesses, "exit", "No stop loss or take profit marked.", { priority: 0, why: WHY.noStop });
     } else if (stopShown && !targetShown) {
-      add(weaknesses, "exit", "A stop loss is marked, but no take profit target is shown.", {
-        priority: 0,
-        why: WHY.noTarget,
-      });
+      add(weaknesses, "exit", "Stop loss marked, but no take profit.", { priority: 0, why: WHY.noTarget });
     } else if (!stopShown && targetShown) {
-      add(weaknesses, "exit", "A take profit is marked, but no stop loss is shown.", {
-        priority: 0,
-        why: WHY.noStop,
-      });
+      add(weaknesses, "exit", "Take profit marked, but no stop loss.", { priority: 0, why: WHY.noStop });
     } else {
-      add(strengths, "exit", "Both a stop loss and a take profit are marked, so the risk can be judged.", {
-        priority: 0,
-      });
+      add(strengths, "exit", "Stop loss and take profit are both marked.", { priority: 0 });
     }
   } else if (tradeVisible) {
     // A trade is confirmed (for example from your notes) but no order lines
     // could be read from the chart.
     if (!stopShown && !targetShown) {
-      add(weaknesses, "exit", "No stop loss or take profit is marked on the chart.", {
+      add(weaknesses, "exit", "No stop loss or take profit marked on the chart.", {
         priority: 0,
         why: WHY.noStop,
       });
@@ -581,16 +541,14 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       planTarget = candidates.length ? candidates[0] : null;
     }
     next.exit = dir
-      ? `For a ${dir}, place your stop loss just beyond the level that would prove your idea wrong (${
+      ? `Put your stop just beyond the level that proves you wrong (${
           isSell ? "above" : "below"
         } your entry area) and your take profit at the next key ${targetWord}${
-          planTarget !== null ? ` around ${fmtPrice(planTarget)}` : ""
+          planTarget !== null ? ` (${fmtPrice(planTarget)})` : ""
         }.`
-      : "Place your stop loss just beyond the level that would prove your idea wrong, and your take profit at the next key support or resistance.";
+      : "Put your stop just beyond the level that proves you wrong and your take profit at the next key support or resistance.";
     if (stopShown && targetShown) {
-      add(strengths, "exit", "Both a stop loss and a take profit are marked on the chart, so the risk can be judged.", {
-        priority: 0,
-      });
+      add(strengths, "exit", "Stop loss and take profit are both marked.", { priority: 0 });
     }
   }
 
