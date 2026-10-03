@@ -343,7 +343,35 @@ function feedbackTemplateFingerprint(value = "") {
   return normalizeText(value).replace(/\s+/g, " ").trim();
 }
 
+// The coaching bullets under "WHAT YOU DID WELL" and "WHAT TO IMPROVE". The
+// summary-box chips are short category headlines on purpose ("Entry area:
+// Valid entry area found"), so they repeat across charts by design; the
+// bullets are where chart-specific prices and levels live.
+function coachingBullets(result = {}) {
+  const text =
+    typeof result?.analysis === "string"
+      ? result.analysis
+      : typeof result?.finalFeedback?.analysis === "string"
+      ? result.finalFeedback.analysis
+      : "";
+  const bullets = [];
+  let inside = false;
+  for (const line of text.replace(/\r/g, "").split("\n")) {
+    const trimmed = line.trim();
+    if (/^[A-Z][A-Z &-]+:$/.test(trimmed)) {
+      inside = trimmed === "WHAT YOU DID WELL:" || trimmed === "WHAT TO IMPROVE:";
+      continue;
+    }
+    if (inside && /^[-*]\s+/.test(trimmed)) bullets.push(trimmed.replace(/^[-*]\s+/, ""));
+  }
+  return bullets;
+}
+
 function feedbackItems(result = {}) {
+  const bullets = coachingBullets(result);
+  if (bullets.length) {
+    return bullets.map(feedbackTemplateFingerprint).filter((item) => item.length >= 30);
+  }
   const strengths = Array.isArray(result?.finalFeedback?.strengths)
     ? result.finalFeedback.strengths
     : Array.isArray(result?.dashboard?.strengths)

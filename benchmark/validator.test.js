@@ -836,3 +836,51 @@ test("plain-language wording satisfies required converted-level terms", () => {
   assert.equal(feedbackMentionsTerm("Entry 1 is the converted support around 1.2.", "converted support"), true);
   assert.equal(feedbackMentionsTerm("A plain resistance level.", "converted resistance"), false);
 });
+
+const chipChart = (instrument, price, { shareBullets = false } = {}) => {
+  const bullets = shareBullets
+    ? [
+        "Entry area: Entry 1 is the level the framework picked. It passed all the checks.",
+        "Entry area: The level is not confirmed yet, so wait for price to return to it.",
+        "Entry trigger: No trigger candle has formed at the level yet.",
+      ]
+    : [
+        `Entry area: Entry 1 is the possible support-turned-resistance around ${price}.`,
+        `Entry area: ${instrument} price must return up to ${price} and be rejected there.`,
+        `Entry trigger: No bearish trigger candle at ${price} on ${instrument} yet.`,
+      ];
+  return {
+    ...structuredClone(baseResult),
+    analysis: `DIRECTIONAL BIAS:\nBearish\n\nWHAT YOU DID WELL:\n- ${bullets[0]}\n\nWHAT TO IMPROVE:\n- ${bullets[1]}\n- ${bullets[2]}\n\nNEXT ACTION:\n- Entry area: Wait for a bearish rejection at ${price}.`,
+    finalFeedback: {
+      ...structuredClone(baseResult.finalFeedback),
+      strengths: ["Entry area: Valid entry area found", "Entry area: Backup area ready"],
+      weaknesses: ["Entry area: Entry area not confirmed yet", "Entry trigger: No trigger candle yet"],
+    },
+  };
+};
+
+const diversityItem = (analysis) => ({
+  status: "passed",
+  mode: "automatic",
+  analysis,
+  validation: validateBenchmarkResult(baseResult, {}),
+});
+
+test("short summary chips may repeat across charts when the coaching bullets are chart-specific", () => {
+  const checked = applyBatchFeedbackDiversityChecks([
+    diversityItem(chipChart("EURUSD", "1.13097")),
+    diversityItem(chipChart("USDCHF", "0.80515")),
+  ]);
+  assert.equal(checked[0].status, "passed");
+  assert.equal(checked[1].status, "passed");
+});
+
+test("identical coaching bullets across charts still fail the diversity check", () => {
+  const checked = applyBatchFeedbackDiversityChecks([
+    diversityItem(chipChart("EURUSD", "1.13097", { shareBullets: true })),
+    diversityItem(chipChart("USDCHF", "0.80515", { shareBullets: true })),
+  ]);
+  assert.equal(checked[0].status, "failed");
+  assert.ok(checked[0].validation.criticalFailures.some((check) => check.id === "batch_feedback_diversity"));
+});
