@@ -8731,6 +8731,14 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
 // judgment misses the connection and reports "not_visible" with an empty
 // reason. Detect the pattern deterministically from the already-extracted
 // labels instead of depending on the model to reason about it correctly.
+// "10,000", "$500", "0.10" -> number; anything unusable -> null.
+function parsePositiveInput(value) {
+  if (/^\s*-/.test(String(value ?? ""))) return null;
+  const cleaned = String(value ?? "").replace(/[^0-9.]/g, "");
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 function detectTicketOrderMarkup(levels = []) {
   const tickets = new Map();
   for (const level of Array.isArray(levels) ? levels : []) {
@@ -25832,6 +25840,7 @@ function buildValidatedAnalysisFacts({
   analysisType = "post-trade",
   selectedDate = "",
   submittedNotes = "",
+  riskInputs = null,
 }) {
   const fallbackPreferredArea =
     visualReview?.preferredEntryArea &&
@@ -26894,6 +26903,7 @@ function buildValidatedAnalysisFacts({
     },
     executedOrder,
     entryTrigger,
+    riskInputs,
     currentPrice,
     chartCutoff: {
       latestVisibleDate: chartDetection?.latestVisibleDate || null,
@@ -30159,7 +30169,14 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       benchmarkContextInstrument = "",
       benchmarkContextTimeframe = "",
       benchmarkDiagnosticSummaryOnly = "false",
+      accountBalance = "",
+      lotSize = "",
     } = req.body;
+    // Optional: lets the review say how much of the account the trade risks.
+    const submittedRiskInputs = {
+      balance: parsePositiveInput(accountBalance),
+      lots: parsePositiveInput(lotSize),
+    };
     let timeframe = requestedTimeframe;
     let submittedInstrument = instrument || pair || selectedPair || "Not provided";
     const submittedNotes = notes || userNotes || "";
@@ -32257,6 +32274,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       analysisType: mode,
       selectedDate: chartCutoff.resolvedDate || selectedDateText || "",
       submittedNotes,
+      riskInputs: submittedRiskInputs,
     });
 
     // Replace any model-suggested entry areas with the deterministic CSA

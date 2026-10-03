@@ -196,6 +196,134 @@ const RISK_RULE =
 const PLAN_MANAGEMENT =
   "Plan ahead: move your stop to breakeven (your entry price), take some profit (a partial close), or trail your stop.";
 
+// ---------------------------------------------------------------- account risk
+// How much of the account one trade puts at risk, from the account balance and
+// lot size the trader entered. The chart cannot show either, so both are
+// optional; with them missing the review says the risk is unknown.
+
+const QUOTE_TO_USD = {
+  EUR: 1.08,
+  GBP: 1.27,
+  AUD: 0.66,
+  NZD: 0.6,
+  CAD: 0.73,
+  CHF: 1.12,
+  JPY: 0.0067,
+};
+
+export function readRiskInputs(facts = {}) {
+  const balance = num(facts?.riskInputs?.balance);
+  const lots = num(facts?.riskInputs?.lots);
+  return {
+    balance: balance !== null && balance > 0 ? balance : null,
+    lots: lots !== null && lots > 0 ? lots : null,
+  };
+}
+
+// Dollar loss if price travels `distance` against `lots` standard lots (a
+// standard FX lot is 100,000 units). Returns null for instruments whose
+// contract size varies by broker (indices, crypto, ...).
+export function estimateRiskUsd({ symbol = "", lots, distance, price }) {
+  const size = num(lots);
+  const move = Math.abs(Number(distance));
+  if (size === null || !Number.isFinite(move) || move <= 0) return null;
+  const code = compactSymbol(symbol);
+
+  if (code === "XAUUSD") return { amount: move * 100 * size, approx: false };
+  if (code === "XAGUSD") return { amount: move * 5000 * size, approx: false };
+  if (!/^[A-Z]{6}$/.test(code) || /XAU|XAG|XPT|XPD|BTC|ETH|LTC|XRP/.test(code)) return null;
+
+  const base = code.slice(0, 3);
+  const quote = code.slice(3);
+  if (quote === "USD") return { amount: move * 100000 * size, approx: false };
+  const ref = num(price);
+  if (base === "USD" && ref !== null && ref > 0) {
+    return { amount: (move * 100000 * size) / ref, approx: false };
+  }
+  if (QUOTE_TO_USD[quote]) {
+    return { amount: move * 100000 * size * QUOTE_TO_USD[quote], approx: true };
+  }
+  return null;
+}
+
+const formatMoney = (value) => {
+  const rounded = value >= 100 ? Math.round(value) : Math.round(value * 100) / 100;
+  return `$${rounded.toLocaleString("en-US")}`;
+};
+
+const formatPercent = (value) =>
+  `${value >= 10 ? Math.round(value) : Math.round(value * 10) / 10}%`;
+
+// Risk of one trade as a share of the account, or null when it cannot be told.
+export function accountRisk({ facts = {}, distance, price }) {
+  const { balance, lots } = readRiskInputs(facts);
+  if (balance === null || lots === null) return null;
+  const usd = estimateRiskUsd({ symbol: facts?.instrument, lots, distance, price });
+  if (!usd || !(usd.amount > 0)) return null;
+
+  // Rounded so a float like 5.000000000003 is read as exactly 5%.
+  const pct = Math.round((usd.amount / balance) * 10000) / 100;
+  const safeLots = Math.floor(((lots * 1) / pct) * 100) / 100;
+  return { amount: usd.amount, approx: usd.approx, pct, lots, safeLots };
+}
+
+// Plain-language verdict on that risk: 2% or less is sensible, then
+// high / too high / far too high. `planned` words it for a trade not yet taken.
+export function describeAccountRisk(risk, { planned = false } = {}) {
+  const money = `${risk.approx ? "about " : ""}${formatMoney(risk.amount)}`;
+  const pctText = formatPercent(risk.pct);
+  const lead = planned
+    ? `At that stop, ${risk.lots} lots would risk ${money} (${pctText} of your account).`
+    : `Risking ${money} (${pctText} of your account).`;
+
+  let level;
+  let judgement;
+  let short;
+  let why = "";
+  let priority = 0;
+  if (risk.pct <= 2) {
+    level = "ok";
+    judgement = "That is a sensible size.";
+    short = `Risk per trade ${pctText} (sensible)`;
+  } else if (risk.pct <= 5) {
+    level = "high";
+    judgement = "That is on the high side.";
+    short = `Risk per trade ${pctText} (high)`;
+    why = "Many traders risk 1% or less per trade.";
+  } else if (risk.pct <= 10) {
+    level = "tooHigh";
+    judgement = "That is too high.";
+    short = `Risk too high (${pctText})`;
+    why = "A short losing streak could do serious damage.";
+  } else {
+    level = "danger";
+    judgement = "That is far too high.";
+    short = `Risk far too high (${pctText})`;
+    const p = risk.pct / 100;
+    const losses = p >= 1 ? 1 : Math.ceil(Math.log(0.5) / Math.log(1 - p));
+    why =
+      losses <= 1
+        ? "Your account could be wiped out fast: one loss could cost half of it or more."
+        : `Your account could be wiped out fast: just ${losses} losses in a row would cost more than half of it.`;
+    priority = -1;
+  }
+
+  let advice;
+  if (level === "ok") {
+    advice = "Keep your risk at 2% or less per trade.";
+  } else if (risk.safeLots >= 0.01) {
+    advice = `Cut your lot size to about ${risk.safeLots.toFixed(2)} to risk about 1%.`;
+  } else {
+    advice = "Even the smallest lot risks too much at this stop distance. Use a closer stop or skip the trade.";
+  }
+
+  return { level, text: `${lead} ${judgement}`, short, why, priority, advice };
+}
+
+const RISK_RULE_SHORT = "Aim for at least 1.5 to 2 times more reward than risk.";
+
+const RISK_UNKNOWN_HINT = "Add your account balance and lot size to see how much you risk per trade.";
+
 export function assessTradePillars({ facts = {}, area = null, hasValidatedArea = false } = {}) {
   const strengths = [];
   const weaknesses = [];
@@ -503,6 +631,29 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       }
     }
 
+    // How much of the account this trade puts at risk (needs balance + lots).
+    if (riskDist !== null) {
+      const accountRiskNow = accountRisk({ facts, distance: riskDist, price: entry });
+      if (accountRiskNow) {
+        const verdict = describeAccountRisk(accountRiskNow);
+        signals.riskPct = accountRiskNow.pct;
+        add(
+          verdict.level === "ok" ? strengths : weaknesses,
+          "risk",
+          verdict.text,
+          verdict.short,
+          { priority: verdict.priority, why: verdict.why }
+        );
+        next.risk = `${verdict.advice} ${RISK_RULE_SHORT}`;
+      } else {
+        add(weaknesses, "risk", "Risk per trade is unknown.", "Risk per trade unknown", {
+          priority: 2,
+          why: "Add your account balance and lot size to check it.",
+        });
+        next.risk = `${RISK_RULE_SHORT} ${RISK_UNKNOWN_HINT}`;
+      }
+    }
+
     // 5. Trade management -------------------------------------------------
     if (slAtBreakeven) {
       add(
@@ -636,8 +787,22 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         rr >= 1.5
           ? "That meets the 1.5 to 2 times rule."
           : "That is under 1.5 times, so look for a further target or skip it.";
-      next.risk =
-        `At those levels you risk ${priceDistance(riskDist, symbol).text} to make ${priceDistance(rewardDist, symbol).text} (${rr.toFixed(1)} times your risk). ${verdict} Risk only a small share of your account (many use 1%).`;
+      const rrText =
+        `At those levels you risk ${priceDistance(riskDist, symbol).text} to make ${priceDistance(rewardDist, symbol).text} (${rr.toFixed(1)} times your risk). ${verdict}`;
+      const planRisk = accountRisk({ facts, distance: riskDist, price: center });
+      if (planRisk) {
+        const planned = describeAccountRisk(planRisk, { planned: true });
+        add(
+          planned.level === "ok" ? strengths : weaknesses,
+          "risk",
+          planned.text,
+          planned.short,
+          { priority: planned.priority, why: planned.why }
+        );
+        next.risk = `${rrText} ${planned.text} ${planned.level === "ok" ? "" : planned.advice}`.trim();
+      } else {
+        next.risk = `${rrText} Risk only a small share of your account (many use 1%). ${RISK_UNKNOWN_HINT}`;
+      }
     }
     if (stopShown && targetShown) {
       add(strengths, "exit", "Stop loss and take profit are both marked.", "Stop and target marked", {
@@ -750,6 +915,23 @@ export function scoreFromSignals(signals) {
     } else {
       risk -= 10;
       riskNegatives.push("more risk than reward");
+    }
+  }
+
+  if (typeof signals.riskPct === "number" && Number.isFinite(signals.riskPct)) {
+    const pctText = formatPercent(signals.riskPct);
+    if (signals.riskPct > 10) {
+      risk -= 35;
+      riskNegatives.push(`risking ${pctText} of the account`);
+    } else if (signals.riskPct > 5) {
+      risk -= 20;
+      riskNegatives.push(`risking ${pctText} of the account`);
+    } else if (signals.riskPct > 2) {
+      risk -= 8;
+      riskNegatives.push(`risking ${pctText} of the account`);
+    } else {
+      risk += 5;
+      riskPositives.push("sensible position size");
     }
   }
 

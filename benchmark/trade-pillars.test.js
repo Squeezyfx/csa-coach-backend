@@ -7,6 +7,7 @@ import {
   detectEntryTrigger,
   priceDistance,
   scoreFromSignals,
+  estimateRiskUsd,
 } from "../trade-pillars.js";
 
 const levels = (prices) => ({ structuralCandidates: prices.map((price) => ({ price })) });
@@ -242,7 +243,11 @@ test("summary boxes get short headlines while coaching keeps the full bullets", 
   ]);
 
   const shortWeaknesses = compilePillarItems(result.weaknesses, { short: true });
-  assert.deepEqual(shortWeaknesses, ["Exit: No take profit", "Risk: Reward unknown (no target)"]);
+  assert.deepEqual(shortWeaknesses, [
+    "Exit: No take profit",
+    "Risk: Reward unknown (no target)",
+    "Risk: Risk per trade unknown",
+  ]);
 
   const full = compilePillarItems(result.strengths);
   assert.ok(full.every((line, index) => line !== shortStrengths[index]));
@@ -304,4 +309,111 @@ test("entry and risk scores follow the pillar findings", () => {
   });
   assert.equal(full.risk, 95);
   assert.ok(full.risk > strong.risk && strong.risk > weak.risk);
+});
+
+const withRiskInputs = (facts, balance, lots) => ({ ...facts, riskInputs: { balance, lots } });
+
+test("risk per trade is called out as unknown when balance and lot size are missing", () => {
+  const { weaknesses, next } = run(eurusdSell(), eurusdArea);
+  assert.ok(has(weaknesses, "Risk: Risk per trade is unknown."));
+  assert.match(next.risk, /Add your account balance and lot size/);
+
+  const plan = run(
+    {
+      instrument: "EURUSD",
+      direction: "bearish",
+      trade: { visible: false },
+      executedOrder: null,
+      risk: {},
+      selectorDiagnostics: levels([1.13907, 1.13524, 1.13714, 1.1311]),
+    },
+    eurusdArea
+  );
+  assert.match(plan.next.risk, /Add your account balance and lot size/);
+  assert.deepEqual(plan.weaknesses, []);
+});
+
+test("account risk is worked out from balance, lot size and stop distance", () => {
+  // 25 pip stop, 0.1 lot on EURUSD = $25 risked. On $10,000 that is 0.25%.
+  const small = run(withRiskInputs(eurusdSell(), 10000, 0.1), eurusdArea);
+  assert.ok(has(small.strengths, "Risk: Risking $25 (0.3% of your account). That is a sensible size."));
+  assert.ok(!has(small.weaknesses, "Risk per trade"));
+  assert.match(small.next.risk, /^Keep your risk at 2% or less per trade\./);
+
+  // 25 pips x 1 lot = $250 on $5,000 = 5%.
+  const high = run(withRiskInputs(eurusdSell(), 5000, 1), eurusdArea);
+  assert.ok(has(high.weaknesses, "Risking $250 (5% of your account). That is on the high side."));
+  assert.match(high.next.risk, /Cut your lot size to about 0\.20 to risk about 1%\./);
+});
+
+test("a risk of 50% of the account triggers a fast-depletion warning", () => {
+  // 25 pips x 2 lots = $500 on $1,000 = 50%.
+  const result = assessTradePillars({
+    facts: withRiskInputs(eurusdSell(), 1000, 2),
+    area: eurusdArea,
+    hasValidatedArea: true,
+  });
+  const weaknesses = compilePillarItems(result.weaknesses, { withWhy: true });
+  assert.ok(has(weaknesses, "Risking $500 (50% of your account). That is far too high."));
+  assert.ok(has(weaknesses, "wiped out fast: one loss could cost half of it or more"));
+  assert.equal(result.signals.riskPct, 50);
+  assert.deepEqual(compilePillarItems(result.weaknesses, { short: true }).filter((l) => l.startsWith("Risk")), [
+    "Risk: Risk far too high (50%)",
+    "Risk: Reward unknown (no target)",
+  ]);
+
+  // 25 pips x 0.5 lot = $125 on $1,000 = 12.5%: depletion measured in losses.
+  const twelve = run(withRiskInputs(eurusdSell(), 1000, 0.5), eurusdArea);
+  assert.ok(has(twelve.weaknesses, "far too high"));
+  const full = assessTradePillars({ facts: withRiskInputs(eurusdSell(), 1000, 0.5), area: eurusdArea, hasValidatedArea: true });
+  assert.ok(has(compilePillarItems(full.weaknesses, { withWhy: true }), "just 6 losses in a row"));
+});
+
+test("risk estimates cover USD-quoted, USD-based, gold and cross pairs", () => {
+  const usdQuoted = estimateRiskUsd({ symbol: "GBPUSD", lots: 1, distance: 0.005, price: 1.3 });
+  assert.equal(Math.round(usdQuoted.amount), 500);
+  assert.equal(usdQuoted.approx, false);
+
+  const usdBase = estimateRiskUsd({ symbol: "USDJPY", lots: 1, distance: 0.5, price: 150 });
+  assert.equal(Math.round(usdBase.amount), 333);
+
+  const gold = estimateRiskUsd({ symbol: "XAUUSD", lots: 0.1, distance: 10, price: 2000 });
+  assert.equal(Math.round(gold.amount), 100);
+
+  const cross = estimateRiskUsd({ symbol: "EURGBP", lots: 1, distance: 0.0020, price: 0.85 });
+  assert.equal(cross.approx, true);
+
+  assert.equal(estimateRiskUsd({ symbol: "US30", lots: 1, distance: 50, price: 40000 }), null);
+});
+
+test("an unreadable account size means the risk stays unknown", () => {
+  const result = run(withRiskInputs(eurusdSell(), 10000, null), eurusdArea);
+  assert.ok(has(result.weaknesses, "Risk per trade is unknown"));
+});
+
+test("account risk feeds the risk score and its summary", () => {
+  const base = { trend: "with", plan: "better", trigger: "found", stop: "beyond", target: "none", rr: null };
+  const safe = scoreFromSignals({ ...base, riskPct: 1 });
+  const none = scoreFromSignals(base);
+  const reckless = scoreFromSignals({ ...base, riskPct: 50 });
+  assert.equal(safe.risk, none.risk + 5);
+  assert.equal(reckless.risk, none.risk - 35);
+  assert.match(reckless.riskSummary, /risking 50% of the account/);
+});
+
+test("a planned trade shows what the planned stop would risk", () => {
+  const facts = {
+    instrument: "EURUSD",
+    direction: "bearish",
+    trade: { visible: false },
+    executedOrder: null,
+    risk: {},
+    riskInputs: { balance: 1000, lots: 1 },
+    selectorDiagnostics: levels([1.13907, 1.13524, 1.13714, 1.1311]),
+  };
+  const result = assessTradePillars({ facts, area: eurusdArea, hasValidatedArea: true });
+  // stop 19 pips away x 1 lot = $190 on $1,000 = 19%
+  assert.match(result.next.risk, /At that stop, 1 lots would risk \$190 \(19% of your account\)\. That is far too high\./);
+  assert.match(result.next.risk, /Cut your lot size to about 0\.05/);
+  assert.ok(has(compilePillarItems(result.weaknesses), "Risk: At that stop"));
 });
