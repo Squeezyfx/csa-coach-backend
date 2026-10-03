@@ -116,9 +116,36 @@ test("with no placed trade the five pillars become a plan", () => {
   assert.deepEqual(strengths, []);
   assert.deepEqual(weaknesses, []);
   assert.match(next.trigger, /bearish engulfing candle/);
-  assert.match(next.exit, /take profit at the next key low \(1\.13110\)/);
-  assert.match(next.risk, /1\.5 to 2 times more reward than risk/);
+  assert.match(next.exit, /Take profit: the next key low at 1\.13110/);
+  assert.match(next.risk, /1\.5 times/);
   assert.match(next.management, /partial close/);
+});
+
+test("a plan names where the stop loss and take profit would go, and what that risks", () => {
+  const facts = {
+    instrument: "EURUSD",
+    direction: "bearish",
+    trade: { visible: false },
+    executedOrder: null,
+    risk: { stopShown: false, targetShown: false },
+    selectorDiagnostics: levels([1.13907, 1.13524, 1.13714, 1.1311]),
+  };
+  const { next } = run(facts, eurusdArea);
+  assert.equal(
+    next.exit,
+    "Stop loss: just above the key high at 1.13714. Take profit: the next key low at 1.13110."
+  );
+  assert.match(next.risk, /risk 19 pips to make 41 pips \(2\.2 times your risk\)\. That meets the 1\.5 to 2 times rule\./);
+
+  const buyFacts = {
+    ...facts,
+    direction: "bullish",
+    selectorDiagnostics: levels([1.1, 1.1052, 1.11, 1.12]),
+  };
+  const buy = run(buyFacts, { direction: "buy", authoritativeCenter: 1.1052 });
+  assert.match(buy.next.exit, /^Stop loss: just below the key low at 1\.10000\./);
+  assert.match(buy.next.exit, /Take profit: the next key high at 1\.11000\./);
+  assert.match(buy.next.risk, /under 1\.5 times/);
 });
 
 test("pillar items are ordered, capped per pillar, labelled and de-duplicated", () => {

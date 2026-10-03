@@ -609,13 +609,36 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         .sort((a, b) => (isSell ? b - a : a - b));
       planTarget = candidates.length ? candidates[0] : null;
     }
+    // The stop goes just beyond the nearest key level on the wrong side of
+    // the entry (a few pips away at least, so it is not inside the noise).
+    let planStop = null;
+    if (center !== null) {
+      const minGap = center * 0.0003;
+      const beyond = levels
+        .filter((l) => (isSell ? l > center + minGap : l < center - minGap))
+        .sort((a, b) => (isSell ? a - b : b - a));
+      planStop = beyond.length ? beyond[0] : null;
+    }
     next.exit = dir
-      ? `Put your stop just beyond the level that proves you wrong (${
-          isSell ? "above" : "below"
-        } your entry area) and your take profit at the next key ${targetWord}${
-          planTarget !== null ? ` (${fmtPrice(planTarget)})` : ""
-        }.`
+      ? planStop !== null && planTarget !== null
+        ? `Stop loss: just ${isSell ? "above" : "below"} the key ${protectWord} at ${fmtPrice(planStop)}. Take profit: the next key ${targetWord} at ${fmtPrice(planTarget)}.`
+        : `Put your stop just beyond the level that proves you wrong (${
+            isSell ? "above" : "below"
+          } your entry area) and your take profit at the next key ${targetWord}${
+            planTarget !== null ? ` (${fmtPrice(planTarget)})` : ""
+          }.`
       : "Put your stop just beyond the level that proves you wrong and your take profit at the next key support or resistance.";
+    if (planStop !== null && planTarget !== null) {
+      const riskDist = Math.abs(planStop - center);
+      const rewardDist = Math.abs(center - planTarget);
+      const rr = rewardDist / riskDist;
+      const verdict =
+        rr >= 1.5
+          ? "That meets the 1.5 to 2 times rule."
+          : "That is under 1.5 times, so look for a further target or skip it.";
+      next.risk =
+        `At those levels you risk ${priceDistance(riskDist, symbol).text} to make ${priceDistance(rewardDist, symbol).text} (${rr.toFixed(1)} times your risk). ${verdict} Risk only a small share of your account (many use 1%).`;
+    }
     if (stopShown && targetShown) {
       add(strengths, "exit", "Stop loss and take profit are both marked.", "Stop and target marked", {
         priority: 0,
