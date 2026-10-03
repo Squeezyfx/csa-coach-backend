@@ -261,6 +261,56 @@ function describeLadder(ladder, isSell) {
   return `Take profits: ${parts.join(", ")}.`;
 }
 
+// ------------------------------------------------------------ planned stop loss
+
+// Average high-low range of the last `lookback` candles: how far one normal
+// candle travels on this chart. Null with too few candles.
+export function averageCandleRange(candles = [], lookback = 14) {
+  const ranges = (Array.isArray(candles) ? candles : [])
+    .map((c) => ({ datetime: c?.datetime || null, high: num(c?.high), low: num(c?.low) }))
+    .filter((c) => c.high !== null && c.low !== null && c.high >= c.low)
+    .sort((a, b) => String(a.datetime).localeCompare(String(b.datetime)))
+    .slice(-lookback)
+    .map((c) => c.high - c.low);
+  if (ranges.length < 5) return null;
+  const mean = ranges.reduce((sum, value) => sum + value, 0) / ranges.length;
+  return mean > 0 ? mean : null;
+}
+
+// { price, keyLevel } for the stop of a planned trade from `center`.
+function planStopFor({ facts, area, center, levels, isSell }) {
+  const avgRange = num(facts?.volatility?.avgRange);
+  const sameLevel = center * 0.00005;
+  const minDist = avgRange !== null ? avgRange : center * 0.0003;
+  const maxDist = avgRange !== null ? avgRange * 2.5 : Infinity;
+  const buffer = avgRange !== null ? avgRange * 0.1 : center * 0.0001;
+
+  // Backup entries on the stop side of the entry: a separate trade, so the
+  // stop belongs in front of them when there is room.
+  const backups = (Array.isArray(facts?.activeEntryAreas) ? facts.activeEntryAreas : [])
+    .map((a) => num(a?.authoritativeCenter))
+    .filter((p) => p !== null && (isSell ? p > center + sameLevel : p < center - sameLevel));
+  const isBackup = (level) => backups.some((p) => Math.abs(p - level) <= sameLevel);
+  const nearestBackup = backups.length ? Math.min(...backups.map((p) => Math.abs(p - center))) : null;
+  const roomBeforeBackup = nearestBackup !== null && nearestBackup > minDist;
+
+  const candidates = levels
+    .filter((l) => (isSell ? l > center : l < center))
+    .filter((l) => {
+      const dist = Math.abs(l - center);
+      if (dist < minDist || dist > maxDist || isBackup(l)) return false;
+      return !roomBeforeBackup || dist < nearestBackup - sameLevel;
+    })
+    .sort((a, b) => Math.abs(a - center) - Math.abs(b - center));
+  if (candidates.length) return { price: candidates[0], keyLevel: true };
+
+  const edge = isSell ? num(area?.zoneHigh) : num(area?.zoneLow);
+  const edgeDist = edge !== null ? Math.max(0, isSell ? edge - center : center - edge) : 0;
+  let dist = Math.max(minDist, edgeDist + buffer);
+  if (roomBeforeBackup && dist >= nearestBackup) dist = Math.max(minDist, nearestBackup - buffer);
+  return { price: isSell ? center + dist : center - dist, keyLevel: false };
+}
+
 // ---------------------------------------------------------------- account risk
 // How much of the account one trade puts at risk, from the account balance and
 // lot size the trader entered. The chart cannot show either, so both are
@@ -849,26 +899,25 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       });
     }
     const planTarget = planLadder.length ? planLadder[planLadder.length - 1].price : null;
-    // The stop goes just beyond the nearest key level on the wrong side of
-    // the entry (a few pips away at least, so it is not inside the noise).
-    let planStop = null;
-    if (center !== null) {
-      const minGap = center * 0.0003;
-      const beyond = levels
-        .filter((l) => (isSell ? l > center + minGap : l < center - minGap))
-        .sort((a, b) => (isSell ? a - b : b - a));
-      planStop = beyond.length ? beyond[0] : null;
-    }
+    // The stop goes just beyond the nearest key level on the wrong side of the
+    // entry, but never inside normal candle noise (at least one average
+    // candle away) and never on the Backup entry, which is a separate trade
+    // taken after this stop is hit. With no suitable key level, it sits one
+    // average candle beyond the entry zone.
+    const planStopInfo = center !== null ? planStopFor({ facts, area, center, levels, isSell }) : null;
+    const planStop = planStopInfo ? planStopInfo.price : null;
+    const stopText =
+      planStopInfo === null
+        ? `Put your stop just beyond the level that proves you wrong (${isSell ? "above" : "below"} your entry area).`
+        : planStopInfo.keyLevel
+        ? `Stop loss: just ${isSell ? "above" : "below"} the key ${protectWord} at ${fmtPrice(planStop)}.`
+        : `Stop loss: about ${fmtPrice(planStop)}, past the entry zone and normal candle moves.`;
     next.exit = dir
-      ? planStop !== null && planTarget !== null
-        ? `Stop loss: just ${isSell ? "above" : "below"} the key ${protectWord} at ${fmtPrice(planStop)}. ${describeLadder(planLadder, isSell)}`
-        : planLadder.length
-        ? `Put your stop just beyond the level that proves you wrong (${
-            isSell ? "above" : "below"
-          } your entry area). ${describeLadder(planLadder, isSell)}`
-        : `Put your stop just beyond the level that proves you wrong (${
-            isSell ? "above" : "below"
-          } your entry area) and your take profit at the next key ${targetWord}.`
+      ? `${stopText} ${
+          planLadder.length
+            ? describeLadder(planLadder, isSell)
+            : `Put your take profit at the next key ${targetWord}.`
+        }`
       : "Put your stop just beyond the level that proves you wrong and your take profit at the next key support or resistance.";
     if (planStop !== null && planTarget !== null) {
       const riskDist = Math.abs(planStop - center);

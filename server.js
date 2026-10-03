@@ -50,7 +50,7 @@ import {
 import { buildVisiblePeriodFibonacciFrame, resolveCalendarPeriodDirection, resolveDeepRetracementDirectionOverride } from "./benchmark/weekly-fibonacci-policy.js";
 import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodWickExtremesFromPixels } from "./chart-raster-reader.js";
 import { buildChartOverlay } from "./chart-overlay.js";
-import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals } from "./trade-pillars.js";
+import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, averageCandleRange } from "./trade-pillars.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -26904,6 +26904,8 @@ function buildValidatedAnalysisFacts({
     executedOrder,
     entryTrigger,
     riskInputs,
+    // How far one normal candle travels on this chart; sizes the planned stop.
+    volatility: { avgRange: averageCandleRange(marketReference?.timeframeCandles) },
     currentPrice,
     chartCutoff: {
       latestVisibleDate: chartDetection?.latestVisibleDate || null,

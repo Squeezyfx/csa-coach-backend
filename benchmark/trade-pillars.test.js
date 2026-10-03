@@ -9,6 +9,7 @@ import {
   scoreFromSignals,
   estimateRiskUsd,
   collectStructuralLevels,
+  averageCandleRange,
 } from "../trade-pillars.js";
 
 const levels = (prices) => ({ structuralCandidates: prices.map((price) => ({ price })) });
@@ -501,4 +502,72 @@ test("a missing take profit is suggested as a ladder ending at the main swing", 
   facts.selectorDiagnostics = { ...facts.selectorDiagnostics, ...levels([1.13907, 1.13524, 1.13714, 1.1311, 1.1286]), fibonacci: { swingLow: 1.1215 } };
   const { next } = run(facts, eurusdArea);
   assert.match(next.exit, /Add take profits: TP1 1\.13110, TP2 1\.12860, final TP 1\.12150 \(the main swing low\)\./);
+});
+
+test("average candle range uses the latest candles and needs enough of them", () => {
+  const candle = (n, range) => ({ datetime: `2026-09-${String(n).padStart(2, "0")} 00:00:00`, high: 1 + range, low: 1 });
+  const rows = [
+    ...Array.from({ length: 4 }, (_, i) => candle(i + 1, 0.1)),
+    ...Array.from({ length: 14 }, (_, i) => candle(i + 10, 0.002)),
+  ];
+  assert.ok(Math.abs(averageCandleRange(rows) - 0.002) < 1e-9);
+  assert.equal(averageCandleRange(rows.slice(0, 3)), null);
+  assert.equal(averageCandleRange([]), null);
+});
+
+const sellAreaFacts = (extra = {}) => ({
+  instrument: "EURUSD",
+  direction: "bearish",
+  trade: { visible: false },
+  executedOrder: null,
+  risk: {},
+  volatility: { avgRange: 0.0012 },
+  activeEntryAreas: [
+    { direction: "sell", authoritativeCenter: 1.13097 },
+    { direction: "sell", authoritativeCenter: 1.13227 },
+  ],
+  selectorDiagnostics: levels([1.13097, 1.13227, 1.1337, 1.12861]),
+  ...extra,
+});
+const sellArea = { direction: "sell", authoritativeCenter: 1.13097, zoneLow: 1.13067, zoneHigh: 1.13127 };
+
+test("the planned stop is not placed on the Backup entry and clears normal candle noise", () => {
+  const { next } = run(sellAreaFacts(), sellArea);
+  // 1.13227 is Entry 2, 1.1337 is beyond it: neither is a stop for Entry 1.
+  assert.match(next.exit, /^Stop loss: about 1\.13217, past the entry zone and normal candle moves\./);
+  assert.match(next.risk, /risk 12 pips to make/);
+});
+
+test("a key level that is far enough away is used for the stop", () => {
+  const facts = sellAreaFacts({
+    activeEntryAreas: [{ direction: "sell", authoritativeCenter: 1.13097 }],
+    selectorDiagnostics: levels([1.13097, 1.13227, 1.1337, 1.12861]),
+  });
+  const { next } = run(facts, sellArea);
+  // 1.13227 is now an ordinary key high 13 pips away (one candle is 12).
+  assert.match(next.exit, /^Stop loss: just above the key high at 1\.13227\./);
+});
+
+test("a stop is never tighter than one average candle, even on a daily chart", () => {
+  const buyArea = { direction: "buy", authoritativeCenter: 0.80515, zoneLow: 0.80485, zoneHigh: 0.80545 };
+  const facts = {
+    instrument: "USDCHF",
+    direction: "bullish",
+    trade: { visible: false },
+    executedOrder: null,
+    risk: {},
+    volatility: { avgRange: 0.006 },
+    activeEntryAreas: [
+      { direction: "buy", authoritativeCenter: 0.80515 },
+      { direction: "buy", authoritativeCenter: 0.80419 },
+    ],
+    selectorDiagnostics: levels([0.80515, 0.80441, 0.80419, 0.80402, 0.796, 0.78, 0.814]),
+  };
+  const withLevel = run(facts, buyArea);
+  assert.match(withLevel.next.exit, /^Stop loss: just below the key low at 0\.79600\./);
+
+  facts.selectorDiagnostics = levels([0.80515, 0.80441, 0.80419, 0.80402, 0.78, 0.814]);
+  const synthetic = run(facts, buyArea);
+  assert.match(synthetic.next.exit, /^Stop loss: about 0\.79915, past the entry zone/);
+  assert.match(synthetic.next.risk, /risk 60 pips/);
 });
