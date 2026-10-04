@@ -100,9 +100,17 @@ export function collectStructuralLevels(facts = {}) {
     if (price !== null && price > 0) prices.push(price);
   }
 
-  prices.sort((a, b) => a - b);
+  // The chart's own last-price line is sometimes read as a "level" (EURCHF W1
+  // reported a resistance at exactly the close, 0.93173). A target or stop
+  // sitting on the current price is not a key level, so leave it out.
+  const current = num(facts?.currentPrice);
+  const notOnCurrentPrice = (price) =>
+    current === null || Math.abs(price - current) > price * 0.00003;
+  const keyPrices = prices.filter(notOnCurrentPrice);
+
+  keyPrices.sort((a, b) => a - b);
   const levels = [];
-  for (const price of prices) {
+  for (const price of keyPrices) {
     if (!levels.length || Math.abs(price - levels[levels.length - 1]) > price * 0.00003) {
       levels.push(price);
     }

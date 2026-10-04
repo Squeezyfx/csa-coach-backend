@@ -571,3 +571,25 @@ test("a stop is never tighter than one average candle, even on a daily chart", (
   assert.match(synthetic.next.exit, /^Stop loss: about 0\.79915, past the entry zone/);
   assert.match(synthetic.next.risk, /risk 60 pips/);
 });
+
+test("the chart's last-price line is not treated as a key level", () => {
+  // EURCHF W1: a reference "resistance" at exactly the close (0.93173).
+  const facts = {
+    instrument: "EURCHF",
+    direction: "bullish",
+    currentPrice: 0.93173,
+    trade: { visible: false },
+    executedOrder: null,
+    risk: {},
+    structuralReferenceAreas: [{ areaType: "resistance", authoritativeCenter: 0.93173 }],
+    selectorDiagnostics: levels([0.9266, 0.93491, 0.9096]),
+  };
+  assert.deepEqual(collectStructuralLevels(facts), [0.9096, 0.9266, 0.93491]);
+
+  const buy = run({ ...facts, selectorDiagnostics: { ...levels([0.9266, 0.93491, 0.9096]), fibonacci: { swingHigh: 0.9485 } } }, {
+    direction: "buy",
+    authoritativeCenter: 0.9266,
+  });
+  assert.match(buy.next.exit, /Take profits: TP1 0\.93491, final TP 0\.94850/);
+  assert.ok(!buy.next.exit.includes("0.93173"));
+});
