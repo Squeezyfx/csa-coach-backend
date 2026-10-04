@@ -4159,6 +4159,9 @@ async function fetchTwelveDataStructureLevels({
   });
 
   const reconstructedMissingKeys = [];
+  // Completed quarters/years whose provider high/low disagreed with the
+  // selected-timeframe candles and were reconciled (diagnostic only).
+  const integrityReconciledKeys = [];
   let dailyLevels = [];
 
   if (Array.isArray(alignedNative.resolved)) {
@@ -4211,6 +4214,70 @@ async function fetchTwelveDataStructureLevels({
         });
         reconstructedMissingKeys.push(key);
       }
+    }
+
+    // INTEGRITY GUARD for completed quarters/years. The provider's native
+    // monthly candles do not always line up with calendar months (see the
+    // monthly-in-year branch above, where GBPCAD exposed it), so a quarter
+    // built from them can lose a month and report a high or low that a real
+    // selected-timeframe candle then exceeds (EURCHF W1: Q1 high 0.92169 when
+    // January's weekly candles reach 0.93491). auditPeriodInventory rightly
+    // refused to certify that period, which in turn blocked every entry. Each
+    // provider extreme must therefore agree with the reconstruction from the
+    // same candles the audit checks, within the same 20%-of-range allowance
+    // the D1/W1 alignment uses; a disagreeing extreme takes the
+    // reconstruction's value. Periods whose extremes agree are untouched.
+    const reconstructedByKey = new Map(
+      executionReconstructedLevels.map((level) => [String(level.key), level])
+    );
+    const reconcileProviderExtreme = (providerValue, reconstructedValue, reconstructedRange) => {
+      const provider = Number(providerValue);
+      const reconstructed = Number(reconstructedValue);
+      if (!Number.isFinite(reconstructed)) return { value: provider, accepted: true };
+      if (!Number.isFinite(provider)) return { value: reconstructed, accepted: false };
+      const range = Math.max(Math.abs(Number(reconstructedRange) || 0), 1e-9);
+      const allowance = Math.max(range * 0.2, Math.abs(reconstructed) * 0.0005);
+      const accepted = Math.abs(provider - reconstructed) <= allowance;
+      return { value: accepted ? provider : reconstructed, accepted };
+    };
+    for (const [key, level] of authoritativeLevelMap) {
+      const reconstructed = reconstructedByKey.get(key);
+      const isCurrentIncomplete =
+        currentFrameworkPeriodComplete !== true &&
+        currentFrameworkPeriod?.key &&
+        key === String(currentFrameworkPeriod.key);
+      if (!reconstructed || isCurrentIncomplete || level?.authoritativeSourceMissing === true) continue;
+      const range = Math.abs(Number(reconstructed.high) - Number(reconstructed.low));
+      const high = reconcileProviderExtreme(level.high, reconstructed.high, range);
+      const low = reconcileProviderExtreme(level.low, reconstructed.low, range);
+      if (high.accepted && low.accepted) continue;
+      // Keep open/close consistent with whichever high/low won.
+      authoritativeLevelMap.set(key, {
+        ...level,
+        open: Number.isFinite(Number(reconstructed.open)) ? Number(reconstructed.open) : level.open,
+        close: Number.isFinite(Number(reconstructed.close)) ? Number(reconstructed.close) : level.close,
+        high: high.value,
+        low: low.value,
+        source: "provider_period_extreme_integrity_reconciled_to_selected_timeframe",
+        nativeHigherTimeframeAuthority: false,
+        hybridHigherTimeframeAuthority: true,
+        highSource: high.accepted ? "provider_extreme_integrity_pass" : "reconstruction_extreme_provider_boundary_mismatch",
+        lowSource: low.accepted ? "provider_extreme_integrity_pass" : "reconstruction_extreme_provider_boundary_mismatch",
+      });
+      integrityReconciledKeys.push({
+        key,
+        providerHigh: Number(level.high),
+        providerLow: Number(level.low),
+        resolvedHigh: high.value,
+        resolvedLow: low.value,
+      });
+    }
+    if (integrityReconciledKeys.length) {
+      console.log("CSA PROVIDER PERIOD INTEGRITY RECONCILED:", {
+        buildId: CSA_BUILD_ID,
+        structureMode: profile?.structureMode || null,
+        periods: integrityReconciledKeys,
+      });
     }
     dailyLevels = Array.from(authoritativeLevelMap.values())
       .sort((a, b) => String(a.key).localeCompare(String(b.key)));
@@ -4276,6 +4343,7 @@ async function fetchTwelveDataStructureLevels({
     nativeAlignment: alignedNative.matches || [],
     unmatchedNative: alignedNative.unmatchedNative || [],
     reconstructedMissingKeys,
+    providerIntegrityReconciled: integrityReconciledKeys,
     sourceIntegrityWarnings,
     resolved: dailyLevels.map((level) => ({
       key: level.key,
