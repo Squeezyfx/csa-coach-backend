@@ -28017,9 +28017,21 @@ function buildControlledFeedback({
         )
       : "";
 
-  const referenceAreas = Array.isArray(facts?.structuralReferenceAreas)
-    ? facts.structuralReferenceAreas
-    : [];
+  // The chart's own last-price line is sometimes read as a "reference level"
+  // (EURCHF W1: a resistance at exactly the close). Price cannot be a level
+  // to break or to watch, so it never reaches the coaching text.
+  const lastPriceForReferences = Number(facts?.currentPrice);
+  const referenceAreas = (
+    Array.isArray(facts?.structuralReferenceAreas) ? facts.structuralReferenceAreas : []
+  ).filter((reference) => {
+    const level = Number(reference?.authoritativeCenter);
+    return !(
+      Number.isFinite(lastPriceForReferences) &&
+      lastPriceForReferences > 0 &&
+      Number.isFinite(level) &&
+      Math.abs(level - lastPriceForReferences) <= lastPriceForReferences * 0.00003
+    );
+  });
 
   // V4.10.16: once a real Entry 1 exists, weak failed-Fib fallback levels
   // must not clutter the beginner-facing plan. Preserve meaningful structural
