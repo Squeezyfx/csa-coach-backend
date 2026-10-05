@@ -10,6 +10,8 @@ import {
   estimateRiskUsd,
   collectStructuralLevels,
   averageCandleRange,
+  typicalSpread,
+  minimumStopFloor,
 } from "../trade-pillars.js";
 
 const levels = (prices) => ({ structuralCandidates: prices.map((price) => ({ price })) });
@@ -136,9 +138,9 @@ test("a plan names where the stop loss and take profit would go, and what that r
   const { next } = run(facts, eurusdArea);
   assert.equal(
     next.exit,
-    "Stop loss: just above the key high at 1.13714. Take profit: the next key low at 1.13110."
+    "Stop loss: just above the key high at 1.13714, with room for the spread. Take profit: the next key low at 1.13110."
   );
-  assert.match(next.risk, /risk 19 pips to make 41 pips \(2\.2 times your risk\)\. That meets the 1\.5 to 2 times rule\./);
+  assert.match(next.risk, /risk 20 pips to make 41 pips \(2\.1 times your risk\)\. That meets the 1\.5 to 2 times rule\./);
 
   const buyFacts = {
     ...facts,
@@ -146,7 +148,7 @@ test("a plan names where the stop loss and take profit would go, and what that r
     selectorDiagnostics: levels([1.1, 1.1052, 1.11, 1.12]),
   };
   const buy = run(buyFacts, { direction: "buy", authoritativeCenter: 1.1052 });
-  assert.match(buy.next.exit, /^Stop loss: just below the key low at 1\.10000\./);
+  assert.match(buy.next.exit, /^Stop loss: just below the key low at 1\.10000, with room for the spread\./);
   assert.match(buy.next.exit, /Take profit: the next key high at 1\.11000\./);
   assert.match(buy.next.risk, /under 1\.5 times/);
 });
@@ -414,8 +416,8 @@ test("a planned trade shows what the planned stop would risk", () => {
     selectorDiagnostics: levels([1.13907, 1.13524, 1.13714, 1.1311]),
   };
   const result = assessTradePillars({ facts, area: eurusdArea, hasValidatedArea: true });
-  // stop 19 pips away x 1 lot = $190 on $1,000 = 19%
-  assert.match(result.next.risk, /At that stop, 1 lots would risk \$190 \(19% of your account\)\. That is far too high\./);
+  // stop 19 pips away plus a 1-pip spread = 20 pips x 1 lot = $200 on $1,000 = 20%
+  assert.match(result.next.risk, /At that stop, 1 lots would risk \$200 \(20% of your account\)\. That is far too high\./);
   assert.match(result.next.risk, /Cut your lot size to about 0\.05/);
   assert.ok(has(compilePillarItems(result.weaknesses), "Risk: At that stop"));
 });
@@ -439,15 +441,15 @@ test("a sell plan ends its take profits at the main swing low", () => {
   const { next } = run(facts, eurusdArea);
   assert.equal(
     next.exit,
-    "Stop loss: just above the key high at 1.13714. Take profits: TP1 1.13110, TP2 1.12400, final TP 1.12150 (the main swing low)."
+    "Stop loss: just above the key high at 1.13714, with room for the spread. Take profits: TP1 1.13110, TP2 1.12400, final TP 1.12150 (the main swing low)."
   );
-  assert.match(next.risk, /to make 137 pips at the final target \(7\.2 times your risk\)/);
+  assert.match(next.risk, /to make 137 pips at the final target \(6\.9 times your risk\)/);
 });
 
 test("a buy plan ends its take profits at the main swing high", () => {
   const facts = withSwing(planFacts([1.1, 1.1052, 1.1012, 1.1085], "bullish"), 1.09, 1.12);
   const { next } = run(facts, { direction: "buy", authoritativeCenter: 1.1052 });
-  assert.match(next.exit, /^Stop loss: just below the key low at 1\.10120\./);
+  assert.match(next.exit, /^Stop loss: just below the key low at 1\.10120, with room for the spread\./);
   assert.match(next.exit, /Take profits: TP1 1\.10850, final TP 1\.12000 \(the main swing high\)\./);
 });
 
@@ -521,7 +523,7 @@ const sellAreaFacts = (extra = {}) => ({
   trade: { visible: false },
   executedOrder: null,
   risk: {},
-  volatility: { avgRange: 0.0012 },
+  volatility: { avgRange: 0.001 },
   activeEntryAreas: [
     { direction: "sell", authoritativeCenter: 1.13097 },
     { direction: "sell", authoritativeCenter: 1.13227 },
@@ -534,8 +536,8 @@ const sellArea = { direction: "sell", authoritativeCenter: 1.13097, zoneLow: 1.1
 test("the planned stop is not placed on the Backup entry and clears normal candle noise", () => {
   const { next } = run(sellAreaFacts(), sellArea);
   // 1.13227 is Entry 2, 1.1337 is beyond it: neither is a stop for Entry 1.
-  assert.match(next.exit, /^Stop loss: about 1\.13217, past the entry zone and normal candle moves\./);
-  assert.match(next.risk, /risk 12 pips to make/);
+  assert.match(next.exit, /^Stop loss: about 1\.13207, past the entry zone, normal candle moves and the spread\./);
+  assert.match(next.risk, /risk 11 pips to make/);
 });
 
 test("a key level that is far enough away is used for the stop", () => {
@@ -544,8 +546,8 @@ test("a key level that is far enough away is used for the stop", () => {
     selectorDiagnostics: levels([1.13097, 1.13227, 1.1337, 1.12861]),
   });
   const { next } = run(facts, sellArea);
-  // 1.13227 is now an ordinary key high 13 pips away (one candle is 12).
-  assert.match(next.exit, /^Stop loss: just above the key high at 1\.13227\./);
+  // 1.13227 is now an ordinary key high 13 pips away (one candle is 10).
+  assert.match(next.exit, /^Stop loss: just above the key high at 1\.13227, with room for the spread\./);
 });
 
 test("a stop is never tighter than one average candle, even on a daily chart", () => {
@@ -564,12 +566,45 @@ test("a stop is never tighter than one average candle, even on a daily chart", (
     selectorDiagnostics: levels([0.80515, 0.80441, 0.80419, 0.80402, 0.796, 0.78, 0.814]),
   };
   const withLevel = run(facts, buyArea);
-  assert.match(withLevel.next.exit, /^Stop loss: just below the key low at 0\.79600\./);
+  assert.match(withLevel.next.exit, /^Stop loss: just below the key low at 0\.79600, with room for the spread\./);
 
   facts.selectorDiagnostics = levels([0.80515, 0.80441, 0.80419, 0.80402, 0.78, 0.814]);
   const synthetic = run(facts, buyArea);
-  assert.match(synthetic.next.exit, /^Stop loss: about 0\.79915, past the entry zone/);
-  assert.match(synthetic.next.risk, /risk 60 pips/);
+  assert.match(synthetic.next.exit, /^Stop loss: about 0\.79905, past the entry zone/);
+  assert.match(synthetic.next.risk, /risk 61 pips/);
+});
+
+test("a tiny five-minute range still gets a realistic stop with the spread added", () => {
+  // AUDJPY M5: one candle is only 2.6 pips, but entry may be on a break or
+  // close and the cross spread is about 2 pips, so the stop floor applies.
+  const facts = {
+    instrument: "AUDJPY",
+    direction: "bearish",
+    trade: { visible: false },
+    executedOrder: null,
+    risk: {},
+    volatility: { avgRange: 0.026 },
+    activeEntryAreas: [{ direction: "sell", authoritativeCenter: 109.886 }],
+    selectorDiagnostics: {
+      ...levels([109.886, 109.669, 108.88]),
+      fibonacci: { swingLow: 108.694 },
+    },
+  };
+  const { next } = run(facts, { direction: "sell", authoritativeCenter: 109.886 });
+  assert.match(next.exit, /^Stop loss: about 109\.966, past the entry zone, normal candle moves and the spread\./);
+  assert.match(next.risk, /risk 8 pips to make 119 pips at the final target/);
+  assert.match(next.risk, /A ratio this high usually means a distant target/);
+});
+
+test("spread and stop floor are set per instrument", () => {
+  assert.ok(Math.abs(typicalSpread("EURUSD") - 0.0001) < 1e-12);
+  assert.ok(Math.abs(typicalSpread("EURGBP") - 0.0002) < 1e-12);
+  assert.ok(Math.abs(typicalSpread("USDJPY") - 0.01) < 1e-12);
+  assert.ok(Math.abs(typicalSpread("XAUUSD") - 0.3) < 1e-12);
+  assert.equal(typicalSpread("US30"), 0);
+  assert.ok(Math.abs(minimumStopFloor("EURUSD") - 0.0006) < 1e-12);
+  assert.ok(Math.abs(minimumStopFloor("AUDJPY") - 0.06) < 1e-12);
+  assert.equal(minimumStopFloor("XAUUSD"), 0);
 });
 
 test("the chart's last-price line is not treated as a key level", () => {

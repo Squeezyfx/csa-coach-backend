@@ -285,12 +285,40 @@ export function averageCandleRange(candles = [], lookback = 14) {
   return mean > 0 ? mean : null;
 }
 
-// { price, keyLevel } for the stop of a planned trade from `center`.
+const MAJOR_FX = new Set(["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD"]);
+const NON_FX = /XAU|XAG|XPT|XPD|BTC|ETH|LTC|XRP/;
+
+// Typical broker spread, in price units. A planned stop has to survive it
+// (a sell's stop is hit on the ask), and the chart does not show it. Unknown
+// instruments (indices, crypto) get 0 rather than a guess.
+export function typicalSpread(symbol = "") {
+  const code = compactSymbol(symbol);
+  if (code === "XAUUSD") return 0.3;
+  if (code === "XAGUSD") return 0.03;
+  if (!/^[A-Z]{6}$/.test(code) || NON_FX.test(code)) return 0;
+  const pip = code.includes("JPY") ? 0.01 : 0.0001;
+  return (MAJOR_FX.has(code) ? 1 : 2) * pip;
+}
+
+// The tightest stop worth suggesting. The entry price is not known exactly (a
+// trader may enter on a candle break or close), so a stop of a couple of pips
+// would be stopped out by noise. FX only; other instruments rely on the
+// average candle range alone.
+export function minimumStopFloor(symbol = "") {
+  const code = compactSymbol(symbol);
+  if (!/^[A-Z]{6}$/.test(code) || NON_FX.test(code)) return 0;
+  return 6 * (code.includes("JPY") ? 0.01 : 0.0001);
+}
+
+// { price, keyLevel, spread, riskDistance } for the stop of a planned trade
+// from `center`. riskDistance includes the spread.
 function planStopFor({ facts, area, center, levels, isSell }) {
   const avgRange = num(facts?.volatility?.avgRange);
   const sameLevel = center * 0.00005;
-  const minDist = avgRange !== null ? avgRange : center * 0.0003;
-  const maxDist = avgRange !== null ? avgRange * 2.5 : Infinity;
+  const spread = typicalSpread(facts?.instrument);
+  const floor = minimumStopFloor(facts?.instrument);
+  const minDist = Math.max(avgRange !== null ? avgRange : center * 0.0003, floor);
+  const maxDist = avgRange !== null ? Math.max(avgRange, floor) * 2.5 : Infinity;
   const buffer = avgRange !== null ? avgRange * 0.1 : center * 0.0001;
 
   // Backup entries on the stop side of the entry: a separate trade, so the
@@ -310,13 +338,25 @@ function planStopFor({ facts, area, center, levels, isSell }) {
       return !roomBeforeBackup || dist < nearestBackup - sameLevel;
     })
     .sort((a, b) => Math.abs(a - center) - Math.abs(b - center));
-  if (candidates.length) return { price: candidates[0], keyLevel: true };
+  if (candidates.length) {
+    return {
+      price: candidates[0],
+      keyLevel: true,
+      spread,
+      riskDistance: Math.abs(candidates[0] - center) + spread,
+    };
+  }
 
   const edge = isSell ? num(area?.zoneHigh) : num(area?.zoneLow);
   const edgeDist = edge !== null ? Math.max(0, isSell ? edge - center : center - edge) : 0;
-  let dist = Math.max(minDist, edgeDist + buffer);
-  if (roomBeforeBackup && dist >= nearestBackup) dist = Math.max(minDist, nearestBackup - buffer);
-  return { price: isSell ? center + dist : center - dist, keyLevel: false };
+  let dist = Math.max(minDist, edgeDist + buffer) + spread;
+  if (roomBeforeBackup && dist >= nearestBackup) dist = Math.max(minDist + spread, nearestBackup - buffer);
+  return {
+    price: isSell ? center + dist : center - dist,
+    keyLevel: false,
+    spread,
+    riskDistance: dist,
+  };
 }
 
 // ---------------------------------------------------------------- account risk
@@ -918,8 +958,12 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       planStopInfo === null
         ? `Put your stop just beyond the level that proves you wrong (${isSell ? "above" : "below"} your entry area).`
         : planStopInfo.keyLevel
-        ? `Stop loss: just ${isSell ? "above" : "below"} the key ${protectWord} at ${fmtPrice(planStop)}.`
-        : `Stop loss: about ${fmtPrice(planStop)}, past the entry zone and normal candle moves.`;
+        ? `Stop loss: just ${isSell ? "above" : "below"} the key ${protectWord} at ${fmtPrice(planStop)}${
+            planStopInfo.spread > 0 ? ", with room for the spread" : ""
+          }.`
+        : `Stop loss: about ${fmtPrice(planStop)}, past the entry zone, normal candle moves${
+            planStopInfo.spread > 0 ? " and the spread" : ""
+          }.`;
     next.exit = dir
       ? `${stopText} ${
           planLadder.length
@@ -928,11 +972,13 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         }`
       : "Put your stop just beyond the level that proves you wrong and your take profit at the next key support or resistance.";
     if (planStop !== null && planTarget !== null) {
-      const riskDist = Math.abs(planStop - center);
+      const riskDist = planStopInfo.riskDistance;
       const rewardDist = Math.abs(center - planTarget);
       const rr = rewardDist / riskDist;
       const verdict =
-        rr >= 1.5
+        rr >= 10
+          ? "That meets the 1.5 to 2 times rule. A ratio this high usually means a distant target, so check it is realistic."
+          : rr >= 1.5
           ? "That meets the 1.5 to 2 times rule."
           : "That is under 1.5 times, so look for a further target or skip it.";
       const atFinal = planLadder.length > 1 || planLadder[0]?.final ? " at the final target" : "";
