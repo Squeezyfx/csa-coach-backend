@@ -1082,6 +1082,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     // The trader's own stop and target, judged against the chart.
     let userRisk = null;
     let userReward = null;
+    let stopTight = false;
     const exitParts = [];
 
     if (review) {
@@ -1107,8 +1108,16 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         }
       }
       if (planned.entry !== null && areaCenter !== null) {
-        const near = (p) => Math.abs(planned.entry - p) / p <= 0.0005;
+        // "Right at" an area means within 0.05% of the price, or half a normal
+        // candle on a small timeframe, whichever is tighter.
+        const candle = num(facts?.volatility?.avgRange);
+        const nearBy = Math.min(areaCenter * 0.0005, candle !== null ? candle * 0.5 : Infinity);
+        const near = (p) => Math.abs(planned.entry - p) <= nearBy;
         const backup = centers.find((p) => Math.abs(p - areaCenter) > areaCenter * 0.0003 && near(p));
+        // Another key level the entry sits next to (an area to watch, not Entry 1).
+        const nearLevel = levels.find((l) => Math.abs(l - areaCenter) > small && near(l));
+        const nearLevelText =
+          nearLevel !== undefined ? ` It does sit next to the key level at ${fmtPrice(nearLevel)}.` : "";
         if (areaDir && plannedDir && areaDir !== plannedDir) {
           add(
             weaknesses,
@@ -1137,7 +1146,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
           add(
             weaknesses,
             "entry",
-            `Planned entry at ${fmtPrice(planned.entry)} comes before price reaches the Entry 1 area (${fmtPrice(areaCenter)}).`,
+            `Planned entry at ${fmtPrice(planned.entry)} comes before price reaches the Entry 1 area (${fmtPrice(areaCenter)}).${nearLevelText}`,
             "Entry before the planned level",
             { priority: 0, why: WHY.early }
           );
@@ -1145,7 +1154,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
           add(
             weaknesses,
             "entry",
-            `Planned entry at ${fmtPrice(planned.entry)} is beyond the Entry 1 area (${fmtPrice(areaCenter)}), so price may turn before it fills.`,
+            `Planned entry at ${fmtPrice(planned.entry)} is beyond the Entry 1 area (${fmtPrice(areaCenter)}), so price may turn before it fills.${nearLevelText}`,
             "Entry may not fill",
             { priority: 0, why: "Waiting for price to reach the area gives a better price." }
           );
@@ -1156,14 +1165,24 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       // candle movement or the spread would take it out.
       const backups = centers.filter((p) => (isSell ? p > center + small : p < center - small));
       const isBackup = (level) => backups.some((p) => Math.abs(p - level) <= small);
-      const protectLevels = levels
-        .filter((l) => (isSell ? l > center + small : l < center - small) && !isBackup(l))
-        .sort((a, b) => (isSell ? a - b : b - a));
-      const nearestProtect = protectLevels.length ? protectLevels[0] : null;
       const spread = typicalSpread(symbol);
       const avgRange = num(facts?.volatility?.avgRange);
       const minDist = Math.max(avgRange !== null ? avgRange : center * 0.0003, minimumStopFloor(symbol));
       const tightLimit = minDist + spread;
+      // Only key levels a stop could sensibly sit behind count: not so far away
+      // that the stop becomes huge (2.5 candles at most), and not past the Backup
+      // entry, which is a separate trade taken after this stop is hit.
+      const maxDist = avgRange !== null ? Math.max(avgRange, minimumStopFloor(symbol)) * 2.5 : Infinity;
+      const nearestBackup = backups.length ? Math.min(...backups.map((p) => Math.abs(p - center))) : null;
+      const roomBeforeBackup = nearestBackup !== null && nearestBackup > minDist;
+      const protectLevels = levels
+        .filter((l) => (isSell ? l > center + small : l < center - small) && !isBackup(l))
+        .filter((l) => {
+          const dist = Math.abs(l - center);
+          return dist <= maxDist && (!roomBeforeBackup || dist < nearestBackup - small);
+        })
+        .sort((a, b) => (isSell ? a - b : b - a));
+      const nearestProtect = protectLevels.length ? protectLevels[0] : null;
 
       if (planned.stop !== null) {
         const onRiskSide = isSell ? planned.stop > center + small : planned.stop < center - small;
@@ -1184,6 +1203,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
           userRisk = Math.abs(planned.stop - center);
           const riskText = priceDistance(userRisk, symbol).text;
           if (userRisk < tightLimit * 0.9) {
+            stopTight = true;
             add(
               weaknesses,
               "exit",
@@ -1297,12 +1317,15 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       userReward !== null ? userReward : planTarget !== null && center !== null ? Math.abs(center - planTarget) : null;
     if (riskDist !== null && rewardDist !== null) {
       const rr = rewardDist / riskDist;
-      const verdict =
-        rr >= 10
-          ? "That meets the 1.5 to 2 times rule. A ratio this high usually means a distant target, so check it is realistic."
-          : rr >= 1.5
-          ? "That meets the 1.5 to 2 times rule."
-          : "That is under 1.5 times, so look for a further target or skip it.";
+      // A ratio built on a stop that normal movement would hit first says
+      // nothing about the trade, so it is neither praised nor trusted.
+      const verdict = stopTight
+        ? "A stop this tight is likely to be hit first, so this ratio can't be trusted. Widen the stop, then check it again."
+        : rr >= 10
+        ? "That meets the 1.5 to 2 times rule. A ratio this high usually means a distant target, so check it is realistic."
+        : rr >= 1.5
+        ? "That meets the 1.5 to 2 times rule."
+        : "That is under 1.5 times, so look for a further target or skip it.";
       const atFinal =
         userReward === null && (planLadder.length > 1 || planLadder[0]?.final) ? " at the final target" : "";
       const rrText =
@@ -1311,7 +1334,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       if (userRisk !== null && userReward !== null) {
         const rrShort = rr.toFixed(1);
         if (rr >= 1.5) {
-          add(
+          if (!stopTight) add(
             strengths,
             "risk",
             `Planned risk ${priceDistance(riskDist, symbol).text} to make ${priceDistance(rewardDist, symbol).text} (${rrShort} times your risk).`,

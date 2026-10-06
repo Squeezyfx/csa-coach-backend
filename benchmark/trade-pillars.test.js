@@ -728,10 +728,10 @@ test("a planned sell with a sound entry, stop and target is praised and summaris
   const result = assess(planned(1.131, 1.134, 1.124));
   const strengths = compilePillarItems(result.strengths);
   assert.ok(has(strengths, "Planned entry at 1.13100 is right at the Entry 1 area (1.13097)."));
-  assert.ok(has(strengths, "Planned stop at 1.13400 sits above the nearest key high (1.13370)."));
+  assert.ok(has(strengths, "Planned stop at 1.13400 limits your loss to 30 pips."));
   assert.ok(has(strengths, "Planned take profit at 1.12400 sits at or before the main swing low (1.12150)."));
   assert.ok(has(strengths, "Planned risk 30 pips to make 70 pips (2.3 times your risk)."));
-  assert.equal(result.next.exit, "Keep your planned stop where it is. Keep your planned take profit.");
+  assert.equal(result.next.exit, "Keep your planned stop in place. Keep your planned take profit.");
   assert.equal(result.snapshotTitle, "YOUR PLANNED TRADE:");
   assert.deepEqual(result.snapshot, [
     "Planned sell at 1.13100.",
@@ -750,11 +750,43 @@ test("a stop that is too tight for the candles and the spread is called out", ()
 });
 
 test("a stop before the nearest key level and a thin reward are flagged", () => {
-  const result = assess(planned(1.131, 1.1335, 1.1275));
+  // no Backup entry: the key high 12.7 pips away is the level the stop should clear
+  const own = { activeEntryAreas: [{ direction: "sell", authoritativeCenter: 1.13097 }] };
+  const result = assess(planned(1.131, 1.1322, 1.1295, own));
   const weaknesses = compilePillarItems(result.weaknesses);
-  assert.ok(has(weaknesses, "Planned stop at 1.13350 sits before the nearest key high (1.13370)."));
-  assert.ok(has(weaknesses, "Planned reward is only 1.4 times your risk (25 pips risked, 35 pips to gain)."));
-  assert.match(result.next.exit, /Move your stop just beyond the key high \(1\.13370\)\./);
+  assert.ok(has(weaknesses, "Planned stop at 1.13220 sits before the nearest key high (1.13227)."));
+  assert.ok(has(weaknesses, "Planned reward is only 1.2 times your risk (12 pips risked, 15 pips to gain)."));
+  assert.match(result.next.exit, /Move your stop just beyond the key high \(1\.13227\)\./);
+});
+
+test("a key level far away or past the Backup entry is not a level the stop must clear", () => {
+  // 1.13370 is 26 pips away and beyond Entry 2 (1.13227): a 15-pip stop is not "inside" it
+  const result = assess(planned(1.131, 1.1325, 1.124));
+  const weaknesses = compilePillarItems(result.weaknesses);
+  assert.ok(!has(weaknesses, "sits before the nearest key high"));
+  assert.ok(has(compilePillarItems(result.strengths), "Planned stop at 1.13250 limits your loss to 15 pips."));
+});
+
+test("a reward ratio built on a stop that is too tight is not praised or trusted", () => {
+  const result = assess(planned(1.131, 1.1315, 1.124));
+  assert.ok(!has(compilePillarItems(result.strengths), "Planned risk"));
+  assert.match(result.next.risk, /A stop this tight is likely to be hit first, so this ratio can't be trusted\./);
+  assert.ok(!/meets the 1\.5 to 2 times rule/.test(result.next.risk));
+});
+
+test("an entry next to another key level says so", () => {
+  // 1.1280 is 3 pips from the key low 1.12861 only if we place the entry there
+  const result = assess(planned(1.12875, 1.1312, 1.1215));
+  const weaknesses = compilePillarItems(result.weaknesses);
+  assert.ok(has(weaknesses, "comes before price reaches the Entry 1 area (1.13097). It does sit next to the key level at 1.12861."));
+});
+
+test("right at an area is half a normal candle on a small timeframe", () => {
+  // 1.1312 is 2.3 pips from the area: close on a 10-pip candle, not on a 3-pip one
+  const calm = assess(planned(1.1312, 1.1345, 1.124, { volatility: { avgRange: 0.0003 } }));
+  assert.ok(has(compilePillarItems(calm.weaknesses), "Planned entry at 1.13120"));
+  const normal = assess(planned(1.1312, 1.1345, 1.124));
+  assert.ok(has(compilePillarItems(normal.strengths), "Planned entry at 1.13120 is right at the Entry 1 area"));
 });
 
 test("a stop or target on the wrong side of the entry is flagged, not graded", () => {
