@@ -483,6 +483,34 @@ export function describeAccountRisk(risk, { planned = false } = {}) {
   return { level, text: `${lead} ${judgement}`, short, why, priority, advice };
 }
 
+// ------------------------------------------------------------- planned trade
+// A trader preparing a trade (Pre-trade mode) can type the entry, stop loss and
+// take profit they are thinking of. Every one is optional and judged on its own.
+
+export function readPlannedTrade(facts = {}) {
+  const planned = facts?.plannedTrade || {};
+  const price = (value) => {
+    const n = num(value);
+    return n !== null && n > 0 ? n : null;
+  };
+  return { entry: price(planned.entry), stop: price(planned.stop), target: price(planned.target) };
+}
+
+// Which way the planned trade points, from where the stop (or target) sits
+// relative to the entry. Null when it cannot be told.
+function plannedDirection({ entry, stop, target }) {
+  if (entry === null) return null;
+  const stopSide = stop === null || stop === entry ? null : stop > entry ? "sell" : "buy";
+  const targetSide = target === null || target === entry ? null : target < entry ? "sell" : "buy";
+  // A stop and a target on the same side of the entry contradict each other,
+  // so neither says which way the trade points; the chart decides instead.
+  if (stopSide !== null && targetSide !== null && stopSide !== targetSide) return null;
+  return stopSide || targetSide;
+}
+
+const PLAN_NOTE =
+  "This is a plan to prepare with, not a signal to trade. Wait for the trigger at the area, then decide.";
+
 const RISK_RULE_SHORT = "Aim for at least 1.5 to 2 times more reward than risk.";
 
 const RISK_UNKNOWN_HINT = "Add your account balance and lot size to see how much you risk per trade.";
@@ -503,7 +531,20 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     facts?.direction === "bearish" ? "sell" : facts?.direction === "bullish" ? "buy" : null;
   const areaDir = area?.direction === "buy" || area?.direction === "sell" ? area.direction : null;
   const orderDir = order?.direction === "buy" || order?.direction === "sell" ? order.direction : null;
-  const dir = orderDir || areaDir || biasDir;
+  // Prices typed for a different pair, or with a slip, are far from this
+  // chart's price; judging them would only produce nonsense, so they are set
+  // aside (and the trader is told).
+  const typedPlan = order ? { entry: null, stop: null, target: null } : readPlannedTrade(facts);
+  const chartPrice = num(facts?.currentPrice);
+  const offChart =
+    chartPrice !== null &&
+    chartPrice > 0 &&
+    [typedPlan.entry, typedPlan.stop, typedPlan.target].some(
+      (p) => p !== null && Math.abs(p - chartPrice) / chartPrice > 0.15
+    );
+  const planned = offChart ? { entry: null, stop: null, target: null } : typedPlan;
+  const plannedDir = plannedDirection(planned);
+  const dir = orderDir || plannedDir || areaDir || biasDir;
   const isSell = dir === "sell";
   const protectWord = isSell ? "high" : "low";
   const targetWord = isSell ? "low" : "high";
@@ -515,6 +556,9 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
   next.trigger = triggerExplanation(dir);
   next.risk = RISK_RULE;
   next.management = PLAN_MANAGEMENT;
+  next.cancel = "";
+  next.note = "";
+  let snapshotTitle = "YOUR TRADE SO FAR:";
 
   const entry = order ? num(order.entryPrice) : null;
 
@@ -984,7 +1028,21 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
   } else {
     // ----------------------------------------------------- no placed trade:
     // coach the plan instead
-    const center = hasValidatedArea ? num(area?.authoritativeCenter) : null;
+    const areaCenter = hasValidatedArea ? num(area?.authoritativeCenter) : null;
+    const hasPlan = planned.entry !== null || planned.stop !== null || planned.target !== null;
+    const preTrade = facts?.analysisType === "pre-trade";
+    const current = num(facts?.currentPrice);
+    if (offChart) {
+      add(
+        weaknesses,
+        "entry",
+        `The prices you entered don't look like this chart (price is about ${fmtPrice(current)}).`,
+        "Planned prices don't match chart",
+        { priority: 0, why: "Check the pair, timeframe and the numbers you typed." }
+      );
+    }
+    // The trader's own entry, when typed, is where the plan is measured from.
+    const center = planned.entry !== null ? planned.entry : areaCenter;
     // Take profits: key levels on the way, ending at the main swing.
     let planLadder = [];
     if (center !== null) {
@@ -1013,16 +1071,231 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         : `Stop loss: about ${fmtPrice(planStop)}, past the entry zone, normal candle moves${
             planStopInfo.spread > 0 ? " and the spread" : ""
           }.`;
-    next.exit = dir
-      ? `${stopText} ${
-          planLadder.length
-            ? describeLadder(planLadder, isSell)
-            : `Put your take profit at the next key ${targetWord}.`
-        }`
+    const review = hasPlan && dir && center !== null;
+    const word = isSell ? "sell" : "buy";
+    const aboveWord = isSell ? "above" : "below";
+    const profitWord = isSell ? "below" : "above";
+    const ladderText = planLadder.length
+      ? describeLadder(planLadder, isSell)
+      : `Put your take profit at the next key ${targetWord}.`;
+
+    // The trader's own stop and target, judged against the chart.
+    let userRisk = null;
+    let userReward = null;
+    const exitParts = [];
+
+    if (review) {
+      const small = center * 0.00005;
+      const centers = (Array.isArray(facts?.activeEntryAreas) ? facts.activeEntryAreas : [])
+        .map((a) => num(a?.authoritativeCenter))
+        .filter((p) => p !== null);
+
+      // 1. Entry area: direction against the trend, and the entry against the area.
+      if (plannedDir && biasDir) {
+        if (biasDir === plannedDir) {
+          add(strengths, "entry", `Your planned ${word} matches the ${facts.direction} trend.`, "With the trend", {
+            priority: 0,
+          });
+        } else {
+          add(
+            weaknesses,
+            "entry",
+            `Your planned ${word} goes against the ${facts.direction} trend.`,
+            "Against the trend",
+            { priority: 0, why: WHY.trend }
+          );
+        }
+      }
+      if (planned.entry !== null && areaCenter !== null) {
+        const near = (p) => Math.abs(planned.entry - p) / p <= 0.0005;
+        const backup = centers.find((p) => Math.abs(p - areaCenter) > areaCenter * 0.0003 && near(p));
+        if (areaDir && plannedDir && areaDir !== plannedDir) {
+          add(
+            weaknesses,
+            "entry",
+            `Your planned ${word} points the opposite way to the chart's ${areaDir} area (${fmtPrice(areaCenter)}).`,
+            "Opposite to the chart's area",
+            { priority: 0, why: WHY.trend }
+          );
+        } else if (near(areaCenter)) {
+          add(
+            strengths,
+            "entry",
+            `Planned entry at ${fmtPrice(planned.entry)} is right at the Entry 1 area (${fmtPrice(areaCenter)}).`,
+            "At the planned level",
+            { priority: 0 }
+          );
+        } else if (backup !== undefined) {
+          add(
+            strengths,
+            "entry",
+            `Planned entry at ${fmtPrice(planned.entry)} is right at the Backup area (${fmtPrice(backup)}).`,
+            "At the backup level",
+            { priority: 0 }
+          );
+        } else if (isSell ? planned.entry < areaCenter : planned.entry > areaCenter) {
+          add(
+            weaknesses,
+            "entry",
+            `Planned entry at ${fmtPrice(planned.entry)} comes before price reaches the Entry 1 area (${fmtPrice(areaCenter)}).`,
+            "Entry before the planned level",
+            { priority: 0, why: WHY.early }
+          );
+        } else {
+          add(
+            weaknesses,
+            "entry",
+            `Planned entry at ${fmtPrice(planned.entry)} is beyond the Entry 1 area (${fmtPrice(areaCenter)}), so price may turn before it fills.`,
+            "Entry may not fill",
+            { priority: 0, why: "Waiting for price to reach the area gives a better price." }
+          );
+        }
+      }
+
+      // 2. Exit: the stop beyond a key level, and not so close that normal
+      // candle movement or the spread would take it out.
+      const backups = centers.filter((p) => (isSell ? p > center + small : p < center - small));
+      const isBackup = (level) => backups.some((p) => Math.abs(p - level) <= small);
+      const protectLevels = levels
+        .filter((l) => (isSell ? l > center + small : l < center - small) && !isBackup(l))
+        .sort((a, b) => (isSell ? a - b : b - a));
+      const nearestProtect = protectLevels.length ? protectLevels[0] : null;
+      const spread = typicalSpread(symbol);
+      const avgRange = num(facts?.volatility?.avgRange);
+      const minDist = Math.max(avgRange !== null ? avgRange : center * 0.0003, minimumStopFloor(symbol));
+      const tightLimit = minDist + spread;
+
+      if (planned.stop !== null) {
+        const onRiskSide = isSell ? planned.stop > center + small : planned.stop < center - small;
+        if (!onRiskSide) {
+          add(
+            weaknesses,
+            "exit",
+            `Planned stop at ${fmtPrice(planned.stop)} is not ${aboveWord} your entry (${fmtPrice(center)}), so it would not protect a ${word}.`,
+            "Stop on the wrong side",
+            { priority: 0, why: WHY.noStop }
+          );
+          exitParts.push(
+            `Put your stop just ${aboveWord} the key ${protectWord}${
+              nearestProtect !== null ? ` (${fmtPrice(nearestProtect)})` : ""
+            }.`
+          );
+        } else {
+          userRisk = Math.abs(planned.stop - center);
+          const riskText = priceDistance(userRisk, symbol).text;
+          if (userRisk < tightLimit * 0.9) {
+            add(
+              weaknesses,
+              "exit",
+              `Planned stop is only ${riskText} from your entry, inside normal candle movement and the spread.`,
+              "Stop too tight",
+              { priority: 0, why: "Price often moves that far without meaning anything." }
+            );
+            exitParts.push(
+              `Widen your stop to about ${fmtPrice(isSell ? center + tightLimit : center - tightLimit)} or further.`
+            );
+          } else if (nearestProtect !== null) {
+            const beyond = isSell ? planned.stop > nearestProtect : planned.stop < nearestProtect;
+            if (beyond) {
+              add(
+                strengths,
+                "exit",
+                `Planned stop at ${fmtPrice(planned.stop)} sits ${aboveWord} the nearest key ${protectWord} (${fmtPrice(nearestProtect)}).`,
+                "Stop beyond a key level",
+                { priority: 0 }
+              );
+              exitParts.push("Keep your planned stop where it is.");
+            } else {
+              add(
+                weaknesses,
+                "exit",
+                `Planned stop at ${fmtPrice(planned.stop)} sits before the nearest key ${protectWord} (${fmtPrice(nearestProtect)}).`,
+                "Stop inside a key level",
+                { priority: 0, why: WHY.stopInside }
+              );
+              exitParts.push(`Move your stop just beyond the key ${protectWord} (${fmtPrice(nearestProtect)}).`);
+            }
+          } else {
+            add(
+              strengths,
+              "exit",
+              `Planned stop at ${fmtPrice(planned.stop)} limits your loss to ${riskText}.`,
+              "Stop loss planned",
+              { priority: 0 }
+            );
+            exitParts.push("Keep your planned stop in place.");
+          }
+        }
+      } else {
+        exitParts.push(stopText);
+      }
+
+      // Exit: the take profit, judged against the main swing the same way a
+      // placed trade's is.
+      if (planned.target !== null) {
+        const onProfitSide = isSell ? planned.target < center - small : planned.target > center + small;
+        if (!onProfitSide) {
+          add(
+            weaknesses,
+            "exit",
+            `Planned take profit at ${fmtPrice(planned.target)} is not ${profitWord} your entry (${fmtPrice(center)}).`,
+            "Target on the wrong side",
+            { priority: 0, why: WHY.noTarget }
+          );
+          exitParts.push(`Put your take profit ${profitWord} your entry. ${ladderText}`);
+        } else {
+          userReward = Math.abs(planned.target - center);
+          const mainSwing = finalSwingTarget(facts, center, isSell);
+          const nearestTarget = levels
+            .filter((l) => (isSell ? l < center - small : l > center + small))
+            .sort((a, b) => (isSell ? b - a : a - b))[0];
+          const tpLimit = mainSwing !== null ? mainSwing : nearestTarget ?? null;
+          const tpLimitName = mainSwing !== null ? `main swing ${targetWord}` : `next key ${targetWord}`;
+          if (tpLimit !== null) {
+            const beyondLevel = isSell ? planned.target < tpLimit : planned.target > tpLimit;
+            if (beyondLevel) {
+              add(
+                weaknesses,
+                "exit",
+                `Planned take profit at ${fmtPrice(planned.target)} is beyond the ${tpLimitName} (${fmtPrice(tpLimit)}).`,
+                "Target past a key level",
+                { priority: 0, why: WHY.targetBeyond }
+              );
+              exitParts.push(`Consider taking some profit at the ${tpLimitName} (${fmtPrice(tpLimit)}).`);
+            } else {
+              add(
+                strengths,
+                "exit",
+                `Planned take profit at ${fmtPrice(planned.target)} sits at or before the ${tpLimitName} (${fmtPrice(tpLimit)}).`,
+                "Target at a key level",
+                { priority: 0 }
+              );
+              exitParts.push("Keep your planned take profit.");
+            }
+          } else {
+            add(strengths, "exit", `Planned take profit marked at ${fmtPrice(planned.target)}.`, "Take profit planned", {
+              priority: 0,
+            });
+            exitParts.push("Keep your planned take profit.");
+          }
+        }
+      } else {
+        exitParts.push(ladderText);
+      }
+    }
+
+    next.exit = review
+      ? exitParts.join(" ").trim()
+      : dir
+      ? `${stopText} ${ladderText}`
       : "Put your stop just beyond the level that proves you wrong and your take profit at the next key support or resistance.";
-    if (planStop !== null && planTarget !== null) {
-      const riskDist = planStopInfo.riskDistance;
-      const rewardDist = Math.abs(center - planTarget);
+
+    // Risk: the trader's own stop and target when typed, otherwise the
+    // suggested ones above.
+    const riskDist = userRisk !== null ? userRisk : planStopInfo ? planStopInfo.riskDistance : null;
+    const rewardDist =
+      userReward !== null ? userReward : planTarget !== null && center !== null ? Math.abs(center - planTarget) : null;
+    if (riskDist !== null && rewardDist !== null) {
       const rr = rewardDist / riskDist;
       const verdict =
         rr >= 10
@@ -1030,20 +1303,44 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
           : rr >= 1.5
           ? "That meets the 1.5 to 2 times rule."
           : "That is under 1.5 times, so look for a further target or skip it.";
-      const atFinal = planLadder.length > 1 || planLadder[0]?.final ? " at the final target" : "";
+      const atFinal =
+        userReward === null && (planLadder.length > 1 || planLadder[0]?.final) ? " at the final target" : "";
       const rrText =
         `At those levels you risk ${priceDistance(riskDist, symbol).text} to make ${priceDistance(rewardDist, symbol).text}${atFinal} (${rr.toFixed(1)} times your risk). ${verdict}`;
+      // Only the trader's own numbers are graded; the suggestion is not.
+      if (userRisk !== null && userReward !== null) {
+        const rrShort = rr.toFixed(1);
+        if (rr >= 1.5) {
+          add(
+            strengths,
+            "risk",
+            `Planned risk ${priceDistance(riskDist, symbol).text} to make ${priceDistance(rewardDist, symbol).text} (${rrShort} times your risk).`,
+            `Reward is ${rrShort} times risk`,
+            { priority: 0 }
+          );
+        } else {
+          add(
+            weaknesses,
+            "risk",
+            rr < 1
+              ? `Planned risk ${priceDistance(riskDist, symbol).text} to make ${priceDistance(rewardDist, symbol).text}: more risk than reward.`
+              : `Planned reward is only ${rrShort} times your risk (${priceDistance(riskDist, symbol).text} risked, ${priceDistance(rewardDist, symbol).text} to gain).`,
+            rr < 1 ? "More risk than reward" : "Thin reward for the risk",
+            { priority: 0, why: WHY.rewardRisk }
+          );
+        }
+      }
       const planRisk = accountRisk({ facts, distance: riskDist, price: center });
       if (planRisk) {
-        const planned = describeAccountRisk(planRisk, { planned: true });
+        const riskVerdict = describeAccountRisk(planRisk, { planned: true });
         add(
-          planned.level === "ok" ? strengths : weaknesses,
+          riskVerdict.level === "ok" ? strengths : weaknesses,
           "risk",
-          planned.text,
-          planned.short,
-          { priority: planned.priority, why: planned.why }
+          riskVerdict.text,
+          riskVerdict.short,
+          { priority: riskVerdict.priority, why: riskVerdict.why }
         );
-        next.risk = `${rrText} ${planned.text} ${planned.level === "ok" ? "" : planned.advice}`.trim();
+        next.risk = `${rrText} ${riskVerdict.text} ${riskVerdict.level === "ok" ? "" : riskVerdict.advice}`.trim();
       } else {
         next.risk = `${rrText} Risk only a small share of your account (many use 1%). ${RISK_UNKNOWN_HINT}`;
       }
@@ -1053,6 +1350,51 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         priority: 0,
       });
     }
+
+    // The trader's own plan, laid out in one place.
+    if (review) {
+      snapshotTitle = "YOUR PLANNED TRADE:";
+      snapshot.push(
+        `Planned ${word} at ${fmtPrice(center)}${planned.entry === null ? " (the Entry 1 area)" : ""}.`
+      );
+      if (planned.stop === null) {
+        snapshot.push("No stop loss entered yet.");
+      } else if (userRisk !== null) {
+        snapshot.push(`Stop loss at ${fmtPrice(planned.stop)}, ${priceDistance(userRisk, symbol).text} from your entry.`);
+      } else {
+        snapshot.push(`Stop loss at ${fmtPrice(planned.stop)}, which is on the wrong side of your entry.`);
+      }
+      if (planned.target === null) {
+        snapshot.push("No take profit entered yet.");
+      } else if (userReward !== null) {
+        snapshot.push(
+          `Take profit at ${fmtPrice(planned.target)}, ${priceDistance(userReward, symbol).text} from your entry${
+            userRisk ? ` (${(userReward / userRisk).toFixed(1)} times your risk)` : ""
+          }.`
+        );
+      } else {
+        snapshot.push(`Take profit at ${fmtPrice(planned.target)}, which is on the wrong side of your entry.`);
+      }
+      if (current !== null && Math.abs(current - center) > center * 0.0003) {
+        snapshot.push(
+          `Price is now ${fmtPrice(current)}, ${priceDistance(current - center, symbol).text} ${
+            current > center ? "above" : "below"
+          } your entry.`
+        );
+      }
+    }
+
+    // A pre-trade plan says what would make it wrong, so the trader knows when
+    // to walk away, and that it is a plan, not a signal.
+    if (preTrade && dir && planStopInfo) {
+      const firstTarget = planLadder.length ? planLadder[0].price : null;
+      next.cancel = `If a candle closes ${aboveWord} ${fmtPrice(planStopInfo.price)}, this ${word} idea is wrong.${
+        firstTarget !== null
+          ? ` Skip it too if price reaches ${fmtPrice(firstTarget)} (your first take profit) before your entry fills.`
+          : ""
+      } Then stand aside and wait for a fresh setup.`;
+    }
+    if (preTrade && dir && center !== null) next.note = PLAN_NOTE;
   }
 
   // Mistakes the trader actually made on a placed trade, in the same words the
@@ -1070,7 +1412,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     if (typeof signals.rr === "number" && signals.rr < 1.5) flag("Risk-to-reward below plan", "MATH FLAW");
   }
 
-  return { strengths, weaknesses, next, signals, snapshot, mistakes };
+  return { strengths, weaknesses, next, signals, snapshot, snapshotTitle, mistakes };
 }
 
 const clamp = (value, low, high) => Math.max(low, Math.min(high, Math.round(value)));
@@ -1266,5 +1608,7 @@ export function buildPillarNextSteps({ entryPlan = "", next = {} } = {}) {
   if (next.exit) steps.push(`${PILLAR_LABELS.exit}: ${next.exit}`);
   if (next.risk) steps.push(`${PILLAR_LABELS.risk}: ${next.risk}`);
   if (next.management) steps.push(`${PILLAR_LABELS.management}: ${next.management}`);
+  if (next.cancel) steps.push(`Cancel the idea: ${next.cancel}`);
+  if (next.note) steps.push(`Remember: ${next.note}`);
   return steps;
 }

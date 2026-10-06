@@ -710,3 +710,124 @@ test("a placed trade's mistakes are listed worst first in the hub's own words", 
   });
   assert.deepEqual(plan.mistakes, []);
 });
+
+// ---------------------------------------------------------------- planned trade
+// Pre-trade mode: the trader types the entry, stop loss and take profit they are
+// thinking of; each is judged on its own, and the plan says when to walk away.
+
+const planned = (entry, stop, target, extra = {}) =>
+  withSwing(
+    sellAreaFacts({ analysisType: "pre-trade", currentPrice: 1.1285, plannedTrade: { entry, stop, target }, ...extra }),
+    1.1215,
+    1.145
+  );
+
+const assess = (facts) => assessTradePillars({ facts, area: sellArea, hasValidatedArea: true });
+
+test("a planned sell with a sound entry, stop and target is praised and summarised", () => {
+  const result = assess(planned(1.131, 1.134, 1.124));
+  const strengths = compilePillarItems(result.strengths);
+  assert.ok(has(strengths, "Planned entry at 1.13100 is right at the Entry 1 area (1.13097)."));
+  assert.ok(has(strengths, "Planned stop at 1.13400 sits above the nearest key high (1.13370)."));
+  assert.ok(has(strengths, "Planned take profit at 1.12400 sits at or before the main swing low (1.12150)."));
+  assert.ok(has(strengths, "Planned risk 30 pips to make 70 pips (2.3 times your risk)."));
+  assert.equal(result.next.exit, "Keep your planned stop where it is. Keep your planned take profit.");
+  assert.equal(result.snapshotTitle, "YOUR PLANNED TRADE:");
+  assert.deepEqual(result.snapshot, [
+    "Planned sell at 1.13100.",
+    "Stop loss at 1.13400, 30 pips from your entry.",
+    "Take profit at 1.12400, 70 pips from your entry (2.3 times your risk).",
+    "Price is now 1.12850, 25 pips below your entry.",
+  ]);
+  assert.deepEqual(result.mistakes, []);
+});
+
+test("a stop that is too tight for the candles and the spread is called out", () => {
+  const result = assess(planned(1.131, 1.1315, 1.124));
+  const weaknesses = compilePillarItems(result.weaknesses);
+  assert.ok(has(weaknesses, "Planned stop is only 5 pips from your entry, inside normal candle movement and the spread."));
+  assert.match(result.next.exit, /^Widen your stop to about 1\.13210 or further\./);
+});
+
+test("a stop before the nearest key level and a thin reward are flagged", () => {
+  const result = assess(planned(1.131, 1.1335, 1.1275));
+  const weaknesses = compilePillarItems(result.weaknesses);
+  assert.ok(has(weaknesses, "Planned stop at 1.13350 sits before the nearest key high (1.13370)."));
+  assert.ok(has(weaknesses, "Planned reward is only 1.4 times your risk (25 pips risked, 35 pips to gain)."));
+  assert.match(result.next.exit, /Move your stop just beyond the key high \(1\.13370\)\./);
+});
+
+test("a stop or target on the wrong side of the entry is flagged, not graded", () => {
+  // both below the entry: contradictory, so the chart's sell direction decides
+  const result = assess(planned(1.131, 1.128, 1.124));
+  const weaknesses = compilePillarItems(result.weaknesses);
+  assert.ok(has(weaknesses, "Planned stop at 1.12800 is not above your entry (1.13100), so it would not protect a sell."));
+  assert.match(result.next.exit, /^Put your stop just above the key high/);
+  assert.ok(has(compilePillarItems(result.strengths), "Planned take profit at 1.12400"));
+});
+
+test("an entry before the area, or beyond it, is explained", () => {
+  const before = assess(planned(1.1295, 1.134, 1.124));
+  assert.ok(has(compilePillarItems(before.weaknesses), "Planned entry at 1.12950 comes before price reaches the Entry 1 area (1.13097)."));
+  const beyond = assess(planned(1.1316, 1.1355, 1.124));
+  assert.ok(has(compilePillarItems(beyond.weaknesses), "Planned entry at 1.13160 is beyond the Entry 1 area (1.13097), so price may turn before it fills."));
+});
+
+test("a planned buy against the bearish trend is flagged", () => {
+  const result = assess(planned(1.131, 1.128, 1.1215 + 0.03));
+  const weaknesses = compilePillarItems(result.weaknesses);
+  assert.ok(has(weaknesses, "Your planned buy goes against the bearish trend."));
+});
+
+test("only the entry typed: the stop and take profits are suggested from that entry", () => {
+  const result = assess(planned(1.131, null, null));
+  assert.match(result.next.exit, /^Stop loss: about 1\.13210, past the entry zone/);
+  assert.match(result.next.exit, /Take profits: .*final TP 1\.12150 \(the main swing low\)\./);
+  assert.deepEqual(result.snapshot.slice(0, 3), [
+    "Planned sell at 1.13100.",
+    "No stop loss entered yet.",
+    "No take profit entered yet.",
+  ]);
+});
+
+test("prices that do not look like this chart are set aside and the trader told", () => {
+  const result = assess(planned(113.1, 113.4, 112.4));
+  const weaknesses = compilePillarItems(result.weaknesses);
+  assert.ok(has(weaknesses, "The prices you entered don't look like this chart (price is about 1.12850)."));
+  assert.deepEqual(result.snapshot, []);
+  assert.match(result.next.exit, /^Stop loss: about 1\.13207/);
+});
+
+test("the risk of a planned stop uses the balance and lot size typed in", () => {
+  const facts = planned(1.131, 1.134, 1.124, { riskInputs: { balance: 1000, lots: 0.1 } });
+  const result = assess(facts);
+  assert.ok(has(compilePillarItems(result.weaknesses), "At that stop, 0.1 lots would risk $30 (3% of your account). That is on the high side."));
+  assert.match(result.next.risk, /At that stop, 0\.1 lots would risk \$30 \(3% of your account\)/);
+});
+
+test("a pre-trade plan says when it is cancelled and that it is not a signal", () => {
+  const result = assess(planned(1.131, 1.134, 1.124));
+  assert.match(result.next.cancel, /^If a candle closes above 1\.13210, this sell idea is wrong\./);
+  assert.match(result.next.cancel, /Skip it too if price reaches 1\.12861 \(your first take profit\) before your entry fills\./);
+  assert.match(result.next.cancel, /stand aside and wait for a fresh setup\.$/);
+  assert.match(result.next.note, /not a signal to trade/);
+  const steps = buildPillarNextSteps({ entryPlan: "Wait.", next: result.next });
+  assert.match(steps[steps.length - 2], /^Cancel the idea: If a candle closes above/);
+  assert.match(steps[steps.length - 1], /^Remember: This is a plan to prepare with, not a signal/);
+
+  // the unmarked chart in Pre-trade mode gets the same two lines
+  const bare = assess(sellAreaFacts({ analysisType: "pre-trade" }));
+  assert.match(bare.next.cancel, /^If a candle closes above/);
+
+  // a post-trade review of a chart with no trade keeps its old output
+  const post = assess(sellAreaFacts({ analysisType: "post-trade" }));
+  assert.equal(post.next.cancel, "");
+  assert.equal(post.next.note, "");
+});
+
+test("a placed trade ignores any typed plan", () => {
+  const facts = { ...eurusdSell(), analysisType: "pre-trade", plannedTrade: { entry: 1.2, stop: 1.3, target: 1.1 } };
+  const result = assessTradePillars({ facts, area: eurusdArea, hasValidatedArea: true });
+  assert.equal(result.snapshotTitle, "YOUR TRADE SO FAR:");
+  assert.equal(result.next.cancel, "");
+});

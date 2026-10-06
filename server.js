@@ -8807,6 +8807,16 @@ function parsePositiveInput(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+// A price typed into the Pre-trade plan fields. Accepts a decimal comma
+// (1,1310) as well as a point, ignores stray symbols, and rejects negatives.
+function parsePriceInput(value) {
+  const text = String(value ?? "").trim();
+  if (!text || /^\s*-/.test(text)) return null;
+  const normalized = /,/.test(text) && !/\./.test(text) ? text.replace(",", ".") : text;
+  const parsed = Number(normalized.replace(/[^0-9.]/g, ""));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 function detectTicketOrderMarkup(levels = []) {
   const tickets = new Map();
   for (const level of Array.isArray(levels) ? levels : []) {
@@ -25909,6 +25919,7 @@ function buildValidatedAnalysisFacts({
   selectedDate = "",
   submittedNotes = "",
   riskInputs = null,
+  plannedTrade = null,
 }) {
   const fallbackPreferredArea =
     visualReview?.preferredEntryArea &&
@@ -26972,6 +26983,7 @@ function buildValidatedAnalysisFacts({
     executedOrder,
     entryTrigger,
     riskInputs,
+    plannedTrade,
     // How far one normal candle travels on this chart; sizes the planned stop.
     volatility: { avgRange: averageCandleRange(marketReference?.timeframeCandles) },
     currentPrice,
@@ -28641,7 +28653,7 @@ function buildControlledFeedback({
     // Where a placed trade stands right now: entry, stop, target, and what the
     // current price means for them.
     ...(Array.isArray(pillars.snapshot) && pillars.snapshot.length
-      ? ["", "YOUR TRADE SO FAR:", ...pillars.snapshot.map((item) => `- ${item}`)]
+      ? ["", pillars.snapshotTitle || "YOUR TRADE SO FAR:", ...pillars.snapshot.map((item) => `- ${item}`)]
       : []),
     "",
     "WHAT YOU DID WELL:",
@@ -30366,12 +30378,25 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       benchmarkDiagnosticSummaryOnly = "false",
       accountBalance = "",
       lotSize = "",
+      plannedEntry = "",
+      plannedStop = "",
+      plannedTarget = "",
     } = req.body;
     // Optional: lets the review say how much of the account the trade risks.
     const submittedRiskInputs = {
       balance: parsePositiveInput(accountBalance),
       lots: parsePositiveInput(lotSize),
     };
+    // Optional, Pre-trade mode only: the entry, stop loss and take profit the
+    // trader is planning, so the review can judge them. Each may be blank.
+    const submittedPlannedTrade =
+      normalizeAnalysisType(analysisType) === "pre-trade"
+        ? {
+            entry: parsePriceInput(plannedEntry),
+            stop: parsePriceInput(plannedStop),
+            target: parsePriceInput(plannedTarget),
+          }
+        : null;
     let timeframe = requestedTimeframe;
     let submittedInstrument = instrument || pair || selectedPair || "Not provided";
     const submittedNotes = notes || userNotes || "";
@@ -32470,6 +32495,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       selectedDate: chartCutoff.resolvedDate || selectedDateText || "",
       submittedNotes,
       riskInputs: submittedRiskInputs,
+      plannedTrade: submittedPlannedTrade,
     });
 
     // Replace any model-suggested entry areas with the deterministic CSA
