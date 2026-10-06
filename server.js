@@ -28675,10 +28675,16 @@ function buildControlledFeedback({
       : "- No converted level was confirmed from the available evidence.",
     "",
     "SETUP READINESS:",
-    `- Area reached: ${area.areaRetested ? "Yes" : "No"}.`,
-    `- Valid trigger present: ${area.triggerPresent ? "Yes" : "No"}.`,
-    `- Stop shown: ${facts.risk.stopShown ? "Yes" : "No"}.`,
-    `- Target shown: ${facts.risk.targetShown ? "Yes" : "No"}.`,
+    // These describe the framework's planned entry, not the trader's own
+    // trade, so say which level they refer to.
+    `- ${hasExecutedOrder ? "Next planned entry area" : "Planned entry area"}${
+      hasValidatedArea
+        ? ` (${safeUserText(area.levelText || "") || formatPrice(area.authoritativeCenter)})`
+        : ""
+    }: ${area.areaRetested ? "price has reached it" : "price has not reached it yet"}.`,
+    `- Trigger candle at that area: ${area.triggerPresent ? "yes" : "not yet"}.`,
+    `- Stop loss marked on the chart: ${facts.risk.stopShown ? "yes" : "no"}.`,
+    `- Take profit marked on the chart: ${facts.risk.targetShown ? "yes" : "no"}.`,
   ];
 
   const eliteSections = [
@@ -28714,6 +28720,7 @@ function buildControlledFeedback({
     nextAction,
     nextSteps,
     tradeSnapshot: Array.isArray(pillars.snapshot) ? pillars.snapshot : [],
+    tradeMistakes: Array.isArray(pillars.mistakes) ? pillars.mistakes : [],
     reviewIncomplete: weeklyDataIncomplete
       ? { reason: "weekly_quarter_data_incomplete", advice: weeklyIncompleteAdvice }
       : null,
@@ -29367,11 +29374,32 @@ function applyPlanToAnalysisResponse({
       ?.aiMistakeDetectionHub ||
     [];
 
-  const safeMistakes =
+  const hubMistakes =
     evidenceSafeMistakeHub(
       sourceMistakes,
       tradeVisible
     );
+
+  // For a placed trade, the hub also lists the mistakes found by the same five
+  // checks the feedback is written from (missing stop or take profit, no
+  // trigger candle, against the trend, ...). Without this a trade with no take
+  // profit and no trigger could still read "No major mistake detected".
+  const pillarMistakes =
+    tradeVisible && Array.isArray(controlled.tradeMistakes)
+      ? controlled.tradeMistakes.map((item) => makeSimpleMistake(item.title, item.severity))
+      : [];
+  const safeMistakes = pillarMistakes.length
+    ? [
+        ...pillarMistakes,
+        ...hubMistakes.filter(
+          (item) =>
+            !/^no major mistake detected$/i.test(String(item?.title || "").trim()) &&
+            !pillarMistakes.some(
+              (found) => found.title.toLowerCase() === String(item?.title || "").trim().toLowerCase()
+            )
+        ),
+      ].slice(0, 5)
+    : hubMistakes;
 
   const base = {
     ...responseBody,

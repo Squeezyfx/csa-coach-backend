@@ -1055,7 +1055,22 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     }
   }
 
-  return { strengths, weaknesses, next, signals, snapshot };
+  // Mistakes the trader actually made on a placed trade, in the same words the
+  // Mistake Detection Hub and the journal's progress tracking use, worst first.
+  const mistakes = [];
+  if (signals) {
+    const flag = (title, severity) => mistakes.push({ title, severity });
+    if (signals.stop === "none") flag("No stop loss", "HIGH RISK");
+    if (signals.trend === "against") flag("Traded against the trend", "HIGH RISK");
+    if (typeof signals.riskPct === "number" && signals.riskPct > 5) flag("Risk per trade too high", "HIGH RISK");
+    if (signals.plan === "early") flag("Entered too early", "WARNING");
+    if (signals.trigger === "missing") flag("Failed to wait for confirmation", "DISCIPLINE");
+    if (signals.stop === "inside") flag("Stop inside a key level", "WARNING");
+    if (signals.target === "none") flag("No take profit", "WARNING");
+    if (typeof signals.rr === "number" && signals.rr < 1.5) flag("Risk-to-reward below plan", "MATH FLAW");
+  }
+
+  return { strengths, weaknesses, next, signals, snapshot, mistakes };
 }
 
 const clamp = (value, low, high) => Math.max(low, Math.min(high, Math.round(value)));

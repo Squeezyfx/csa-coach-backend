@@ -672,3 +672,41 @@ test("a plan with no placed trade has no trade summary", () => {
   });
   assert.deepEqual(snapshot, []);
 });
+
+test("a placed trade's mistakes are listed worst first in the hub's own words", () => {
+  const facts = eurusdSell();
+  facts.entryTrigger = { found: false, candlesChecked: 48 };
+  const { mistakes } = assessTradePillars({ facts, area: eurusdArea, hasValidatedArea: true });
+  assert.deepEqual(
+    mistakes.map((m) => m.title),
+    ["Failed to wait for confirmation", "No take profit"]
+  );
+
+  const bad = eurusdSell();
+  bad.direction = "bullish";
+  delete bad.executedOrder.stopPrice;
+  bad.risk.stopShown = false;
+  const worst = assessTradePillars({ facts: bad, area: eurusdArea, hasValidatedArea: true }).mistakes;
+  assert.deepEqual(
+    worst.map((m) => `${m.title}|${m.severity}`),
+    [
+      "No stop loss|HIGH RISK",
+      "Traded against the trend|HIGH RISK",
+      "Failed to wait for confirmation|DISCIPLINE",
+      "No take profit|WARNING",
+    ]
+  );
+
+  const clean = eurusdSell();
+  clean.entryTrigger = { found: true, type: "engulfing", candlesChecked: 48 };
+  clean.executedOrder.targetPrice = 1.1264;
+  clean.risk.targetShown = true;
+  assert.deepEqual(assessTradePillars({ facts: clean, area: eurusdArea, hasValidatedArea: true }).mistakes, []);
+
+  const plan = assessTradePillars({
+    facts: { instrument: "EURUSD", direction: "bearish", trade: { visible: false }, executedOrder: null, risk: {} },
+    area: eurusdArea,
+    hasValidatedArea: true,
+  });
+  assert.deepEqual(plan.mistakes, []);
+});
