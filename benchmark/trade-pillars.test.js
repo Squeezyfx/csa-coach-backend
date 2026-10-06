@@ -628,3 +628,47 @@ test("the chart's last-price line is not treated as a key level", () => {
   assert.match(buy.next.exit, /Take profits: TP1 0\.93491, final TP 0\.94850/);
   assert.ok(!buy.next.exit.includes("0.93173"));
 });
+
+test("a placed trade gets a one-place summary of entry, stop, target and where price is now", () => {
+  const facts = eurusdSell();
+  facts.executedOrder = { ticket: "1", direction: "sell", entryPrice: 1.13705, stopPrice: 1.13905 };
+  facts.currentPrice = 1.124;
+  const { snapshot } = assessTradePillars({ facts, area: eurusdArea, hasValidatedArea: true });
+  assert.deepEqual(snapshot, [
+    "Sell entered at 1.13705.",
+    "Stop loss at 1.13905, 20 pips from your entry.",
+    "No take profit marked.",
+    "Price is now 1.12400: 130 pips in profit (6.5 times your risk).",
+    "Your stop loss is 150 pips from the current price.",
+  ]);
+});
+
+test("the trade summary covers a losing trade, a moved stop and a take profit", () => {
+  const losing = eurusdSell();
+  losing.currentPrice = 1.1377;
+  losing.executedOrder.targetPrice = 1.1264;
+  const a = assessTradePillars({ facts: losing, area: eurusdArea, hasValidatedArea: true }).snapshot;
+  assert.ok(a.includes("Price is now 1.13770: 13 pips against you (52% of the way to your stop)."));
+  assert.ok(a.includes("Take profit at 1.12640, 100 pips from your entry (4.0 times your risk)."));
+  assert.ok(a.includes("Your take profit is 113 pips from the current price."));
+
+  const breakeven = eurusdSell();
+  breakeven.executedOrder.stopPrice = 1.1364;
+  const b = assessTradePillars({ facts: breakeven, area: eurusdArea, hasValidatedArea: true }).snapshot;
+  assert.ok(b.includes("Stop loss is at your entry price (breakeven), so this trade can't lose."));
+
+  const noStop = eurusdSell();
+  delete noStop.executedOrder.stopPrice;
+  noStop.risk.stopShown = false;
+  const c = assessTradePillars({ facts: noStop, area: eurusdArea, hasValidatedArea: true }).snapshot;
+  assert.ok(c.includes("No stop loss marked."));
+});
+
+test("a plan with no placed trade has no trade summary", () => {
+  const { snapshot } = assessTradePillars({
+    facts: { instrument: "EURUSD", direction: "bearish", trade: { visible: false }, executedOrder: null, risk: {} },
+    area: eurusdArea,
+    hasValidatedArea: true,
+  });
+  assert.deepEqual(snapshot, []);
+});

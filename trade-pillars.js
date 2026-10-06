@@ -492,6 +492,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
   const weaknesses = [];
   const next = { trigger: "", exit: "", risk: "", management: "" };
   let signals = null;
+  const snapshot = [];
   const add = (list, pillar, text, short, extra = {}) =>
     list.push({ pillar, text, short, priority: 1, ...extra });
 
@@ -897,6 +898,54 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       next.management =
         "First add a stop loss (see Exit). Then, once you are up about the size of your risk, move it to breakeven (your entry price).";
     }
+
+    // Where the trade stands right now, in one place: entry, stop, target and
+    // what the current price means for them.
+    snapshot.push(`${isSell ? "Sell" : "Buy"} entered at ${fmtPrice(entry)}.`);
+    if (sl === null) {
+      snapshot.push("No stop loss marked.");
+    } else if (slAtBreakeven) {
+      snapshot.push("Stop loss is at your entry price (breakeven), so this trade can't lose.");
+    } else if (slLockedProfit) {
+      snapshot.push(
+        `Stop loss at ${fmtPrice(sl)} is past your entry, so ${priceDistance(Math.abs(entry - sl), symbol).text} of profit is locked in.`
+      );
+    } else if (riskDist !== null) {
+      snapshot.push(`Stop loss at ${fmtPrice(sl)}, ${priceDistance(riskDist, symbol).text} from your entry.`);
+    }
+    if (tp === null) {
+      snapshot.push("No take profit marked.");
+    } else if (rewardDist !== null) {
+      snapshot.push(
+        `Take profit at ${fmtPrice(tp)}, ${priceDistance(rewardDist, symbol).text} from your entry${
+          riskDist ? ` (${(rewardDist / riskDist).toFixed(1)} times your risk)` : ""
+        }.`
+      );
+    }
+    if (current !== null) {
+      const move = isSell ? entry - current : current - entry;
+      if (Math.abs(move) <= flatTol) {
+        snapshot.push(`Price is now ${fmtPrice(current)}, about level with your entry.`);
+      } else if (move > 0) {
+        snapshot.push(
+          `Price is now ${fmtPrice(current)}: ${priceDistance(move, symbol).text} in profit${
+            riskDist ? ` (${(move / riskDist).toFixed(1)} times your risk)` : ""
+          }.`
+        );
+      } else {
+        snapshot.push(
+          `Price is now ${fmtPrice(current)}: ${priceDistance(move, symbol).text} against you${
+            riskDist ? ` (${Math.min(100, Math.round((Math.abs(move) / riskDist) * 100))}% of the way to your stop)` : ""
+          }.`
+        );
+      }
+      if (sl !== null && (isSell ? sl > current : sl < current)) {
+        snapshot.push(`Your stop loss is ${priceDistance(Math.abs(sl - current), symbol).text} from the current price.`);
+      }
+      if (tp !== null && (isSell ? tp < current : tp > current)) {
+        snapshot.push(`Your take profit is ${priceDistance(Math.abs(tp - current), symbol).text} from the current price.`);
+      }
+    }
   } else if (order) {
     // ------------------------------------------------------------ a trade is
     // visible, but no readable entry price: judge what is marked, no numbers
@@ -1006,7 +1055,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     }
   }
 
-  return { strengths, weaknesses, next, signals };
+  return { strengths, weaknesses, next, signals, snapshot };
 }
 
 const clamp = (value, low, high) => Math.max(low, Math.min(high, Math.round(value)));

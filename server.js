@@ -28638,6 +28638,11 @@ function buildControlledFeedback({
   const starterSections = [
     "DIRECTIONAL BIAS:",
     directionText,
+    // Where a placed trade stands right now: entry, stop, target, and what the
+    // current price means for them.
+    ...(Array.isArray(pillars.snapshot) && pillars.snapshot.length
+      ? ["", "YOUR TRADE SO FAR:", ...pillars.snapshot.map((item) => `- ${item}`)]
+      : []),
     "",
     "WHAT YOU DID WELL:",
     ...coachStrengths.map((item) => `- ${item}`),
@@ -28708,6 +28713,7 @@ function buildControlledFeedback({
     weaknesses: finalWeaknesses,
     nextAction,
     nextSteps,
+    tradeSnapshot: Array.isArray(pillars.snapshot) ? pillars.snapshot : [],
     reviewIncomplete: weeklyDataIncomplete
       ? { reason: "weekly_quarter_data_incomplete", advice: weeklyIncompleteAdvice }
       : null,
