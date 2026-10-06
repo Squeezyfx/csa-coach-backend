@@ -27999,6 +27999,19 @@ function buildControlledFeedback({
       ? areaDisplay(facts)
       : "";
 
+  // A weekly chart whose quarter data could not be built (typically in the
+  // first days of a quarter, when the new quarter has no completed weekly
+  // candle yet) comes back with no usable direction and no Fibonacci frame.
+  // That is a data gap, not "no good entry", so say so instead of giving
+  // entry-area advice that is built on nothing.
+  const weeklyDataIncomplete =
+    String(facts?.timeframe || "").toUpperCase() === "W1" &&
+    !hasValidatedArea &&
+    facts?.selectorDiagnostics?.fallbackSource === "no_entry_direction_unresolved" &&
+    facts?.selectorDiagnostics?.fibonacci?.source === "not_available";
+  const weeklyIncompleteAdvice =
+    "Try the daily chart for entries, or run this weekly chart again after the quarter's first full week.";
+
   const secondaryAreaText =
     selectedSecondaryArea
       ? formatRankedArea(
@@ -28173,7 +28186,9 @@ function buildControlledFeedback({
   } else {
     addStrength(
       "entry",
-      `The direction is clear (${directionText}), but no entry area has passed the checks yet.`,
+      weeklyDataIncomplete
+        ? `The weekly direction reads ${directionText}, but entry areas could not be worked out for this chart.`
+        : `The direction is clear (${directionText}), but no entry area has passed the checks yet.`,
       { short: "Direction clear" }
     );
   }
@@ -28212,7 +28227,15 @@ function buildControlledFeedback({
     );
   }
 
-  if (facts.entryAreaValidation?.passed === false) {
+  if (weeklyDataIncomplete) {
+    addWeakness(
+      "entry",
+      "This weekly review is incomplete: the quarter doesn't have enough weekly data yet, so no entry area could be worked out.",
+      { short: "Weekly data incomplete", why: weeklyIncompleteAdvice }
+    );
+  }
+
+  if (!weeklyDataIncomplete && facts.entryAreaValidation?.passed === false) {
     addWeakness(
       "entry",
       "No level passed the framework's checks, so none is safe to enter yet.",
@@ -28220,7 +28243,9 @@ function buildControlledFeedback({
     );
   }
 
-  if (
+  if (weeklyDataIncomplete) {
+    // Covered by the single weekly-data weakness above.
+  } else if (
     !hasValidatedArea &&
     !bullishRecoveryContext &&
     !bearishPullbackContext
@@ -28373,7 +28398,9 @@ function buildControlledFeedback({
 
   let nextAction;
 
-  if (!hasValidatedArea) {
+  if (weeklyDataIncomplete) {
+    nextAction = `Weekly entry areas aren't available for this chart yet. ${weeklyIncompleteAdvice}`;
+  } else if (!hasValidatedArea) {
     nextAction =
       bearishPullbackContext &&
       facts.direction === "bullish" &&
@@ -28530,7 +28557,9 @@ function buildControlledFeedback({
   const entryTriggerWord =
     facts.direction === "bearish" ? "bearish rejection" : facts.direction === "bullish" ? "bullish hold" : "trigger";
   let entryPlan;
-  if (!hasValidatedArea) {
+  if (weeklyDataIncomplete) {
+    entryPlan = `Weekly entries aren't available yet. ${weeklyIncompleteAdvice}`;
+  } else if (!hasValidatedArea) {
     entryPlan = referenceAreasText
       ? `No strong entry yet. Watch the ${referenceAreasText} for a ${entryTriggerWord}.`
       : wrongSideReferenceText && facts.direction === "bullish"
@@ -28564,7 +28593,11 @@ function buildControlledFeedback({
   if (facts.historicalCutoff?.active) {
     entryPlan += ` (Candles after ${facts.historicalCutoff.selectedDate} are excluded.)`;
   }
-  const nextSteps = buildPillarNextSteps({ entryPlan, next: pillars.next });
+  // With no entry area there is no trigger, stop or target to describe.
+  const nextSteps = buildPillarNextSteps({
+    entryPlan,
+    next: weeklyDataIncomplete ? {} : pillars.next,
+  });
 
   // For a placed trade, Entry Accuracy and Risk Management come from the same
   // pillar findings the bullets are written from, so the grade cannot
@@ -28675,6 +28708,9 @@ function buildControlledFeedback({
     weaknesses: finalWeaknesses,
     nextAction,
     nextSteps,
+    reviewIncomplete: weeklyDataIncomplete
+      ? { reason: "weekly_quarter_data_incomplete", advice: weeklyIncompleteAdvice }
+      : null,
     entry1: hasValidatedArea
       ? {
           areaType: area.areaType,
