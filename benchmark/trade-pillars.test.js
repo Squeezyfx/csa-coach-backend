@@ -12,6 +12,7 @@ import {
   averageCandleRange,
   typicalSpread,
   minimumStopFloor,
+  scoreFromPlan,
 } from "../trade-pillars.js";
 
 const levels = (prices) => ({ structuralCandidates: prices.map((price) => ({ price })) });
@@ -862,4 +863,55 @@ test("a placed trade ignores any typed plan", () => {
   const result = assessTradePillars({ facts, area: eurusdArea, hasValidatedArea: true });
   assert.equal(result.snapshotTitle, "YOUR TRADE SO FAR:");
   assert.equal(result.next.cancel, "");
+});
+
+test("an entry a few pips from another key level still says so", () => {
+  // 1.12900 is 3.9 pips from the key low 1.12861, within half a 10-pip candle
+  const result = assess(planned(1.129, 1.1312, 1.1215));
+  assert.ok(has(compilePillarItems(result.weaknesses), "It does sit next to the key level at 1.12861."));
+});
+
+test("a typed plan is scored from the same findings as its bullets", () => {
+  const sound = assess(planned(1.131, 1.134, 1.124));
+  assert.deepEqual(
+    { ...sound.planSignals, rr: Math.round(sound.planSignals.rr * 10) / 10 },
+    { entryTyped: true, trend: "with", area: "close", stop: "ok", target: "ok", rr: 2.3, riskPct: null }
+  );
+  assert.deepEqual(scoreFromPlan(sound.planSignals), { entry: 85, risk: 95 });
+
+  // a stop that is too tight earns little and its ratio earns nothing
+  const tight = assess(planned(1.131, 1.1315, 1.124));
+  assert.equal(tight.planSignals.stop, "tight");
+  assert.equal(tight.planSignals.rr, null);
+  assert.deepEqual(scoreFromPlan(tight.planSignals), { entry: 85, risk: 65 });
+
+  // a stop on the wrong side and an entry against the trend score badly
+  const wrong = assess(planned(1.131, 1.128, 1.124));
+  assert.equal(wrong.planSignals.stop, "wrong");
+  assert.ok(scoreFromPlan(wrong.planSignals).risk < 45);
+
+  const against = assess(planned(1.131, 1.128, 1.1515));
+  assert.equal(against.planSignals.trend, "against");
+  assert.ok(scoreFromPlan(against.planSignals).entry < 50);
+});
+
+test("an oversized position drags the planned risk score down", () => {
+  const sensible = assess(planned(1.131, 1.134, 1.124, { riskInputs: { balance: 100000, lots: 0.5 } }));
+  const reckless = assess(planned(1.131, 1.134, 1.124, { riskInputs: { balance: 1000, lots: 1 } }));
+  assert.ok(scoreFromPlan(reckless.planSignals).risk < scoreFromPlan(sensible.planSignals).risk);
+  assert.equal(sensible.planSignals.riskPct < 2, true);
+});
+
+test("unfilled boxes are never penalised and a plan without numbers has no plan score", () => {
+  assert.equal(scoreFromPlan(null), null);
+  // entry only: Entry Readiness is scored, Risk Plan keeps the chart-only score
+  const entryOnly = scoreFromPlan(assess(planned(1.131, null, null)).planSignals);
+  assert.ok(entryOnly.entry > 50);
+  assert.equal(entryOnly.risk, null);
+  // a target only: Risk Plan is scored, Entry Readiness keeps the chart-only score
+  const targetOnly = scoreFromPlan(assess(planned(null, null, 1.124)).planSignals);
+  assert.equal(targetOnly.entry, null);
+  assert.ok(targetOnly.risk > 45);
+  // nothing typed
+  assert.equal(assess(sellAreaFacts({ analysisType: "pre-trade" })).planSignals, null);
 });

@@ -559,6 +559,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
   next.cancel = "";
   next.note = "";
   let snapshotTitle = "YOUR TRADE SO FAR:";
+  let planSignals = null;
 
   const entry = order ? num(order.entryPrice) : null;
 
@@ -1087,12 +1088,22 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
 
     if (review) {
       const small = center * 0.00005;
+      planSignals = {
+        entryTyped: planned.entry !== null,
+        trend: null,
+        area: null,
+        stop: "none",
+        target: "none",
+        rr: null,
+        riskPct: null,
+      };
       const centers = (Array.isArray(facts?.activeEntryAreas) ? facts.activeEntryAreas : [])
         .map((a) => num(a?.authoritativeCenter))
         .filter((p) => p !== null);
 
       // 1. Entry area: direction against the trend, and the entry against the area.
       if (plannedDir && biasDir) {
+        planSignals.trend = biasDir === plannedDir ? "with" : "against";
         if (biasDir === plannedDir) {
           add(strengths, "entry", `Your planned ${word} matches the ${facts.direction} trend.`, "With the trend", {
             priority: 0,
@@ -1115,10 +1126,12 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         const near = (p) => Math.abs(planned.entry - p) <= nearBy;
         const backup = centers.find((p) => Math.abs(p - areaCenter) > areaCenter * 0.0003 && near(p));
         // Another key level the entry sits next to (an area to watch, not Entry 1).
-        const nearLevel = levels.find((l) => Math.abs(l - areaCenter) > small && near(l));
+        const nextTo = Math.min(areaCenter * 0.0015, candle !== null ? candle * 0.5 : Infinity);
+        const nearLevel = levels.find((l) => Math.abs(l - areaCenter) > small && Math.abs(planned.entry - l) <= nextTo);
         const nearLevelText =
           nearLevel !== undefined ? ` It does sit next to the key level at ${fmtPrice(nearLevel)}.` : "";
         if (areaDir && plannedDir && areaDir !== plannedDir) {
+          planSignals.area = "opposite";
           add(
             weaknesses,
             "entry",
@@ -1127,6 +1140,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
             { priority: 0, why: WHY.trend }
           );
         } else if (near(areaCenter)) {
+          planSignals.area = "close";
           add(
             strengths,
             "entry",
@@ -1135,6 +1149,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
             { priority: 0 }
           );
         } else if (backup !== undefined) {
+          planSignals.area = "close";
           add(
             strengths,
             "entry",
@@ -1143,6 +1158,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
             { priority: 0 }
           );
         } else if (isSell ? planned.entry < areaCenter : planned.entry > areaCenter) {
+          planSignals.area = "early";
           add(
             weaknesses,
             "entry",
@@ -1151,6 +1167,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
             { priority: 0, why: WHY.early }
           );
         } else {
+          planSignals.area = "beyond";
           add(
             weaknesses,
             "entry",
@@ -1187,6 +1204,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       if (planned.stop !== null) {
         const onRiskSide = isSell ? planned.stop > center + small : planned.stop < center - small;
         if (!onRiskSide) {
+          planSignals.stop = "wrong";
           add(
             weaknesses,
             "exit",
@@ -1204,6 +1222,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
           const riskText = priceDistance(userRisk, symbol).text;
           if (userRisk < tightLimit * 0.9) {
             stopTight = true;
+            planSignals.stop = "tight";
             add(
               weaknesses,
               "exit",
@@ -1216,6 +1235,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
             );
           } else if (nearestProtect !== null) {
             const beyond = isSell ? planned.stop > nearestProtect : planned.stop < nearestProtect;
+            planSignals.stop = beyond ? "beyond" : "inside";
             if (beyond) {
               add(
                 strengths,
@@ -1236,6 +1256,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
               exitParts.push(`Move your stop just beyond the key ${protectWord} (${fmtPrice(nearestProtect)}).`);
             }
           } else {
+            planSignals.stop = "ok";
             add(
               strengths,
               "exit",
@@ -1255,6 +1276,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       if (planned.target !== null) {
         const onProfitSide = isSell ? planned.target < center - small : planned.target > center + small;
         if (!onProfitSide) {
+          planSignals.target = "wrong";
           add(
             weaknesses,
             "exit",
@@ -1273,6 +1295,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
           const tpLimitName = mainSwing !== null ? `main swing ${targetWord}` : `next key ${targetWord}`;
           if (tpLimit !== null) {
             const beyondLevel = isSell ? planned.target < tpLimit : planned.target > tpLimit;
+            planSignals.target = beyondLevel ? "beyond" : "ok";
             if (beyondLevel) {
               add(
                 weaknesses,
@@ -1293,6 +1316,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
               exitParts.push("Keep your planned take profit.");
             }
           } else {
+            planSignals.target = "ok";
             add(strengths, "exit", `Planned take profit marked at ${fmtPrice(planned.target)}.`, "Take profit planned", {
               priority: 0,
             });
@@ -1333,6 +1357,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       // Only the trader's own numbers are graded; the suggestion is not.
       if (userRisk !== null && userReward !== null) {
         const rrShort = rr.toFixed(1);
+        if (planSignals && !stopTight) planSignals.rr = rr;
         if (rr >= 1.5) {
           if (!stopTight) add(
             strengths,
@@ -1355,6 +1380,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       }
       const planRisk = accountRisk({ facts, distance: riskDist, price: center });
       if (planRisk) {
+        if (planSignals && userRisk !== null) planSignals.riskPct = planRisk.pct;
         const riskVerdict = describeAccountRisk(planRisk, { planned: true });
         add(
           riskVerdict.level === "ok" ? strengths : weaknesses,
@@ -1435,7 +1461,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     if (typeof signals.rr === "number" && signals.rr < 1.5) flag("Risk-to-reward below plan", "MATH FLAW");
   }
 
-  return { strengths, weaknesses, next, signals, snapshot, snapshotTitle, mistakes };
+  return { strengths, weaknesses, next, signals, planSignals, snapshot, snapshotTitle, mistakes };
 }
 
 const clamp = (value, low, high) => Math.max(low, Math.min(high, Math.round(value)));
@@ -1575,6 +1601,54 @@ export function scoreFromSignals(signals) {
       riskNegatives
     ),
   };
+}
+
+// Entry Readiness and Risk Plan scores for a plan the trader typed in Pre-trade
+// mode, from the same findings the bullets are written from. Each part is null
+// when the trader typed nothing it could be judged on, so the chart-only score
+// stays. Unfilled boxes are never penalised.
+export function scoreFromPlan(signals) {
+  if (!signals) return null;
+
+  let entry = null;
+  if (signals.entryTyped && (signals.trend || signals.area)) {
+    entry = 50;
+    if (signals.trend === "with") entry += 15;
+    else if (signals.trend === "against") entry -= 20;
+    if (signals.area === "close") entry += 20;
+    else if (signals.area === "early" || signals.area === "beyond") entry -= 10;
+    else if (signals.area === "opposite") entry -= 20;
+    entry = clamp(entry, 20, 90);
+  }
+
+  let risk = null;
+  const hasStop = signals.stop && signals.stop !== "none";
+  const hasTarget = signals.target && signals.target !== "none";
+  if (hasStop || hasTarget) {
+    risk = 45;
+    if (signals.stop === "wrong") risk -= 25;
+    else if (signals.stop === "tight") risk += 5;
+    else if (signals.stop === "inside") risk += 10;
+    else if (signals.stop === "ok") risk += 20;
+    else if (signals.stop === "beyond") risk += 25;
+    if (signals.target === "wrong") risk -= 15;
+    else if (signals.target === "beyond") risk += 5;
+    else if (signals.target === "ok") risk += 15;
+    if (typeof signals.rr === "number" && Number.isFinite(signals.rr)) {
+      if (signals.rr >= 1.5) risk += 15;
+      else if (signals.rr >= 1) risk += 3;
+      else risk -= 10;
+    }
+    if (typeof signals.riskPct === "number" && Number.isFinite(signals.riskPct)) {
+      if (signals.riskPct > 10) risk -= 35;
+      else if (signals.riskPct > 5) risk -= 20;
+      else if (signals.riskPct > 2) risk -= 8;
+      else risk += 5;
+    }
+    risk = clamp(risk, 10, 95);
+  }
+
+  return entry === null && risk === null ? null : { entry, risk };
 }
 
 // Orders pillar items (trade, entry, trigger, exit, risk, management), keeps

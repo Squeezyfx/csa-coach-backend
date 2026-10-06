@@ -50,7 +50,7 @@ import {
 import { buildVisiblePeriodFibonacciFrame, resolveCalendarPeriodDirection, resolveDeepRetracementDirectionOverride } from "./benchmark/weekly-fibonacci-policy.js";
 import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodWickExtremesFromPixels } from "./chart-raster-reader.js";
 import { buildChartOverlay } from "./chart-overlay.js";
-import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, averageCandleRange } from "./trade-pillars.js";
+import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -28616,16 +28616,40 @@ function buildControlledFeedback({
   // disagree with the feedback. Setup Quality (the chart plan) is unchanged.
   const baseScores = controlledScores(facts);
   const pillarScores = scoreFromSignals(pillars.signals);
-  const scores = pillarScores
-    ? {
-        ...baseScores,
-        entryAccuracy: pillarScores.entry,
-        riskManagement: pillarScores.risk,
-        overall: Math.round(
-          (baseScores.setupQuality + pillarScores.entry + pillarScores.risk) / 3
-        ),
-      }
-    : baseScores;
+  // A plan typed in Pre-trade mode moves the two plan scores the same way: Risk
+  // Plan comes from the stop and target typed, Entry Readiness averages the
+  // chart's own readiness with how well the typed entry fits it. Setup Quality
+  // and the readiness weights are unchanged, and anything not typed keeps the
+  // chart-only score.
+  const planScores =
+    pillarScores || weeklyDataIncomplete ? null : scoreFromPlan(pillars.planSignals);
+  let scores = baseScores;
+  if (pillarScores) {
+    scores = {
+      ...baseScores,
+      entryAccuracy: pillarScores.entry,
+      riskManagement: pillarScores.risk,
+      overall: Math.round(
+        (baseScores.setupQuality + pillarScores.entry + pillarScores.risk) / 3
+      ),
+    };
+  } else if (planScores) {
+    const entryAccuracy =
+      planScores.entry !== null
+        ? Math.round((baseScores.entryAccuracy + planScores.entry) / 2)
+        : baseScores.entryAccuracy;
+    const riskManagement = planScores.risk !== null ? planScores.risk : baseScores.riskManagement;
+    scores = {
+      ...baseScores,
+      entryAccuracy,
+      riskManagement,
+      overall: Math.round(
+        baseScores.setupQuality * baseScores.weights.setupQuality +
+          entryAccuracy * baseScores.weights.entryAccuracy +
+          riskManagement * baseScores.weights.riskManagement
+      ),
+    };
+  }
 
   const scoreContext = {
     scoringModelVersion:
