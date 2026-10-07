@@ -81,14 +81,27 @@ export function resolveFrameworkBias({periodInventory=[],periodOpen=null,periodC
   if(close===null) return null;
   const position=(close-low)/(high-low),open=number(periodOpen)??number(rows[0].open);
   const completed=rows.filter(r=>r.partialPeriod!==true&&r.periodLifecycle!=="in_progress");
-  let direction=open!==null&&close!==open ? (close>open?"bullish":"bearish") : position>=.618?"bullish":position<=.382?"bearish":null;
-  let basis=direction?(open!==null&&close!==open?"calendar_open_close":"calendar_range_position"):null;
+  const hasMove=open!==null&&close!==open;
+  // The period candle's colour decides only when the move is big enough to mean
+  // something. A small open-to-close gap (under 25% of the period's range) is
+  // indecisive: a recovery week that is a few pips under its open is not a
+  // bearish week. In that case the completed periods' own structure decides
+  // (higher high + higher low = bullish, lower high + lower low = bearish),
+  // and only if that is unclear does the small open/close difference count.
+  const DECISIVE_MOVE=.25;
+  let direction=null,basis=null;
+  if(hasMove&&Math.abs(close-open)/(high-low)>=DECISIVE_MOVE) {
+    direction=close>open?"bullish":"bearish"; basis="calendar_open_close";
+  } else if(!hasMove) {
+    direction=position>=.618?"bullish":position<=.382?"bearish":null;
+    if(direction) basis="calendar_range_position";
+  }
   if(!direction&&completed.length>=2) {
     const first=completed[0],last=completed.at(-1);
     direction=last.high>first.high&&last.low>first.low?"bullish":last.high<first.high&&last.low<first.low?"bearish":null;
     if(direction) basis="completed_period_structure";
   }
-  if(!direction&&open!==null&&Math.abs(close-open)/(high-low)>=.08) {
+  if(!direction&&hasMove) {
     direction=close>open?"bullish":"bearish"; basis="calendar_open_close";
   }
   // A retracement past 61.8% of the completed periods' own framing swing

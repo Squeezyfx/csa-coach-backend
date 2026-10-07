@@ -21328,9 +21328,18 @@ function rankChartNativeFallbackAreas({
     // The selector is also VM-tested in isolation, so keep this small
     // instrument-aware boundary rule local rather than depending on the
     // OANDA adapter import. Standard FX receives the agreed three-pip buffer.
-    const fibBoundaryTolerance = /^[A-Z]{6}$/.test(compactFibSymbol)
+    const brokerPipBuffer = /^[A-Z]{6}$/.test(compactFibSymbol)
       ? compactFibSymbol.endsWith("JPY") ? 0.03 : 0.0003
       : null;
+    // A level "very close" to the edge of the 38.2%-61.8% band counts. The
+    // allowance is the larger of the broker buffer and 5% of the framing
+    // range, so it scales with the chart: a level 4 pips outside the band on a
+    // 117-pip week is a near miss, not a rejection, while a level a long way
+    // outside is still out.
+    const fibBoundaryTolerance =
+      impulseRange !== null
+        ? Math.max(brokerPipBuffer ?? 0, impulseRange * 0.05)
+        : brokerPipBuffer;
     const rawLow = asPositiveNumber(candidate?.zoneLow) || price;
     const rawHigh = asPositiveNumber(candidate?.zoneHigh) || price;
     const zoneLow = Math.min(rawLow, rawHigh);
