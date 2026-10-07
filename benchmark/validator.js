@@ -205,6 +205,16 @@ function defaultTolerance(price) {
   return 0.00008;
 }
 
+// Levels read off a screenshot are not broker-exact: the same level comes back a
+// fraction of a pip either side of the saved answer (1.35702 for 1.35703,
+// 0.85631 for 0.85621). A required level counts when it is within 0.015% of its
+// price: about 1 pip on a major, a couple of points on gold, and still far
+// tighter than any real difference between levels on an index.
+function chartReadingTolerance(price) {
+  const n = Math.abs(Number(price));
+  return Number.isFinite(n) ? n * 0.00015 : 0;
+}
+
 function exactLevelTolerance(price, expectedDigits = null) {
   const digits = Number.isInteger(expectedDigits)
     ? expectedDigits
@@ -956,9 +966,12 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const tolerance =
       finiteNumber(expectation.levelTolerance) ??
       toleranceOverride ??
-      (oandaProvisionalReference && requiredPrice >= 1 && requiredPrice < 10
-        ? Math.max(exactLevelTolerance(requiredPrice, required.digits), Number(dataMatch?.tolerance) || 0.0003)
-        : exactLevelTolerance(requiredPrice, required.digits));
+      Math.max(
+        oandaProvisionalReference && requiredPrice >= 1 && requiredPrice < 10
+          ? Math.max(exactLevelTolerance(requiredPrice, required.digits), Number(dataMatch?.tolerance) || 0.0003)
+          : exactLevelTolerance(requiredPrice, required.digits),
+        chartReadingTolerance(requiredPrice)
+      );
     const matchingZoneExpectation = configuredEntryZones.find((item) =>
       priceInsideZone(requiredPrice, item.zone, tolerance)
     );
@@ -990,9 +1003,12 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
     const tolerance =
       finiteNumber(expectation.levelTolerance) ??
       toleranceOverride ??
-      (oandaProvisionalReference && requiredPrice >= 1 && requiredPrice < 10
-        ? Math.max(exactLevelTolerance(requiredPrice, required.digits), Number(dataMatch?.tolerance) || 0.0003)
-        : exactLevelTolerance(requiredPrice, required.digits));
+      Math.max(
+        oandaProvisionalReference && requiredPrice >= 1 && requiredPrice < 10
+          ? Math.max(exactLevelTolerance(requiredPrice, required.digits), Number(dataMatch?.tolerance) || 0.0003)
+          : exactLevelTolerance(requiredPrice, required.digits),
+        chartReadingTolerance(requiredPrice)
+      );
     const matchingZoneExpectation = configuredEntryZones.find((item) =>
       priceInsideZone(requiredPrice, item.zone, tolerance)
     );
@@ -1101,5 +1117,6 @@ export const benchmarkValidatorInternals = {
   textMentionsZone,
   defaultTolerance,
   exactLevelTolerance,
+  chartReadingTolerance,
   feedbackTemplateFingerprint,
 };

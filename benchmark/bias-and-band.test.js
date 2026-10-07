@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { resolveFrameworkBias } from "../framework-calendar.js";
 import { evaluateFrameworkCandidate } from "../shared-analysis-engine.js";
 import { fibBandBoundaryAllowance } from "../csa-entry-policy.js";
+import { benchmarkValidatorInternals } from "./validator.js";
 
 // EURUSD H1, week of Monday 2026-10-05, read on Wednesday 03:35 UTC. Monday spiked
 // down to 1.11617 and recovered; Tuesday made a higher low (1.12023) and a
@@ -140,4 +141,22 @@ test("the live selector and the validator both use the shared allowance", () => 
   const validator = fs.readFileSync(new URL("./validator.js", import.meta.url), "utf8");
   assert.ok(server.includes("fibBandBoundaryAllowance({"));
   assert.ok(validator.includes("fibBandBoundaryAllowance({"));
+});
+
+test("a required level read off a screenshot counts within about a pip, but not a real difference", () => {
+  const { chartReadingTolerance } = benchmarkValidatorInternals;
+  const near = (expected, got) => Math.abs(expected - got) <= chartReadingTolerance(expected);
+  // the mismatches seen in the 2026-10-07 strict runs, all under a pip
+  assert.ok(near(1.35703, 1.35702)); // 2898
+  assert.ok(near(0.80711, 0.80712)); // 2899
+  assert.ok(near(1.38437, 1.38439)); // 2901
+  assert.ok(near(0.8029, 0.80293)); // 2912
+  assert.ok(near(0.85621, 0.85631)); // 2915, exactly one pip
+  assert.ok(near(1.20144, 1.20148)); // 2917
+  assert.ok(near(1.6278, 1.62775)); // 2918
+  // real differences are still differences
+  assert.ok(!near(0.93648, 0.93747)); // 2916 Entry 1, ten pips off
+  assert.ok(!near(53275.6, 53261.4)); // 2902 Entry 1, 14 points off
+  assert.ok(!near(50575, 50539.4)); // 2927 Entry 1, 36 points off
+  assert.equal(chartReadingTolerance("x"), 0);
 });
