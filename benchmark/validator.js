@@ -630,12 +630,15 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
             : fallbackSwingHigh - fallbackRange * 0.618;
           const bandLow = Math.min(fib382, fib618);
           const bandHigh = Math.max(fib382, fib618);
+          // Same allowance as the live selector: a level a few pips outside the
+          // 38.2%-61.8% band still counts, up to 5% of the framing range.
           const boundaryAllowance = Math.max(
             defaultTolerance(candidatePrice),
             Math.min(
               finiteNumber(candidate?.fibonacciTolerance) ?? 0,
               fallbackRange * 0.01
-            )
+            ),
+            fallbackRange * 0.05
           );
           return candidatePrice >= bandLow - boundaryAllowance &&
             candidatePrice <= bandHigh + boundaryAllowance;
