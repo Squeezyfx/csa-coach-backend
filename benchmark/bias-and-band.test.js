@@ -160,3 +160,30 @@ test("a required level read off a screenshot counts within about a pip, but not 
   assert.ok(!near(50575, 50539.4)); // 2927 Entry 1, 36 points off
   assert.equal(chartReadingTolerance("x"), 0);
 });
+
+import { selectIndependentEntryAreas } from "../csa-entry-policy.js";
+
+const qualifiedArea = (center, extra = {}) => ({
+  authoritativeCenter: center,
+  resolvedEntryPrice: center,
+  areaType: "converted support",
+  provenanceVerified: true,
+  authoritativeFrameworkLevel: true,
+  requiredFibConfluence: true,
+  structuralScore: 5,
+  fibonacciScore: 5,
+  independentEntryEvidence: true,
+  ...extra,
+});
+
+test("the same level read twice is one entry, but two real levels stay two", () => {
+  // gold H1 2900: a chart line at 4436.15 and a Tuesday high at 4435.58 are one level
+  const gold = selectIndependentEntryAreas(
+    [qualifiedArea(4436.15), qualifiedArea(4435.5801), qualifiedArea(4428.73)],
+    "bullish"
+  );
+  assert.deepEqual(gold.map((a) => a.authoritativeCenter), [4436.15, 4428.73]);
+  // EURGBP 2915: two separate levels 2 pips apart are still two entries
+  const eurgbp = selectIndependentEntryAreas([qualifiedArea(0.85631), qualifiedArea(0.85612)], "bullish");
+  assert.equal(eurgbp.length, 2);
+});

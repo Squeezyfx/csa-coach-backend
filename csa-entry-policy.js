@@ -1204,10 +1204,13 @@ export function selectIndependentEntryAreas(candidates = [], direction = "range"
       if (!Number.isFinite(existingCenter) || !Number.isFinite(candidateCenter)) {
         return false;
       }
+      // The same level is often read twice, once from a chart line and once
+      // from a period high/low (4436.15 and 4435.58 on gold), a fraction of a
+      // pip apart. Within 0.015% of price it is one opportunity, not two.
       const allowance = Math.max(
         Number(existing?.closeAllowance || 0),
         Number(candidate?.closeAllowance || 0),
-        Math.abs(existingCenter) * 0.00001
+        Math.abs(existingCenter) * 0.00015
       );
       return Math.abs(existingCenter - candidateCenter) <= allowance;
     });
