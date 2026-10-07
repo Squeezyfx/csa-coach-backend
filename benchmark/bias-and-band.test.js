@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { resolveFrameworkBias } from "../framework-calendar.js";
 import { evaluateFrameworkCandidate } from "../shared-analysis-engine.js";
+import { fibBandBoundaryAllowance } from "../csa-entry-policy.js";
 
 // EURUSD H1, week of Monday 2026-10-05, read on Wednesday 03:35 UTC. Monday spiked
 // down to 1.11617 and recovered; Tuesday made a higher low (1.12023) and a
@@ -111,7 +112,32 @@ test("the allowance applies at the 38.2% edge as well", () => {
   assert.equal(sell.qualified, true);
 });
 
-test("the live selector passes a range-based boundary allowance", () => {
-  const source = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8");
-  assert.ok(source.includes("Math.max(brokerPipBuffer ?? 0, impulseRange * 0.05)"));
+test("the band allowance is 5% of the range, never under the pip buffer, never over 0.1% of price", () => {
+  // EURUSD week of 117 pips: 5% is 5.8 pips, under the 0.1% cap of 11 pips
+  const eurusd = fibBandBoundaryAllowance({ pipBuffer: 0.0003, impulseRange: 0.01169, price: 1.12023 });
+  assert.ok(Math.abs(eurusd - 0.0005845) < 1e-9);
+  // a tiny range never goes below the broker buffer
+  assert.equal(fibBandBoundaryAllowance({ pipBuffer: 0.0003, impulseRange: 0.001, price: 1.12 }), 0.0003);
+  // a huge index range is capped at 0.1% of price (USA30 D1: 5% would be 496 points)
+  const usa30 = fibBandBoundaryAllowance({ impulseRange: 9917, price: 51149.3 });
+  assert.ok(Math.abs(usa30 - 51.1493) < 1e-6);
+  // no usable range: fall back to the pip buffer, or nothing
+  assert.equal(fibBandBoundaryAllowance({ pipBuffer: 0.0003 }), 0.0003);
+  assert.equal(fibBandBoundaryAllowance({}), null);
+});
+
+test("the cap keeps the verified near-band entries and drops the far one", () => {
+  // USDCHF H1 2899: expected 0.80711 sits 7.4 pips outside the band (range about 186 pips)
+  assert.ok(0.00074 <= fibBandBoundaryAllowance({ pipBuffer: 0.0003, impulseRange: 0.0186, price: 0.80711 }));
+  // USA30 H1 2902: expected 53421.2 sits 39.8 points outside (range about 1002)
+  assert.ok(39.8 <= fibBandBoundaryAllowance({ impulseRange: 1002, price: 53421.2 }));
+  // USA30 D1 2927: 51149.3 sits 159 points outside a 9,917-point range, which is too far
+  assert.ok(159 > fibBandBoundaryAllowance({ impulseRange: 9917, price: 51149.3 }));
+});
+
+test("the live selector and the validator both use the shared allowance", () => {
+  const server = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  const validator = fs.readFileSync(new URL("./validator.js", import.meta.url), "utf8");
+  assert.ok(server.includes("fibBandBoundaryAllowance({"));
+  assert.ok(validator.includes("fibBandBoundaryAllowance({"));
 });

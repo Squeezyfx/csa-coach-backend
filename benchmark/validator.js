@@ -1,5 +1,6 @@
 import { calendarMapping } from "../framework-calendar.js";
 import { isCryptoSymbol } from "../market-data-matching.js";
+import { fibBandBoundaryAllowance } from "../csa-entry-policy.js";
 const DAY_WORDS = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)(?:'s)?\b/i;
 const FIB_WORDS = /\b(?:fib(?:onacci)?|38\.2%|50%|61\.8%)\b/i;
 const BENCHMARK_VALIDATOR_VERSION = "1.15.0";
@@ -631,14 +632,15 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
           const bandLow = Math.min(fib382, fib618);
           const bandHigh = Math.max(fib382, fib618);
           // Same allowance as the live selector: a level a few pips outside the
-          // 38.2%-61.8% band still counts, up to 5% of the framing range.
+          // 38.2%-61.8% band still counts (5% of the framing range, capped at
+          // 0.1% of the level's price).
           const boundaryAllowance = Math.max(
             defaultTolerance(candidatePrice),
             Math.min(
               finiteNumber(candidate?.fibonacciTolerance) ?? 0,
               fallbackRange * 0.01
             ),
-            fallbackRange * 0.05
+            fibBandBoundaryAllowance({ impulseRange: fallbackRange, price: candidatePrice }) ?? 0
           );
           return candidatePrice >= bandLow - boundaryAllowance &&
             candidatePrice <= bandHigh + boundaryAllowance;

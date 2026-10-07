@@ -26,6 +26,7 @@ import {
   expectedFrameworkPeriodDates,
   expandExactSupportResistanceBoundaries,
   findNearestAllowedFibonacciMatch,
+  fibBandBoundaryAllowance,
   getMarketDataSymbolCandidates,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
@@ -21333,13 +21334,15 @@ function rankChartNativeFallbackAreas({
       : null;
     // A level "very close" to the edge of the 38.2%-61.8% band counts. The
     // allowance is the larger of the broker buffer and 5% of the framing
-    // range, so it scales with the chart: a level 4 pips outside the band on a
-    // 117-pip week is a near miss, not a rejection, while a level a long way
-    // outside is still out.
-    const fibBoundaryTolerance =
-      impulseRange !== null
-        ? Math.max(brokerPipBuffer ?? 0, impulseRange * 0.05)
-        : brokerPipBuffer;
+    // range, capped at 0.1% of the level's price (see fibBandBoundaryAllowance),
+    // so it scales with the chart: a level 4 pips outside the band on a 117-pip
+    // week is a near miss, not a rejection, while a level a long way outside is
+    // still out, even on a huge index range.
+    const fibBoundaryTolerance = fibBandBoundaryAllowance({
+      pipBuffer: brokerPipBuffer,
+      impulseRange,
+      price,
+    });
     const rawLow = asPositiveNumber(candidate?.zoneLow) || price;
     const rawHigh = asPositiveNumber(candidate?.zoneHigh) || price;
     const zoneLow = Math.min(rawLow, rawHigh);

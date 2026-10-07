@@ -722,6 +722,20 @@ export function sequenceFibQualifiedAreas(candidates = [], direction = "range") 
   });
 }
 
+// How far outside the 38.2%-61.8% band a level may sit and still count: the
+// larger of the broker pip buffer and 5% of the framing range, but never more
+// than 0.1% of the level's own price, so a huge range (an index, a weekly
+// chart) cannot stretch "a few pips" into hundreds of points.
+export function fibBandBoundaryAllowance({ pipBuffer = null, impulseRange = null, price = null } = {}) {
+  const buffer = Number.isFinite(Number(pipBuffer)) && Number(pipBuffer) > 0 ? Number(pipBuffer) : 0;
+  const range = Number(impulseRange);
+  const level = Math.abs(Number(price));
+  if (!(range > 0)) return pipBuffer === null || pipBuffer === undefined ? null : buffer;
+  const proportional = range * 0.05;
+  const capped = Number.isFinite(level) && level > 0 ? Math.min(proportional, level * 0.001) : proportional;
+  return Math.max(buffer, capped);
+}
+
 export function findNearestAllowedFibonacciMatch({
   direction = "range",
   swingHigh = null,
