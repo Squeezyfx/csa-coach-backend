@@ -207,12 +207,13 @@ function defaultTolerance(price) {
 
 // Levels read off a screenshot are not broker-exact: the same level comes back a
 // fraction of a pip either side of the saved answer (1.35702 for 1.35703,
-// 0.85631 for 0.85621). A required level counts when it is within 0.015% of its
-// price: about 1 pip on a major, a couple of points on gold, and still far
-// tighter than any real difference between levels on an index.
+// 0.85631 for 0.85621, 4427.91 for 4428.73 on gold). An expected level counts
+// when it is within 0.02% of its price: about 1.5 pips on a major, under a point
+// on gold, and still far tighter than any real difference (10 pips on EURCHF
+// is 0.1%, 36 points on USA30 is 0.07%).
 function chartReadingTolerance(price) {
   const n = Math.abs(Number(price));
-  return Number.isFinite(n) ? n * 0.00015 : 0;
+  return Number.isFinite(n) ? n * 0.0002 : 0;
 }
 
 function exactLevelTolerance(price, expectedDigits = null) {
@@ -859,7 +860,7 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   const expectedEntry1Type = normalizeAreaType(expectation.expectedEntry1Type || "");
   const entry1Zone = expectedEntryZone(expectation, 1);
   if (expectedEntry1 !== null || entry1Zone) {
-    const tolerance = toleranceOverride ?? defaultTolerance(expectedEntry1);
+    const tolerance = toleranceOverride ?? Math.max(defaultTolerance(expectedEntry1), chartReadingTolerance(expectedEntry1));
     addCheck(
       checks,
       "entry_1",
@@ -891,7 +892,7 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   const entry2Zone = expectedEntryZone(expectation, 2);
   const entry2Required = expectation.entry2Required === true || expectedEntry2 !== null || Boolean(entry2Zone);
   if (entry2Required) {
-    const tolerance = toleranceOverride ?? defaultTolerance(expectedEntry2 ?? entries[1]?.center ?? 1);
+    const tolerance = toleranceOverride ?? Math.max(defaultTolerance(expectedEntry2 ?? entries[1]?.center ?? 1), chartReadingTolerance(expectedEntry2 ?? entries[1]?.center ?? 1));
     const passed = entryMatchesExpectation(
       entries[1],
       expectedEntry2,
@@ -930,7 +931,7 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   const entry3Zone = expectedEntryZone(expectation, 3);
   const entry3Required = expectation.entry3Required === true || expectedEntry3 !== null || Boolean(entry3Zone);
   if (entry3Required) {
-    const tolerance = toleranceOverride ?? defaultTolerance(expectedEntry3 ?? entries[2]?.center ?? 1);
+    const tolerance = toleranceOverride ?? Math.max(defaultTolerance(expectedEntry3 ?? entries[2]?.center ?? 1), chartReadingTolerance(expectedEntry3 ?? entries[2]?.center ?? 1));
     addCheck(
       checks,
       "entry_3",

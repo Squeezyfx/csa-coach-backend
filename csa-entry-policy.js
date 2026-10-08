@@ -1148,6 +1148,34 @@ export function expandExactSupportResistanceBoundaries(candidates = []) {
     });
 }
 
+// Entries closer together than this share of price are one area.
+export const STACKED_ENTRY_FRACTION = 0.0004;
+
+// One entry for two stacked levels: centred between them, its zone spanning both.
+export function mergeStackedEntryAreas(first = {}, second = {}) {
+  const centerOf = (area) => Number(area?.authoritativeCenter ?? area?.resolvedEntryPrice);
+  const edges = (area) => {
+    const center = centerOf(area);
+    const low = Number(area?.zoneLow);
+    const high = Number(area?.zoneHigh);
+    return [Number.isFinite(low) && low > 0 ? low : center, Number.isFinite(high) && high > 0 ? high : center];
+  };
+  const centers = [centerOf(first), centerOf(second)];
+  if (!centers.every(Number.isFinite)) return first;
+  const middle = (centers[0] + centers[1]) / 2;
+  const bounds = [...edges(first), ...edges(second)].filter(Number.isFinite);
+  return {
+    ...first,
+    authoritativeCenter: middle,
+    resolvedEntryPrice: middle,
+    ...(Number.isFinite(Number(first?.price)) ? { price: middle } : {}),
+    zoneLow: Math.min(...bounds),
+    zoneHigh: Math.max(...bounds),
+    mergedEntryLevels: [...centers].sort((a, b) => a - b),
+    closeAllowance: Math.max(Number(first?.closeAllowance || 0), Number(second?.closeAllowance || 0)),
+  };
+}
+
 export function selectIndependentEntryAreas(candidates = [], direction = "range") {
   // Every returned entry must carry its own completed structural validation
   // and its own pass against the batch-wide dominant Fibonacci impulse.
@@ -1193,8 +1221,10 @@ export function selectIndependentEntryAreas(candidates = [], direction = "range"
     if (!hasSeparateEvidence) continue;
 
     // Do not allow a nearby OCR fragment or duplicate zone to consume another
-    // entry slot. A candidate must be a distinct structural opportunity.
-    const duplicate = selected.some((existing) => {
+    // entry slot. A candidate must be a distinct structural opportunity. Two
+    // levels stacked within 0.04% of price are one area, not two price points:
+    // they merge into a single entry at their midpoint, its zone covering both.
+    const stackedIndex = selected.findIndex((existing) => {
       const existingCenter = Number(
         existing?.authoritativeCenter ?? existing?.resolvedEntryPrice
       );
@@ -1205,17 +1235,18 @@ export function selectIndependentEntryAreas(candidates = [], direction = "range"
         return false;
       }
       // The same level is often read twice, once from a chart line and once
-      // from a period high/low (4436.15 and 4435.58 on gold), a fraction of a
-      // pip apart. Within 0.015% of price it is one opportunity, not two.
+      // from a period high/low (4436.15 and 4435.58 on gold), or two nearby
+      // lines form one band (0.85631 and 0.85612 on EURGBP).
       const allowance = Math.max(
         Number(existing?.closeAllowance || 0),
         Number(candidate?.closeAllowance || 0),
-        Math.abs(existingCenter) * 0.00015
+        Math.abs(existingCenter) * STACKED_ENTRY_FRACTION
       );
       return Math.abs(existingCenter - candidateCenter) <= allowance;
     });
 
-    if (!duplicate) selected.push(candidate);
+    if (stackedIndex === -1) selected.push(candidate);
+    else selected[stackedIndex] = mergeStackedEntryAreas(selected[stackedIndex], candidate);
   }
 
   return sequenceFibQualifiedAreas(selected, direction).slice(0, 3);

@@ -154,6 +154,7 @@ test("a required level read off a screenshot counts within about a pip, but not 
   assert.ok(near(0.85621, 0.85631)); // 2915, exactly one pip
   assert.ok(near(1.20144, 1.20148)); // 2917
   assert.ok(near(1.6278, 1.62775)); // 2918
+  assert.ok(near(4428.73, 4427.91357)); // 2900 gold, the same level from a chart line and a period high
   // real differences are still differences
   assert.ok(!near(0.93648, 0.93747)); // 2916 Entry 1, ten pips off
   assert.ok(!near(53275.6, 53261.4)); // 2902 Entry 1, 14 points off
@@ -176,14 +177,31 @@ const qualifiedArea = (center, extra = {}) => ({
   ...extra,
 });
 
-test("the same level read twice is one entry, but two real levels stay two", () => {
+test("stacked levels merge into one area at their midpoint; real separate levels stay separate", () => {
+  const centers = (areas) => areas.map((a) => Math.round(a.authoritativeCenter * 1e6) / 1e6);
   // gold H1 2900: a chart line at 4436.15 and a Tuesday high at 4435.58 are one level
   const gold = selectIndependentEntryAreas(
     [qualifiedArea(4436.15), qualifiedArea(4435.5801), qualifiedArea(4428.73)],
     "bullish"
   );
-  assert.deepEqual(gold.map((a) => a.authoritativeCenter), [4436.15, 4428.73]);
-  // EURGBP 2915: two separate levels 2 pips apart are still two entries
+  assert.deepEqual(centers(gold), [4435.86505, 4428.73]);
+  assert.equal(gold[0].zoneLow, 4435.5801);
+  assert.equal(gold[0].zoneHigh, 4436.15);
+  // EURGBP 2915: 0.85631 and 0.85612 are one band, centred on the saved 0.85621
   const eurgbp = selectIndependentEntryAreas([qualifiedArea(0.85631), qualifiedArea(0.85612)], "bullish");
-  assert.equal(eurgbp.length, 2);
+  assert.deepEqual(centers(eurgbp), [0.856215]);
+  assert.deepEqual(eurgbp[0].mergedEntryLevels, [0.85612, 0.85631]);
+  // USA30 H1 2902: Tuesday low and Wednesday low merge; the 53421.2 level stays its own entry
+  const usa30 = selectIndependentEntryAreas(
+    [qualifiedArea(53281.3), qualifiedArea(53261.4), qualifiedArea(53421.2)],
+    "bearish"
+  );
+  assert.equal(usa30.length, 2);
+  assert.ok(Math.abs(usa30[0].authoritativeCenter - 53271.35) < 1e-6);
+  // EURAUD 2918 merges (4 pips); AUDNZD 2917 (5.2 pips, 0.043%) is two levels
+  assert.equal(selectIndependentEntryAreas([qualifiedArea(1.62775), qualifiedArea(1.62816)], "bullish").length, 1);
+  assert.equal(selectIndependentEntryAreas([qualifiedArea(1.20148), qualifiedArea(1.20096)], "bullish").length, 2);
+  // EURCHF 2916: 9 pips apart is two entries, the higher one first
+  const eurchf = selectIndependentEntryAreas([qualifiedArea(0.93655), qualifiedArea(0.93747)], "bullish");
+  assert.deepEqual(centers(eurchf), [0.93747, 0.93655]);
 });
