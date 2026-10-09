@@ -379,10 +379,25 @@ function coachingBullets(result = {}) {
   return bullets;
 }
 
+// The fixed readiness lines the engine writes for any unmarked chart whose
+// planned area has not been reached are true of every chart in that situation,
+// so repeating them is expected and is not counted as reused feedback. Any
+// other repeated statement, generic or not, still is.
+const READINESS_REMINDERS = [
+  /^Trade: No trade is marked on this chart\./i,
+  /^Entry area: Price hasn't returned to the planned .+ area yet\.?$/i,
+  /^Entry trigger: No (?:bullish|bearish) trigger candle at the planned .+ area yet\.?$/i,
+];
+const isReadinessReminder = (text) =>
+  READINESS_REMINDERS.some((pattern) => pattern.test(String(text || "").trim()));
+
 function feedbackItems(result = {}) {
   const bullets = coachingBullets(result);
   if (bullets.length) {
-    return bullets.map(feedbackTemplateFingerprint).filter((item) => item.length >= 30);
+    return bullets
+      .filter((bullet) => !isReadinessReminder(bullet))
+      .map(feedbackTemplateFingerprint)
+      .filter((item) => item.length >= 30);
   }
   const strengths = Array.isArray(result?.finalFeedback?.strengths)
     ? result.finalFeedback.strengths

@@ -105,9 +105,13 @@ test("preserves trailing-zero precision for five-decimal FX expectations", () =>
   changed.analysisFacts.structuralReferenceAreas = [];
   changed.finalFeedback.entry1 = { authoritativeCenter: 0.69618 };
 
-  const result = validateBenchmarkResult(changed, { requiredLevels: "0.69620" });
-  assert.equal(result.passed, false);
-  assert.ok(result.criticalFailures.some((check) => check.id === "required_level_0.6962"));
+  // 0.2 pip from the engine's 0.69618 is within chart-reading tolerance (0.02%)
+  const near = validateBenchmarkResult(changed, { requiredLevels: "0.69620" });
+  assert.ok(near.checks.some((check) => check.id === "required_level_0.6962" && check.passed));
+  // a real difference still fails, and keeps the five-decimal label
+  const far = validateBenchmarkResult(changed, { requiredLevels: "0.69700" });
+  assert.equal(far.passed, false);
+  assert.ok(far.criticalFailures.some((check) => check.id === "required_level_0.697"));
 });
 
 test("validates the exact structural role of Entry 1", () => {
@@ -883,4 +887,29 @@ test("identical coaching bullets across charts still fail the diversity check", 
   ]);
   assert.equal(checked[0].status, "failed");
   assert.ok(checked[0].validation.criticalFailures.some((check) => check.id === "batch_feedback_diversity"));
+});
+
+test("status lines with no price are not counted as reused feedback, but copied priced statements are", () => {
+  const analysisFor = (price, extra = []) => ({
+    ...structuredClone(baseResult),
+    analysis: [
+      "DIRECTIONAL BIAS:", "Bullish after a strong breakout", "",
+      "WHAT YOU DID WELL:",
+      `- Entry area: Entry 1 is the demand around ${price}. It passed all the framework's checks.`,
+      `- Entry area: Only the demand around ${price} qualified. Weaker levels were left out.`,
+      "", "WHAT TO IMPROVE:",
+      "- Trade: No trade is marked on this chart. Add your entry, stop loss and take profit to get feedback on your trade.",
+      "- Entry area: Price hasn't returned to the planned demand area yet.",
+      "- Entry trigger: No bullish trigger candle at the planned demand area yet.",
+      ...extra,
+    ].join("\n"),
+  });
+  const item = (analysis) => ({ status: "passed", mode: "strict", analysis, validation: validateBenchmarkResult(analysis, {}) });
+  // two charts, different levels, identical status lines: fine (2913 and 2914 in the 2026-10-09 run)
+  const different = applyBatchFeedbackDiversityChecks([item(analysisFor("1.38245")), item(analysisFor("53361.8"))]);
+  assert.ok(!different[0].validation.criticalFailures.some((c) => c.id === "batch_feedback_diversity"));
+  assert.ok(!different[1].validation.criticalFailures.some((c) => c.id === "batch_feedback_diversity"));
+  // the same priced statements on two charts is still a copy
+  const copied = applyBatchFeedbackDiversityChecks([item(analysisFor("1.38245")), item(analysisFor("1.38245"))]);
+  assert.ok(copied[0].validation.criticalFailures.some((c) => c.id === "batch_feedback_diversity"));
 });
