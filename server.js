@@ -21544,8 +21544,17 @@ function rankChartNativeFallbackAreas({
             String(area?.areaType || "") === String(selectedArea?.areaType || "")
           ) || selectedArea
         : selectedArea;
+      // Two stacked levels merged into one entry sit at their midpoint; the text
+      // shown to the customer must name that same price, not the first level's.
+      const mergedText = Array.isArray(originalArea?.mergedEntryLevels)
+        ? {
+            levelText: formatPrice(originalArea.authoritativeCenter, symbol),
+            zoneText: `around ${formatPrice(originalArea.authoritativeCenter, symbol)}`,
+          }
+        : {};
       return {
       ...originalArea,
+      ...mergedText,
       executionOrder: index + 1,
       role: index === 0 ? "primary" : index === 1 ? "secondary" : "tertiary",
       };

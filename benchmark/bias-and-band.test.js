@@ -216,7 +216,7 @@ test("stacked levels merge into one area at their midpoint; real separate levels
   assert.deepEqual(centers(eurchf), [0.93747, 0.93655]);
 });
 
-import { classifyDrawnLineRole, DRAWN_LINE_SUPERSEDES_FRACTION } from "../csa-entry-policy.js";
+import { classifyDrawnLineRole, DRAWN_LINE_SUPERSEDES_FRACTION, mergeStackedEntryAreas } from "../csa-entry-policy.js";
 
 // USA30 H1, week of Monday 2026-08-24, read on Wednesday. The blue line at 53524.20 is
 // Monday's high; Tuesday traded above it, so in a bullish week it is resistance turned
@@ -299,4 +299,17 @@ test("an exact drawn line replaces an estimated high of the same level, but not 
   assert.ok(!replaces(53421.2, 53281.3)); // 2902: a different level
   assert.ok(!replaces(0.93747, 0.93655)); // 2916: nine pips apart
   assert.ok(!replaces(1.35703, 1.35703)); // identical price is left to the ordinary de-duplication
+});
+
+test("a merged entry's displayed level is refreshed to its midpoint in the live selector", () => {
+  const server = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  assert.ok(server.includes("Array.isArray(originalArea?.mergedEntryLevels)"));
+  assert.ok(server.includes("levelText: formatPrice(originalArea.authoritativeCenter, symbol)"));
+  // the merge helper itself records both levels so the selector can tell
+  const merged = mergeStackedEntryAreas(
+    { authoritativeCenter: 53261.4, levelText: "53261.40", zoneLow: 53261.4, zoneHigh: 53261.4 },
+    { authoritativeCenter: 53281.3, levelText: "53281.30", zoneLow: 53281.3, zoneHigh: 53281.3 }
+  );
+  assert.deepEqual(merged.mergedEntryLevels, [53261.4, 53281.3]);
+  assert.ok(Math.abs(merged.authoritativeCenter - 53271.35) < 1e-9);
 });
