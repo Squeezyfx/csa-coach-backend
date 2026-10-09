@@ -247,6 +247,19 @@ test("a drawn line that no period has broken keeps its role, and so does a line 
   assert.deepEqual(classifyDrawnLineRole({ direction: "range", price: 53524.2, areaType: "resistance", currentPrice: 53496.2, periods: usa30Week }), {});
 });
 
+test("the vision model's label for a drawn line does not change its role", () => {
+  // 2914 on 2026-10-09 came back "converted resistance" for the same line that was "resistance" before
+  for (const label of ["resistance", "supply", "converted resistance"]) {
+    const role = classifyDrawnLineRole({ direction: "bullish", price: 53524.2, areaType: label, currentPrice: 53496.2, periods: usa30Week });
+    assert.equal(role.areaType, "converted support", label);
+    assert.equal(role.reclaimRequired, true, label);
+  }
+  for (const label of ["support", "demand", "converted support"]) {
+    const role = classifyDrawnLineRole({ direction: "bearish", price: 1.115, areaType: label, currentPrice: 1.118, periods: [{ high: 1.14, low: 1.12 }, { high: 1.135, low: 1.105 }] });
+    assert.equal(role.areaType, "converted resistance", label);
+  }
+});
+
 test("a bearish week mirrors it: broken support becomes resistance", () => {
   const down = [{ high: 1.14, low: 1.12 }, { high: 1.135, low: 1.105 }];
   const role = classifyDrawnLineRole({ direction: "bearish", price: 1.115, areaType: "support", currentPrice: 1.118, periods: down });

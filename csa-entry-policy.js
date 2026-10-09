@@ -1157,11 +1157,13 @@ export const STACKED_ENTRY_FRACTION = 0.0004;
 export const DRAWN_LINE_SUPERSEDES_FRACTION = 0.0005;
 
 // The role of a line drawn on the chart, read from price action rather than
-// from the vision model's word. A resistance that any period has since traded
-// above is resistance turned support in a bullish market (a support that any
-// period has since traded below is support turned resistance in a bearish
-// one), even if price has just dipped back under it: it then needs a reclaim.
-// Returns the fields to overwrite, or {} when the line keeps its role.
+// from the vision model's word, which varies from run to run ("resistance" one
+// time, "converted resistance" the next, for the same line). A resistance-side
+// line that any period has since traded above is resistance turned support in
+// a bullish market (a support-side line traded below is support turned
+// resistance in a bearish one), even if price has just dipped back under it:
+// it then needs a reclaim. Returns the fields to overwrite, or {} when the
+// line keeps its role.
 export function classifyDrawnLineRole({
   direction = "range",
   price = null,
@@ -1176,7 +1178,7 @@ export function classifyDrawnLineRole({
   if (!Number.isFinite(level) || level <= 0) return {};
   const rows = Array.isArray(periods) ? periods : [];
   const now = Number(currentPrice);
-  if (direction === "bullish" && ["resistance", "supply"].includes(type)) {
+  if (direction === "bullish" && ["resistance", "supply", "converted resistance"].includes(type)) {
     const brokenUp = rows.some((period) => Number(period?.high) > level + margin);
     if (!brokenUp) return {};
     return {
@@ -1186,7 +1188,7 @@ export function classifyDrawnLineRole({
       reclaimRequired: Number.isFinite(now) && now < level,
     };
   }
-  if (direction === "bearish" && ["support", "demand"].includes(type)) {
+  if (direction === "bearish" && ["support", "demand", "converted support"].includes(type)) {
     const brokenDown = rows.some((period) => {
       const low = Number(period?.low);
       return Number.isFinite(low) && low < level - margin;
