@@ -27,6 +27,8 @@ import {
   expandExactSupportResistanceBoundaries,
   findNearestAllowedFibonacciMatch,
   fibBandBoundaryAllowance,
+  classifyDrawnLineRole,
+  DRAWN_LINE_SUPERSEDES_FRACTION,
   getMarketDataSymbolCandidates,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
@@ -21118,13 +21120,25 @@ function buildPeriodInventoryStructuralCandidates({
   const rejectedVisualCandidates = [];
   const admittedVisualCandidates = visualCandidates.filter((candidate) => {
     const price = asPositiveNumber(candidate?.price);
+    // A line drawn on the chart is read from the picture, not from a period's
+    // candles. The vision step may tie it to today because price is pressing
+    // against it, but it marks an earlier high or low, so the unfinished-period
+    // rule (which stops today's own highs and lows becoming entries) does not
+    // apply to it.
+    const isExactDrawnLine =
+      price !== null &&
+      independentlyReadPrices.some(
+        (visiblePrice) =>
+          Math.abs(visiblePrice - price) <=
+          Math.max(cleanBreakTolerance, Number.EPSILON * 100)
+      );
     const candidatePeriodLabels = [
       candidate?.sourcePeriod,
       candidate?.sourceDay,
       candidate?.period,
       candidate?.date,
     ].map((value) => String(value || "").trim()).filter(Boolean);
-    if (candidatePeriodLabels.some((label) => inProgressPeriodLabels.has(label))) {
+    if (!isExactDrawnLine && candidatePeriodLabels.some((label) => inProgressPeriodLabels.has(label))) {
       rejectedVisualCandidates.push({
         ...candidate,
         provenanceVerified: false,
@@ -21163,20 +21177,59 @@ function buildPeriodInventoryStructuralCandidates({
       });
     }
     return admitted;
-  }).map((candidate) => ({
-    ...candidate,
-    provenanceVerified: true,
-    authoritativeFrameworkLevel: true,
-    priceSource: independentlyReadPrices.some(price =>
-      Math.abs(price - Number(candidate.price)) <= Math.max(cleanBreakTolerance, Number.EPSILON * 100))
-      ? "independent_horizontal_line_reader_exact"
-      : candidate?.provenanceVerified === true && candidate?.independentEntryEvidence === true
-      ? "independent_supply_demand_displacement"
-      : "deterministic_period_high_low_inventory",
-  }));
+  }).map((candidate) => {
+    const isDrawnLine = independentlyReadPrices.some((price) =>
+      Math.abs(price - Number(candidate.price)) <= Math.max(cleanBreakTolerance, Number.EPSILON * 100));
+    // A drawn line takes its role from price action: resistance that a period
+    // has traded above is resistance turned support in a bullish market.
+    const drawnRole = isDrawnLine
+      ? classifyDrawnLineRole({
+          direction,
+          price: Number(candidate.price),
+          areaType: candidate.areaType,
+          currentPrice,
+          periods: [...periods, ...inProgressPeriods],
+          tolerance: cleanBreakTolerance,
+        })
+      : {};
+    return {
+      ...candidate,
+      ...drawnRole,
+      provenanceVerified: true,
+      authoritativeFrameworkLevel: true,
+      priceSource: isDrawnLine
+        ? "independent_horizontal_line_reader_exact"
+        : candidate?.provenanceVerified === true && candidate?.independentEntryEvidence === true
+        ? "independent_supply_demand_displacement"
+        : "deterministic_period_high_low_inventory",
+    };
+  });
+
+  // An exact drawn line replaces an estimated period high/low at the same
+  // level (within 0.05% of price but not identical): it is the same level read
+  // more precisely, and keeping both would count it twice.
+  const drawnLinePrices = admittedVisualCandidates
+    .filter((candidate) => candidate.priceSource === "independent_horizontal_line_reader_exact")
+    .map((candidate) => Number(candidate.price));
+  const supersededPeriodCandidates = [];
+  const keptPeriodCandidates = filteredPeriodCandidates.filter((candidate) => {
+    const periodPrice = Number(candidate?.price);
+    const line = drawnLinePrices.find((linePrice) => {
+      const gap = Math.abs(linePrice - periodPrice);
+      return gap > 0 && gap <= Math.abs(linePrice) * DRAWN_LINE_SUPERSEDES_FRACTION;
+    });
+    if (line === undefined) return true;
+    supersededPeriodCandidates.push({
+      ...candidate,
+      provenanceVerified: false,
+      requiresReview: false,
+      rejectionReason: `replaced by the exact line drawn at ${line}`,
+    });
+    return false;
+  });
 
   const seen = new Set();
-  const candidates = [...filteredPeriodCandidates, ...admittedVisualCandidates]
+  const candidates = [...keptPeriodCandidates, ...admittedVisualCandidates]
     .filter((candidate) => candidate?.price !== null)
     .filter((candidate) => {
       const key = `${String(candidate.areaType)}:${Number(candidate.price)}`;
@@ -21187,7 +21240,7 @@ function buildPeriodInventoryStructuralCandidates({
 
   return {
     candidates,
-    rejectedVisualCandidates: [...rejectedVisualCandidates, ...rejectedPeriodCandidates],
+    rejectedVisualCandidates: [...rejectedVisualCandidates, ...rejectedPeriodCandidates, ...supersededPeriodCandidates],
     periods,
     inProgressPeriods,
   };
@@ -21363,7 +21416,7 @@ function rankChartNativeFallbackAreas({
     const reclaimRequired = candidate?.reclaimRequired === true;
     const sideCompatible = price !== null && (
       direction === "bullish"
-        ? price < resolvedCurrentPrice || (reclaimRequired && areaType === "support")
+        ? price < resolvedCurrentPrice || (reclaimRequired && ["support", "converted support"].includes(areaType))
         : price > resolvedCurrentPrice
     );
     const isSupplyDemand = ["supply", "demand"].includes(areaType);

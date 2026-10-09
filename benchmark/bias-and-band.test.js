@@ -205,3 +205,75 @@ test("stacked levels merge into one area at their midpoint; real separate levels
   const eurchf = selectIndependentEntryAreas([qualifiedArea(0.93655), qualifiedArea(0.93747)], "bullish");
   assert.deepEqual(centers(eurchf), [0.93747, 0.93655]);
 });
+
+import { classifyDrawnLineRole, DRAWN_LINE_SUPERSEDES_FRACTION } from "../csa-entry-policy.js";
+
+// USA30 H1, week of Monday 2026-08-24, read on Wednesday. The blue line at 53524.20 is
+// Monday's high; Tuesday traded above it, so in a bullish week it is resistance turned
+// support, and price (53496.2) has just dipped back under it.
+const usa30Week = [
+  { date: "2026-08-24", high: 53501.8, low: 53140.4 },
+  { date: "2026-08-25", high: 53730.5, low: 53361.8 },
+  { date: "2026-08-26", high: 53711.3, low: 53381.8 },
+];
+
+test("a drawn resistance that price has traded above is support in a bullish week, needing a reclaim while price is under it", () => {
+  const role = classifyDrawnLineRole({ direction: "bullish", price: 53524.2, areaType: "resistance", currentPrice: 53496.2, periods: usa30Week });
+  assert.equal(role.areaType, "converted support");
+  assert.equal(role.conversionBreakConfirmed, true);
+  assert.equal(role.reclaimRequired, true);
+  // price back above the line: support, no reclaim needed
+  const above = classifyDrawnLineRole({ direction: "bullish", price: 53524.2, areaType: "resistance", currentPrice: 53600, periods: usa30Week });
+  assert.equal(above.areaType, "converted support");
+  assert.equal(above.reclaimRequired, false);
+});
+
+test("a drawn line that no period has broken keeps its role, and so does a line of the right role", () => {
+  // Tuesday's high 53730.5 has not been traded through
+  assert.deepEqual(classifyDrawnLineRole({ direction: "bullish", price: 53730.5, areaType: "resistance", currentPrice: 53496.2, periods: usa30Week }), {});
+  // already support in a bullish week
+  assert.deepEqual(classifyDrawnLineRole({ direction: "bullish", price: 53166, areaType: "support", currentPrice: 53496.2, periods: usa30Week }), {});
+  // a range has no direction to convert by
+  assert.deepEqual(classifyDrawnLineRole({ direction: "range", price: 53524.2, areaType: "resistance", currentPrice: 53496.2, periods: usa30Week }), {});
+});
+
+test("a bearish week mirrors it: broken support becomes resistance", () => {
+  const down = [{ high: 1.14, low: 1.12 }, { high: 1.135, low: 1.105 }];
+  const role = classifyDrawnLineRole({ direction: "bearish", price: 1.115, areaType: "support", currentPrice: 1.118, periods: down });
+  assert.equal(role.areaType, "converted resistance");
+  assert.equal(role.reclaimRequired, true);
+});
+
+test("the converted-support reclaim passes the entry gate, and a plain resistance in a bullish week does not", () => {
+  const frame = { swingHigh: 53730.5, swingLow: 53140.4 };
+  const allowance = fibBandBoundaryAllowance({ impulseRange: frame.swingHigh - frame.swingLow, price: 53524.2 });
+  const decide = (candidate) =>
+    evaluateFrameworkCandidate({
+      candidate: { zoneLow: candidate.price, zoneHigh: candidate.price, independentEntryEvidence: true, ...candidate },
+      direction: "bullish",
+      currentPrice: 53496.2,
+      ...frame,
+      tolerance: 59,
+      boundaryTolerance: allowance,
+      frameUsable: true,
+      structuralEvidenceValid: true,
+    });
+  const converted = decide({ price: 53524.2, areaType: "converted support", reclaimRequired: true });
+  assert.equal(converted.qualified, true);
+  const plain = decide({ price: 53524.2, areaType: "resistance", reclaimRequired: true });
+  assert.equal(plain.qualified, false);
+  assert.ok(plain.rejectionReasons.includes("structural role conflicts with bias"));
+});
+
+test("an exact drawn line replaces an estimated high of the same level, but not a distinct one", () => {
+  const replaces = (line, estimate) => {
+    const gap = Math.abs(line - estimate);
+    return gap > 0 && gap <= Math.abs(line) * DRAWN_LINE_SUPERSEDES_FRACTION;
+  };
+  assert.ok(replaces(53524.2, 53501.8)); // 2914 Monday high, 22 points (0.042%)
+  assert.ok(replaces(4436.15, 4435.5801)); // 2900 gold
+  assert.ok(replaces(4428.73, 4427.91357)); // 2900 gold
+  assert.ok(!replaces(53421.2, 53281.3)); // 2902: a different level
+  assert.ok(!replaces(0.93747, 0.93655)); // 2916: nine pips apart
+  assert.ok(!replaces(1.35703, 1.35703)); // identical price is left to the ordinary de-duplication
+});

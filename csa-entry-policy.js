@@ -1151,6 +1151,57 @@ export function expandExactSupportResistanceBoundaries(candidates = []) {
 // Entries closer together than this share of price are one area.
 export const STACKED_ENTRY_FRACTION = 0.0004;
 
+// An exact line drawn on the chart replaces an estimated period high/low that
+// sits within this share of price of it: they are the same level, and the line
+// is the more precise reading of it.
+export const DRAWN_LINE_SUPERSEDES_FRACTION = 0.0005;
+
+// The role of a line drawn on the chart, read from price action rather than
+// from the vision model's word. A resistance that any period has since traded
+// above is resistance turned support in a bullish market (a support that any
+// period has since traded below is support turned resistance in a bearish
+// one), even if price has just dipped back under it: it then needs a reclaim.
+// Returns the fields to overwrite, or {} when the line keeps its role.
+export function classifyDrawnLineRole({
+  direction = "range",
+  price = null,
+  areaType = "",
+  currentPrice = null,
+  periods = [],
+  tolerance = 0,
+} = {}) {
+  const level = Number(price);
+  const type = String(areaType || "").toLowerCase().trim();
+  const margin = Math.max(Number(tolerance) || 0, 0);
+  if (!Number.isFinite(level) || level <= 0) return {};
+  const rows = Array.isArray(periods) ? periods : [];
+  const now = Number(currentPrice);
+  if (direction === "bullish" && ["resistance", "supply"].includes(type)) {
+    const brokenUp = rows.some((period) => Number(period?.high) > level + margin);
+    if (!brokenUp) return {};
+    return {
+      areaType: "converted support",
+      originalType: type,
+      conversionBreakConfirmed: true,
+      reclaimRequired: Number.isFinite(now) && now < level,
+    };
+  }
+  if (direction === "bearish" && ["support", "demand"].includes(type)) {
+    const brokenDown = rows.some((period) => {
+      const low = Number(period?.low);
+      return Number.isFinite(low) && low < level - margin;
+    });
+    if (!brokenDown) return {};
+    return {
+      areaType: "converted resistance",
+      originalType: type,
+      conversionBreakConfirmed: true,
+      reclaimRequired: Number.isFinite(now) && now > level,
+    };
+  }
+  return {};
+}
+
 // One entry for two stacked levels: centred between them, its zone spanning both.
 export function mergeStackedEntryAreas(first = {}, second = {}) {
   const centerOf = (area) => Number(area?.authoritativeCenter ?? area?.resolvedEntryPrice);

@@ -32,7 +32,7 @@ export function evaluateFrameworkCandidate({candidate={},direction,currentPrice,
   const fibMatch=findNearestAllowedFibonacciMatch({direction,swingHigh,swingLow,price,
     zoneLow:Math.min(zoneLow,zoneHigh),zoneHigh:Math.max(zoneLow,zoneHigh),tolerance,boundaryTolerance});
   const side=Number.isFinite(price)&&(direction==="bullish"?
-    price<currentPrice||(candidate.reclaimRequired===true&&type==="support"):direction==="bearish"&&price>currentPrice);
+    price<currentPrice||(candidate.reclaimRequired===true&&["support","converted support"].includes(type)):direction==="bearish"&&price>currentPrice);
   const rejectionReasons=[];
   if(!allowed.includes(type)) rejectionReasons.push("structural role conflicts with bias");
   if(!side) rejectionReasons.push("level is on the wrong side of current price");
