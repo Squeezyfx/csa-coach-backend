@@ -28793,8 +28793,12 @@ function buildControlledFeedback({
         : ""
     }: ${area.areaRetested ? "price has reached it" : "price has not reached it yet"}.`,
     `- Trigger candle at that area: ${area.triggerPresent ? "yes" : "not yet"}.`,
-    `- Stop loss marked on the chart: ${facts.risk.stopShown ? "yes" : "no"}.`,
-    `- Take profit marked on the chart: ${facts.risk.targetShown ? "yes" : "no"}.`,
+    `- Stop loss marked on the chart: ${
+      facts.risk.stopShown ? "yes" : Number(facts?.plannedTrade?.stop) > 0 ? "no (the stop you typed is checked above)" : "no"
+    }.`,
+    `- Take profit marked on the chart: ${
+      facts.risk.targetShown ? "yes" : Number(facts?.plannedTrade?.target) > 0 ? "no (the take profit you typed is checked above)" : "no"
+    }.`,
   ];
 
   const eliteSections = [

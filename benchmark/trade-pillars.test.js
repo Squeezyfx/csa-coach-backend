@@ -839,7 +839,8 @@ test("the risk of a planned stop uses the balance and lot size typed in", () => 
 });
 
 test("a pre-trade plan says when it is cancelled and that it is not a signal", () => {
-  const result = assess(planned(1.131, 1.134, 1.124));
+  // price (1.1300) is between the entry (1.1310) and the first target (1.12861)
+  const result = assess(planned(1.131, 1.134, 1.124, { currentPrice: 1.13 }));
   assert.match(result.next.cancel, /^If a candle closes above 1\.13210, this sell idea is wrong\./);
   assert.match(result.next.cancel, /Skip it too if price reaches 1\.12861 \(your first take profit\) before your entry fills\./);
   assert.match(result.next.cancel, /stand aside and wait for a fresh setup\.$/);
@@ -914,4 +915,15 @@ test("unfilled boxes are never penalised and a plan without numbers has no plan 
   assert.ok(targetOnly.risk > 45);
   // nothing typed
   assert.equal(assess(sellAreaFacts({ analysisType: "pre-trade" })).planSignals, null);
+});
+
+test("the first-target skip rule is left out once price is already past that target", () => {
+  // 2026-10-09 run: a sell planned at 1.12850 with price at 1.12524, below the first target 1.12800
+  const past = assess(planned(1.131, 1.134, 1.124, { currentPrice: 1.1252 }));
+  assert.match(past.next.cancel, /^If a candle closes above 1\.13210, this sell idea is wrong\./);
+  assert.ok(!/first take profit/.test(past.next.cancel));
+  assert.match(past.next.cancel, /Then stand aside and wait for a fresh setup\.$/);
+  // no price known: keep the rule
+  const unknown = assess(planned(1.131, 1.134, 1.124, { currentPrice: null }));
+  assert.match(unknown.next.cancel, /your first take profit/);
 });

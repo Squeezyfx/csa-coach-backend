@@ -1437,8 +1437,14 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     // to walk away, and that it is a plan, not a signal.
     if (preTrade && dir && planStopInfo) {
       const firstTarget = planLadder.length ? planLadder[0].price : null;
+      // "Price reaches the first take profit before the entry fills" only makes
+      // sense while price is still on the entry's side of that target. If price
+      // is already past it (a sell planned above the market, with price below
+      // the first target), reaching the entry means passing through it anyway.
+      const targetStillAhead =
+        firstTarget !== null && (current === null || (isSell ? current > firstTarget : current < firstTarget));
       next.cancel = `If a candle closes ${aboveWord} ${fmtPrice(planStopInfo.price)}, this ${word} idea is wrong.${
-        firstTarget !== null
+        targetStillAhead
           ? ` Skip it too if price reaches ${fmtPrice(firstTarget)} (your first take profit) before your entry fills.`
           : ""
       } Then stand aside and wait for a fresh setup.`;
