@@ -211,9 +211,15 @@ function defaultTolerance(price) {
 // when it is within 0.02% of its price: about 1.5 pips on a major, under a point
 // on gold, and still far tighter than any real difference (10 pips on EURCHF
 // is 0.1%, 36 points on USA30 is 0.07%).
-function chartReadingTolerance(price) {
+//
+// On a daily, weekly or monthly chart one pixel covers many times more price
+// (about 21 points per pixel on the USA30 daily chart), so the same screenshot
+// reading is a few pixels off by a larger share of price: 0.1% there.
+function chartReadingTolerance(price, timeframe = "") {
   const n = Math.abs(Number(price));
-  return Number.isFinite(n) ? n * 0.0002 : 0;
+  if (!Number.isFinite(n)) return 0;
+  const wide = ["D1", "W1", "MN", "MN1"].includes(String(timeframe || "").toUpperCase().trim());
+  return n * (wide ? 0.001 : 0.0002);
 }
 
 function exactLevelTolerance(price, expectedDigits = null) {
@@ -485,6 +491,9 @@ function expectedFrameworkInventory(timeframe = "", latestVisibleDate = "", trad
 export function validateBenchmarkResult(result = {}, expectation = {}) {
   const checks = [];
   const toleranceOverride = finiteNumber(expectation.tolerance);
+  const readingTimeframe = String(
+    result?.selectedTimeframe || result?.detectedTimeframe || result?.analysisFacts?.timeframe || ""
+  ).toUpperCase();
   const direction = normalizeDirection(
     result?.analysisFacts?.direction ||
       result?.regressionSnapshot?.direction ||
@@ -875,7 +884,7 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   const expectedEntry1Type = normalizeAreaType(expectation.expectedEntry1Type || "");
   const entry1Zone = expectedEntryZone(expectation, 1);
   if (expectedEntry1 !== null || entry1Zone) {
-    const tolerance = toleranceOverride ?? Math.max(defaultTolerance(expectedEntry1), chartReadingTolerance(expectedEntry1));
+    const tolerance = toleranceOverride ?? Math.max(defaultTolerance(expectedEntry1), chartReadingTolerance(expectedEntry1, readingTimeframe));
     addCheck(
       checks,
       "entry_1",
@@ -907,7 +916,7 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   const entry2Zone = expectedEntryZone(expectation, 2);
   const entry2Required = expectation.entry2Required === true || expectedEntry2 !== null || Boolean(entry2Zone);
   if (entry2Required) {
-    const tolerance = toleranceOverride ?? Math.max(defaultTolerance(expectedEntry2 ?? entries[1]?.center ?? 1), chartReadingTolerance(expectedEntry2 ?? entries[1]?.center ?? 1));
+    const tolerance = toleranceOverride ?? Math.max(defaultTolerance(expectedEntry2 ?? entries[1]?.center ?? 1), chartReadingTolerance(expectedEntry2 ?? entries[1]?.center ?? 1, readingTimeframe));
     const passed = entryMatchesExpectation(
       entries[1],
       expectedEntry2,
@@ -946,7 +955,7 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
   const entry3Zone = expectedEntryZone(expectation, 3);
   const entry3Required = expectation.entry3Required === true || expectedEntry3 !== null || Boolean(entry3Zone);
   if (entry3Required) {
-    const tolerance = toleranceOverride ?? Math.max(defaultTolerance(expectedEntry3 ?? entries[2]?.center ?? 1), chartReadingTolerance(expectedEntry3 ?? entries[2]?.center ?? 1));
+    const tolerance = toleranceOverride ?? Math.max(defaultTolerance(expectedEntry3 ?? entries[2]?.center ?? 1), chartReadingTolerance(expectedEntry3 ?? entries[2]?.center ?? 1, readingTimeframe));
     addCheck(
       checks,
       "entry_3",
@@ -986,7 +995,7 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
         oandaProvisionalReference && requiredPrice >= 1 && requiredPrice < 10
           ? Math.max(exactLevelTolerance(requiredPrice, required.digits), Number(dataMatch?.tolerance) || 0.0003)
           : exactLevelTolerance(requiredPrice, required.digits),
-        chartReadingTolerance(requiredPrice)
+        chartReadingTolerance(requiredPrice, readingTimeframe)
       );
     const matchingZoneExpectation = configuredEntryZones.find((item) =>
       priceInsideZone(requiredPrice, item.zone, tolerance)
@@ -1023,7 +1032,7 @@ export function validateBenchmarkResult(result = {}, expectation = {}) {
         oandaProvisionalReference && requiredPrice >= 1 && requiredPrice < 10
           ? Math.max(exactLevelTolerance(requiredPrice, required.digits), Number(dataMatch?.tolerance) || 0.0003)
           : exactLevelTolerance(requiredPrice, required.digits),
-        chartReadingTolerance(requiredPrice)
+        chartReadingTolerance(requiredPrice, readingTimeframe)
       );
     const matchingZoneExpectation = configuredEntryZones.find((item) =>
       priceInsideZone(requiredPrice, item.zone, tolerance)

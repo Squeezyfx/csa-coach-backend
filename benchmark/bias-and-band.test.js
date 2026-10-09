@@ -162,6 +162,16 @@ test("a required level read off a screenshot counts within about a pip, but not 
   assert.equal(chartReadingTolerance("x"), 0);
 });
 
+test("a daily, weekly or monthly chart allows 0.1% for screenshot reading, an hourly chart does not", () => {
+  const { chartReadingTolerance } = benchmarkValidatorInternals;
+  // USA30 D1 2927: the saved February high 50575 against the chart reading 50539.4
+  assert.ok(Math.abs(50575 - 50539.4) <= chartReadingTolerance(50575, "D1"));
+  assert.ok(Math.abs(50575 - 50539.4) > chartReadingTolerance(50575, "H1"));
+  assert.ok(Math.abs(50575 - 50539.4) <= chartReadingTolerance(50575, "w1"));
+  // still tight enough to tell real levels apart: the April high is 678 points away
+  assert.ok(Math.abs(50575 - 49897.8) > chartReadingTolerance(50575, "D1"));
+});
+
 import { selectIndependentEntryAreas } from "../csa-entry-policy.js";
 
 const qualifiedArea = (center, extra = {}) => ({
