@@ -795,7 +795,10 @@ test("a stop or target on the wrong side of the entry is flagged, not graded", (
   const result = assess(planned(1.131, 1.128, 1.124));
   const weaknesses = compilePillarItems(result.weaknesses);
   assert.ok(has(weaknesses, "Planned stop at 1.12800 is not above your entry (1.13100), so it would not protect a sell."));
-  assert.match(result.next.exit, /^Put your stop just above the key high/);
+  assert.match(result.next.exit, /^Put your stop above your entry\. Stop loss: /);
+  assert.match(result.next.exit, /\d\.\d{5}/);
+  assert.ok(has(compilePillarItems(result.weaknesses, { withWhy: true }), "A stop on the wrong side leaves your loss unprotected."));
+  assert.ok(!has(compilePillarItems(result.weaknesses, { withWhy: true }), "It limits your loss if you are wrong."));
   assert.ok(has(compilePillarItems(result.strengths), "Planned take profit at 1.12400"));
 });
 

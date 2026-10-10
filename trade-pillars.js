@@ -1210,13 +1210,10 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
             "exit",
             `Planned stop at ${fmtPrice(planned.stop)} is not ${aboveWord} your entry (${fmtPrice(center)}), so it would not protect a ${word}.`,
             "Stop on the wrong side",
-            { priority: 0, why: WHY.noStop }
+            { priority: 0, why: "A stop on the wrong side leaves your loss unprotected." }
           );
-          exitParts.push(
-            `Put your stop just ${aboveWord} the key ${protectWord}${
-              nearestProtect !== null ? ` (${fmtPrice(nearestProtect)})` : ""
-            }.`
-          );
+          // Say where the stop should go, with a price, not just which side.
+          exitParts.push(`Put your stop ${aboveWord} your entry. ${stopText}`);
         } else {
           userRisk = Math.abs(planned.stop - center);
           const riskText = priceDistance(userRisk, symbol).text;
@@ -1282,7 +1279,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
             "exit",
             `Planned take profit at ${fmtPrice(planned.target)} is not ${profitWord} your entry (${fmtPrice(center)}).`,
             "Target on the wrong side",
-            { priority: 0, why: WHY.noTarget }
+            { priority: 0, why: "A target on the wrong side can never be reached." }
           );
           exitParts.push(`Put your take profit ${profitWord} your entry. ${ladderText}`);
         } else {
