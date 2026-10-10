@@ -30214,7 +30214,10 @@ app.post("/create-checkout-session", async (req, res) => {
       if (customerUpdate.error) throw customerUpdate.error;
     }
 
-    const trialEligible = profile.trial_used !== true;
+    // No free trial on paid plans: Starter is the free way to try the coach.
+    // Set OFFER_PAID_TRIAL=true on the server to bring the 7-day trial back.
+    const trialEligible =
+      process.env.OFFER_PAID_TRIAL === "true" && profile.trial_used !== true;
 
     const subscriptionData = {
       metadata: {
