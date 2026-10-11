@@ -979,7 +979,11 @@ async function updateProfileFromStripeSubscription(subscription, eventId = "") {
         stripe_price_id: priceId || null,
         current_period_start: stripeTimestampToIso(periodStart),
         current_period_end: stripeTimestampToIso(periodEnd),
-        cancel_at_period_end: subscription.cancel_at_period_end === true,
+        // Newer Stripe API versions can schedule a cancellation with a cancel_at
+        // date instead of setting cancel_at_period_end, so honour either.
+        cancel_at_period_end:
+          subscription.cancel_at_period_end === true ||
+          (Number(subscription.cancel_at) > 0 && mappedStatus !== "cancelled"),
         trial_used: hadTrial,
       };
 
