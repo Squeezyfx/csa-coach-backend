@@ -346,6 +346,25 @@ const PLAN_CONFIG = Object.freeze({
 
 const ACTIVE_SUBSCRIPTION_STATUSES = new Set(["active", "trialing"]);
 
+// A failed renewal keeps paid access for a few days while Stripe retries the card.
+const PAYMENT_GRACE_DAYS = Math.max(
+  0,
+  Number.isFinite(Number(process.env.PAYMENT_GRACE_DAYS)) && process.env.PAYMENT_GRACE_DAYS !== ""
+    ? Number(process.env.PAYMENT_GRACE_DAYS)
+    : 7
+);
+
+// Returns the end of the grace window, or null when there is none. The window
+// starts when the renewal that failed began (current_period_start).
+function paymentGraceEndsAt(profile = {}) {
+  const status = String(profile.subscription_status || "").toLowerCase();
+  if (status !== "past_due" || PAYMENT_GRACE_DAYS <= 0) return null;
+  const start = Date.parse(profile.current_period_start || "");
+  if (!Number.isFinite(start)) return null;
+  const end = start + PAYMENT_GRACE_DAYS * 86400000;
+  return end > Date.now() ? new Date(end).toISOString() : null;
+}
+
 function normalizePlanCode(value = "") {
   const plan = String(value || "").trim().toLowerCase();
   return PLAN_CONFIG[plan] ? plan : "starter";
@@ -396,9 +415,13 @@ async function getUserPlanEntitlement(userId) {
   const basePlan = normalizePlanCode(profile.subscription_plan);
   const subscriptionStatus = String(profile.subscription_status || "active").toLowerCase();
 
-  // Starter remains available without Stripe. Paid plans must be active/trialing.
+  // Starter remains available without Stripe. Paid plans must be active/trialing,
+  // or inside the short grace window after a failed renewal payment.
+  const graceEndsAt = basePlan === "starter" ? null : paymentGraceEndsAt(profile);
   const paidBasePlanActive =
-    basePlan === "starter" || ACTIVE_SUBSCRIPTION_STATUSES.has(subscriptionStatus);
+    basePlan === "starter" ||
+    ACTIVE_SUBSCRIPTION_STATUSES.has(subscriptionStatus) ||
+    Boolean(graceEndsAt);
   const usableBasePlan = paidBasePlanActive ? basePlan : "starter";
 
   const hasActiveBetaOverride =
@@ -446,6 +469,8 @@ async function getUserPlanEntitlement(userId) {
     strategyLimit: planConfig.strategyLimit,
     features: planConfig.features,
     cancelAtPeriodEnd: profile.cancel_at_period_end === true,
+    paymentIssue: basePlan !== "starter" && subscriptionStatus === "past_due",
+    paymentGraceEndsAt: graceEndsAt,
     currentPeriodStart: profile.current_period_start || null,
     currentPeriodEnd: profile.current_period_end || null,
     trialUsed: profile.trial_used === true,
