@@ -1,6 +1,7 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
+import { setCourseAccess } from "./ghl-access.js";
 import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields, supplementLivePeriod } from "./framework-periods.js";
 import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch } from "./candle-alignment.js";
 import { periodCompleteAtCutoff } from "./period-completion.js";
@@ -1027,6 +1028,21 @@ async function updateProfileFromStripeSubscription(subscription, eventId = "") {
     customerId,
     subscriptionId,
   });
+
+  // Bonus course in GoHighLevel follows the subscription: on while a paid plan is
+  // active, off once it has ended. A past-due plan changes nothing here, so the
+  // payment grace period keeps the course too. Best effort, never blocks Stripe.
+  const bonusOn =
+    !subscriptionEnded &&
+    updates.subscription_plan !== "starter" &&
+    ["active", "trialing"].includes(mappedStatus);
+  if (bonusOn || subscriptionEnded) {
+    setCourseAccess({
+      email: result.data?.email || "",
+      name: result.data?.full_name || "",
+      active: bonusOn,
+    }).catch((error) => console.warn("Course access update error:", error?.message || error));
+  }
 
   return result.data;
 }
