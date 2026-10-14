@@ -2,6 +2,15 @@ import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFr
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
 import { setCourseAccess } from "./ghl-access.js";
+import {
+  indicatorLimitFor,
+  normalizeAccountNumber,
+  normalizePlatform,
+  cleanBroker,
+  canRemove,
+  removalAllowedAt,
+  describeAccount,
+} from "./indicator-access.js";
 import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields, supplementLivePeriod } from "./framework-periods.js";
 import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch } from "./candle-alignment.js";
 import { periodCompleteAtCutoff } from "./period-completion.js";
@@ -29814,6 +29823,142 @@ app.get("/account-entitlements", async (req, res) => {
 });
 
 
+
+// ---- Bonus indicator: trading accounts registered by Pro and Elite subscribers ----
+async function loadIndicatorAccounts(userId) {
+  const result = await supabaseAdmin
+    .from("indicator_access")
+    .select("id, account_number, platform, broker, status, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true });
+  if (result.error) throw result.error;
+  return result.data || [];
+}
+
+function indicatorPayload(entitlement, rows) {
+  const limit = indicatorLimitFor(entitlement);
+  return {
+    success: true,
+    eligible: limit > 0,
+    limit,
+    plan: entitlement.basePlan,
+    accounts: rows.map((row) => describeAccount(row, entitlement)),
+  };
+}
+
+function indicatorError(res, error, fallbackType) {
+  const statusCode = Number(error?.statusCode) || 500;
+  return res.status(statusCode).json({
+    success: false,
+    error: statusCode >= 500 ? "The indicator request could not be completed. Please try again." : error.message,
+    errorType: error.errorType || fallbackType,
+  });
+}
+
+app.get("/indicator-access", async (req, res) => {
+  try {
+    const requestAuth = await getRequestUser(req);
+    const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
+    const rows = await loadIndicatorAccounts(requestAuth.user.id);
+    return res.json(indicatorPayload(entitlement, rows));
+  } catch (error) {
+    console.error("Indicator access lookup error:", error?.message || error);
+    return indicatorError(res, error, "indicator_lookup_failed");
+  }
+});
+
+app.post("/indicator-access", async (req, res) => {
+  try {
+    const requestAuth = await getRequestUser(req);
+    const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
+    const limit = indicatorLimitFor(entitlement);
+    if (!limit) {
+      const error = new Error("The indicator is included with an active Pro or Elite subscription.");
+      error.statusCode = 403;
+      error.errorType = "indicator_not_included";
+      throw error;
+    }
+
+    const accountNumber = normalizeAccountNumber(req.body?.accountNumber);
+    const platform = normalizePlatform(req.body?.platform);
+    if (!accountNumber) {
+      const error = new Error("Enter your MT4/MT5 account number: digits only, 4 to 12 of them.");
+      error.statusCode = 400;
+      error.errorType = "invalid_account_number";
+      throw error;
+    }
+    if (!platform) {
+      const error = new Error("Choose MT4 or MT5.");
+      error.statusCode = 400;
+      error.errorType = "invalid_platform";
+      throw error;
+    }
+
+    const existing = await loadIndicatorAccounts(requestAuth.user.id);
+    if (existing.some((row) => row.account_number === accountNumber)) {
+      const error = new Error("That account is already on your list.");
+      error.statusCode = 409;
+      error.errorType = "indicator_account_exists";
+      throw error;
+    }
+    if (existing.length >= limit) {
+      const error = new Error(
+        `Your plan includes the indicator on ${limit} trading account${limit === 1 ? "" : "s"}. Remove one first (accounts can be removed 30 days after they were added), or upgrade for more.`
+      );
+      error.statusCode = 409;
+      error.errorType = "indicator_limit_reached";
+      throw error;
+    }
+
+    const insert = await supabaseAdmin.from("indicator_access").insert({
+      user_id: requestAuth.user.id,
+      account_number: accountNumber,
+      platform,
+      broker: cleanBroker(req.body?.broker) || null,
+    });
+    if (insert.error) throw insert.error;
+
+    console.log(`Indicator access requested: ${requestAuth.user.email || requestAuth.user.id} ${platform} ${accountNumber}`);
+    const rows = await loadIndicatorAccounts(requestAuth.user.id);
+    return res.json(indicatorPayload(entitlement, rows));
+  } catch (error) {
+    console.error("Indicator access add error:", error?.message || error);
+    return indicatorError(res, error, "indicator_add_failed");
+  }
+});
+
+app.delete("/indicator-access/:id", async (req, res) => {
+  try {
+    const requestAuth = await getRequestUser(req);
+    const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
+    const rows = await loadIndicatorAccounts(requestAuth.user.id);
+    const row = rows.find((item) => item.id === req.params.id);
+    if (!row) {
+      const error = new Error("That account was not found on your list.");
+      error.statusCode = 404;
+      error.errorType = "indicator_account_missing";
+      throw error;
+    }
+    if (!canRemove(row.created_at)) {
+      const when = new Date(removalAllowedAt(row.created_at)).toISOString().slice(0, 10);
+      const error = new Error(`This account can be removed from ${when}. Contact support if you need it changed sooner.`);
+      error.statusCode = 403;
+      error.errorType = "indicator_remove_too_soon";
+      throw error;
+    }
+    const removal = await supabaseAdmin
+      .from("indicator_access")
+      .delete()
+      .eq("id", row.id)
+      .eq("user_id", requestAuth.user.id);
+    if (removal.error) throw removal.error;
+    const remaining = rows.filter((item) => item.id !== row.id);
+    return res.json(indicatorPayload(entitlement, remaining));
+  } catch (error) {
+    console.error("Indicator access remove error:", error?.message || error);
+    return indicatorError(res, error, "indicator_remove_failed");
+  }
+});
 
 app.get("/strategies", async (req, res) => {
   try {
