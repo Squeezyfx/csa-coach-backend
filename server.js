@@ -1041,7 +1041,18 @@ async function updateProfileFromStripeSubscription(subscription, eventId = "") {
       email: result.data?.email || "",
       name: result.data?.full_name || "",
       active: bonusOn,
-    }).catch((error) => console.warn("Course access update error:", error?.message || error));
+    })
+      .then((outcome) => {
+        const who = result.data?.email || profile.id;
+        if (outcome?.skipped) {
+          console.warn(`Course access skipped for ${who}: GoHighLevel is not configured (GHL_API_KEY / GHL_LOCATION_ID).`);
+        } else if (outcome?.ok) {
+          console.log(`Course access: ${who} marked ${bonusOn ? "active" : "ended"} in GoHighLevel.`);
+        } else {
+          console.warn(`Course access update failed for ${who}: ${outcome?.error || "unknown error"}`);
+        }
+      })
+      .catch((error) => console.warn("Course access update error:", error?.message || error));
   }
 
   return result.data;
