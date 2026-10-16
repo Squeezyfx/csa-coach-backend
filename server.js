@@ -2,6 +2,7 @@ import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFr
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
 import { setCourseAccess } from "./ghl-access.js";
+import { findHoveredCandleMatch } from "./chart-endpoint-guard.js";
 import {
   indicatorLimitFor,
   normalizeAccountNumber,
@@ -1587,7 +1588,7 @@ Important:
 - Set latestVisibleCandleComplete=true only if visible evidence confirms the final candle has closed. Never infer completion from a bearish/bullish body or a calendar date alone; use null when unknown.
 - When readable, return the latest visible candle time in 24-hour HH:mm format.
 - latestVisibleTime must describe where the uploaded screenshot stops, not the current time and not a later market time.
-- Read the final visible candle OPEN, HIGH, LOW and CLOSE from the top-left chart header when printed. Return all four exact values. latestVisiblePrice must equal latestVisibleClose. Prefer the exact header values over visual wick estimates.
+- Read the final visible candle OPEN, HIGH, LOW and CLOSE from the top-left chart header ONLY when that header belongs to the LAST candle at the right edge of the chart. If a mouse cursor or crosshair is on the chart, the header shows the candle UNDER THE CURSOR, not the last candle. In that case take latestVisibleClose and latestVisiblePrice from the last-price tag on the right-hand price axis (the highlighted label level with the last candle) and return null for latestVisibleOpen, latestVisibleHigh and latestVisibleLow. When the header is clearly the last candle, return all four exact values and prefer them over visual wick estimates. latestVisiblePrice must equal latestVisibleClose.
 - latestVisiblePrice must describe the final candle visible in the uploaded screenshot, not a later external-data price. If the exact final close cannot be read confidently, return null rather than guessing.
 - If the final candle time cannot be read confidently, set latestVisibleTime=null and latestVisibleTimeConfidence="low". Never guess.
 - If the date axis is hard to read, set dateConfidence="low" instead of blocking the chart.
@@ -31118,6 +31119,48 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
       "market_reference_fetch",
       marketReferenceStartedAt
     );
+
+    // A screenshot taken with the mouse over the chart prints the HOVERED candle in
+    // the header. If all four header values match an OLDER candle of the provider's
+    // own data, that header is not the last candle, so its price must not be treated
+    // as the chart's endpoint. (Seen on GBPUSD H1, 2026-10-16: header read 1.3219
+    // from a candle four days back while the chart ended at 1.3358, which flipped
+    // the bias to bearish.)
+    if (
+      marketReference?.ok === true &&
+      normalizeCutoffMode(chartCutoff?.mode || "final_visible") === "final_visible"
+    ) {
+      const hoveredCandle = findHoveredCandleMatch({
+        candles: marketReference.timeframeCandles || [],
+        header: {
+          open: chartDetection?.latestVisibleOpen,
+          high: chartDetection?.latestVisibleHigh,
+          low: chartDetection?.latestVisibleLow,
+          close: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
+        },
+        tolerance: getApprovedPriceTolerance(normalizedSymbol),
+        excludeLast: ["D1", "W1", "MN", "MN1"].includes(timeframe) ? 3 : 48,
+      });
+      if (hoveredCandle) {
+        console.warn("Chart header read an older candle (mouse over chart); ignoring its price:", {
+          hoveredCandle: hoveredCandle.datetime,
+          headerClose: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
+        });
+        chartDetection = {
+          ...chartDetection,
+          latestVisiblePrice: null,
+          latestVisibleClose: null,
+          latestVisibleOpen: null,
+          latestVisibleHigh: null,
+          latestVisibleLow: null,
+          latestVisiblePriceConfidence: "low",
+          hoveredCandleHeaderIgnored: {
+            datetime: hoveredCandle.datetime,
+            reason: "header_ohlc_matches_an_older_provider_candle",
+          },
+        };
+      }
+    }
 
     // FINAL VISIBLE CANDLE synchronization:
     // A sparse time axis can show the last printed date tick before the actual
