@@ -2,7 +2,7 @@ import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFr
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
 import { setCourseAccess } from "./ghl-access.js";
-import { findHoveredCandleMatch } from "./chart-endpoint-guard.js";
+import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
 import {
   indicatorLimitFor,
   normalizeAccountNumber,
@@ -31146,14 +31146,20 @@ app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
           hoveredCandle: hoveredCandle.datetime,
           headerClose: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
         });
+        // Four header values matching a real provider candle prove the provider data
+        // is this chart's own dataset, so the provider's newest close stands in for
+        // the endpoint price. Leaving it empty would make the provider alignment
+        // check reject the whole week ("readable chart price required").
+        const standInClose = providerFinalClose(marketReference.timeframeCandles || []);
         chartDetection = {
           ...chartDetection,
-          latestVisiblePrice: null,
-          latestVisibleClose: null,
+          latestVisiblePrice: standInClose,
+          latestVisibleClose: standInClose,
           latestVisibleOpen: null,
           latestVisibleHigh: null,
           latestVisibleLow: null,
-          latestVisiblePriceConfidence: "low",
+          latestVisiblePriceConfidence: standInClose ? "medium" : "low",
+          latestVisiblePriceSource: standInClose ? "provider_final_close_after_hover_header" : null,
           hoveredCandleHeaderIgnored: {
             datetime: hoveredCandle.datetime,
             reason: "header_ohlc_matches_an_older_provider_candle",

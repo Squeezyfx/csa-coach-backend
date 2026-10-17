@@ -44,3 +44,10 @@ test("a close on its own is not enough evidence", () => {
   const hit = findHoveredCandleMatch({ candles, header: { close: 1.3219 }, tolerance: 0.0006 });
   assert.equal(hit, null);
 });
+
+import { providerFinalClose } from "../chart-endpoint-guard.js";
+
+test("the provider's newest close stands in for a hovered header", () => {
+  assert.equal(providerFinalClose([...candles].reverse()), 1.33582);
+  assert.equal(providerFinalClose([]), null);
+});

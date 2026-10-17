@@ -34,3 +34,12 @@ export function findHoveredCandleMatch({
   }
   return best;
 }
+
+// Close of the newest provider candle, used as the chart's endpoint price once a
+// hovered header has proved the provider data is the chart's own dataset.
+export function providerFinalClose(candles = []) {
+  const rows = (Array.isArray(candles) ? candles : [])
+    .filter((c) => c?.datetime && finite(c?.close))
+    .sort((a, b) => String(a.datetime).localeCompare(String(b.datetime)));
+  return rows.length ? Number(rows[rows.length - 1].close) : null;
+}
