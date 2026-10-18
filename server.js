@@ -26844,6 +26844,12 @@ function buildValidatedAnalysisFacts({
     analysisType,
     chartMarkingStatus,
     userEvidence: {
+      // The trader picked the right pair and timeframe for the chart they uploaded.
+      contextMatched:
+        isDetectedInstrumentUsable(chartDetection?.detectedInstrument) &&
+        comparableInstrument(chartDetection?.detectedInstrument) === comparableInstrument(submittedInstrument) &&
+        String(chartDetection?.detectedTimeframe || "").trim().toUpperCase() === String(timeframe || "").trim().toUpperCase() &&
+        String(timeframe || "").trim() !== "",
       chartMarked: chartMarkingStatus === "marked",
       preferredAreaMarked,
       visibleMarkedLevelCount: visibleUserMarkedLevels.length,
@@ -28330,6 +28336,13 @@ function buildControlledFeedback({
       { short: "Levels marked on chart" }
     );
   }
+  if (userEvidence.contextMatched) {
+    addStrength(
+      "entry",
+      `You set the right pair and timeframe (${chartScope}), so this review matches your chart.`,
+      { short: "Pair and timeframe match" }
+    );
+  }
   // Strengths credit what the TRADER did (marked the framework's area, wrote a
   // matching plan, placed a sound trade). What the framework finds on its own
   // (Entry 1, the backup area, the direction) is not the trader's doing, so it
@@ -28444,7 +28457,11 @@ function buildControlledFeedback({
       { short: "Entry area failed" }
     );
   } else {
-    if (!area.areaRetested && !hasExecutedOrder) {
+    // A post-trade review with no trade on the chart has nothing of the trader's to
+    // judge, so the framework's "not retested / no trigger yet" notes are left to
+    // Next action and Setup readiness rather than listed as weaknesses.
+    const noTradeToJudge = isPostTrade && !facts.trade.visible;
+    if (!area.areaRetested && !hasExecutedOrder && !noTradeToJudge) {
       addWeakness(
         "entry",
         area.areaType === "converted resistance"
@@ -28456,7 +28473,7 @@ function buildControlledFeedback({
       );
     }
 
-    if (!area.triggerPresent && !hasExecutedOrder) {
+    if (!area.triggerPresent && !hasExecutedOrder && !noTradeToJudge) {
       addWeakness(
         "trigger",
         area.areaType === "converted resistance"
