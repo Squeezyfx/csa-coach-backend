@@ -393,6 +393,11 @@ const READINESS_REMINDERS = [
   /^Trade: No trade is marked on this chart\./i,
   /^Entry area: Price hasn't returned to the planned .+ area yet\.?$/i,
   /^Entry trigger: No (?:bullish|bearish) trigger candle at the planned .+ area yet\.?$/i,
+  // Fixed "what is missing and why" lines for a chart with no trade, stop, target or plan marked.
+  /^Entry area: (?:No entry area or entry point is marked|Nothing is marked on this chart)/i,
+  /^Exit: No stop loss or take profit is marked/i,
+  /^Risk: Risk can't be checked yet/i,
+  /^Trade management: (?:No trade is shown|There is no trade to manage|Nothing on the chart shows)/i,
 ];
 const isReadinessReminder = (text) =>
   READINESS_REMINDERS.some((pattern) => pattern.test(String(text || "").trim()));
