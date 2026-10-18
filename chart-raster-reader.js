@@ -39,6 +39,10 @@ export function decodePng8(buffer) {
   }
   const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : colorType === 0 ? 1 : 0;
   if (!width || !height || bitDepth !== 8 || interlace !== 0 || !channels || !idat.length) return null;
+  // The pixel reader needs width x height x 4 bytes of memory (plus a decompressed copy).
+  // Skip it for very large images (over ~16 megapixels) instead of risking the server's
+  // memory; the chart is still reviewed, only this optional pixel reading is skipped.
+  if (width * height > 16000000) return null;
   const packed = inflateSync(Buffer.concat(idat));
   const stride = width * channels;
   if (packed.length < (stride + 1) * height) return null;
