@@ -3,6 +3,7 @@ import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
 import { setCourseAccess } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
+import { createAnalysisSlots } from "./analysis-slots.js";
 import {
   indicatorLimitFor,
   normalizeAccountNumber,
@@ -11863,8 +11864,10 @@ function auditXauHistoricalBenchmark({
   };
 }
 
-const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const ANALYSIS_CACHE_MAX_ITEMS = 100;
+// Each cached response can be several hundred KB (it carries the provider candles),
+// so the cache is kept small: it only exists to answer an immediate re-upload.
+const ANALYSIS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const ANALYSIS_CACHE_MAX_ITEMS = 20;
 const completedAnalysisCache = new Map();
 
 function createAnalysisFingerprint({
@@ -30674,7 +30677,40 @@ app.get("/sample-analysis", (req, res) => {
   });
 });
 
-app.post("/analyze-chart", upload.single("chart"), async (req, res) => {
+// Memory guard: only a few analyses may run at once (set ANALYSIS_CONCURRENCY on the
+// server to change it; 1 is the safest on a 512 MB plan). Others wait their turn.
+const analysisSlots = createAnalysisSlots({
+  max: Math.max(1, Number(process.env.ANALYSIS_CONCURRENCY) || 2),
+  maxWaitMs: 120000,
+});
+
+function memoryLine(label) {
+  const usage = process.memoryUsage();
+  const mb = (value) => Math.round(value / 1048576);
+  const slots = analysisSlots.stats();
+  return `CSA MEMORY ${label}: rss=${mb(usage.rss)}MB heap=${mb(usage.heapUsed)}MB external=${mb(usage.external)}MB analyses=${slots.active} waiting=${slots.waiting} cache=${completedAnalysisCache.size}`;
+}
+
+// A reading every 5 minutes shows whether memory climbs steadily (a leak) or only
+// jumps while analyses run (large screenshots). Search the logs for "CSA MEMORY".
+setInterval(() => console.log(memoryLine("idle-check")), 5 * 60 * 1000).unref();
+
+const analysisSlotMiddleware = analysisSlots.middleware((req, res) =>
+  res.status(503).json({
+    success: false,
+    errorType: "server_busy",
+    error: "The coach is busy reviewing other charts right now. Please try again in a minute.",
+  })
+);
+
+app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
+  const startedRss = process.memoryUsage().rss;
+  res.on("finish", () => {
+    const rssNow = process.memoryUsage().rss;
+    console.log(memoryLine(`after-analysis (started at ${Math.round(startedRss / 1048576)}MB)`));
+  });
+  next();
+}, upload.single("chart"), async (req, res) => {
   try {
     const benchmarkDryRun = isAuthorizedBenchmarkDryRun(req);
     const requestAuth = benchmarkDryRun
