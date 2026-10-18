@@ -28329,33 +28329,42 @@ function buildControlledFeedback({
       "You marked levels on the chart, which makes review easier.",
       { short: "Levels marked on chart" }
     );
-  } else if (hasValidatedArea) {
-    addStrength(
+  }
+  // Strengths credit what the TRADER did (marked the framework's area, wrote a
+  // matching plan, placed a sound trade). What the framework finds on its own
+  // (Entry 1, the backup area, the direction) is not the trader's doing, so it
+  // lives in "Next action" and "Chart levels" and is not listed as a strength
+  // when nothing on the chart or in the notes shows the trader got there.
+
+  // The trader marked levels, but the framework's first area is not among them:
+  // say so, case by case, instead of crediting the marks.
+  if (
+    userEvidence.chartMarked &&
+    !userEvidence.preferredAreaMarked &&
+    hasValidatedArea &&
+    !isPostTrade &&
+    !facts.plannedTrade
+  ) {
+    addWeakness(
       "entry",
-      `Entry 1 is the ${areaText}. It passed all the framework's checks.`,
-      { short: "Valid entry area found" }
-    );
-  } else {
-    addStrength(
-      "entry",
-      weeklyDataIncomplete
-        ? `The weekly direction reads ${directionText}, but entry areas could not be worked out for this chart.`
-        : `The direction is clear (${directionText}), but no entry area has passed the checks yet.`,
-      { short: "Direction clear" }
+      `Your marked levels don't include the framework's first area, the ${areaText}.`,
+      { short: "Marked levels miss the first area" }
     );
   }
 
-  if (selectedSecondaryArea && secondaryAreaText) {
-    addStrength(
+  // Pre-trade with nothing marked and no plan typed: there is nothing of the
+  // trader's own to review yet, so say that plainly.
+  if (
+    !isPostTrade &&
+    !userEvidence.chartMarked &&
+    !facts.trade.visible &&
+    !facts.plannedTrade &&
+    !userEvidence.entryPlanDescribed
+  ) {
+    addWeakness(
       "entry",
-      `Backup area: ${secondaryAreaText}. Used only if the first fails.`,
-      { short: "Backup area ready" }
-    );
-  } else if (hasValidatedArea) {
-    addStrength(
-      "entry",
-      `Only the ${areaText} qualified. Weaker levels were left out.`,
-      { short: "One clean entry area" }
+      "Nothing is marked on this chart and no planned entry, stop or target was typed in, so only the framework's view is shown. Add them to get a check of your own plan.",
+      { short: "No plan marked yet" }
     );
   }
 
