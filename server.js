@@ -28371,7 +28371,6 @@ function buildControlledFeedback({
   // Pre-trade with nothing marked and no plan typed: there is nothing of the
   // trader's own to review yet, so say that plainly.
   if (
-    !isPostTrade &&
     !userEvidence.chartMarked &&
     !facts.trade.visible &&
     !facts.plannedTrade &&
@@ -28379,8 +28378,10 @@ function buildControlledFeedback({
   ) {
     addWeakness(
       "entry",
-      "Nothing is marked on this chart and no planned entry, stop or target was typed in, so only the framework's view is shown. Add them to get a check of your own plan.",
-      { short: "No plan marked yet" }
+      isPostTrade
+        ? "No entry area or entry point is marked on this chart, so your entry can't be compared with the framework's view. Mark your entry, stop loss and take profit to get feedback on your own trade."
+        : "Nothing is marked on this chart and no planned entry, stop or target was typed in, so only the framework's view is shown. Add them to get a check of your own plan.",
+      { short: isPostTrade ? "No entry marked" : "No plan marked yet" }
     );
   }
 

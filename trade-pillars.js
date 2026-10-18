@@ -1449,6 +1449,64 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     if (preTrade && dir && center !== null) next.note = PLAN_NOTE;
   }
 
+  // Every review speaks to the same key parts of a trade, so a trader learns what
+  // each chart needs to show. When the chart (or the typed plan) gives nothing to
+  // judge for one of them, say so and say why, instead of staying silent.
+  {
+    const covered = (pillar) =>
+      strengths.some((item) => item.pillar === pillar) || weaknesses.some((item) => item.pillar === pillar);
+    const preTradeMode = facts?.analysisType === "pre-trade";
+    const noTradeShown = !tradeVisible && !order;
+    const stopKnown = stopShown || planned.stop !== null || num(order?.stopPrice) !== null;
+    const targetKnown = targetShown || planned.target !== null || num(order?.targetPrice) !== null;
+
+    if (!covered("exit") && !stopKnown && !targetKnown) {
+      add(
+        weaknesses,
+        "exit",
+        noTradeShown && !preTradeMode
+          ? "No stop loss or take profit is marked, because no trade is shown on the chart, so your exit can't be checked."
+          : "No stop loss or take profit is marked on the chart or typed in, so your exit can't be checked.",
+        "No stop loss or take profit",
+        { priority: 0, why: WHY.noStop }
+      );
+    }
+
+    if (!covered("risk")) {
+      const inputs = readRiskInputs(facts);
+      const reasons = [];
+      if (!stopKnown && !targetKnown) reasons.push("there is no stop loss or take profit to measure it from");
+      else if (!stopKnown) reasons.push("there is no stop loss to measure it from");
+      else if (!targetKnown) reasons.push("there is no take profit to compare it with");
+      if (inputs.balance === null && inputs.lots === null) reasons.push("no account balance or lot size was entered");
+      else if (inputs.balance === null) reasons.push("no account balance was entered");
+      else if (inputs.lots === null) reasons.push("no lot size was entered");
+      if (reasons.length) {
+        add(
+          weaknesses,
+          "risk",
+          `Risk can't be checked yet: ${reasons.join(", and ")}.`,
+          "Risk can't be checked yet",
+          { priority: 0, why: "Aim for 1.5 to 2 times more reward than risk, and risk only a small share of your account." }
+        );
+      }
+    }
+
+    if (!covered("management")) {
+      add(
+        weaknesses,
+        "management",
+        noTradeShown
+          ? preTradeMode
+            ? "There is no trade to manage yet. Decide in advance when you would move your stop to breakeven, take some profit or trail your stop."
+            : "No trade is shown, so trade management (moving your stop to breakeven, taking partial profit, trailing your stop) can't be reviewed."
+          : "Nothing on the chart shows how you managed the trade: moving the stop to breakeven, taking partial profit or trailing the stop.",
+        "Trade management not shown",
+        { priority: 0 }
+      );
+    }
+  }
+
   // Mistakes the trader actually made on a placed trade, in the same words the
   // Mistake Detection Hub and the journal's progress tracking use, worst first.
   const mistakes = [];

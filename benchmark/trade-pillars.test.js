@@ -120,7 +120,11 @@ test("with no placed trade the five pillars become a plan", () => {
   };
   const { strengths, weaknesses, next } = run(facts, eurusdArea);
   assert.deepEqual(strengths, []);
-  assert.deepEqual(weaknesses, []);
+  // Nothing marked: each missing part is named, with the reason, so the trader
+  // learns what the chart needs to show.
+  assert.ok(has(weaknesses, "Exit: No stop loss or take profit is marked"));
+  assert.ok(has(weaknesses, "Risk: Risk can't be checked yet"));
+  assert.ok(has(weaknesses, "Trade management:"));
   assert.match(next.trigger, /bearish engulfing candle/);
   assert.match(next.exit, /Take profit: the next key low at 1\.13110/);
   assert.match(next.risk, /1\.5 times/);
@@ -335,7 +339,7 @@ test("risk per trade is called out as unknown when balance and lot size are miss
     eurusdArea
   );
   assert.match(plan.next.risk, /Add your account balance and lot size/);
-  assert.deepEqual(plan.weaknesses, []);
+  assert.ok(has(plan.weaknesses, "Risk: Risk can't be checked yet"));
 });
 
 test("account risk is worked out from balance, lot size and stop distance", () => {
@@ -929,4 +933,34 @@ test("the first-target skip rule is left out once price is already past that tar
   // no price known: keep the rule
   const unknown = assess(planned(1.131, 1.134, 1.124, { currentPrice: null }));
   assert.match(unknown.next.cancel, /your first take profit/);
+});
+
+const bareChart = (analysisType) => ({
+  instrument: "USDCAD",
+  timeframe: "M15",
+  direction: "bullish",
+  analysisType,
+  trade: { visible: false },
+  currentPrice: 1.4187,
+  risk: { stopShown: false, targetShown: false },
+});
+
+test("a chart with nothing marked still says what is missing for stop, target, risk and management", () => {
+  const { weaknesses } = run(bareChart("post-trade"), { direction: "buy", authoritativeCenter: 1.41771 });
+  assert.ok(has(weaknesses, "Exit: No stop loss or take profit is marked, because no trade is shown"));
+  assert.ok(has(weaknesses, "Risk: Risk can't be checked yet: there is no stop loss or take profit to measure it from, and no account balance or lot size was entered."));
+  assert.ok(has(weaknesses, "Trade management: No trade is shown, so trade management"));
+});
+
+test("the pre-trade wording asks for a plan instead of blaming a missing trade", () => {
+  const { weaknesses } = run(bareChart("pre-trade"), { direction: "buy", authoritativeCenter: 1.41771 });
+  assert.ok(has(weaknesses, "Exit: No stop loss or take profit is marked on the chart or typed in"));
+  assert.ok(has(weaknesses, "Trade management: There is no trade to manage yet. Decide in advance"));
+});
+
+test("risk names only what is actually missing when the stop and target are known", () => {
+  const facts = { ...bareChart("post-trade"), risk: { stopShown: true, targetShown: true }, riskInputs: { balance: 5000, lots: null } };
+  const { weaknesses } = run(facts, { direction: "buy", authoritativeCenter: 1.41771 });
+  assert.ok(has(weaknesses, "Risk: Risk can't be checked yet: no lot size was entered."));
+  assert.ok(!has(weaknesses, "Exit: No stop loss or take profit"));
 });
