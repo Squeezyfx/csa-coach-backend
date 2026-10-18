@@ -28855,7 +28855,14 @@ function buildControlledFeedback({
       ? `- Tertiary area: ${tertiaryAreaText}.`
       : "- No separate tertiary area was confirmed.",
     `- Area status: ${area.lifecycleStatus.replace(/_/g, " ")}.`,
-    facts.convertedLevel.detected
+    // The entry area itself can be a converted level (a previous high that price
+    // has traded above, now acting as support, or the mirror). Say so, instead of
+    // reporting "no converted level" right under a primary area that is one.
+    hasValidatedArea && /^converted (support|resistance)$/i.test(String(area.areaType || ""))
+      ? `- Converted level: ${safeUserText(area.levelText || "") || formatPrice(area.authoritativeCenter)} is a former ${
+          /support/i.test(area.areaType) ? "resistance now acting as support" : "support now acting as resistance"
+        }${area.areaRetested ? "." : ", not yet retested."}`
+      : facts.convertedLevel.detected
       ? `- Converted level: ${facts.convertedLevel.state.replace(/_/g, " ")}.`
       : "- No converted level was confirmed from the available evidence.",
     "",
