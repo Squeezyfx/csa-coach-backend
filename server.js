@@ -28196,7 +28196,7 @@ function buildControlledFeedback({
     facts?.selectorDiagnostics?.fibonacci?.source === "not_available";
   const weeklyDataIncomplete = weeklyDataIncompleteW1 || newWeekStart;
   const weeklyIncompleteAdvice = newWeekStart
-    ? "More price action is needed as the week develops. Review the chart again once the first day has closed."
+    ? "Review the chart again once the first day of the week has closed."
     : "Try the daily chart for entries, or run this weekly chart again after the quarter's first full week.";
 
   const secondaryAreaText =
@@ -28439,7 +28439,7 @@ function buildControlledFeedback({
     addWeakness(
       "entry",
       newWeekStart
-        ? "There is not enough price action this week yet, so there is no directional bias and no entry area. More information is needed as the week develops."
+        ? "There is not enough price action this week yet, so there is no directional bias and no entry area. More is needed as the week develops."
         : "This weekly review is incomplete: the quarter doesn't have enough weekly data yet, so no entry area could be worked out.",
       { short: newWeekStart ? "No bias or entry yet" : "Weekly data incomplete", why: weeklyIncompleteAdvice }
     );
@@ -28614,7 +28614,7 @@ function buildControlledFeedback({
 
   if (weeklyDataIncomplete) {
     nextAction = newWeekStart
-      ? `No entry area yet: there is not enough price action this week. ${weeklyIncompleteAdvice}`
+      ? `No entry area yet, because there is not enough price action this week. ${weeklyIncompleteAdvice}`
       : `Weekly entry areas aren't available for this chart yet. ${weeklyIncompleteAdvice}`;
   } else if (!hasValidatedArea) {
     nextAction =
@@ -28911,7 +28911,9 @@ function buildControlledFeedback({
     tertiaryAreaText
       ? `- Tertiary area: ${tertiaryAreaText}.`
       : "- No separate tertiary area was confirmed.",
-    `- Area status: ${area.lifecycleStatus.replace(/_/g, " ")}.`,
+    hasValidatedArea
+      ? `- Area status: ${area.lifecycleStatus.replace(/_/g, " ")}.`
+      : "- Area status: there is no entry area to track yet.",
     // Plain words for a beginner: a level price broke through can switch roles,
     // so a former ceiling becomes a floor (or the other way round).
     hasValidatedArea && /^converted (support|resistance)$/i.test(String(area.areaType || ""))
@@ -28925,12 +28927,12 @@ function buildControlledFeedback({
     "SETUP READINESS:",
     // These describe the framework's planned entry, not the trader's own
     // trade, so say which level they refer to.
-    `- ${hasExecutedOrder ? "Next planned entry area" : "Planned entry area"}${
-      hasValidatedArea
-        ? ` (${safeUserText(area.levelText || "") || formatPrice(area.authoritativeCenter)})`
-        : ""
-    }: ${area.areaRetested ? "price has reached it" : "price has not reached it yet"}.`,
-    `- Trigger candle at that area: ${area.triggerPresent ? "yes" : "not yet"}.`,
+    hasValidatedArea
+      ? `- ${hasExecutedOrder ? "Next planned entry area" : "Planned entry area"} (${safeUserText(area.levelText || "") || formatPrice(area.authoritativeCenter)}): ${area.areaRetested ? "price has reached it" : "price has not reached it yet"}.`
+      : "- Planned entry area: none yet, so there is nothing for price to reach.",
+    hasValidatedArea
+      ? `- Trigger candle at that area: ${area.triggerPresent ? "yes" : "not yet"}.`
+      : "- Trigger candle: not applicable until there is an entry area.",
     `- Stop loss marked on the chart: ${
       facts.risk.stopShown ? "yes" : Number(facts?.plannedTrade?.stop) > 0 ? "no (the stop you typed is checked above)" : "no"
     }.`,
@@ -28943,8 +28945,12 @@ function buildControlledFeedback({
     ...proSections,
     "",
     "ADVANCED COACHING:",
-    `- Confluence strength: ${facts.confluence.strength}.`,
-    `- Area lifecycle: ${area.lifecycleStatus.replace(/_/g, " ")}.`,
+    hasValidatedArea
+      ? `- Confluence strength: ${facts.confluence.strength}.`
+      : "- Confluence strength: not available without an entry area.",
+    hasValidatedArea
+      ? `- Area lifecycle: ${area.lifecycleStatus.replace(/_/g, " ")}.`
+      : "- Area lifecycle: not available without an entry area.",
     facts.trade.visible
       ? `- Trade outcome: ${facts.trade.outcome.replace(/_/g, " ")}.`
       : "- No executed trade was clearly visible, so outcome quality was not judged.",
