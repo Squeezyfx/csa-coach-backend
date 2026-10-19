@@ -28196,7 +28196,7 @@ function buildControlledFeedback({
     facts?.selectorDiagnostics?.fibonacci?.source === "not_available";
   const weeklyDataIncomplete = weeklyDataIncompleteW1 || newWeekStart;
   const weeklyIncompleteAdvice = newWeekStart
-    ? "Wait until the first day of the week has closed, then review the chart again."
+    ? "More price action is needed as the week develops. Review the chart again once the first day has closed."
     : "Try the daily chart for entries, or run this weekly chart again after the quarter's first full week.";
 
   const secondaryAreaText =
@@ -28299,7 +28299,7 @@ function buildControlledFeedback({
     referenceAreaTexts[0] || "";
 
   const directionText = newWeekStart
-    ? "Not clear yet: a new week has just started"
+    ? "No directional bias yet. More price action is needed as the week develops."
     : directionDisplay(facts);
   const action = area.direction === "sell" ? "sell" : area.direction === "buy" ? "buy" : "trade";
   const opposingLevel = facts.direction === "bearish" ? "support" : "resistance";
@@ -28439,9 +28439,9 @@ function buildControlledFeedback({
     addWeakness(
       "entry",
       newWeekStart
-        ? "A new week has just started and no day of it has finished, so the bias and the entry areas aren't clear yet."
+        ? "There is not enough price action this week yet, so there is no directional bias and no entry area. More information is needed as the week develops."
         : "This weekly review is incomplete: the quarter doesn't have enough weekly data yet, so no entry area could be worked out.",
-      { short: newWeekStart ? "New week: no entry yet" : "Weekly data incomplete", why: weeklyIncompleteAdvice }
+      { short: newWeekStart ? "No bias or entry yet" : "Weekly data incomplete", why: weeklyIncompleteAdvice }
     );
   }
 
@@ -28614,7 +28614,7 @@ function buildControlledFeedback({
 
   if (weeklyDataIncomplete) {
     nextAction = newWeekStart
-      ? `No entry area yet: a new week has just started and no day of it has finished. ${weeklyIncompleteAdvice}`
+      ? `No entry area yet: there is not enough price action this week. ${weeklyIncompleteAdvice}`
       : `Weekly entry areas aren't available for this chart yet. ${weeklyIncompleteAdvice}`;
   } else if (!hasValidatedArea) {
     nextAction =
@@ -28775,7 +28775,7 @@ function buildControlledFeedback({
   let entryPlan;
   if (weeklyDataIncomplete) {
     entryPlan = newWeekStart
-      ? `No entry area yet: a new week has just started. ${weeklyIncompleteAdvice}`
+      ? `No entry area yet: there is not enough price action this week. ${weeklyIncompleteAdvice}`
       : `Weekly entries aren't available yet. ${weeklyIncompleteAdvice}`;
   } else if (!hasValidatedArea) {
     entryPlan = referenceAreasText
