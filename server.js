@@ -31199,17 +31199,40 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       marketReference?.ok === true &&
       normalizeCutoffMode(chartCutoff?.mode || "final_visible") === "final_visible"
     ) {
-      const hoveredCandle = findHoveredCandleMatch({
-        candles: marketReference.timeframeCandles || [],
-        header: {
-          open: chartDetection?.latestVisibleOpen,
-          high: chartDetection?.latestVisibleHigh,
-          low: chartDetection?.latestVisibleLow,
-          close: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
-        },
-        tolerance: getApprovedPriceTolerance(normalizedSymbol),
-        excludeLast: ["D1", "W1", "MN", "MN1"].includes(timeframe) ? 3 : 48,
-      });
+      // The header is only suspect when its close is far from the provider's newest
+      // close (a real last-candle header agrees with it). That makes it safe to match
+      // against ANY older candle with a tolerance that also covers a small feed
+      // difference: gold or an index on the chart's broker feed can differ from the
+      // provider's by a few tenths, which the exact-pip tolerance alone would miss
+      // (seen on XAUUSD H1, 2026-10-19).
+      const providerNewestClose = providerFinalClose(marketReference.timeframeCandles || []);
+      const headerCloseValue = Number(chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice);
+      const approvedTolerance = getApprovedPriceTolerance(normalizedSymbol);
+      const headerFarFromProvider =
+        providerNewestClose !== null &&
+        Number.isFinite(headerCloseValue) &&
+        headerCloseValue > 0 &&
+        Math.abs(headerCloseValue - providerNewestClose) > approvedTolerance * 3;
+      const hoveredCandle = headerFarFromProvider
+        ? findHoveredCandleMatch({
+            candles: marketReference.timeframeCandles || [],
+            header: {
+              open: chartDetection?.latestVisibleOpen,
+              high: chartDetection?.latestVisibleHigh,
+              low: chartDetection?.latestVisibleLow,
+              close: headerCloseValue,
+            },
+            tolerance: Math.max(approvedTolerance, providerNewestClose * 0.0002),
+            excludeLast: 1,
+          })
+        : null;
+      if (headerFarFromProvider && !hoveredCandle) {
+        console.warn("Chart header close is far from the provider's newest close and matches no older candle:", {
+          headerClose: headerCloseValue,
+          providerNewestClose,
+          tolerance: Math.max(approvedTolerance, providerNewestClose * 0.0002),
+        });
+      }
       if (hoveredCandle) {
         console.warn("Chart header read an older candle (mouse over chart); ignoring its price:", {
           hoveredCandle: hoveredCandle.datetime,
