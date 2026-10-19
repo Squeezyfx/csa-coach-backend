@@ -174,3 +174,33 @@ export function resolveDeepRetracementDirectionOverride({periods=[],threshold=0.
     swingHighKey:valid[highIndex].key,swingLowKey:valid[lowIndex].key,
     source:"deep_retracement_past_threshold_of_framing_swing"};
 }
+
+/** The start of a trading week, before any day of it has finished.
+ * An intraday chart (M1-H1) that ends on a Monday, the Sunday-evening open, the weekend, or the
+ * Friday close (market closed) is between weeks: the week that ended is over and the new one has
+ * no finished day, so neither a bias nor an entry is clear yet. A Friday chart only counts when its
+ * final candle time is readable and from 20:00 UTC (the last hours before the close).
+ * Returns { active, reason } or null. Crypto trades every day, so it never applies. */
+export function newWeekWithoutCompletedDay({timeframe,resolvedDate,selectedDate="",lastVisibleTime="",tradesOnWeekends=false}={}) {
+  if(tradesOnWeekends) return null;
+  const profile=frameworkProfile(timeframe);
+  if(!profile||profile.range!=="week") return null;
+  const resolved=parseCalendarDate(resolvedDate);
+  if(!resolved) return null;
+  const day=resolved.getUTCDay();
+  if(day===0) return {active:true,reason:"sunday_evening_open"};
+  if(day===1) return {active:true,reason:"monday_no_completed_day"};
+  if(day===6) return {active:true,reason:"weekend_market_closed"};
+  if(day===5) {
+    const match=/^(\d{2}):(\d{2})/.exec(String(lastVisibleTime||"").trim());
+    if(match&&Number(match[1])>=20) return {active:true,reason:"friday_close_market_closed"};
+  }
+  // A chart that stops at the end of last week while the trader is reviewing it on a Monday is
+  // between weeks too, even when the final candle's time could not be read.
+  if(day===5) {
+    const selected=parseCalendarDate(selectedDate);
+    const gapDays=selected?Math.round((+selected-+resolved)/DAY):0;
+    if(selected&&selected.getUTCDay()===1&&gapDays>0&&gapDays<=3) return {active:true,reason:"chart_ends_before_selected_monday"};
+  }
+  return null;
+}

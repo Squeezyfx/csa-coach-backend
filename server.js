@@ -16,7 +16,7 @@ import {
 import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields, supplementLivePeriod } from "./framework-periods.js";
 import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch } from "./candle-alignment.js";
 import { periodCompleteAtCutoff } from "./period-completion.js";
-import { resolveFrameworkBias, calendarMapping } from "./framework-calendar.js";
+import { resolveFrameworkBias, calendarMapping, newWeekWithoutCompletedDay } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
 import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData, isCryptoSymbol } from "./market-data-matching.js";
@@ -26840,8 +26840,29 @@ function buildValidatedAnalysisFacts({
       ? "pullback"
       : "trend";
 
+  // The start of a trading week (Sunday-evening open or Monday): no day of the week has
+  // finished, so the bias and entry areas are not clear yet.
+  const newWeekStart =
+    finalVisibleMode && !historicalCutoff?.active
+      ? newWeekWithoutCompletedDay({
+          timeframe,
+          resolvedDate:
+            marketReference?.chartCutoff?.resolvedDate ||
+            chartDetection?.latestVisibleDate ||
+            "",
+          selectedDate,
+          // The final candle's time is only trusted when the cutoff was read exactly.
+          lastVisibleTime:
+            marketReference?.chartCutoff?.exactVisibleCutoff === true
+              ? String(marketReference?.chartCutoff?.endDateTime || "").slice(11, 16)
+              : "",
+          tradesOnWeekends: isCryptoSymbol(submittedInstrument),
+        })
+      : null;
+
   return {
     engineVersion: CSA_FEEDBACK_ENGINE_VERSION,
+    newWeekStart,
     instrument: submittedInstrument,
     timeframe,
     analysisType,
@@ -28127,10 +28148,13 @@ function buildControlledFeedback({
   analysisFramework = "csa",
   personalStrategyAssessment = null,
 }) {
-  const selectedEntryAreas =
-    getCanonicalSelectedEntryAreas(
-      facts
-    );
+  // A new trading week with no finished day: no bias and no entry yet.
+  const newWeekStart = facts?.newWeekStart?.active === true;
+  const selectedEntryAreas = newWeekStart
+    ? []
+    : getCanonicalSelectedEntryAreas(
+        facts
+      );
 
   const selectedPrimaryArea =
     selectedEntryAreas[0] ||
@@ -28165,13 +28189,15 @@ function buildControlledFeedback({
   // candle yet) comes back with no usable direction and no Fibonacci frame.
   // That is a data gap, not "no good entry", so say so instead of giving
   // entry-area advice that is built on nothing.
-  const weeklyDataIncomplete =
+  const weeklyDataIncompleteW1 =
     String(facts?.timeframe || "").toUpperCase() === "W1" &&
     !hasValidatedArea &&
     facts?.selectorDiagnostics?.fallbackSource === "no_entry_direction_unresolved" &&
     facts?.selectorDiagnostics?.fibonacci?.source === "not_available";
-  const weeklyIncompleteAdvice =
-    "Try the daily chart for entries, or run this weekly chart again after the quarter's first full week.";
+  const weeklyDataIncomplete = weeklyDataIncompleteW1 || newWeekStart;
+  const weeklyIncompleteAdvice = newWeekStart
+    ? "Wait until the first day of the week has closed, then review the chart again."
+    : "Try the daily chart for entries, or run this weekly chart again after the quarter's first full week.";
 
   const secondaryAreaText =
     selectedSecondaryArea
@@ -28212,7 +28238,9 @@ function buildControlledFeedback({
   // references (score >= 35), including the AUDUSD 0.70104 and 0.69845
   // benchmarks, while suppressing low-evidence anchors such as XAUUSD 4019.20
   // (score 28). When no entry qualifies, retain the wider fallback path.
-  const coachingReferenceAreas = hasValidatedArea
+  const coachingReferenceAreas = newWeekStart
+    ? []
+    : hasValidatedArea
     ? referenceAreas.filter(
         (reference) => Number(reference?.structuralScore || 0) >= 35
       )
@@ -28270,7 +28298,9 @@ function buildControlledFeedback({
   const closestReferenceAreaText =
     referenceAreaTexts[0] || "";
 
-  const directionText = directionDisplay(facts);
+  const directionText = newWeekStart
+    ? "Not clear yet: a new week has just started"
+    : directionDisplay(facts);
   const action = area.direction === "sell" ? "sell" : area.direction === "buy" ? "buy" : "trade";
   const opposingLevel = facts.direction === "bearish" ? "support" : "resistance";
   const triggerSide = facts.direction === "bearish" ? "bearish" : facts.direction === "bullish" ? "bullish" : "valid";
@@ -28408,8 +28438,10 @@ function buildControlledFeedback({
   if (weeklyDataIncomplete) {
     addWeakness(
       "entry",
-      "This weekly review is incomplete: the quarter doesn't have enough weekly data yet, so no entry area could be worked out.",
-      { short: "Weekly data incomplete", why: weeklyIncompleteAdvice }
+      newWeekStart
+        ? "A new week has just started and no day of it has finished, so the bias and the entry areas aren't clear yet."
+        : "This weekly review is incomplete: the quarter doesn't have enough weekly data yet, so no entry area could be worked out.",
+      { short: newWeekStart ? "New week: no entry yet" : "Weekly data incomplete", why: weeklyIncompleteAdvice }
     );
   }
 
@@ -28581,7 +28613,9 @@ function buildControlledFeedback({
   let nextAction;
 
   if (weeklyDataIncomplete) {
-    nextAction = `Weekly entry areas aren't available for this chart yet. ${weeklyIncompleteAdvice}`;
+    nextAction = newWeekStart
+      ? `No entry area yet: a new week has just started and no day of it has finished. ${weeklyIncompleteAdvice}`
+      : `Weekly entry areas aren't available for this chart yet. ${weeklyIncompleteAdvice}`;
   } else if (!hasValidatedArea) {
     nextAction =
       bearishPullbackContext &&
@@ -28740,7 +28774,9 @@ function buildControlledFeedback({
     facts.direction === "bearish" ? "bearish rejection" : facts.direction === "bullish" ? "bullish hold" : "trigger";
   let entryPlan;
   if (weeklyDataIncomplete) {
-    entryPlan = `Weekly entries aren't available yet. ${weeklyIncompleteAdvice}`;
+    entryPlan = newWeekStart
+      ? `No entry area yet: a new week has just started. ${weeklyIncompleteAdvice}`
+      : `Weekly entries aren't available yet. ${weeklyIncompleteAdvice}`;
   } else if (!hasValidatedArea) {
     entryPlan = referenceAreasText
       ? `No strong entry yet. Watch the ${referenceAreasText} for a ${entryTriggerWord}.`
@@ -28938,7 +28974,7 @@ function buildControlledFeedback({
     tradeSnapshot: Array.isArray(pillars.snapshot) ? pillars.snapshot : [],
     tradeMistakes: Array.isArray(pillars.mistakes) ? pillars.mistakes : [],
     reviewIncomplete: weeklyDataIncomplete
-      ? { reason: "weekly_quarter_data_incomplete", advice: weeklyIncompleteAdvice }
+      ? { reason: newWeekStart ? "new_week_no_completed_day" : "weekly_quarter_data_incomplete", advice: weeklyIncompleteAdvice }
       : null,
     entry1: hasValidatedArea
       ? {
