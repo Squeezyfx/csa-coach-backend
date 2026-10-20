@@ -30072,7 +30072,6 @@ async function askSupportModel({ system, messages }) {
     const response = await anthropic.messages.create({
       model: SUPPORT_CLAUDE_MODEL,
       max_tokens: SUPPORT_LIMITS.maxReplyTokens,
-      temperature: 0.2,
       system,
       messages,
     });
