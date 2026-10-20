@@ -4,6 +4,16 @@ import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
 import { setCourseAccess } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
 import { createAnalysisSlots } from "./analysis-slots.js";
+import { readFileSync as readSupportGuideFile } from "node:fs";
+import {
+  buildSystemPrompt,
+  buildMessages,
+  cleanQuestion,
+  dailyCap as supportDailyCap,
+  capReached as supportCapReached,
+  startOfUtcDay as supportStartOfDay,
+  SUPPORT_LIMITS,
+} from "./support-chat.js";
 import {
   indicatorLimitFor,
   normalizeAccountNumber,
@@ -30036,6 +30046,131 @@ app.delete("/indicator-access/:id", async (req, res) => {
   } catch (error) {
     console.error("Indicator access remove error:", error?.message || error);
     return indicatorError(res, error, "indicator_remove_failed");
+  }
+});
+
+// ---- In-app help chat: answers questions about using CSA Forex from the help guide ----
+// A cheaper model than the chart review, short replies, and a daily limit per person.
+let supportGuideCache = null;
+function getSupportGuide() {
+  if (supportGuideCache !== null) return supportGuideCache;
+  try {
+    supportGuideCache = readSupportGuideFile(new URL("./support/help-guide.md", import.meta.url), "utf8");
+  } catch (error) {
+    console.error("Help guide could not be read:", error?.message || error);
+    supportGuideCache = "";
+  }
+  return supportGuideCache;
+}
+
+const SUPPORT_CLAUDE_MODEL = process.env.SUPPORT_CLAUDE_MODEL || "claude-haiku-5-5";
+const SUPPORT_OPENAI_MODEL = process.env.SUPPORT_OPENAI_MODEL || "gpt-4.1-mini";
+
+async function askSupportModel({ system, messages }) {
+  if (getActiveAiProvider() === "claude") {
+    if (!anthropic) throw new Error("The assistant is not configured.");
+    const response = await anthropic.messages.create({
+      model: SUPPORT_CLAUDE_MODEL,
+      max_tokens: SUPPORT_LIMITS.maxReplyTokens,
+      temperature: 0.2,
+      system,
+      messages,
+    });
+    return getAnthropicText(response);
+  }
+  if (!openai) throw new Error("The assistant is not configured.");
+  const response = await openai.responses.create({
+    model: SUPPORT_OPENAI_MODEL,
+    input: [{ role: "system", content: system }, ...messages],
+    max_output_tokens: SUPPORT_LIMITS.maxReplyTokens,
+    temperature: 0.2,
+  });
+  return response.output_text || "";
+}
+
+app.post("/support-chat", async (req, res) => {
+  try {
+    const requestAuth = await getRequestUser(req);
+    const question = cleanQuestion(req.body?.message);
+    if (!question) {
+      return res.status(400).json({ success: false, errorType: "empty_question", error: "Type your question first." });
+    }
+
+    const cap = supportDailyCap();
+    let usedToday = 0;
+    if (supabaseAdmin) {
+      const counted = await supabaseAdmin
+        .from("support_chats")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", requestAuth.user.id)
+        .gte("created_at", supportStartOfDay());
+      if (!counted.error) usedToday = Number(counted.count || 0);
+    }
+    if (supportCapReached(usedToday, cap)) {
+      return res.status(429).json({
+        success: false,
+        errorType: "support_daily_limit",
+        error: `You have reached today's limit of ${cap} help questions. It resets tomorrow. For anything urgent, email support@csaforex.com.`,
+      });
+    }
+
+    let account = null;
+    try {
+      const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
+      account = {
+        planLabel: entitlement.planLabel,
+        analysesUsed: entitlement.analysesUsed,
+        analysesLimit: entitlement.analysesLimit,
+        betaTester: entitlement.isBetaTester === true,
+      };
+    } catch {
+      account = null;
+    }
+
+    const guide = getSupportGuide();
+    if (!guide) {
+      return res.status(503).json({ success: false, errorType: "guide_missing", error: "The help assistant is not available right now. Please email support@csaforex.com." });
+    }
+
+    const system = buildSystemPrompt({ guideText: guide, account });
+    const messages = buildMessages({
+      question,
+      history: req.body?.history,
+      reviewText: req.body?.reviewText,
+    });
+
+    const answer = String(await askSupportModel({ system, messages })).trim();
+    if (!answer) {
+      return res.status(502).json({ success: false, errorType: "empty_answer", error: "I could not put an answer together. Please try again." });
+    }
+
+    if (supabaseAdmin) {
+      supabaseAdmin
+        .from("support_chats")
+        .insert({
+          user_id: requestAuth.user.id,
+          email: requestAuth.user.email || null,
+          question,
+          answer,
+          used_review: Boolean(String(req.body?.reviewText || "").trim()),
+        })
+        .then((result) => {
+          if (result.error) console.warn("Help chat log skipped:", result.error.message);
+        });
+    }
+
+    return res.json({ success: true, answer, remainingToday: Math.max(0, cap - usedToday - 1) });
+  } catch (error) {
+    const statusCode = Number(error?.statusCode) || 500;
+    console.error("Help chat error:", error?.message || error);
+    return res.status(statusCode).json({
+      success: false,
+      errorType: error?.errorType || "support_chat_failed",
+      error:
+        statusCode >= 500
+          ? "The help assistant had a problem. Please try again, or email support@csaforex.com."
+          : error.message,
+    });
   }
 });
 
