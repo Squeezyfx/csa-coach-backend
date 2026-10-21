@@ -33023,12 +33023,20 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
     const chartNativeImpulseStartedAt =
       csaNowMs();
 
+    // When the data provider's period inventory is already verified against the chart, the Fib frame
+    // comes from that inventory and the extra chart-reading calls for the impulse (about 15 seconds)
+    // cannot improve it. The benchmark path has always skipped them with the same entries. Set
+    // CHART_IMPULSE_ALWAYS=true on the server to run them anyway.
+    const skipImpulseForVerifiedInventory =
+      String(process.env.CHART_IMPULSE_ALWAYS || "").trim().toLowerCase() !== "true" &&
+      chartDetection?.marketInventoryDiagnostics?.marketInventoryVerified === true;
+
     const chartNativeImpulse =
-      benchmarkDiagnosticOnly
+      benchmarkDiagnosticOnly || skipImpulseForVerifiedInventory
         ? {
             usable: false,
-            source: "credit_saving_benchmark_diagnostic",
-            reason: "Current-period inventory owns the diagnostic Fib frame; extra impulse-mapping vision calls were skipped.",
+            source: benchmarkDiagnosticOnly ? "credit_saving_benchmark_diagnostic" : "provider_inventory_verified_skip",
+            reason: "Current-period inventory owns the Fib frame; extra impulse-mapping vision calls were skipped.",
           }
         : await extractChartNativeImpulseAnchors({
         imageBase64,
