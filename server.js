@@ -21858,6 +21858,15 @@ function rankChartNativeFallbackAreas({
         if (price === null || resolvedCurrentPrice === null || !Number.isFinite(Number(resolvedCurrentPrice))) return null;
         const low = asPositiveNumber(candidate.zoneLow) || price;
         const high = asPositiveNumber(candidate.zoneHigh) || price;
+        // Only levels CLOSE to the retracement zone are worth watching: no more than 12% of the
+        // framing range beyond its 38.2% or 61.8% edge. Anything farther is not offered.
+        const frameRange = Number(swingHigh) - Number(swingLow);
+        if (!(frameRange > 0)) return null;
+        const ratio = direction === "bearish"
+          ? (price - Number(swingLow)) / frameRange
+          : (Number(swingHigh) - price) / frameRange;
+        const beyondZone = ratio > 0.618 ? ratio - 0.618 : ratio < 0.382 ? 0.382 - ratio : 0;
+        if (beyondZone > 0.12) return null;
         return {
           direction: direction === "bearish" ? "sell" : "buy",
           areaType: String(candidate.areaType || "").toLowerCase().trim(),
