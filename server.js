@@ -21840,9 +21840,49 @@ function rankChartNativeFallbackAreas({
   // inventory so the benchmark can show which Monday/Tuesday/etc. levels
   // were checked and why none was selected.
   if (!selected.length) {
+    // No entry qualified. Offer the nearest levels that are on the right side of price and fit
+    // the bias, and failed ONLY because they sit outside the ideal retracement zone, as
+    // "levels to watch" (never as entries). The closest one is the most useful to a trader.
+    const nearbyLevelsToWatch = candidateEvaluations
+      .filter(
+        (evaluation) =>
+          evaluation &&
+          evaluation.qualified !== true &&
+          Array.isArray(evaluation.rejectionReasons) &&
+          evaluation.rejectionReasons.length > 0 &&
+          evaluation.rejectionReasons.every((reason) => /retracement band/i.test(String(reason)))
+      )
+      .map((evaluation) => {
+        const candidate = evaluation.candidate || {};
+        const price = asPositiveNumber(candidate.price);
+        if (price === null || resolvedCurrentPrice === null || !Number.isFinite(Number(resolvedCurrentPrice))) return null;
+        const low = asPositiveNumber(candidate.zoneLow) || price;
+        const high = asPositiveNumber(candidate.zoneHigh) || price;
+        return {
+          direction: direction === "bearish" ? "sell" : "buy",
+          areaType: String(candidate.areaType || "").toLowerCase().trim(),
+          zoneLow: Math.min(low, high),
+          zoneHigh: Math.max(low, high),
+          authoritativeCenter: price,
+          levelText: formatPrice(price, symbol),
+          zoneText: `around ${formatPrice(price, symbol)}`,
+          frameworkPeriod: candidate.sourcePeriod || candidate.sourceDay || null,
+          structuralScore: 40,
+          distanceFromPrice: Math.abs(price - Number(resolvedCurrentPrice)),
+          fibPassed: false,
+          conversionConfirmed: false,
+          sourceIndex: -1,
+          referenceOnly: true,
+          outsideIdealZone: true,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.distanceFromPrice - b.distanceFromPrice)
+      .slice(0, 2);
+
     return {
       areas: [],
-      referenceAreas: [],
+      referenceAreas: nearbyLevelsToWatch,
       validation: {
         passed: true,
         errors: [],
