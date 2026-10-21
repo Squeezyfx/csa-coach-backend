@@ -28299,13 +28299,28 @@ function buildControlledFeedback({
   // references (score >= 35), including the AUDUSD 0.70104 and 0.69845
   // benchmarks, while suppressing low-evidence anchors such as XAUUSD 4019.20
   // (score 28). When no entry qualifies, retain the wider fallback path.
+  // With no entry, only levels CLOSE to the retracement zone are worth watching (within 12% of the
+  // framing range of its 38.2% or 61.8% edge). A level farther away, or a bare chart label with no
+  // link to the zone, is left out. With no readable frame nothing is filtered.
+  const zoneFrame = facts?.selectorDiagnostics?.fibonacci || {};
+  const zoneRange = Number(zoneFrame.swingHigh) - Number(zoneFrame.swingLow);
+  const isCloseToZone = (reference) => {
+    if (!(zoneRange > 0)) return true;
+    const center = Number(reference?.authoritativeCenter);
+    if (!Number.isFinite(center)) return true;
+    const ratio = facts.direction === "bearish"
+      ? (center - Number(zoneFrame.swingLow)) / zoneRange
+      : (Number(zoneFrame.swingHigh) - center) / zoneRange;
+    const beyond = ratio > 0.618 ? ratio - 0.618 : ratio < 0.382 ? 0.382 - ratio : 0;
+    return beyond <= 0.12;
+  };
   const coachingReferenceAreas = newWeekStart
     ? []
     : hasValidatedArea
     ? referenceAreas.filter(
         (reference) => Number(reference?.structuralScore || 0) >= 35
       )
-    : referenceAreas;
+    : referenceAreas.filter(isCloseToZone);
 
   // With no validated entry, a reference level on the wrong side of the bias
   // (a resistance under a bullish bias, a support under a bearish one) is not
