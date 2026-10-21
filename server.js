@@ -6954,6 +6954,7 @@ STRICT READING RULES:
 4. Before finishing, scan the price axis a second time and confirm that the number of returned items equals the number of distinct user-drawn horizontal strokes.
 5. Copy the printed digits exactly into displayedPrice and platformLabel.
 6. Exclude the live/current-price label, bid/ask quote, OHLC header values, ordinary axis tick labels, candle prices, and dates.
+6b. Also exclude the CROSSHAIR price label: a grey or white tag on the price axis that follows the mouse pointer (it sits wherever the cursor is, often far from the last candle, with a thin dashed line running across the chart at the cursor's height). It is the price under the mouse, not a drawn level. A drawn level is a line the trader placed on purpose, usually coloured, with its own label.
 7. If a horizontal line is visible but its printed digits are not readable, set displayedPrice to null. Do not estimate or reconstruct digits.
 8. Never invent digits.
 9. Return the lines in visual top-to-bottom order.
@@ -8966,6 +8967,7 @@ STRICT MARKED/UNMARKED RULE:
 - MARKED means the uploaded image clearly contains user-drawn support/resistance evidence such as horizontal lines, rectangles, shaded zones, or labels that identify trading levels.
 - UNMARKED means there is no clear user-drawn support/resistance evidence.
 - Do NOT treat grid lines, current-price lines, bid/ask lines, order lines, crosshair lines, chart borders, session separators, or AI/backend-calculated levels as user-marked support/resistance.
+- The grey or white price tag that follows the mouse pointer (the crosshair price) is never a level of any kind: do not report it as support, resistance, supply, demand, or as the current price.
 - Before claiming that support or resistance is visible, describe the exact visible object that proves it.
 - If no such object can be identified, the chart MUST be classified as UNMARKED.
 - For an UNMARKED chart, explicitly say: "There is no visible evidence of user-marked support or resistance on this chart."
