@@ -238,6 +238,88 @@ export function reconcileChartDataMatch({
   return chartDataMatch;
 }
 
+/**
+ * Verify the data feed from the chart HEADER when the header is not the last candle.
+ *
+ * With the mouse pointer on the chart the header prints the candle under the pointer, so the
+ * last-candle OHLC is unknown and reconcileChartDataMatch (which looks only next to the last
+ * provider candle) cannot confirm the match: the review then stays "date_unverified" and loses
+ * levels. The header's four prices still identify one real candle, which proves the provider data
+ * is this chart's own dataset and gives the feed offset. That offset, applied to the provider's
+ * newest close, must land near the chart's last-price tag. All of these must hold: a tight shape
+ * fit, no second candle in the recent window that fits nearly as well (a coincidence), and an
+ * offset consistent with the last price. When any fails nothing is changed. onDiagnostic receives
+ * the outcome either way so it can be logged and tuned against real charts.
+ *
+ * Only ever upgrades an unverified status; it never downgrades or changes a match.
+ */
+export const HEADER_FEED_WINDOW = 250;
+
+export function reconcileWithHeaderFeedOffset({
+  chartDataMatch, candles = [], header = null, lastClose = null, tolerance, maxOffset = null, window: windowSize = HEADER_FEED_WINDOW,
+  onDiagnostic = null,
+} = {}) {
+  if (!chartDataMatch || !["mismatch", "date_unverified", "time_unverified", "partial_or_unknown_candle"]
+    .includes(chartDataMatch.status)) {
+    return chartDataMatch;
+  }
+  const visible = visibleOhlcFromDetection({
+    latestVisibleOpen: header?.open, latestVisibleHigh: header?.high,
+    latestVisibleLow: header?.low, latestVisibleClose: header?.close,
+  });
+  const tag = num(lastClose);
+  if (!visible || tag === null || tag <= 0 || !(Number(tolerance) > 0)) return chartDataMatch;
+
+  const rows = (Array.isArray(candles) ? candles : [])
+    .filter((c) => c && c.datetime && FIELDS.every((f) => num(c[f]) !== null))
+    .sort((a, b) => (normalizeCandleDatetime(a.datetime) < normalizeCandleDatetime(b.datetime) ? -1 : 1));
+  if (rows.length < 2) return chartDataMatch;
+  const newestClose = num(rows[rows.length - 1].close);
+
+  const recent = rows.slice(-windowSize);
+  const hits = [];
+  for (const candle of recent) {
+    const r = ohlcAligned(visible, candle, tolerance, { maxOffset });
+    if (r.aligned) hits.push({ candle, ...r });
+  }
+  const finish = (reason, extra = {}) => {
+    if (typeof onDiagnostic === "function") {
+      onDiagnostic({ reason, hits: hits.length, window: recent.length, ...extra });
+    }
+    return chartDataMatch;
+  };
+  if (!hits.length) return finish("no_candle_fits_header");
+  hits.sort((a, b) => a.residual - b.residual);
+  const hit = hits[0];
+  // A true match is a tight fit (real feeds differ by a pip or two at most once the constant
+  // offset is removed); a loose fit across a wide window is how coincidences happen.
+  if (hit.residual > tolerance * 0.5) return finish("best_fit_too_loose", { residual: hit.residual });
+  // No second candle may fit nearly as well: that would make the choice a coincidence.
+  const runnerUp = hits[1];
+  if (runnerUp && runnerUp.residual < hit.residual + tolerance * 0.5) {
+    return finish("ambiguous_match", { residual: hit.residual, runnerUp: runnerUp.residual });
+  }
+  // The offset must be broadly consistent with the chart's last price. A feed offset drifts a
+  // little through the week, so this check is wider than the shape check above.
+  if (Math.abs(tag - (newestClose + hit.offset)) > tolerance * 3) {
+    return finish("offset_does_not_reach_last_price", { offset: hit.offset });
+  }
+  if (typeof onDiagnostic === "function") {
+    onDiagnostic({ reason: "upgraded", hits: hits.length, window: recent.length, residual: hit.residual, offset: hit.offset, headerCandle: hit.candle.datetime });
+  }
+
+  return {
+    ...chartDataMatch,
+    status: "matched_reference",
+    matchMode: "header_feed_offset",
+    feedOffset: hit.offset,
+    ohlcResidual: hit.residual,
+    headerCandleDate: hit.candle.datetime,
+    priorStatus: chartDataMatch.status,
+    reason: "The chart header identified one real provider candle, and its feed offset carries through to the chart's last price.",
+  };
+}
+
 function normalizeCandleDatetime(value = "") {
   return String(value || "").trim().replace("T", " ").slice(0, 19);
 }

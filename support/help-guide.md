@@ -238,6 +238,13 @@ chart or type them into the boxes."
 and trade management. When something isn't shown on the chart or typed in, the review says what is
 missing and why, so you know what to include next time."
 
+**Why did the review stop earlier than my chart, or miss a level I expected?**
+"Most often the mouse pointer was resting on the chart when the screenshot was taken. TradingView then
+shows the date and price of the candle under the pointer, and the review can read that instead of the
+last candle. Look at the line under the Chart view that says 'Reviewed up to'. If your chart goes further,
+move the mouse off the chart, take a fresh screenshot and run it again. A 'Lower confidence' note under
+the chart means the same thing."
+
 **The review looks wrong for my chart.**
 "Thank you for telling us. First check the pair and timeframe match your chart, and that your mouse was
 not resting on the chart when you took the screenshot (TradingView shows the price of the candle under

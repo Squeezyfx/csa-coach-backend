@@ -24,7 +24,7 @@ import {
   describeAccount,
 } from "./indicator-access.js";
 import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields, supplementLivePeriod } from "./framework-periods.js";
-import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch } from "./candle-alignment.js";
+import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch, reconcileWithHeaderFeedOffset } from "./candle-alignment.js";
 import { periodCompleteAtCutoff } from "./period-completion.js";
 import { resolveFrameworkBias, calendarMapping, newWeekWithoutCompletedDay } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
@@ -1608,6 +1608,7 @@ Important:
 - When readable, return the latest visible candle time in 24-hour HH:mm format.
 - latestVisibleTime must describe where the uploaded screenshot stops, not the current time and not a later market time.
 - Read the final visible candle OPEN, HIGH, LOW and CLOSE from the top-left chart header ONLY when that header belongs to the LAST candle at the right edge of the chart. If a mouse cursor or crosshair is on the chart, the header shows the candle UNDER THE CURSOR, not the last candle. In that case take latestVisibleClose and latestVisiblePrice from the last-price tag on the right-hand price axis (the highlighted label level with the last candle) and return null for latestVisibleOpen, latestVisibleHigh and latestVisibleLow. When the header is clearly the last candle, return all four exact values and prefer them over visual wick estimates. latestVisiblePrice must equal latestVisibleClose.
+- Separately, ALWAYS transcribe the four open, high, low and close values printed in the top-left chart header into headerOpen, headerHigh, headerLow and headerClose exactly as shown, for whichever candle the header describes (the last candle, or the candle under the mouse pointer). These four values are used only to verify the data feed; they are not the final candle when a pointer is on the chart. Return null for any value that is not printed.
 - A boxed label on the bottom time axis that shows a full date AND time with the year (for example "20 Oct '26 08:00"), usually with a vertical dashed line above it, is the CROSSHAIR position under the mouse pointer. It is NOT the final candle. Never use its date or time for latestVisibleDate, latestVisibleTime or latestPrintedAxisDate, and never list it in timeAxisTimestamps or timeAxisDates. Work out the final candle from the ordinary printed ticks and the right edge of the chart instead.
 - latestVisiblePrice must describe the final candle visible in the uploaded screenshot, not a later external-data price. If the exact final close cannot be read confidently, return null rather than guessing.
 - If the final candle time cannot be read confidently, set latestVisibleTime=null and latestVisibleTimeConfidence="low". Never guess.
@@ -1688,6 +1689,10 @@ Return exactly this JSON shape:
   "latestVisibleHigh": 1.23456,
   "latestVisibleLow": 1.23456,
   "latestVisibleClose": 1.23456,
+  "headerOpen": 1.23456,
+  "headerHigh": 1.23456,
+  "headerLow": 1.23456,
+  "headerClose": 1.23456,
   "latestVisiblePriceConfidence": "high or medium or low",
   "dateConfidence": "high or medium or low",
   "latestVisibleDateEvidence": "explicit_final_candle_timestamp or inferred_axis or unknown",
@@ -5868,6 +5873,12 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
         isTradingChart && Number.isFinite(Number(parsed?.latestVisibleClose ?? parsed?.latestVisiblePrice)) && Number(parsed.latestVisibleClose ?? parsed?.latestVisiblePrice) > 0
           ? Number(parsed.latestVisibleClose ?? parsed.latestVisiblePrice)
           : null,
+      // The header's own four prices, whichever candle it describes (see
+      // reconcileWithHeaderFeedOffset): used only to verify the data feed.
+      headerOpen: isTradingChart && Number(parsed?.headerOpen) > 0 ? Number(parsed.headerOpen) : null,
+      headerHigh: isTradingChart && Number(parsed?.headerHigh) > 0 ? Number(parsed.headerHigh) : null,
+      headerLow: isTradingChart && Number(parsed?.headerLow) > 0 ? Number(parsed.headerLow) : null,
+      headerClose: isTradingChart && Number(parsed?.headerClose) > 0 ? Number(parsed.headerClose) : null,
       latestVisiblePriceConfidence:
         isTradingChart
           ? String(parsed?.latestVisiblePriceConfidence || "low").toLowerCase()
@@ -31813,6 +31824,28 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       if (reconciledDataMatch !== chartDataMatch) {
         console.log("[chart-data-match] reconciled: " + JSON.stringify({ symbol: normalizedSymbol, from: chartDataMatch.status, to: reconciledDataMatch.status, matchMode: reconciledDataMatch.matchMode, feedOffset: reconciledDataMatch.feedOffset }));
         chartDataMatch = reconciledDataMatch;
+      }
+      // With the mouse pointer on the chart the header describes another candle, so the check
+      // above cannot confirm the feed. The header's own prices still can (see the function).
+      if (String(process.env.HEADER_FEED_RECONCILE || "on").toLowerCase() !== "off") {
+        const headerReconciled = reconcileWithHeaderFeedOffset({
+          onDiagnostic: (info) => console.log("[chart-data-match] header feed check: " + JSON.stringify({ symbol: normalizedSymbol, status: chartDataMatch.status, ...info })),
+          chartDataMatch,
+          candles: marketReference.impulseCandles?.length ? marketReference.impulseCandles : marketReference.timeframeCandles,
+          header: {
+            open: chartDetection?.headerOpen,
+            high: chartDetection?.headerHigh,
+            low: chartDetection?.headerLow,
+            close: chartDetection?.headerClose,
+          },
+          lastClose: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
+          tolerance: getFinalVisiblePriceSyncTolerance({ marketReference, symbol: normalizedSymbol, targetPrice: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice }),
+          maxOffset: getCleanBreakTolerance(normalizedSymbol) * 5,
+        });
+        if (headerReconciled !== chartDataMatch) {
+          console.log("[chart-data-match] header feed offset: " + JSON.stringify({ symbol: normalizedSymbol, from: chartDataMatch.status, to: headerReconciled.status, headerCandle: headerReconciled.headerCandleDate, feedOffset: headerReconciled.feedOffset }));
+          chartDataMatch = headerReconciled;
+        }
       }
       marketReference.chartDataMatch = chartDataMatch;
       if (marketReference.dataProvider === "OANDA" && chartDataMatch.status === "matched_reference" && marketReference.oandaAlignmentCandle) {
