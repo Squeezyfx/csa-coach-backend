@@ -116,3 +116,10 @@ test("a level far from the candles is listed under the picture instead of squash
   assert.equal(chart.offChart.length, 1);
   assert.equal(chart.offChart[0].price, 1.3);
 });
+
+test("the data-match status is carried so the page can warn about a lower-confidence review", () => {
+  const weak = buildCleanChart({ marketReference, dataMatchStatus: "date_unverified" });
+  assert.equal(weak.dataMatch, "date_unverified");
+  const none = buildCleanChart({ marketReference });
+  assert.equal(none.dataMatch, "");
+});

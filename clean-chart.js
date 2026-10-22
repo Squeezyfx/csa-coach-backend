@@ -42,6 +42,7 @@ export function buildCleanChart({
   instrument = "",
   timeframe = "",
   analysisType = "",
+  dataMatchStatus = "",
 } = {}) {
   const source = Array.isArray(marketReference?.timeframeCandles) ? marketReference.timeframeCandles : [];
   const rows = source
@@ -143,6 +144,10 @@ export function buildCleanChart({
     instrument: String(instrument || "").toUpperCase(),
     timeframe: String(timeframe || "").toUpperCase(),
     analysisType: String(analysisType || ""),
+    // How well the chart's own price matched the market data. When it did not (the date or
+    // candle could not be verified, which is common when the mouse pointer is on the chart),
+    // the page tells the trader the review is less reliable and how to get a better one.
+    dataMatch: String(dataMatchStatus || ""),
     decimals,
     last,
     candles: rows.map((r) => [r.t, r.o, r.h, r.l, r.c]),

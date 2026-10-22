@@ -33330,6 +33330,7 @@ ${(visualReview?.strategyMissingInformation || []).length
         instrument: submittedInstrument,
         timeframe,
         analysisType: mode,
+        dataMatchStatus: marketReference?.chartDataMatch?.status || "",
       });
     } catch (error) {
       console.warn("[clean-chart] skipped:", error?.message || error);
