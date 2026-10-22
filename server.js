@@ -75,6 +75,7 @@ import {
 import { buildVisiblePeriodFibonacciFrame, resolveCalendarPeriodDirection, resolveDeepRetracementDirectionOverride } from "./benchmark/weekly-fibonacci-policy.js";
 import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodWickExtremesFromPixels } from "./chart-raster-reader.js";
 import { buildChartOverlay } from "./chart-overlay.js";
+import { buildCleanChart } from "./clean-chart.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
@@ -1204,9 +1205,12 @@ function compactRawAiResponse({
   analysisFramework = "csa",
   selectedStrategy = null,
   personalStrategySnapshot = null,
+  cleanChart = null,
 }) {
   return {
     analysis,
+    // The plain chart picture, so the journal can show it again without new market data.
+    cleanChart,
     analysisFramework,
     selectedStrategy: selectedStrategy
       ? {
@@ -1296,6 +1300,7 @@ async function saveCompletedReview({
   analysisFramework = "csa",
   selectedStrategy = null,
   personalStrategySnapshot = null,
+  cleanChart = null,
 }) {
   if (!user) {
     return {
@@ -1351,6 +1356,7 @@ async function saveCompletedReview({
       analysisFramework,
       selectedStrategy,
       personalStrategySnapshot,
+      cleanChart,
     });
 
     const reviewInsert = await supabaseAdmin
@@ -28318,7 +28324,7 @@ function buildControlledFeedback({
     ? []
     : hasValidatedArea
     ? referenceAreas.filter(
-        (reference) => Number(reference?.structuralScore || 0) >= 35
+        (reference) => Number(reference?.structuralScore || 0) >= 35 && isCloseToZone(reference)
       )
     : referenceAreas.filter(isCloseToZone);
 
@@ -29094,6 +29100,16 @@ function buildControlledFeedback({
             levelText: safeUserText(selectedTertiaryArea.levelText || ""),
           }
         : null,
+    // Numbers behind the clean chart picture: the same levels and trade lines the text names.
+    chartGeometry: {
+      trade: pillars.geometry || null,
+      watch: [...entryReferenceAreas.slice(0, 2), ...(wrongSideReference ? [wrongSideReference] : [])]
+        .map((reference) => ({
+          price: asPositiveNumber(reference?.authoritativeCenter),
+          areaType: reference?.areaType || null,
+        }))
+        .filter((item) => item.price),
+    },
     narrativeLock: {
       version:
         "1.0.0-selected-entry-single-source",
@@ -33294,6 +33310,20 @@ ${(visualReview?.strategyMissingInformation || []).length
     } catch (error) {
       console.warn("[chart-overlay] skipped:", error?.message || error);
     }
+    // Plain candlestick picture with only the levels the review names. The page draws it and it
+    // is saved with the journal entry. Never allowed to break the analysis response.
+    let cleanChart = null;
+    try {
+      cleanChart = buildCleanChart({
+        marketReference,
+        finalFeedback,
+        instrument: submittedInstrument,
+        timeframe,
+        analysisType: mode,
+      });
+    } catch (error) {
+      console.warn("[clean-chart] skipped:", error?.message || error);
+    }
     const responseBody = {
       success: true,
       entitlement: updatedEntitlement,
@@ -33494,6 +33524,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       visualReview,
       chartDetection,
       chartOverlay,
+      cleanChart,
       chartValidationAudit: {
         buildId: CSA_BUILD_ID,
         isTradingChart:
@@ -33565,6 +33596,7 @@ ${(visualReview?.strategyMissingInformation || []).length
           selectedStrategy.strategy,
         personalStrategySnapshot:
           selectedStrategy.snapshot,
+        cleanChart,
       });
 
     finalClientResponse = normalizeUserFacingTypographyDeep({

@@ -520,6 +520,9 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
   const weaknesses = [];
   const next = { trigger: "", exit: "", risk: "", management: "" };
   let signals = null;
+  // Prices behind the trade lines in the text (the trader's own order, or the planned
+  // entry, stop and take profits), so the chart picture can draw exactly the same numbers.
+  let geometry = null;
   const snapshot = [];
   const add = (list, pillar, text, short, extra = {}) =>
     list.push({ pillar, text, short, priority: 1, ...extra });
@@ -573,6 +576,13 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     const beTol = entry * 0.00008;
     const flatTol = entry * 0.0003;
     const word = isSell ? "sell" : "buy";
+    geometry = {
+      kind: "placed",
+      side: isSell ? "sell" : "buy",
+      entry,
+      stop: sl !== null && sl > 0 ? sl : null,
+      targets: tp !== null && tp > 0 ? [tp] : [],
+    };
 
     signals = {
       trend: null,
@@ -1062,6 +1072,18 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     // average candle beyond the entry zone.
     const planStopInfo = center !== null ? planStopFor({ facts, area, center, levels, isSell }) : null;
     const planStop = planStopInfo ? planStopInfo.price : null;
+    if (dir && center !== null && preTrade) {
+      geometry = {
+        kind: "plan",
+        side: isSell ? "sell" : "buy",
+        entry: center,
+        entryTyped: planned.entry !== null,
+        stop: planStop,
+        stopTyped: planned.stop,
+        targets: planLadder.map((t) => t.price),
+        targetTyped: planned.target,
+      };
+    }
     const stopText =
       planStopInfo === null
         ? `Put your stop just beyond the level that proves you wrong (${isSell ? "above" : "below"} your entry area).`
@@ -1522,7 +1544,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     if (typeof signals.rr === "number" && signals.rr < 1.5) flag("Risk-to-reward below plan", "MATH FLAW");
   }
 
-  return { strengths, weaknesses, next, signals, planSignals, snapshot, snapshotTitle, mistakes };
+  return { strengths, weaknesses, next, signals, planSignals, snapshot, snapshotTitle, mistakes, geometry };
 }
 
 const clamp = (value, low, high) => Math.max(low, Math.min(high, Math.round(value)));
