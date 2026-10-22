@@ -1238,6 +1238,8 @@ function compactRawAiResponse({
         dashboardFeedback?.displayLabels || null,
       scoreDisplay:
         dashboardFeedback?.scoreDisplay || null,
+      scoreContext:
+        dashboardFeedback?.scoreContext || null,
       overallDisplayLabel:
         dashboardFeedback?.overallDisplayLabel ||
         dashboardFeedback?.displayLabels?.overall ||
@@ -28950,6 +28952,13 @@ function buildControlledFeedback({
       scores.entryMetricMode,
     riskMetricMode:
       scores.riskMetricMode,
+    // What the Entry and Risk scores are based on, so the dashboard averages only real
+    // measurements: "trade" (a placed order), "plan" (stop/take profit/entry typed in), "chart"
+    // (the chart's own readiness) or "none" (nothing was shown, the score is a fixed placeholder).
+    entryBasis:
+      pillarScores ? "trade" : planScores && planScores.entry !== null ? "plan" : "chart",
+    riskBasis:
+      pillarScores ? "trade" : planScores && planScores.risk !== null ? "plan" : "none",
     weights:
       scores.weights,
   };
