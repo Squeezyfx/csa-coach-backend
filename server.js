@@ -28338,7 +28338,20 @@ function buildControlledFeedback({
     ? []
     : hasValidatedArea
     ? referenceAreas.filter(
-        (reference) => Number(reference?.structuralScore || 0) >= 35 && isCloseToZone(reference)
+        (reference) =>
+          Number(reference?.structuralScore || 0) >= 35 &&
+          isCloseToZone(reference) &&
+          // A level within about 0.02% of price of an entry is that same level, not a second one to watch.
+          ![area, selectedSecondaryArea, selectedTertiaryArea].some((entry) => {
+            const entryCenter = Number(entry?.authoritativeCenter);
+            const referenceCenter = Number(reference?.authoritativeCenter);
+            return (
+              Number.isFinite(entryCenter) &&
+              Number.isFinite(referenceCenter) &&
+              entryCenter > 0 &&
+              Math.abs(referenceCenter - entryCenter) <= entryCenter * 0.0002
+            );
+          })
       )
     : referenceAreas.filter(isCloseToZone);
 
