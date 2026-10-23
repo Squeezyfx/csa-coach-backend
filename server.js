@@ -1703,6 +1703,15 @@ Return exactly this JSON shape:
   "notes": "brief note"
 }`;
 
+// CHART_HEADER_FIELDS=off removes the header-price request from the chart read, so the effect of
+// that request can be compared on the same charts without another deploy.
+const CHART_DETECTION_PROMPT_ACTIVE =
+  String(process.env.CHART_HEADER_FIELDS || "on").toLowerCase() === "off"
+    ? CHART_DETECTION_PROMPT
+        .replace(/^- Separately, ALWAYS transcribe.*\n/m, "")
+        .replace(/^\s*"header(Open|High|Low|Close)".*\n/gm, "")
+    : CHART_DETECTION_PROMPT;
+
 const CONFIRMED_TRIGGER_WORDS = [
   "engulfing", "pin bar", "pinbar", "hammer", "doji", "inside bar", "lower high",
   "higher low", "breakout", "breakdown", "break-and-hold", "break and hold",
@@ -5548,7 +5557,7 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
 
   try {
     const detectionRead = await readChartDetectionResponse({
-      systemPrompt: CHART_DETECTION_PROMPT,
+      systemPrompt: CHART_DETECTION_PROMPT_ACTIVE,
       userText: `Inspect this uploaded chart image.\nSelected instrument: ${submittedInstrument || "not provided"}\nSelected timeframe: ${selectedTimeframe || "not provided"}\nSelected chart/trade date: ${selectedDateText || "not provided"}\nAnalysis type: ${analysisType || "post-trade"}\nReturn only JSON.`,
       imageBase64,
       mimeType,
