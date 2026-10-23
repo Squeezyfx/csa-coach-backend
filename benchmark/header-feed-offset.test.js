@@ -108,3 +108,20 @@ test("the outcome is reported for logging, whether or not the status changed", (
   reconcileWithHeaderFeedOffset({ ...base, lastClose: lastClose + 0.01, onDiagnostic: (info) => seen.push(info.reason) });
   assert.deepEqual(seen, ["upgraded", "offset_does_not_reach_last_price"]);
 });
+
+test("an exact fit is accepted even when a second candle fits within about a pip", () => {
+  const near = candles.map((c) => ({ ...c }));
+  // A decoy with the same open, low and close but a high 1 pip different.
+  near[150] = { ...near[120], datetime: near[150].datetime, high: Number((near[120].high + 0.0001).toFixed(5)) };
+  const diagnostics = [];
+  const result = reconcileWithHeaderFeedOffset({ ...base, candles: near, onDiagnostic: (info) => diagnostics.push(info.reason) });
+  assert.equal(result.status, "matched_reference");
+  assert.equal(result.headerCandleDate, hovered.datetime);
+  assert.deepEqual(diagnostics, ["upgraded"]);
+});
+
+test("a decoy that is nearly as exact as the real candle still blocks the match", () => {
+  const near = candles.map((c) => ({ ...c }));
+  near[150] = { ...near[120], datetime: near[150].datetime, high: Number((near[120].high + 0.00001).toFixed(5)) };
+  assert.equal(reconcileWithHeaderFeedOffset({ ...base, candles: near }), unverified);
+});

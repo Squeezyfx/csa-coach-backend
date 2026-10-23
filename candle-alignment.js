@@ -294,10 +294,18 @@ export function reconcileWithHeaderFeedOffset({
   // A true match is a tight fit (real feeds differ by a pip or two at most once the constant
   // offset is removed); a loose fit across a wide window is how coincidences happen.
   if (hit.residual > tolerance * 0.5) return finish("best_fit_too_loose", { residual: hit.residual });
-  // No second candle may fit nearly as well: that would make the choice a coincidence.
+  // No second candle may fit nearly as well: that would make the choice a coincidence. A loose
+  // fit needs a wide gap to the runner-up. An EXACT fit (all four prices differ from the provider
+  // candle by the same constant, to within a fraction of a tick) is very hard to get by chance, so
+  // a smaller gap is enough. The 2026-10-23 EURUSD case: residual 0, runner-up 1.75 pips away.
   const runnerUp = hits[1];
-  if (runnerUp && runnerUp.residual < hit.residual + tolerance * 0.5) {
-    return finish("ambiguous_match", { residual: hit.residual, runnerUp: runnerUp.residual });
+  if (runnerUp) {
+    const gap = runnerUp.residual - hit.residual;
+    const exactFit = hit.residual <= tolerance * 0.02;
+    const clear = gap >= tolerance * 0.5 || (exactFit && gap >= tolerance * 0.08);
+    if (!clear) {
+      return finish("ambiguous_match", { residual: hit.residual, runnerUp: runnerUp.residual });
+    }
   }
   // The offset must be broadly consistent with the chart's last price. A feed offset drifts a
   // little through the week, so this check is wider than the shape check above.
