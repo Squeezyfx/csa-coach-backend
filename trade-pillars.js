@@ -515,7 +515,10 @@ const RISK_RULE_SHORT = "Aim for at least 1.5 to 2 times more reward than risk."
 
 const RISK_UNKNOWN_HINT = "Add your account balance and lot size to see how much you risk per trade.";
 
-export function assessTradePillars({ facts = {}, area = null, hasValidatedArea = false } = {}) {
+// watchLevel: the price of the level worth watching when there is no validated entry (Pre-trade
+// only). The suggested stop and take profits are then laid out from that level, as "if you buy
+// there", so a trader sees where the idea would be wrong and where it could go.
+export function assessTradePillars({ facts = {}, area = null, hasValidatedArea = false, watchLevel = null } = {}) {
   const strengths = [];
   const weaknesses = [];
   const next = { trigger: "", exit: "", risk: "", management: "" };
@@ -1052,8 +1055,11 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         { priority: 0, why: "Check the pair, timeframe and the numbers you typed." }
       );
     }
-    // The trader's own entry, when typed, is where the plan is measured from.
-    const center = planned.entry !== null ? planned.entry : areaCenter;
+    // The trader's own entry, when typed, is where the plan is measured from. With no entry
+    // area, a level worth watching stands in for it (Pre-trade only).
+    const watchCenter = preTrade && !hasValidatedArea && planned.entry === null ? num(watchLevel) : null;
+    const center = planned.entry !== null ? planned.entry : areaCenter !== null ? areaCenter : watchCenter;
+    const fromWatch = watchCenter !== null && center === watchCenter;
     // Take profits: key levels on the way, ending at the main swing.
     let planLadder = [];
     if (center !== null) {
@@ -1078,6 +1084,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         side: isSell ? "sell" : "buy",
         entry: center,
         entryTyped: planned.entry !== null,
+        fromWatch,
         stop: planStop,
         stopTyped: planned.stop,
         targets: planLadder.map((t) => t.price),
@@ -1349,6 +1356,8 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
 
     next.exit = review
       ? exitParts.join(" ").trim()
+      : dir && fromWatch
+      ? `If price holds the watch level at ${fmtPrice(center)} and you decide to ${word} from it: ${stopText} ${ladderText}`
       : dir
       ? `${stopText} ${ladderText}`
       : "Put your stop just beyond the level that proves you wrong and your take profit at the next key support or resistance.";

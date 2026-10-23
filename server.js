@@ -28730,7 +28730,16 @@ function buildControlledFeedback({
   // The trader's own placed order (entry, stop loss, take profit), when one
   // is visible, is judged against the five pillars; with no placed trade the
   // same pillars become a plan to follow.
-  const pillars = assessTradePillars({ facts, area, hasValidatedArea });
+  const pillars = assessTradePillars({
+    facts,
+    area,
+    hasValidatedArea,
+    // With no entry, the first level worth watching anchors the suggested stop and take profits.
+    watchLevel:
+      !hasValidatedArea && !weeklyDataIncomplete
+        ? asPositiveNumber(entryReferenceAreas[0]?.authoritativeCenter)
+        : null,
+  });
   strengthItems.push(...pillars.strengths);
   weaknessItems.push(...pillars.weaknesses);
 

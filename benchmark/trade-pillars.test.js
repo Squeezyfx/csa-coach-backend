@@ -964,3 +964,39 @@ test("risk names only what is actually missing when the stop and target are know
   assert.ok(has(weaknesses, "Risk: Risk can't be checked yet: no lot size was entered."));
   assert.ok(!has(weaknesses, "Exit: No stop loss or take profit"));
 });
+
+test("with no entry, a level to watch anchors a suggested stop and take profits (Pre-trade)", () => {
+  const facts = {
+    ...withSwing(planFacts([1.12037, 1.1195, 1.1258, 1.1285, 1.1301], "bullish"), 1.11807, 1.12601),
+    analysisType: "pre-trade",
+    currentPrice: 1.12256,
+  };
+  const result = assessTradePillars({ facts, area: null, hasValidatedArea: false, watchLevel: 1.12037 });
+  assert.match(result.next.exit, /^If price holds the watch level at 1\.12037 and you decide to buy from it: Stop loss: /);
+  assert.match(result.next.exit, /Take profit/);
+  assert.equal(result.geometry.kind, "plan");
+  assert.equal(result.geometry.fromWatch, true);
+  assert.equal(result.geometry.entry, 1.12037);
+  assert.ok(result.geometry.stop < 1.12037);
+  assert.ok(result.geometry.targets.every((price) => price > 1.12037));
+});
+
+test("a level to watch changes nothing in Post-trade, or when there is no level", () => {
+  const facts = { ...planFacts([1.12037, 1.1195], "bullish"), analysisType: "post-trade" };
+  const post = assessTradePillars({ facts, area: null, hasValidatedArea: false, watchLevel: 1.12037 });
+  assert.equal(post.geometry, null);
+  assert.doesNotMatch(post.next.exit, /watch level/);
+  const pre = assessTradePillars({ facts: { ...facts, analysisType: "pre-trade" }, area: null, hasValidatedArea: false, watchLevel: null });
+  assert.equal(pre.geometry, null);
+});
+
+test("a typed entry is never replaced by the level to watch", () => {
+  const facts = {
+    ...withSwing(planFacts([1.12037, 1.1195, 1.1258], "bullish"), 1.11807, 1.12601),
+    analysisType: "pre-trade",
+    currentPrice: 1.12256,
+    plannedTrade: { entry: 1.1215 },
+  };
+  const result = assessTradePillars({ facts, area: null, hasValidatedArea: false, watchLevel: 1.12037 });
+  assert.notEqual(result.geometry && result.geometry.fromWatch, true);
+});
