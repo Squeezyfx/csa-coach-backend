@@ -76,6 +76,8 @@ import { buildVisiblePeriodFibonacciFrame, resolveCalendarPeriodDirection, resol
 import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodWickExtremesFromPixels } from "./chart-raster-reader.js";
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
+import { eraseCrosshairTimeLabels } from "./crosshair-eraser.js";
+import { applyPointerEvidence } from "./pointer-check.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
@@ -5536,6 +5538,40 @@ async function readChartHeaderOhlc({ imageBase64, mimeType }) {
     return Object.values(out).every((v) => v !== null) ? out : null;
   } catch (error) {
     console.warn("[chart-header-read] skipped:", error?.message || error);
+    return null;
+  }
+}
+
+// A small, separate read of two numbers: the close printed in the chart header and the price in the
+// coloured current-price tag on the right-hand axis. When they disagree, the header describes the
+// candle under the mouse pointer (see pointer-check.js). Runs alongside the main chart read, so it
+// adds no waiting time. Returns null on any failure.
+async function readChartPriceTag({ imageBase64, mimeType }) {
+  if (!isAiProviderConfigured() || !imageBase64) return null;
+  try {
+    const response = await runVisionModel({
+      systemPrompt:
+        "You read two numbers from a trading chart screenshot. " +
+        "lastPrice: the number inside the coloured (red or green) price tag on the right-hand price axis that marks the current price, level with the last candle at the right edge. " +
+        "It is NOT the grey or white tag that follows the mouse pointer, and NOT a tag that belongs to a line drawn on the chart. " +
+        "headerClose: the C (close) value printed in the top-left chart header next to O, H and L. " +
+        'Return only JSON: {"lastPrice": number or null, "headerClose": number or null}. ' +
+        "Use null for anything you cannot read. Never estimate a number.",
+      userText: "Read lastPrice and headerClose. Return only JSON.",
+      imageBase64,
+      mimeType,
+      openaiModel: "gpt-4.1",
+      claudeModel: CLAUDE_MODEL,
+      temperature: 0,
+      imageDetail: "high",
+      maxTokens: 120,
+    });
+    const value = extractJsonObject(response?.text || "");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const read = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : null);
+    return { lastPrice: read(value.lastPrice), headerClose: read(value.headerClose) };
+  } catch (error) {
+    console.warn("[pointer-check] read skipped:", error?.message || error);
     return null;
   }
 }
@@ -31140,8 +31176,26 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
           analysisFramework,
           strategyId,
         });
-    const imageBase64 = req.file.buffer.toString("base64");
-    const mimeType = req.file.mimetype || "image/png";
+    // With the mouse pointer on a TradingView chart, the time axis shows a grey box with the date
+    // under the pointer, which the chart reader keeps taking for the last candle. Paint that box
+    // out of the copy the AI reads. The saved journal picture stays the original.
+    // ERASE_CROSSHAIR_LABEL=off turns this off.
+    let visionBuffer = req.file.buffer;
+    let visionMimeType = req.file.mimetype || "image/png";
+    if (String(process.env.ERASE_CROSSHAIR_LABEL || "on").toLowerCase() !== "off" && /png/i.test(visionMimeType)) {
+      try {
+        const erased = eraseCrosshairTimeLabels(req.file.buffer);
+        if (erased) {
+          visionBuffer = erased.buffer;
+          visionMimeType = "image/png";
+          console.log("[crosshair-eraser] covered the pointer's date box:", JSON.stringify(erased.erased));
+        }
+      } catch (error) {
+        console.warn("[crosshair-eraser] skipped:", error?.message || error);
+      }
+    }
+    const imageBase64 = visionBuffer.toString("base64");
+    const mimeType = visionMimeType;
     const selectedDateText = chartDate || tradeDate || "";
     const selectedDate = parseISODateOnly(selectedDateText);
     const normalizedRequestedCutoffMode = normalizeCutoffMode(cutoffMode);
@@ -31223,6 +31277,12 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
     const chartValidationStartedAt =
       csaNowMs();
 
+    // Pointer check: read the real last-price tag at the same time as the main chart read.
+    // POINTER_CHECK=off turns it off.
+    const pointerEvidencePromise =
+      String(process.env.POINTER_CHECK || "on").toLowerCase() === "off"
+        ? Promise.resolve(null)
+        : readChartPriceTag({ imageBase64, mimeType });
     let chartDetection = await detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument, selectedTimeframe: timeframe, selectedDateText, analysisType: mode });
 
     csaTimingLog(
@@ -31253,6 +31313,19 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
     if (!isUploadedChartDataUsable(chartDetection, selectedDateText)) {
       const analysis = buildInsufficientChartDataAnalysis({ submittedInstrument, timeframe, selectedDateText, chartDetection });
       return stoppedResponse({ res, errorType: "insufficient_chart_data", error: "Uploaded chart does not have enough visible price data for review.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
+    }
+
+    {
+      const pointerEvidence = await pointerEvidencePromise;
+      const pointerCheck = applyPointerEvidence({ chartDetection, evidence: pointerEvidence, selectedDateText });
+      console.log("[pointer-check]", JSON.stringify({
+        evidence: pointerEvidence,
+        applied: pointerCheck.applied,
+        reason: pointerCheck.reason,
+        dateBefore: chartDetection?.latestVisibleDate || null,
+        dateUsed: pointerCheck.applied ? pointerCheck.date || null : null,
+      }));
+      if (pointerCheck.applied) chartDetection = pointerCheck.chartDetection;
     }
 
     // The private batch tester may infer chart context directly from a clear
