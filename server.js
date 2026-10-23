@@ -1703,14 +1703,16 @@ Return exactly this JSON shape:
   "notes": "brief note"
 }`;
 
-// CHART_HEADER_FIELDS=off removes the header-price request from the chart read, so the effect of
-// that request can be compared on the same charts without another deploy.
+// Asking the main chart read for the header prices changed how it read other things (chart 2909's
+// direction went from bullish to range on every run), so by default that request is left out and
+// the header is read by a separate, small call only when the data match is unverified (see
+// readChartHeaderOhlc). CHART_HEADER_FIELDS=on puts the request back into the main read.
 const CHART_DETECTION_PROMPT_ACTIVE =
-  String(process.env.CHART_HEADER_FIELDS || "on").toLowerCase() === "off"
+  String(process.env.CHART_HEADER_FIELDS || "off").toLowerCase() === "on"
     ? CHART_DETECTION_PROMPT
+    : CHART_DETECTION_PROMPT
         .replace(/^- Separately, ALWAYS transcribe.*\n/m, "")
-        .replace(/^\s*"header(Open|High|Low|Close)".*\n/gm, "")
-    : CHART_DETECTION_PROMPT;
+        .replace(/^\s*"header(Open|High|Low|Close)".*\n/gm, "");
 
 const CONFIRMED_TRIGGER_WORDS = [
   "engulfing", "pin bar", "pinbar", "hammer", "doji", "inside bar", "lower high",
@@ -5505,6 +5507,37 @@ async function readChartDetectionResponse(options) {
     recovered = Boolean(parsed);
   }
   return { response, parsed, recovered };
+}
+
+// A small, separate read of the four prices printed in the chart header (whichever candle it
+// describes). It runs only when the data match is unverified, so it never changes how the main
+// chart read behaves. Returns null on any failure.
+async function readChartHeaderOhlc({ imageBase64, mimeType }) {
+  if (!isAiProviderConfigured() || !imageBase64) return null;
+  try {
+    const response = await runVisionModel({
+      systemPrompt:
+        "You read one thing from a trading chart screenshot: the open (O), high (H), low (L) and close (C) prices printed in the top-left chart header, exactly as shown, for whichever candle the header describes. " +
+        'Return only JSON: {"open": number or null, "high": number or null, "low": number or null, "close": number or null}. ' +
+        "Use null for anything that is not printed. Never estimate a price from the candles.",
+      userText: "Read the header open, high, low and close. Return only JSON.",
+      imageBase64,
+      mimeType,
+      openaiModel: "gpt-4.1",
+      claudeModel: CLAUDE_MODEL,
+      temperature: 0,
+      imageDetail: "high",
+      maxTokens: 200,
+    });
+    const value = extractJsonObject(response?.text || "");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const read = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : null);
+    const out = { open: read(value.open), high: read(value.high), low: read(value.low), close: read(value.close) };
+    return Object.values(out).every((v) => v !== null) ? out : null;
+  } catch (error) {
+    console.warn("[chart-header-read] skipped:", error?.message || error);
+    return null;
+  }
 }
 
 async function detectChartContextFromImage({ imageBase64, mimeType, submittedInstrument = "", selectedTimeframe = "", selectedDateText = "", analysisType = "post-trade" }) {
@@ -31849,17 +31882,23 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       }
       // With the mouse pointer on the chart the header describes another candle, so the check
       // above cannot confirm the feed. The header's own prices still can (see the function).
-      if (String(process.env.HEADER_FEED_RECONCILE || "on").toLowerCase() !== "off") {
+      // Only the "date_unverified" case (the usual result of a pointer on the chart) is handled,
+      // so charts that fail for other reasons are not touched.
+      if (String(process.env.HEADER_FEED_RECONCILE || "on").toLowerCase() !== "off" && chartDataMatch?.status === "date_unverified") {
+        let headerPrices = {
+          open: chartDetection?.headerOpen,
+          high: chartDetection?.headerHigh,
+          low: chartDetection?.headerLow,
+          close: chartDetection?.headerClose,
+        };
+        if (!Object.values(headerPrices).every((v) => Number(v) > 0)) {
+          headerPrices = (await readChartHeaderOhlc({ imageBase64, mimeType })) || headerPrices;
+        }
         const headerReconciled = reconcileWithHeaderFeedOffset({
-          onDiagnostic: (info) => console.log("[chart-data-match] header feed check: " + JSON.stringify({ symbol: normalizedSymbol, status: chartDataMatch.status, ...info })),
+          onDiagnostic: (info) => console.log("[chart-data-match] header feed check: " + JSON.stringify({ symbol: normalizedSymbol, status: chartDataMatch.status, headerPrices, ...info })),
           chartDataMatch,
           candles: marketReference.impulseCandles?.length ? marketReference.impulseCandles : marketReference.timeframeCandles,
-          header: {
-            open: chartDetection?.headerOpen,
-            high: chartDetection?.headerHigh,
-            low: chartDetection?.headerLow,
-            close: chartDetection?.headerClose,
-          },
+          header: headerPrices,
           lastClose: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
           tolerance: getFinalVisiblePriceSyncTolerance({ marketReference, symbol: normalizedSymbol, targetPrice: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice }),
           maxOffset: getCleanBreakTolerance(normalizedSymbol) * 5,
