@@ -5551,13 +5551,12 @@ async function readChartPriceTag({ imageBase64, mimeType }) {
   try {
     const response = await runVisionModel({
       systemPrompt:
-        "You read two numbers from a trading chart screenshot. " +
+        "You read one number from a trading chart screenshot. " +
         "lastPrice: the number inside the coloured (red or green) price tag on the right-hand price axis that marks the current price, level with the last candle at the right edge. " +
         "It is NOT the grey or white tag that follows the mouse pointer, and NOT a tag that belongs to a line drawn on the chart. " +
-        "headerClose: the C (close) value printed in the top-left chart header next to O, H and L. " +
-        'Return only JSON: {"lastPrice": number or null, "headerClose": number or null}. ' +
-        "Use null for anything you cannot read. Never estimate a number.",
-      userText: "Read lastPrice and headerClose. Return only JSON.",
+        'Return only JSON: {"lastPrice": number or null}. ' +
+        "Use null if you cannot read it. Never estimate a number.",
+      userText: "Read lastPrice. Return only JSON.",
       imageBase64,
       mimeType,
       openaiModel: "gpt-4.1",
@@ -5569,7 +5568,7 @@ async function readChartPriceTag({ imageBase64, mimeType }) {
     const value = extractJsonObject(response?.text || "");
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const read = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : null);
-    return { lastPrice: read(value.lastPrice), headerClose: read(value.headerClose) };
+    return { lastPrice: read(value.lastPrice) };
   } catch (error) {
     console.warn("[pointer-check] read skipped:", error?.message || error);
     return null;
@@ -31317,9 +31316,17 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
 
     {
       const pointerEvidence = await pointerEvidencePromise;
-      const pointerCheck = applyPointerEvidence({ chartDetection, evidence: pointerEvidence, selectedDateText });
+      // The close to compare with the tag is the main chart read's own: the small extra read
+      // sometimes returned the header's low or high by mistake and flagged clean charts.
+      const mainClose = Number(chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice);
+      const pointerCheck = applyPointerEvidence({
+        chartDetection,
+        evidence: { lastPrice: pointerEvidence?.lastPrice ?? null, headerClose: Number.isFinite(mainClose) ? mainClose : null },
+        selectedDateText,
+      });
       console.log("[pointer-check]", JSON.stringify({
         evidence: pointerEvidence,
+        mainClose: Number.isFinite(mainClose) ? mainClose : null,
         applied: pointerCheck.applied,
         reason: pointerCheck.reason,
         dateBefore: chartDetection?.latestVisibleDate || null,

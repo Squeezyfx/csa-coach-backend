@@ -23,10 +23,11 @@ const num = (value) => {
 
 const isoDate = (value) => (/^\d{4}-\d{2}-\d{2}$/.test(String(value || "").trim()) ? String(value).trim() : "");
 
-// How far apart the header's close and the price tag may be before the header is not the last
-// candle: a hundredth of a percent of price (about one pip on EURUSD).
+// How far apart the chart read's close and the price tag may be before that close is not the last
+// candle: 0.015% of price (about 1.7 pips on EURUSD). A single misread digit stays under it, while a
+// hovered candle is usually several pips away.
 export function pointerPriceThreshold(price) {
-  return Number(price) * 0.00008;
+  return Number(price) * 0.00015;
 }
 
 export function applyPointerEvidence({ chartDetection, evidence, selectedDateText = "" } = {}) {

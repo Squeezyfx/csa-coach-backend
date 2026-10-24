@@ -64,8 +64,8 @@ test("missing, implausible or non-chart evidence changes nothing", () => {
 });
 
 test("the tolerance scales with the price", () => {
-  assert.ok(pointerPriceThreshold(1.12) < 0.0001);
-  assert.ok(pointerPriceThreshold(53000) > 4);
+  assert.ok(pointerPriceThreshold(1.12) < 0.0002);
+  assert.ok(pointerPriceThreshold(53000) > 6);
 });
 
 test("a tag outside the chart's own price axis is not trusted", () => {
@@ -81,4 +81,14 @@ test("a tag outside the chart's own price axis is not trusted", () => {
     evidence: { lastPrice: 1.1199, headerClose: 1.12374 },
   });
   assert.equal(inside.applied, true);
+});
+
+test("the benchmark cases that were wrongly flagged are left alone", () => {
+  // Header close and tag agree to the last digit, or differ by a digit or two of misreading.
+  for (const [tag, close] of [[1.37913, 1.37913], [1.37913, 1.37906], [53524.2, 53524.2], [0.857, 0.85693], [1.62539, 1.62532]]) {
+    const result = applyPointerEvidence({ chartDetection: detection(), evidence: { lastPrice: tag, headerClose: close } });
+    assert.equal(result.applied, false, `${tag} vs ${close}`);
+  }
+  // A hovered candle several pips away is still caught.
+  assert.equal(applyPointerEvidence({ chartDetection: detection(), evidence: { lastPrice: 1.12256, headerClose: 1.12212 } }).applied, true);
 });
