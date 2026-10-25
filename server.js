@@ -31181,12 +31181,14 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
     // ERASE_CROSSHAIR_LABEL=off turns this off.
     let visionBuffer = req.file.buffer;
     let visionMimeType = req.file.mimetype || "image/png";
+    let crosshairBoxErased = null;
     if (String(process.env.ERASE_CROSSHAIR_LABEL || "on").toLowerCase() !== "off" && /png/i.test(visionMimeType)) {
       try {
         const erased = eraseCrosshairTimeLabels(req.file.buffer);
         if (erased) {
           visionBuffer = erased.buffer;
           visionMimeType = "image/png";
+          crosshairBoxErased = erased.erased;
           console.log("[crosshair-eraser] covered the pointer's date box:", JSON.stringify(erased.erased));
         }
       } catch (error) {
@@ -31313,6 +31315,8 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       const analysis = buildInsufficientChartDataAnalysis({ submittedInstrument, timeframe, selectedDateText, chartDetection });
       return stoppedResponse({ res, errorType: "insufficient_chart_data", error: "Uploaded chart does not have enough visible price data for review.", analysis, submittedInstrument, timeframe, chartDetection, normalizedSymbol, timezone, selectedTimeframeProfile });
     }
+
+    if (crosshairBoxErased) chartDetection = { ...chartDetection, crosshairBoxErased };
 
     {
       const pointerEvidence = await pointerEvidencePromise;
