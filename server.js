@@ -4,6 +4,7 @@ import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
 import { setCourseAccess } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
 import { createAnalysisSlots } from "./analysis-slots.js";
+import { attemptLimitsFromEnv, createAttemptLimiter, exemptEmailsFromEnv } from "./attempt-limiter.js";
 import { readFileSync as readSupportGuideFile } from "node:fs";
 import {
   buildSystemPrompt,
@@ -100,6 +101,12 @@ const AI_PROVIDER = String(process.env.AI_PROVIDER || "openai")
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-5";
+// Optional faster settings for the two slowest steps (the first chart read and the full visual
+// review). Unset, both use CLAUDE_MODEL and the same token budget as before. Test any change on
+// the 16-chart benchmark before using it for customers.
+const CHART_VALIDATION_MODEL = process.env.CHART_VALIDATION_MODEL || CLAUDE_MODEL;
+const VISUAL_REVIEW_MODEL = process.env.VISUAL_REVIEW_MODEL || CLAUDE_MODEL;
+const VISUAL_REVIEW_MAX_TOKENS = Math.max(600, Number(process.env.VISUAL_REVIEW_MAX_TOKENS) || 2000);
 const BENCHMARK_DRY_RUN_ENABLED =
   String(process.env.BENCHMARK_DRY_RUN_ENABLED || "")
     .trim()
@@ -5595,7 +5602,7 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
       imageBase64,
       mimeType,
       openaiModel: "gpt-4.1",
-      claudeModel: CLAUDE_MODEL,
+      claudeModel: CHART_VALIDATION_MODEL,
       temperature: 0,
       imageDetail: "high",
     });
@@ -9327,9 +9334,9 @@ Return exactly this JSON shape:
       // Keep the same structured review, but avoid reserving an unnecessarily
       // large generation budget for prose the deterministic backend later
       // normalizes/locks anyway.
-      maxTokens: 2000,
+      maxTokens: VISUAL_REVIEW_MAX_TOKENS,
       openaiModel: "gpt-4.1-mini",
-      claudeModel: CLAUDE_MODEL,
+      claudeModel: VISUAL_REVIEW_MODEL,
       temperature: 0,
       imageDetail: "high",
     });
@@ -31047,6 +31054,33 @@ const analysisSlotMiddleware = analysisSlots.middleware((req, res) =>
   })
 );
 
+// Cost guard: every review attempt that reaches the AI is counted per user and for the whole
+// service (see attempt-limiter.js). The caps can be changed with ATTEMPT_* variables on the
+// server; ATTEMPT_LIMIT_EXEMPT_EMAILS lists emails that are never limited (for example the owner).
+const attemptLimiter = createAttemptLimiter({ limits: attemptLimitsFromEnv() });
+const attemptLimitExemptEmails = exemptEmailsFromEnv();
+setInterval(() => attemptLimiter.sweep(), 10 * 60 * 1000).unref();
+
+function enforceAttemptLimits({ res, requestAuth, entitlement }) {
+  const email = String(requestAuth?.user?.email || "").toLowerCase();
+  if (attemptLimitExemptEmails.has(email)) return;
+  const userId = requestAuth.user.id;
+  const verdict = attemptLimiter.check({ userId, plan: entitlement?.effectivePlan });
+  if (!verdict.allowed) {
+    console.warn("[attempt-limit] blocked:", JSON.stringify({ userId, plan: entitlement?.effectivePlan, reason: verdict.reason, retryAfterSeconds: verdict.retryAfterSeconds }));
+    const error = new Error(verdict.message);
+    error.statusCode = 429;
+    error.errorType = verdict.errorType;
+    error.retryAfterSeconds = verdict.retryAfterSeconds;
+    throw error;
+  }
+  attemptLimiter.record(userId);
+  // An attempt that ends in an error (not a busy server or a limit) counts toward the failure cap.
+  res.on("finish", () => {
+    if (res.statusCode >= 400 && res.statusCode !== 429 && res.statusCode !== 503) attemptLimiter.recordFailure(userId);
+  });
+}
+
 app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
   const startedRss = process.memoryUsage().rss;
   res.on("finish", () => {
@@ -31202,6 +31236,7 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
 
     if (!benchmarkDryRun) {
       assertAnalysisAllowed(entitlement);
+      enforceAttemptLimits({ res, requestAuth, entitlement });
     }
 
     const totalAnalysisStartedAt =
@@ -31211,7 +31246,9 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       buildId: CSA_BUILD_ID,
       focusedPriceMode:
         "independent_line_labels_then_server_mapping",
-      fullVisualMaxTokens: 2000,
+      fullVisualMaxTokens: VISUAL_REVIEW_MAX_TOKENS,
+      visualReviewModel: VISUAL_REVIEW_MODEL,
+      chartValidationModel: CHART_VALIDATION_MODEL,
       visualAndPriceMap:
         "parallel",
       chartNativeBranches:
@@ -33803,6 +33840,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       }
     );
     const statusCode = Number(error?.statusCode) || 500;
+    if (error?.retryAfterSeconds) res.set("Retry-After", String(error.retryAfterSeconds));
     return res.status(statusCode).json({
       success: false,
       error:
