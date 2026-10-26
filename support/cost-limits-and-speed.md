@@ -34,7 +34,20 @@ The two slowest steps of a review are the first chart read (about 13 to 15 s) an
 | `CHART_VALIDATION_MODEL` | first chart read | same as `CLAUDE_MODEL` |
 | `VISUAL_REVIEW_MODEL` | full visual review | same as `CLAUDE_MODEL` |
 | `VISUAL_REVIEW_MAX_TOKENS` | size of the visual review answer | 2000 |
+| `SKIP_VISUAL_REVIEW` | `on` leaves out the full visual review (testing only) | off |
 
 Do **not** set these on the live service first. Set one on the **test service**, run the 16 charts, and
 compare with the last good run (15 of 16, same entries). Try `VISUAL_REVIEW_MODEL` first, one change at a
 time. The Render log line `CSA PERFORMANCE CONFIG` shows the models in use.
+
+## 3. What the first speed tests showed (2026-10-26)
+
+- `VISUAL_REVIEW_MODEL=claude-haiku-5-5` was refused by the provider ("temperature is deprecated for this
+  model"). The server now notices this once per model and retries without `temperature`, so newer models
+  work instead of failing the call.
+- While that call was failing, the review carried on without the full visual review. On the four test
+  charts (2898, 2901, 2914, 2918) the entries, direction, data match and coach text were **identical** to
+  the baseline, and the review took about half as long (24-26 s instead of 51-54 s for the clean charts).
+- `SKIP_VISUAL_REVIEW=on` does the same on purpose. Those four charts have no marks drawn by the trader, so
+  the test does not show what is lost on charts where the trader drew entries, stops or zones. Check marked
+  charts (Pre-trade and Post-trade) with the switch on and off before using it for customers.

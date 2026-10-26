@@ -107,6 +107,10 @@ const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-5";
 const CHART_VALIDATION_MODEL = process.env.CHART_VALIDATION_MODEL || CLAUDE_MODEL;
 const VISUAL_REVIEW_MODEL = process.env.VISUAL_REVIEW_MODEL || CLAUDE_MODEL;
 const VISUAL_REVIEW_MAX_TOKENS = Math.max(600, Number(process.env.VISUAL_REVIEW_MAX_TOKENS) || 2000);
+// SKIP_VISUAL_REVIEW=on leaves out the full visual review (the slowest step). The levels, entries and
+// coach text come from the data and the deterministic engine; what is lost is the reading of the
+// trader's own marks on the chart. For testing only until checked on marked charts.
+const SKIP_VISUAL_REVIEW = String(process.env.SKIP_VISUAL_REVIEW || "off").toLowerCase() === "on";
 const BENCHMARK_DRY_RUN_ENABLED =
   String(process.env.BENCHMARK_DRY_RUN_ENABLED || "")
     .trim()
@@ -165,6 +169,8 @@ function getAnthropicText(message) {
  * The model is used only for the same visual interpretation work the
  * OpenAI calls were already doing.
  */
+const modelsWithoutTemperature = new Set();
+
 async function runVisionModel({
   systemPrompt,
   userText,
@@ -183,10 +189,9 @@ async function runVisionModel({
       throw new Error("ANTHROPIC_API_KEY is missing on the server.");
     }
 
-    const response = await anthropic.messages.create({
+    const request = {
       model: claudeModel,
       max_tokens: maxTokens,
-      temperature,
       system: systemPrompt,
       messages: [
         {
@@ -207,7 +212,25 @@ async function runVisionModel({
           ],
         },
       ],
-    });
+    };
+    // Some newer models reject `temperature` ("temperature is deprecated for this model"). Learn
+    // that once per model and leave it out from then on, instead of failing the call.
+    let response;
+    if (modelsWithoutTemperature.has(claudeModel)) {
+      response = await anthropic.messages.create(request);
+    } else {
+      try {
+        response = await anthropic.messages.create({ ...request, temperature });
+      } catch (error) {
+        if (error?.status === 400 && /temperature/i.test(String(error?.message || ""))) {
+          modelsWithoutTemperature.add(claudeModel);
+          console.warn(`[model] ${claudeModel} does not accept temperature; calling it without.`);
+          response = await anthropic.messages.create(request);
+        } else {
+          throw error;
+        }
+      }
+    }
 
     return {
       provider,
@@ -31248,6 +31271,7 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
         "independent_line_labels_then_server_mapping",
       fullVisualMaxTokens: VISUAL_REVIEW_MAX_TOKENS,
       visualReviewModel: VISUAL_REVIEW_MODEL,
+      skipVisualReview: SKIP_VISUAL_REVIEW,
       chartValidationModel: CHART_VALIDATION_MODEL,
       visualAndPriceMap:
         "parallel",
@@ -32105,9 +32129,11 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       initialVisualReview,
       initialFrameworkPriceMap,
     ] = await Promise.all([
-      benchmarkDiagnosticOnly
+      benchmarkDiagnosticOnly || SKIP_VISUAL_REVIEW
         ? Promise.resolve(visualFallback(
-            "Credit-saving benchmark diagnostic mode skipped full customer-facing visual feedback."
+            benchmarkDiagnosticOnly
+              ? "Credit-saving benchmark diagnostic mode skipped full customer-facing visual feedback."
+              : "The full visual review was switched off on the server (SKIP_VISUAL_REVIEW)."
           ))
         : compareUploadedChartWithCsaFramework({
         imageBase64,
