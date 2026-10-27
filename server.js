@@ -1,7 +1,7 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
-import { setCourseAccess } from "./ghl-access.js";
+import { courseTagUpdates, setCourseAccess } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
 import { createAnalysisSlots } from "./analysis-slots.js";
 import { attemptLimitsFromEnv, createAttemptLimiter, exemptEmailsFromEnv } from "./attempt-limiter.js";
@@ -1089,20 +1089,32 @@ async function updateProfileFromStripeSubscription(subscription, eventId = "") {
     !subscriptionEnded &&
     updates.subscription_plan !== "starter" &&
     ["active", "trialing"].includes(mappedStatus);
-  if (bonusOn || subscriptionEnded) {
+  // Elite courses use a second pair of tags. They are switched on for an active Elite plan, and off
+  // only for someone who was Elite before this change (a downgrade or a cancellation), so Pro
+  // subscribers never trigger the Elite workflows.
+  const courseUpdates = courseTagUpdates({
+    bonusOn,
+    subscriptionEnded,
+    newPlan: updates.subscription_plan,
+    previousPlan: profile.subscription_plan,
+  });
+
+  for (const { tier, active } of courseUpdates) {
     setCourseAccess({
       email: result.data?.email || "",
       name: result.data?.full_name || "",
-      active: bonusOn,
+      active,
+      tier,
     })
       .then((outcome) => {
         const who = result.data?.email || profile.id;
+        const what = tier === "elite" ? "Elite course access" : "Course access";
         if (outcome?.skipped) {
-          console.warn(`Course access skipped for ${who}: GoHighLevel is not configured (GHL_API_KEY / GHL_LOCATION_ID).`);
+          console.warn(`${what} skipped for ${who}: GoHighLevel is not configured (GHL_API_KEY / GHL_LOCATION_ID).`);
         } else if (outcome?.ok) {
-          console.log(`Course access: ${who} marked ${bonusOn ? "active" : "ended"} in GoHighLevel.`);
+          console.log(`${what}: ${who} marked ${active ? "active" : "ended"} in GoHighLevel.`);
         } else {
-          console.warn(`Course access update failed for ${who}: ${outcome?.error || "unknown error"}`);
+          console.warn(`${what} update failed for ${who}: ${outcome?.error || "unknown error"}`);
         }
       })
       .catch((error) => console.warn("Course access update error:", error?.message || error));
