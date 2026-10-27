@@ -6,6 +6,7 @@ import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-gua
 import { createAnalysisSlots } from "./analysis-slots.js";
 import { attemptLimitsFromEnv, createAttemptLimiter, exemptEmailsFromEnv } from "./attempt-limiter.js";
 import { isMissingStripeCustomer } from "./stripe-customer.js";
+import { usagePeriodStart } from "./usage-period.js";
 import { readFileSync as readSupportGuideFile } from "node:fs";
 import {
   buildSystemPrompt,
@@ -486,12 +487,29 @@ async function getUserPlanEntitlement(userId) {
   const effectivePlan = hasActiveBetaOverride ? "elite" : usableBasePlan;
   const planConfig = PLAN_CONFIG[effectivePlan];
 
-  const { count, error: usageError } = await supabaseAdmin
-    .from("usage_records")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", userId)
-    .eq("action_type", "chart_review")
-    .eq("usage_month", getCurrentUsageMonth());
+  const periodStart = hasActiveBetaOverride
+    ? null
+    : usagePeriodStart({
+        basePlan,
+        subscriptionStatus,
+        currentPeriodStart: profile.current_period_start,
+      });
+  const countUsage = (sincePeriodStart) => {
+    let query = supabaseAdmin
+      .from("usage_records")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("action_type", "chart_review");
+    return sincePeriodStart
+      ? query.gte("created_at", sincePeriodStart)
+      : query.eq("usage_month", getCurrentUsageMonth());
+  };
+  let { count, error: usageError } = await countUsage(periodStart);
+  // If the table has no created_at column, fall back to counting the calendar month.
+  if (usageError && periodStart) {
+    console.warn("Usage count by billing period failed, using the calendar month:", usageError.message);
+    ({ count, error: usageError } = await countUsage(null));
+  }
 
   if (usageError) {
     const error = new Error(`Unable to check monthly usage: ${usageError.message}`);
