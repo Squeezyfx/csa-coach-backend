@@ -5,6 +5,7 @@ import { setCourseAccess } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
 import { createAnalysisSlots } from "./analysis-slots.js";
 import { attemptLimitsFromEnv, createAttemptLimiter, exemptEmailsFromEnv } from "./attempt-limiter.js";
+import { isMissingStripeCustomer } from "./stripe-customer.js";
 import { readFileSync as readSupportGuideFile } from "node:fs";
 import {
   buildSystemPrompt,
@@ -30785,13 +30786,22 @@ app.post("/create-checkout-session", async (req, res) => {
     let customerId = profile.stripe_customer_id || "";
 
     if (customerId) {
-      const existingSubscriptions = await stripe.subscriptions.list({
-        customer: customerId,
-        status: "all",
-        limit: 10,
-      });
+      let existingSubscriptions = null;
+      try {
+        existingSubscriptions = await stripe.subscriptions.list({
+          customer: customerId,
+          status: "all",
+          limit: 10,
+        });
+      } catch (error) {
+        // A customer id saved while testing (sandbox) does not exist in the live Stripe account.
+        // Start again with a fresh customer instead of stopping the purchase.
+        if (!isMissingStripeCustomer(error)) throw error;
+        console.warn(`[stripe] saved customer ${customerId} not found in this Stripe account; creating a new one.`);
+        customerId = "";
+      }
 
-      const blockingSubscription = existingSubscriptions.data.find((subscription) =>
+      const blockingSubscription = existingSubscriptions?.data.find((subscription) =>
         ["active", "trialing", "past_due", "incomplete", "unpaid", "paused"].includes(
           subscription.status
         )
@@ -30806,7 +30816,9 @@ app.post("/create-checkout-session", async (req, res) => {
           errorType: "subscription_already_exists",
         });
       }
-    } else {
+    }
+
+    if (!customerId) {
       const customer = await stripe.customers.create({
         email: requestAuth.user.email || profile.email || undefined,
         name: profile.full_name || undefined,
@@ -30913,10 +30925,20 @@ app.post("/create-billing-portal-session", async (req, res) => {
       });
     }
 
-    const portalSession = await stripe.billingPortal.sessions.create({
-      customer: profileResult.data.stripe_customer_id,
-      return_url: FRONTEND_URL,
-    });
+    let portalSession;
+    try {
+      portalSession = await stripe.billingPortal.sessions.create({
+        customer: profileResult.data.stripe_customer_id,
+        return_url: FRONTEND_URL,
+      });
+    } catch (error) {
+      if (!isMissingStripeCustomer(error)) throw error;
+      return res.status(404).json({
+        success: false,
+        error: "No Stripe billing account is connected to this profile yet.",
+        errorType: "billing_customer_not_found",
+      });
+    }
 
     return res.json({
       success: true,
