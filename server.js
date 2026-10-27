@@ -31091,12 +31091,24 @@ function memoryLine(label) {
 // jumps while analyses run (large screenshots). Search the logs for "CSA MEMORY".
 setInterval(() => console.log(memoryLine("idle-check")), 5 * 60 * 1000).unref();
 
-const analysisSlotMiddleware = analysisSlots.middleware((req, res) =>
-  res.status(503).json({
-    success: false,
-    errorType: "server_busy",
-    error: "The coach is busy reviewing other charts right now. Please try again in a minute.",
-  })
+// When reviews have to wait for a free slot, Elite goes first, then Pro, then everyone else (beta
+// testers count as Pro). The plan is only looked up when the server is busy.
+const PLAN_QUEUE_PRIORITY = Object.freeze({ elite: 2, pro: 1 });
+async function planQueuePriorityFor(req) {
+  if (!getBearerToken(req)) return 0;
+  const auth = await getRequestUser(req);
+  const entitlement = await getUserPlanEntitlement(auth.user.id);
+  return PLAN_QUEUE_PRIORITY[entitlement?.effectivePlan] || 0;
+}
+
+const analysisSlotMiddleware = analysisSlots.middleware(
+  (req, res) =>
+    res.status(503).json({
+      success: false,
+      errorType: "server_busy",
+      error: "The coach is busy reviewing other charts right now. Please try again in a minute.",
+    }),
+  { priorityFor: planQueuePriorityFor }
 );
 
 // Cost guard: every review attempt that reaches the AI is counted per user and for the whole

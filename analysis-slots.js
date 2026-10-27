@@ -29,9 +29,10 @@ export function createAnalysisSlots({ max = 2, maxWaitMs = 120000, now = () => D
   }
 
   // Resolves with a release function, or rejects with { busy: true } after maxWaitMs.
-  function acquire() {
+  // A higher priority goes ahead of lower ones in the queue (equal priorities keep their order).
+  function acquire({ priority = 0 } = {}) {
     return new Promise((resolve, reject) => {
-      const entry = { resolve, cancelled: false, timer: null };
+      const entry = { resolve, cancelled: false, timer: null, priority };
       if (active < max && queue.length === 0) {
         grant(entry);
         return;
@@ -42,7 +43,9 @@ export function createAnalysisSlots({ max = 2, maxWaitMs = 120000, now = () => D
         if (index >= 0) queue.splice(index, 1);
         reject({ busy: true });
       }, maxWaitMs);
-      queue.push(entry);
+      let at = queue.length;
+      while (at > 0 && queue[at - 1].priority < priority) at -= 1;
+      queue.splice(at, 0, entry);
     });
   }
 
@@ -51,7 +54,9 @@ export function createAnalysisSlots({ max = 2, maxWaitMs = 120000, now = () => D
     stats: () => ({ active, waiting: queue.length, max }),
     // Express middleware: take a slot, give it back when the response ends or the
     // connection closes (including a browser that gave up).
-    middleware(onBusy) {
+    // priorityFor(req) (optional, may be async) says who goes first when requests have to wait. It is
+    // only called when this request would actually wait, so a quiet server pays nothing for it.
+    middleware(onBusy, { priorityFor = null } = {}) {
       return async (req, res, nextMiddleware) => {
         let release = null;
         let finished = false;
@@ -62,7 +67,15 @@ export function createAnalysisSlots({ max = 2, maxWaitMs = 120000, now = () => D
         res.on("close", done);
         res.on("finish", done);
         try {
-          release = await acquire();
+          let priority = 0;
+          if (priorityFor && (active >= max || queue.length > 0)) {
+            try {
+              priority = Number(await priorityFor(req)) || 0;
+            } catch {
+              priority = 0;
+            }
+          }
+          release = await acquire({ priority });
           if (finished) {
             release();
             return;
