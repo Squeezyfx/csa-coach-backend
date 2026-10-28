@@ -30083,7 +30083,7 @@ app.post("/password-reset", async (req, res) => {
     const { error } = await supabaseAdmin.auth.resetPasswordForEmail(email, {
       // Matches the emailRedirectTo used elsewhere in the front-end's own
       // sign-up flow, so the recovery link lands back on the same page.
-      redirectTo: "https://training.csaforex.com/version2web",
+      redirectTo: FRONTEND_URL,
     });
     // Supabase's own resetPasswordForEmail never reveals whether the email
     // is registered - always report success for that case so this public
