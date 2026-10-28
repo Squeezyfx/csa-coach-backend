@@ -158,6 +158,32 @@ test("a plan names where the stop loss and take profit would go, and what that r
   assert.match(buy.next.risk, /under 1\.5 times/);
 });
 
+test("a stop beyond a key level sits past it by the spread, and the text says whose numbers the risk uses", () => {
+  const facts = {
+    instrument: "EURUSD",
+    direction: "bearish",
+    analysisType: "pre-trade",
+    trade: { visible: false },
+    executedOrder: null,
+    risk: { stopShown: false, targetShown: false },
+    selectorDiagnostics: levels([1.13907, 1.13524, 1.13714, 1.1311]),
+  };
+  const result = assessTradePillars({ facts, area: eurusdArea, hasValidatedArea: true });
+  // the text names the key level, the stop itself is one pip (the typical EURUSD spread) beyond it
+  assert.match(result.next.exit, /^Stop loss: just above the key high at 1\.13714, with room for the spread\./);
+  assert.ok(Math.abs(result.geometry.stop - 1.13724) < 1e-9);
+  assert.match(result.next.cancel, /^If a candle closes above 1\.13724, this sell idea is wrong\./);
+  assert.match(result.next.risk, /^With the suggested stop and targets you risk 20 pips/);
+
+  // the trader's own stop and target: the text says they are the trader's prices
+  const own = assessTradePillars({
+    facts: { ...facts, plannedTrade: { entry: 1.13524, stop: 1.1385, target: 1.1311 } },
+    area: eurusdArea,
+    hasValidatedArea: true,
+  });
+  assert.match(own.next.risk, /^With your planned prices you risk /);
+});
+
 test("pillar items are ordered, capped per pillar, labelled and de-duplicated", () => {
   const items = [
     { pillar: "management", text: "M1." },

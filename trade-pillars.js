@@ -310,8 +310,9 @@ export function minimumStopFloor(symbol = "") {
   return 6 * (code.includes("JPY") ? 0.01 : 0.0001);
 }
 
-// { price, keyLevel, spread, riskDistance } for the stop of a planned trade
-// from `center`. riskDistance includes the spread.
+// { price, level, keyLevel, spread, riskDistance } for the stop of a planned trade
+// from `center`. The price sits beyond the key level (or the entry zone) by the spread, and
+// riskDistance includes it. `level` is the key level itself, which the text names.
 function planStopFor({ facts, area, center, levels, isSell }) {
   const avgRange = num(facts?.volatility?.avgRange);
   const sameLevel = center * 0.00005;
@@ -339,11 +340,13 @@ function planStopFor({ facts, area, center, levels, isSell }) {
     })
     .sort((a, b) => Math.abs(a - center) - Math.abs(b - center));
   if (candidates.length) {
+    const level = candidates[0];
     return {
-      price: candidates[0],
+      price: isSell ? level + spread : level - spread,
+      level,
       keyLevel: true,
       spread,
-      riskDistance: Math.abs(candidates[0] - center) + spread,
+      riskDistance: Math.abs(level - center) + spread,
     };
   }
 
@@ -1095,7 +1098,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       planStopInfo === null
         ? `Put your stop just beyond the level that proves you wrong (${isSell ? "above" : "below"} your entry area).`
         : planStopInfo.keyLevel
-        ? `Stop loss: just ${isSell ? "above" : "below"} the key ${protectWord} at ${fmtPrice(planStop)}${
+        ? `Stop loss: just ${isSell ? "above" : "below"} the key ${protectWord} at ${fmtPrice(planStopInfo.level)}${
             planStopInfo.spread > 0 ? ", with room for the spread" : ""
           }.`
         : `Stop loss: about ${fmtPrice(planStop)}, past the entry zone, normal candle moves${
@@ -1380,8 +1383,15 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         : "That is under 1.5 times, so look for a further target or skip it.";
       const atFinal =
         userReward === null && (planLadder.length > 1 || planLadder[0]?.final) ? " at the final target" : "";
+      // Say whose numbers these are: the trader's own plan, the suggested levels, or a mix.
+      const rrFrom =
+        userRisk !== null && userReward !== null
+          ? "With your planned prices"
+          : userRisk === null && userReward === null
+          ? "With the suggested stop and targets"
+          : "With your prices and the suggested levels";
       const rrText =
-        `At those levels you risk ${priceDistance(riskDist, symbol).text} to make ${priceDistance(rewardDist, symbol).text}${atFinal} (${rr.toFixed(1)} times your risk). ${verdict}`;
+        `${rrFrom} you risk ${priceDistance(riskDist, symbol).text} to make ${priceDistance(rewardDist, symbol).text}${atFinal} (${rr.toFixed(1)} times your risk). ${verdict}`;
       // Only the trader's own numbers are graded; the suggestion is not.
       if (userRisk !== null && userReward !== null) {
         const rrShort = rr.toFixed(1);
