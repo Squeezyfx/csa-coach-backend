@@ -20968,7 +20968,8 @@ async function extractVisibleCurrentWeekFrame({ imageBase64, mimeType, timeframe
 // that later sets marketInventoryVerified through providerInventoryAuthoritative: the provider answered
 // with periods, the chart is the same instrument (every compared price within 0.5%), the closed periods
 // pass the integrity audit and the current-period frame verifies. The matched_reference status is handled
-// by the caller. Keep this in step with the marketInventoryVerified calculation further down.
+// by the caller, and only the time_unverified and partial_reference states qualify (see below). Keep this
+// in step with the marketInventoryVerified calculation further down.
 function providerInventoryCertifiedForFocusedSkip({
   marketReference = null,
   timeframe = "",
@@ -20977,6 +20978,10 @@ function providerInventoryCertifiedForFocusedSkip({
   symbol = "",
 } = {}) {
   if (marketReference?.ok !== true) return false;
+  // Only where the provider's levels are what the entries use. A "mismatch" (the provider's OHLC differs
+  // from the chart's broker feed, e.g. USA30 on OANDA) leaves the chart-read prices as the source of the
+  // entries, so the vision read must still run: skipping it lost Entry 1 on benchmark chart 2914.
+  if (!["time_unverified", "partial_reference"].includes(marketReference?.chartDataMatch?.status)) return false;
   const periods = marketReference?.providerPeriodAnalysis?.periods;
   if (!Array.isArray(periods) || !periods.length) return false;
   const comparisons = Array.isArray(marketReference?.chartDataMatch?.comparisons)
