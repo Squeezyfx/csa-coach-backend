@@ -9031,8 +9031,9 @@ function detectTicketOrderMarkup(levels = []) {
     const kind = match[2].toLowerCase();
     const price =
       nullablePositiveNumber(level?.displayedPrice) ||
-      extractNumericPriceFromLabel(level?.platformLabel) ||
-      extractNumericPriceFromLabel(level?.description);
+      // The label holds only the ticket number, the kind and the lot size ("#489524810 tp"), never the
+      // price. Reading a number from it returned the ticket as a take profit of 489524810.00 (chart 3010).
+      extractNumericPriceFromLabel(String(level?.description || "").replace(/#\d+/g, " "));
     if (!tickets.has(ticket)) tickets.set(ticket, { ticket });
     const entry = tickets.get(ticket);
     if (kind === "buy" || kind === "sell") {
