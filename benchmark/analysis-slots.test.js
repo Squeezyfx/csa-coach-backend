@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAnalysisSlots } from "../analysis-slots.js";
+import { createAnalysisSlots, normalizeQueueTicket } from "../analysis-slots.js";
 
 test("runs up to the limit at once and queues the rest in order", async () => {
   const slots = createAnalysisSlots({ max: 2, maxWaitMs: 1000 });
@@ -85,4 +85,56 @@ test("a failing priority lookup falls back to normal priority and still queues",
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(slots.stats().waiting, 1);
   release();
+});
+
+test("a ticket is accepted only when it looks like a random id", () => {
+  assert.equal(normalizeQueueTicket("abcd1234-ef56"), "abcd1234-ef56");
+  assert.equal(normalizeQueueTicket(["abcd1234-ef56", "x"]), "abcd1234-ef56");
+  assert.equal(normalizeQueueTicket("short"), "");
+  assert.equal(normalizeQueueTicket("has spaces in it!"), "");
+  assert.equal(normalizeQueueTicket(undefined), "");
+});
+
+test("position tells a waiting request its place and a running one that it is running", async () => {
+  let clock = 0;
+  const slots = createAnalysisSlots({ max: 1, maxWaitMs: 1000, now: () => clock });
+  const first = await slots.acquire({ ticket: "ticket-run-0001" });
+  assert.equal(slots.position("ticket-run-0001").state, "running");
+  const second = slots.acquire({ ticket: "ticket-two-0002" });
+  const third = slots.acquire({ ticket: "ticket-three-0003" });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(slots.position("ticket-two-0002"), { state: "waiting", place: 1, waiting: 2, estimatedSeconds: 60 });
+  assert.equal(slots.position("ticket-three-0003").place, 2);
+  assert.equal(slots.position("ticket-three-0003").estimatedSeconds, 120);
+  assert.equal(slots.position("nobody-here-0004").state, "unknown");
+  assert.equal(slots.position("").state, "unknown");
+
+  clock = 40000;
+  first();
+  const releaseSecond = await second;
+  assert.equal(slots.position("ticket-two-0002").state, "running");
+  assert.equal(slots.position("ticket-three-0003").place, 1);
+  // The first review held its slot for 40 seconds, so the estimate now follows that.
+  assert.equal(slots.position("ticket-three-0003").estimatedSeconds, 40);
+  releaseSecond();
+  (await third)();
+  assert.equal(slots.position("ticket-three-0003").state, "unknown");
+});
+
+test("with two slots the estimate counts rounds, not places", async () => {
+  const slots = createAnalysisSlots({ max: 2, maxWaitMs: 1000 });
+  const a = await slots.acquire();
+  const b = await slots.acquire();
+  const c = slots.acquire({ ticket: "ticket-c-00000001" });
+  const d = slots.acquire({ ticket: "ticket-d-00000002" });
+  const e = slots.acquire({ ticket: "ticket-e-00000003" });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(slots.position("ticket-c-00000001").estimatedSeconds, 60);
+  assert.equal(slots.position("ticket-d-00000002").estimatedSeconds, 60);
+  assert.equal(slots.position("ticket-e-00000003").estimatedSeconds, 120);
+  a();
+  b();
+  (await c)();
+  (await d)();
+  (await e)();
 });

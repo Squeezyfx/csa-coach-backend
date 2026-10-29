@@ -3,7 +3,7 @@ import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
 import { courseTagUpdates, setCourseAccess } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
-import { createAnalysisSlots } from "./analysis-slots.js";
+import { createAnalysisSlots, normalizeQueueTicket } from "./analysis-slots.js";
 import { attemptLimitsFromEnv, createAttemptLimiter, exemptEmailsFromEnv } from "./attempt-limiter.js";
 import { isMissingStripeCustomer } from "./stripe-customer.js";
 import { usagePeriodStart } from "./usage-period.js";
@@ -31203,7 +31203,7 @@ const analysisSlotMiddleware = analysisSlots.middleware(
       errorType: "server_busy",
       error: "The coach is busy reviewing other charts right now. Please try again in a minute.",
     }),
-  { priorityFor: planQueuePriorityFor }
+  { priorityFor: planQueuePriorityFor, ticketFor: (req) => req.query?.queueTicket }
 );
 
 // Cost guard: every review attempt that reaches the AI is counted per user and for the whole
@@ -31232,6 +31232,13 @@ function enforceAttemptLimits({ res, requestAuth, entitlement }) {
     if (res.statusCode >= 400 && res.statusCode !== 429 && res.statusCode !== 503) attemptLimiter.recordFailure(userId);
   });
 }
+
+// The page polls this while a review waits for a free slot, with the same random ticket it sent on
+// /analyze-chart. It reveals only the place in line and a rough time, never anything about a user.
+app.get("/analysis-queue-status", (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ success: true, ...analysisSlots.position(normalizeQueueTicket(req.query?.ticket)) });
+});
 
 app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
   const startedRss = process.memoryUsage().rss;
