@@ -20963,6 +20963,66 @@ async function extractVisibleCurrentWeekFrame({ imageBase64, mimeType, timeframe
   }
 }
 
+// True when the provider's own candles already certify the period inventory, so the extra chart-reading
+// call that builds a vision inventory cannot improve it. This repeats, ahead of that call, the same test
+// that later sets marketInventoryVerified through providerInventoryAuthoritative: the provider answered
+// with periods, the chart is the same instrument (every compared price within 0.5%), the closed periods
+// pass the integrity audit and the current-period frame verifies. The matched_reference status is handled
+// by the caller. Keep this in step with the marketInventoryVerified calculation further down.
+function providerInventoryCertifiedForFocusedSkip({
+  marketReference = null,
+  timeframe = "",
+  chartCutoff = null,
+  chartDetection = null,
+  symbol = "",
+} = {}) {
+  if (marketReference?.ok !== true) return false;
+  const periods = marketReference?.providerPeriodAnalysis?.periods;
+  if (!Array.isArray(periods) || !periods.length) return false;
+  const comparisons = Array.isArray(marketReference?.chartDataMatch?.comparisons)
+    ? marketReference.chartDataMatch.comparisons
+    : [];
+  const deviations = comparisons
+    .map((item) => {
+      const chartValue = Number(item?.chart);
+      const providerValue = Number(item?.provider);
+      if (!Number.isFinite(chartValue) || !Number.isFinite(providerValue) || chartValue === 0) return null;
+      return Math.abs(chartValue - providerValue) / Math.abs(chartValue);
+    })
+    .filter((value) => value !== null);
+  if (!deviations.length || !deviations.every((value) => value <= 0.005)) return false;
+
+  const inventoryDate = chartCutoff?.resolvedDate || chartDetection?.latestVisibleDate || "";
+  const cutoffDateTime = chartCutoff?.endDateTime || `${inventoryDate} 23:59:59`;
+  const oandaEndpointIsProvisional =
+    marketReference?.dataProvider === "OANDA" &&
+    ["partial_reference", "date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(
+      marketReference?.chartDataMatch?.status
+    );
+  const tradesOnWeekends = isCryptoSymbol(symbol || "");
+  const marketPeriodInventory = applyCurrentFrameworkPeriodLifecycle({
+    periods: marketReferencePeriodInventory({ marketReference, timeframe, cutoffDate: inventoryDate }),
+    timeframe,
+    cutoffDateTime,
+    explicitlyComplete: oandaEndpointIsProvisional ? false : marketReference?.currentFrameworkPeriodComplete,
+    tradesOnWeekends,
+  });
+  const integrity = auditPeriodInventory({
+    cutoffDate: inventoryDate,
+    periods: marketPeriodInventory.filter((period) =>
+      period?.partialPeriod !== true && period?.periodLifecycle !== "in_progress"
+    ),
+    candles: timeframe === "D1" ? marketReference?.timeframeCandles || [] : [],
+    tolerance: getCleanBreakTolerance(symbol),
+  });
+  if (!integrity.passed) return false;
+  return deriveVerifiedPeriodFrameFromInventory({
+    timeframe,
+    latestVisibleDate: inventoryDate,
+    periodInventory: marketPeriodInventory,
+  })?.currentPeriodFrameVerified === true;
+}
+
 function applyCurrentFrameworkPeriodLifecycle({
   periods = [],
   timeframe = "",
@@ -32388,13 +32448,25 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
     // enough signal to skip the fallback reader.
     const providerOnlyForex = marketReference?.dataProvider === "OANDA" &&
       marketReference?.chartDataMatch?.status === "matched_reference";
+    // A "time_unverified" or "partial_reference" match (the ordinary state for a live chart) still has
+    // a certified provider inventory, so the extra vision call (about 20 seconds) adds nothing there
+    // either. Set FOCUSED_FALLBACK_ALWAYS=true on the server to run it anyway.
+    const skipFocusedFallbackForCertifiedProvider =
+      String(process.env.FOCUSED_FALLBACK_ALWAYS || "").trim().toLowerCase() !== "true" &&
+      providerInventoryCertifiedForFocusedSkip({
+        marketReference,
+        timeframe,
+        chartCutoff,
+        chartDetection,
+        symbol: normalizedSymbol || submittedInstrument,
+      });
     { // Every supported timeframe reconciles its evidence through the shared engine.
       const focusedFallbackStartedAt = csaNowMs();
       const [
         focusedChartNativeFallback,
         visibleCurrentWeekFrame,
       ] = await Promise.all([
-        (providerOnlyForex || (providerInventoryAligned && !BENCHMARK_DRY_RUN_ENABLED))
+        (providerOnlyForex || skipFocusedFallbackForCertifiedProvider || (providerInventoryAligned && !BENCHMARK_DRY_RUN_ENABLED))
           ? Promise.resolve(visualReview?.chartNativeEntryFallback || null)
           : extractFocusedChartNativeEntryFallback({
           imageBase64,
@@ -33220,6 +33292,7 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
         "focused_chart_native_entry_fallback",
         focusedFallbackStartedAt,
         {
+          skippedForCertifiedProvider: skipFocusedFallbackForCertifiedProvider,
           usable: focusedChartNativeFallback?.usable === true,
           candidateCount: Array.isArray(
             focusedChartNativeFallback?.candidates
