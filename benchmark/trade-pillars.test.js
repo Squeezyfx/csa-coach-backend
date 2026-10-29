@@ -1026,3 +1026,20 @@ test("a typed entry is never replaced by the level to watch", () => {
   const result = assessTradePillars({ facts, area: null, hasValidatedArea: false, watchLevel: 1.12037 });
   assert.notEqual(result.geometry && result.geometry.fromWatch, true);
 });
+
+test("a Post-trade review with no trade on the chart still draws the suggested stop and take profits the text names", () => {
+  const facts = {
+    instrument: "EURUSD",
+    direction: "bearish",
+    analysisType: "post-trade",
+    trade: { visible: false },
+    executedOrder: null,
+    risk: { stopShown: false, targetShown: false },
+    selectorDiagnostics: levels([1.13907, 1.13524, 1.13714, 1.1311]),
+  };
+  const result = assessTradePillars({ facts, area: eurusdArea, hasValidatedArea: true });
+  assert.match(result.next.exit, /^Stop loss: just above the key high at 1\.13714/);
+  assert.equal(result.geometry.kind, "plan");
+  assert.ok(Math.abs(result.geometry.stop - 1.13724) < 1e-9);
+  assert.ok(result.geometry.targets.length > 0);
+});

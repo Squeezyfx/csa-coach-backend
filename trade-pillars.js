@@ -1081,7 +1081,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     // average candle beyond the entry zone.
     const planStopInfo = center !== null ? planStopFor({ facts, area, center, levels, isSell }) : null;
     const planStop = planStopInfo ? planStopInfo.price : null;
-    if (dir && center !== null && preTrade) {
+    if (dir && center !== null) {
       geometry = {
         kind: "plan",
         side: isSell ? "sell" : "buy",
