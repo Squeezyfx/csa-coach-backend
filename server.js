@@ -31873,7 +31873,9 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       // provider data. Retry date resolution with the year shifted and let
       // a real provider candle confirm which year actually matches before
       // falling through to the ordinary mismatch/alternate-provider paths.
-      if (chartDataMatch.status === "mismatch" && chartDataMatchCloseGapRatio(chartDataMatch) > 0.01) {
+      // A wrong year also shows up as time_unverified / date_unverified (the exact-time rule is checked
+      // before the price rule), so a price gap over 1% triggers the search for those statuses too.
+      if (["mismatch", "time_unverified", "date_unverified", "partial_or_unknown_candle"].includes(chartDataMatch.status) && chartDataMatchCloseGapRatio(chartDataMatch) > 0.01) {
         yearCorrectionSearch:
         for (let magnitude = 1; magnitude <= 3; magnitude++) {
           for (const delta of [-magnitude, magnitude]) {
