@@ -28397,6 +28397,7 @@ function buildControlledFeedback({
   plan = "starter",
   analysisFramework = "csa",
   personalStrategyAssessment = null,
+  marketData = null,
 }) {
   // A new trading week with no finished day: no bias and no entry yet.
   const newWeekStart = facts?.newWeekStart?.active === true;
@@ -28567,6 +28568,11 @@ function buildControlledFeedback({
 
   const hasSingleReferenceArea =
     referenceAreaTexts.length === 1;
+
+  // The data provider has no prices for this instrument (for example a dollar index), so any level
+  // shown was read from the chart picture only and could not be checked against market prices.
+  const noMarketData = marketData?.unavailable === true;
+  const noMarketDataName = String(marketData?.instrument || "").trim() || "this instrument";
 
   // V4.10.15: a valid Entry 1 must not make the next important structural
   // level disappear. Entry candidates and reference-only levels answer two
@@ -28740,7 +28746,11 @@ function buildControlledFeedback({
   ) {
     addWeakness(
       "entry",
-      facts.direction === "bearish"
+      noMarketData
+        ? referenceAreasText
+          ? `Market data isn't available for ${noMarketDataName}, so the ${referenceAreasText} could only be read from your chart and could not be checked against real prices. Treat ${hasSingleReferenceArea ? "it" : "them"} as a rough guide, not a verified entry.`
+          : `Market data isn't available for ${noMarketDataName}, so no entry area could be checked against real prices.`
+        : facts.direction === "bearish"
         ? referenceAreasText
           ? hasSingleReferenceArea
             ? `The ${referenceAreasText} is worth watching, but too weak to sell from yet.`
@@ -28753,7 +28763,7 @@ function buildControlledFeedback({
             : `The ${referenceAreasText} are worth watching, but too weak to buy from yet.`
           : "No strong support or demand level found for a buy yet."
         : "No strong entry area found yet.",
-      { short: "No strong entry level yet" }
+      { short: noMarketData ? "Levels not verified" : "No strong entry level yet" }
     );
     if (!referenceAreasText && wrongSideReferenceText) {
       addWeakness(
@@ -29065,7 +29075,11 @@ function buildControlledFeedback({
       ? `No entry area yet: there is not enough price action this week. ${weeklyIncompleteAdvice}`
       : `Weekly entries aren't available yet. ${weeklyIncompleteAdvice}`;
   } else if (!hasValidatedArea) {
-    entryPlan = referenceAreasText
+    entryPlan = noMarketData
+      ? referenceAreasText
+        ? `No verified entry, because market data isn't available for ${noMarketDataName}. Use the ${referenceAreasText} as a rough guide and wait for a ${entryTriggerWord}.`
+        : `No verified entry, because market data isn't available for ${noMarketDataName}.`
+      : referenceAreasText
       ? `No strong entry yet. Watch the ${referenceAreasText} for a ${entryTriggerWord}.`
       : wrongSideReferenceText && facts.direction === "bullish"
       ? `No strong buy area yet. Wait for a clear support or demand level, or for price to break above the ${wrongSideReferenceText} and hold.`
@@ -33583,6 +33597,10 @@ ${(visualReview?.strategyMissingInformation || []).length
 
     const finalFeedback = buildControlledFeedback({
       facts: analysisFacts,
+      marketData: {
+        unavailable: marketReference?.ok === false && marketReference?.failureCategory === "symbol_unavailable",
+        instrument: submittedInstrument || chartDetection?.detectedInstrument || "",
+      },
       plan: entitlement?.effectivePlan || "starter",
       analysisFramework: selectedStrategy.analysisFramework,
       personalStrategyAssessment:
@@ -33838,7 +33856,7 @@ ${(visualReview?.strategyMissingInformation || []).length
           analysisFacts?.historicalPhase?.diagnostics || null,
       },
       dashboard: dashboardFeedback,
-      contextStatus: marketReference.ok ? `Market-data-backed CSA setup review completed using ${structureLabel} and visual chart comparison.` : `Setup review completed without market data: ${marketReference.error}`,
+      contextStatus: marketReference.ok ? `Market-data-backed CSA setup review completed using ${structureLabel} and visual chart comparison.` : marketReference.failureCategory === "symbol_unavailable" ? "Setup review completed without market data: prices for this instrument are not available." : `Setup review completed without market data: ${marketReference.error}`,
       grade: dashboardFeedback.setupQualityScore >= 85 ? "A" : dashboardFeedback.setupQualityScore >= 75 ? "B" : dashboardFeedback.setupQualityScore >= 60 ? "C" : dashboardFeedback.setupQualityScore >= 40 ? "D" : "F",
       confidence: dashboardFeedback.setupQualityScore,
       structureScore: dashboardFeedback.scores.setupQuality,
