@@ -1,7 +1,7 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
-import { courseTagUpdates, setCourseAccess } from "./ghl-access.js";
+import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
 import { createAnalysisSlots, normalizeQueueTicket } from "./analysis-slots.js";
 import { attemptLimitsFromEnv, createAttemptLimiter, exemptEmailsFromEnv } from "./attempt-limiter.js";
@@ -30316,6 +30316,18 @@ app.post("/indicator-access", async (req, res) => {
     if (insert.error) throw insert.error;
 
     console.log(`Indicator access requested: ${requestAuth.user.email || requestAuth.user.id} ${platform} ${accountNumber}`);
+    // Tell the owner through GoHighLevel (tag + workflow). Not awaited: it never throws and must not slow the reply.
+    notifyIndicatorRequest({
+      email: requestAuth.user.email || "",
+      name: requestAuth.user.user_metadata?.full_name || requestAuth.user.user_metadata?.name || "",
+      platform,
+      accountNumber,
+      broker: cleanBroker(req.body?.broker),
+    }).then((outcome) => {
+      if (outcome?.skipped) console.warn("Indicator request alert skipped: GoHighLevel is not configured (GHL_API_KEY / GHL_LOCATION_ID).");
+      else if (outcome?.ok) console.log(`Indicator request alert sent to GoHighLevel for ${requestAuth.user.email || requestAuth.user.id}.`);
+      else console.warn(`Indicator request alert failed for ${requestAuth.user.email || requestAuth.user.id}: ${outcome?.error || "unknown error"}`);
+    });
     const rows = await loadIndicatorAccounts(requestAuth.user.id);
     return res.json(indicatorPayload(entitlement, rows));
   } catch (error) {

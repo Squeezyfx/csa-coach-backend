@@ -26,6 +26,7 @@ export function ghlSettings(env = process.env) {
     endedTag: String(env.GHL_TAG_ENDED || "csa-bonus-ended").trim(),
     eliteActiveTag: String(env.GHL_TAG_ELITE_ACTIVE || "csa-elite-active").trim(),
     eliteEndedTag: String(env.GHL_TAG_ELITE_ENDED || "csa-elite-ended").trim(),
+    indicatorRequestedTag: String(env.GHL_TAG_INDICATOR_REQUESTED || "csa-indicator-requested").trim(),
   };
 }
 
@@ -113,6 +114,60 @@ export async function setCourseAccess(
     return { ok: true, contactId, tag: addTag };
   } catch (error) {
     log.warn?.("Course access update failed:", error?.message || error);
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+// A subscriber has asked for the bonus indicator on a trading account. Access is handed out by hand,
+// so this tells the owner: it tags the GoHighLevel contact and a workflow in GoHighLevel reacts to
+// the tag (an internal notification email to the owner, and a confirmation email to the subscriber):
+//   tag "csa-indicator-requested" added -> workflow "Indicator request"
+// The tag is removed first, so a second request from the same person (Elite may register three
+// accounts) adds it again and fires the workflow again. The account details go on the contact as a
+// note; that part is best effort. The details are always in the Supabase indicator_access table.
+// Returns { ok, skipped?, error? } and never throws, so a GoHighLevel problem can never fail the request.
+export async function notifyIndicatorRequest(
+  { email, name = "", platform = "", accountNumber = "", broker = "" },
+  { env = process.env, fetchImpl = globalThis.fetch, log = console } = {}
+) {
+  const settings = ghlSettings(env);
+  const cleanEmail = String(email || "").trim().toLowerCase();
+
+  if (!settings.token || !settings.locationId) return { ok: true, skipped: "not_configured" };
+  if (!cleanEmail) return { ok: false, error: "No email address on the profile." };
+  if (typeof fetchImpl !== "function") return { ok: false, error: "fetch is not available." };
+
+  try {
+    const upsert = await ghlRequest(settings, fetchImpl, "POST", "/contacts/upsert", {
+      locationId: settings.locationId,
+      email: cleanEmail,
+      ...(name ? { name: String(name).trim() } : {}),
+    });
+    const contactId = upsert?.contact?.id;
+    if (!contactId) throw new Error("GoHighLevel did not return a contact id.");
+
+    const tag = settings.indicatorRequestedTag;
+    try {
+      await ghlRequest(settings, fetchImpl, "DELETE", `/contacts/${contactId}/tags`, { tags: [tag] });
+    } catch {
+      // Nothing to remove the first time; the add below is what matters.
+    }
+    await ghlRequest(settings, fetchImpl, "POST", `/contacts/${contactId}/tags`, { tags: [tag] });
+
+    try {
+      const details = [
+        `Indicator requested: ${String(platform).toUpperCase() || "platform not given"} account ${accountNumber || "not given"}`,
+        broker ? `Broker: ${broker}` : "",
+        `Requested at ${new Date().toISOString()}`,
+      ].filter(Boolean).join("\n");
+      await ghlRequest(settings, fetchImpl, "POST", `/contacts/${contactId}/notes`, { body: details });
+    } catch (error) {
+      log.warn?.("Indicator request note failed:", error?.message || error);
+    }
+
+    return { ok: true, contactId, tag };
+  } catch (error) {
+    log.warn?.("Indicator request notification failed:", error?.message || error);
     return { ok: false, error: error?.message || String(error) };
   }
 }

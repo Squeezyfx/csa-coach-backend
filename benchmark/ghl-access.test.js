@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { courseTagUpdates, setCourseAccess, ghlConfigured, ghlSettings } from "../ghl-access.js";
+import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, ghlConfigured, ghlSettings } from "../ghl-access.js";
 
 const env = { GHL_API_KEY: "token", GHL_LOCATION_ID: "loc1" };
 const quiet = { warn() {} };
@@ -95,4 +95,41 @@ test("which tags are sent after a subscription change", () => {
   assert.deepEqual(courseTagUpdates({ subscriptionEnded: true, newPlan: "starter", previousPlan: "pro" }), [{ tier: "pro", active: false }]);
   // Payment problem (past due): nothing changes, even for Elite.
   assert.deepEqual(courseTagUpdates({ bonusOn: false, subscriptionEnded: false, newPlan: "elite", previousPlan: "elite" }), []);
+});
+
+test("an indicator request removes then adds the request tag and leaves a note", async () => {
+  const calls = [];
+  const result = await notifyIndicatorRequest(
+    { email: " Trader@Example.com ", name: "Tolu", platform: "mt4", accountNumber: "123456", broker: "Acme FX" },
+    { env, fetchImpl: fakeFetch(calls), log: quiet }
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.tag, "csa-indicator-requested");
+  assert.deepEqual(calls.map((c) => c.method), ["POST", "DELETE", "POST", "POST"]);
+  assert.deepEqual(calls[1].body, { tags: ["csa-indicator-requested"] });
+  assert.deepEqual(calls[2].body, { tags: ["csa-indicator-requested"] });
+  assert.equal(calls[3].url.endsWith("/contacts/c123/notes"), true);
+  assert.match(calls[3].body.body, /MT4 account 123456/);
+  assert.match(calls[3].body.body, /Broker: Acme FX/);
+});
+
+test("an indicator request still tags the contact when the note fails", async () => {
+  const calls = [];
+  const result = await notifyIndicatorRequest(
+    { email: "a@b.com", platform: "mt5", accountNumber: "654321" },
+    { env, fetchImpl: fakeFetch(calls, { failOn: "/notes" }), log: quiet }
+  );
+  assert.equal(result.ok, true);
+  assert.equal(calls.some((c) => c.url.endsWith("/tags") && c.method === "POST"), true);
+});
+
+test("an indicator request does nothing when GoHighLevel is not configured and never throws on errors", async () => {
+  const calls = [];
+  const skipped = await notifyIndicatorRequest({ email: "a@b.com" }, { env: {}, fetchImpl: fakeFetch(calls), log: quiet });
+  assert.equal(skipped.skipped, "not_configured");
+  assert.equal(calls.length, 0);
+  const failed = await notifyIndicatorRequest({ email: "a@b.com" }, { env, fetchImpl: fakeFetch([], { failOn: "/contacts/upsert" }), log: quiet });
+  assert.equal(failed.ok, false);
+  const noEmail = await notifyIndicatorRequest({ email: "" }, { env, fetchImpl: fakeFetch([]), log: quiet });
+  assert.equal(noEmail.ok, false);
 });
