@@ -27,6 +27,8 @@ export function ghlSettings(env = process.env) {
     eliteActiveTag: String(env.GHL_TAG_ELITE_ACTIVE || "csa-elite-active").trim(),
     eliteEndedTag: String(env.GHL_TAG_ELITE_ENDED || "csa-elite-ended").trim(),
     indicatorRequestedTag: String(env.GHL_TAG_INDICATOR_REQUESTED || "csa-indicator-requested").trim(),
+    firstReviewTag: String(env.GHL_TAG_FIRST_REVIEW || "csa-first-review").trim(),
+    limitReachedTag: String(env.GHL_TAG_FREE_LIMIT_REACHED || "csa-free-limit-reached").trim(),
   };
 }
 
@@ -168,6 +170,60 @@ export async function notifyIndicatorRequest(
     return { ok: true, contactId, tag };
   } catch (error) {
     log.warn?.("Indicator request notification failed:", error?.message || error);
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+// Which funnel stages a free (Starter) subscriber has just reached, judged from the allowance after
+// the review that was just saved. Only Starter accounts take part: paid plans and beta testers with
+// a plan override are never tagged. "first_review" is the first review of the month, and
+// "limit_reached" is the review that used the last of the allowance.
+export function funnelStages({ effectivePlan = "", analysesUsed = 0, analysesRemaining = 1 } = {}) {
+  if (effectivePlan !== "starter") return [];
+  const stages = [];
+  if (Number(analysesUsed) === 1) stages.push("first_review");
+  if (Number(analysesRemaining) <= 0) stages.push("limit_reached");
+  return stages;
+}
+
+// A free subscriber reached a funnel stage. Same pattern as the other tags: the tag is removed and
+// added again so the matching GoHighLevel workflow can fire, and the workflow's "Allow re-entry"
+// setting decides whether it can fire more than once for the same person:
+//   stage "first_review"  -> tag "csa-first-review"
+//   stage "limit_reached" -> tag "csa-free-limit-reached"
+// Returns { ok, skipped?, error? } and never throws, so a GoHighLevel problem can never fail a review.
+export async function tagFunnelStage(
+  { email, name = "", stage },
+  { env = process.env, fetchImpl = globalThis.fetch, log = console } = {}
+) {
+  const settings = ghlSettings(env);
+  const cleanEmail = String(email || "").trim().toLowerCase();
+  const tag = stage === "first_review" ? settings.firstReviewTag : stage === "limit_reached" ? settings.limitReachedTag : "";
+
+  if (!settings.token || !settings.locationId) return { ok: true, skipped: "not_configured" };
+  if (!tag) return { ok: false, error: `Unknown funnel stage: ${stage}` };
+  if (!cleanEmail) return { ok: false, error: "No email address on the profile." };
+  if (typeof fetchImpl !== "function") return { ok: false, error: "fetch is not available." };
+
+  try {
+    const upsert = await ghlRequest(settings, fetchImpl, "POST", "/contacts/upsert", {
+      locationId: settings.locationId,
+      email: cleanEmail,
+      ...(name ? { name: String(name).trim() } : {}),
+    });
+    const contactId = upsert?.contact?.id;
+    if (!contactId) throw new Error("GoHighLevel did not return a contact id.");
+
+    try {
+      await ghlRequest(settings, fetchImpl, "DELETE", `/contacts/${contactId}/tags`, { tags: [tag] });
+    } catch {
+      // Nothing to remove the first time; the add below is what matters.
+    }
+    await ghlRequest(settings, fetchImpl, "POST", `/contacts/${contactId}/tags`, { tags: [tag] });
+
+    return { ok: true, contactId, tag };
+  } catch (error) {
+    log.warn?.("Funnel stage tag failed:", error?.message || error);
     return { ok: false, error: error?.message || String(error) };
   }
 }

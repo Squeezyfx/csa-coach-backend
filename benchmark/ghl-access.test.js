@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, ghlConfigured, ghlSettings } from "../ghl-access.js";
+import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage, ghlConfigured, ghlSettings } from "../ghl-access.js";
 
 const env = { GHL_API_KEY: "token", GHL_LOCATION_ID: "loc1" };
 const quiet = { warn() {} };
@@ -132,4 +132,38 @@ test("an indicator request does nothing when GoHighLevel is not configured and n
   assert.equal(failed.ok, false);
   const noEmail = await notifyIndicatorRequest({ email: "" }, { env, fetchImpl: fakeFetch([]), log: quiet });
   assert.equal(noEmail.ok, false);
+});
+
+test("funnel stages only apply to free accounts, at the first review and the last allowed one", () => {
+  assert.deepEqual(funnelStages({ effectivePlan: "starter", analysesUsed: 1, analysesRemaining: 6 }), ["first_review"]);
+  assert.deepEqual(funnelStages({ effectivePlan: "starter", analysesUsed: 4, analysesRemaining: 3 }), []);
+  assert.deepEqual(funnelStages({ effectivePlan: "starter", analysesUsed: 7, analysesRemaining: 0 }), ["limit_reached"]);
+  assert.deepEqual(funnelStages({ effectivePlan: "starter", analysesUsed: 1, analysesRemaining: 0 }), ["first_review", "limit_reached"]);
+  assert.deepEqual(funnelStages({ effectivePlan: "pro", analysesUsed: 1, analysesRemaining: 0 }), []);
+  assert.deepEqual(funnelStages({ effectivePlan: "elite", analysesUsed: 40, analysesRemaining: 0 }), []);
+  assert.deepEqual(funnelStages({}), []);
+});
+
+test("a funnel stage removes then adds its tag", async () => {
+  const calls = [];
+  const first = await tagFunnelStage({ email: " Trader@Example.com ", name: "Tolu", stage: "first_review" }, { env, fetchImpl: fakeFetch(calls), log: quiet });
+  assert.equal(first.ok, true);
+  assert.equal(first.tag, "csa-first-review");
+  assert.deepEqual(calls.map((c) => c.method), ["POST", "DELETE", "POST"]);
+  assert.deepEqual(calls[2].body, { tags: ["csa-first-review"] });
+  const more = [];
+  const limit = await tagFunnelStage({ email: "a@b.com", stage: "limit_reached" }, { env, fetchImpl: fakeFetch(more), log: quiet });
+  assert.equal(limit.tag, "csa-free-limit-reached");
+  assert.deepEqual(more[2].body, { tags: ["csa-free-limit-reached"] });
+});
+
+test("a funnel stage does nothing when GoHighLevel is not configured and never throws", async () => {
+  const calls = [];
+  const skipped = await tagFunnelStage({ email: "a@b.com", stage: "first_review" }, { env: {}, fetchImpl: fakeFetch(calls), log: quiet });
+  assert.equal(skipped.skipped, "not_configured");
+  assert.equal(calls.length, 0);
+  assert.equal((await tagFunnelStage({ email: "a@b.com", stage: "nope" }, { env, fetchImpl: fakeFetch([]), log: quiet })).ok, false);
+  assert.equal((await tagFunnelStage({ email: "", stage: "first_review" }, { env, fetchImpl: fakeFetch([]), log: quiet })).ok, false);
+  const failed = await tagFunnelStage({ email: "a@b.com", stage: "first_review" }, { env, fetchImpl: fakeFetch([], { failOn: "/contacts/upsert" }), log: quiet });
+  assert.equal(failed.ok, false);
 });

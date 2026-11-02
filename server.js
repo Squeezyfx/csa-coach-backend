@@ -1,7 +1,7 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
-import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest } from "./ghl-access.js";
+import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
 import { createAnalysisSlots, normalizeQueueTicket } from "./analysis-slots.js";
 import { attemptLimitsFromEnv, createAttemptLimiter, exemptEmailsFromEnv } from "./attempt-limiter.js";
@@ -33957,6 +33957,24 @@ ${(visualReview?.strategyMissingInformation || []).length
           selectedStrategy.snapshot,
         cleanChart,
       });
+
+    // Free-plan funnel: tell GoHighLevel when a Starter subscriber has done their first review or used
+    // their last free one, so follow-up emails can start. Best effort, never delays or fails the review.
+    if (journalSave.savedToJournal && requestAuth.user?.email) {
+      for (const stage of funnelStages(updatedEntitlement)) {
+        tagFunnelStage({
+          email: requestAuth.user.email,
+          name: requestAuth.user.user_metadata?.full_name || requestAuth.user.user_metadata?.name || "",
+          stage,
+        })
+          .then((outcome) => {
+            if (outcome?.skipped) return;
+            if (outcome?.ok) console.log(`Funnel: ${requestAuth.user.email} reached ${stage} (tag ${outcome.tag}).`);
+            else console.warn(`Funnel tag failed for ${requestAuth.user.email} (${stage}): ${outcome?.error || "unknown error"}`);
+          })
+          .catch((error) => console.warn("Funnel tag error:", error?.message || error));
+      }
+    }
 
     finalClientResponse = normalizeUserFacingTypographyDeep({
       ...finalClientResponse,
