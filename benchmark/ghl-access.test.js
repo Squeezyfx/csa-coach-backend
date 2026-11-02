@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage, ghlConfigured, ghlSettings } from "../ghl-access.js";
+import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage, shouldTagSignup, ghlConfigured, ghlSettings } from "../ghl-access.js";
 
 const env = { GHL_API_KEY: "token", GHL_LOCATION_ID: "loc1" };
 const quiet = { warn() {} };
@@ -166,4 +166,24 @@ test("a funnel stage does nothing when GoHighLevel is not configured and never t
   assert.equal((await tagFunnelStage({ email: "", stage: "first_review" }, { env, fetchImpl: fakeFetch([]), log: quiet })).ok, false);
   const failed = await tagFunnelStage({ email: "a@b.com", stage: "first_review" }, { env, fetchImpl: fakeFetch([], { failOn: "/contacts/upsert" }), log: quiet });
   assert.equal(failed.ok, false);
+});
+
+test("a signed-up stage uses its own tag", async () => {
+  const calls = [];
+  const result = await tagFunnelStage({ email: "new@b.com", stage: "signed_up" }, { env, fetchImpl: fakeFetch(calls), log: quiet });
+  assert.equal(result.tag, "csa-signed-up");
+  assert.deepEqual(calls[2].body, { tags: ["csa-signed-up"] });
+});
+
+test("only a new, unreviewed, untagged free account is tagged as signed up", () => {
+  const now = Date.parse("2026-11-03T12:00:00Z");
+  const fresh = { effectivePlan: "starter", analysesUsed: 0, createdAt: "2026-11-02T08:00:00Z" };
+  assert.equal(shouldTagSignup(fresh, { now }), true);
+  assert.equal(shouldTagSignup({ ...fresh, taggedBefore: true }, { now }), false);
+  assert.equal(shouldTagSignup({ ...fresh, analysesUsed: 1 }, { now }), false);
+  assert.equal(shouldTagSignup({ ...fresh, effectivePlan: "pro" }, { now }), false);
+  assert.equal(shouldTagSignup({ ...fresh, effectivePlan: "elite" }, { now }), false);
+  assert.equal(shouldTagSignup({ ...fresh, createdAt: "2026-10-01T08:00:00Z" }, { now }), false);
+  assert.equal(shouldTagSignup({ ...fresh, createdAt: "" }, { now }), false);
+  assert.equal(shouldTagSignup({}, { now }), false);
 });

@@ -1,7 +1,7 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
-import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage } from "./ghl-access.js";
+import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage, shouldTagSignup } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
 import { createAnalysisSlots, normalizeQueueTicket } from "./analysis-slots.js";
 import { attemptLimitsFromEnv, createAttemptLimiter, exemptEmailsFromEnv } from "./attempt-limiter.js";
@@ -30204,10 +30204,49 @@ app.post("/password-reset", async (req, res) => {
   }
 });
 
+// Brand-new free accounts get the "signed up" tag in GoHighLevel the first time the page loads their
+// plan, so people who register but never run a review can still be followed up. A marker on the
+// Supabase user stops it repeating; it is set only after the tag went through, so a failure retries
+// at the next login. Best effort, never delays or fails the plan lookup.
+const signupTagsInFlight = new Set();
+
+function tagSignupIfNew(user, entitlement) {
+  if (!user?.email || signupTagsInFlight.has(user.id)) return;
+  const eligible = shouldTagSignup({
+    effectivePlan: entitlement.effectivePlan,
+    analysesUsed: entitlement.analysesUsed,
+    createdAt: user.created_at,
+    taggedBefore: user.app_metadata?.csa_signup_tagged === true,
+  });
+  if (!eligible) return;
+
+  signupTagsInFlight.add(user.id);
+  tagFunnelStage({
+    email: user.email,
+    name: user.user_metadata?.full_name || user.user_metadata?.name || "",
+    stage: "signed_up",
+  })
+    .then(async (outcome) => {
+      if (outcome?.skipped) return;
+      if (!outcome?.ok) {
+        console.warn(`Funnel tag failed for ${user.email} (signed_up): ${outcome?.error || "unknown error"}`);
+        return;
+      }
+      console.log(`Funnel: ${user.email} reached signed_up (tag ${outcome.tag}).`);
+      const marked = await supabaseAdmin.auth.admin.updateUserById(user.id, {
+        app_metadata: { ...(user.app_metadata || {}), csa_signup_tagged: true },
+      });
+      if (marked?.error) console.warn(`Could not mark ${user.email} as signup-tagged:`, marked.error.message);
+    })
+    .catch((error) => console.warn("Funnel signup tag error:", error?.message || error))
+    .finally(() => signupTagsInFlight.delete(user.id));
+}
+
 app.get("/account-entitlements", async (req, res) => {
   try {
     const requestAuth = await getRequestUser(req);
     const entitlement = await getUserPlanEntitlement(requestAuth.user.id);
+    tagSignupIfNew(requestAuth.user, entitlement);
     return res.json({ success: true, entitlement });
   } catch (error) {
     const statusCode = Number(error?.statusCode) || 500;

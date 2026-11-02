@@ -27,6 +27,7 @@ export function ghlSettings(env = process.env) {
     eliteActiveTag: String(env.GHL_TAG_ELITE_ACTIVE || "csa-elite-active").trim(),
     eliteEndedTag: String(env.GHL_TAG_ELITE_ENDED || "csa-elite-ended").trim(),
     indicatorRequestedTag: String(env.GHL_TAG_INDICATOR_REQUESTED || "csa-indicator-requested").trim(),
+    signedUpTag: String(env.GHL_TAG_SIGNED_UP || "csa-signed-up").trim(),
     firstReviewTag: String(env.GHL_TAG_FIRST_REVIEW || "csa-first-review").trim(),
     limitReachedTag: String(env.GHL_TAG_FREE_LIMIT_REACHED || "csa-free-limit-reached").trim(),
   };
@@ -186,9 +187,21 @@ export function funnelStages({ effectivePlan = "", analysesUsed = 0, analysesRem
   return stages;
 }
 
+// Whether a logged-in account should be tagged "signed_up" now: a brand-new free account that has not
+// run a review yet and has not been tagged before. The age limit keeps the tag away from people who
+// registered long ago, so old accounts never get a "welcome" email. taggedBefore is the marker kept on
+// the Supabase user once the tag has gone through.
+export function shouldTagSignup({ effectivePlan = "", analysesUsed = 0, createdAt = "", taggedBefore = false } = {}, { now = Date.now(), maxAgeDays = 7 } = {}) {
+  if (taggedBefore || effectivePlan !== "starter" || Number(analysesUsed) > 0) return false;
+  const created = Date.parse(createdAt);
+  if (!Number.isFinite(created)) return false;
+  return now - created <= maxAgeDays * 24 * 60 * 60 * 1000;
+}
+
 // A free subscriber reached a funnel stage. Same pattern as the other tags: the tag is removed and
 // added again so the matching GoHighLevel workflow can fire, and the workflow's "Allow re-entry"
 // setting decides whether it can fire more than once for the same person:
+//   stage "signed_up"     -> tag "csa-signed-up"
 //   stage "first_review"  -> tag "csa-first-review"
 //   stage "limit_reached" -> tag "csa-free-limit-reached"
 // Returns { ok, skipped?, error? } and never throws, so a GoHighLevel problem can never fail a review.
@@ -198,7 +211,7 @@ export async function tagFunnelStage(
 ) {
   const settings = ghlSettings(env);
   const cleanEmail = String(email || "").trim().toLowerCase();
-  const tag = stage === "first_review" ? settings.firstReviewTag : stage === "limit_reached" ? settings.limitReachedTag : "";
+  const tag = { signed_up: settings.signedUpTag, first_review: settings.firstReviewTag, limit_reached: settings.limitReachedTag }[stage] || "";
 
   if (!settings.token || !settings.locationId) return { ok: true, skipped: "not_configured" };
   if (!tag) return { ok: false, error: `Unknown funnel stage: ${stage}` };
