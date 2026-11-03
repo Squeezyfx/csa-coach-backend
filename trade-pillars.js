@@ -83,10 +83,19 @@ export function collectStructuralLevels(facts = {}) {
     ...(Array.isArray(facts?.structuralReferenceAreas) ? facts.structuralReferenceAreas : []),
   ];
 
+  // A level the AI only read off the chart picture (a dashed line it described, which can be the
+  // chart's own last-price line) has no completed period behind it. Targets and stops come from
+  // completed periods' highs and lows, so such a level is left out whenever the review has any.
+  const hasCompletedPeriodLevel = sources.some((item) => item?.sourcePeriod || item?.sourceDay || item?.frameworkPeriod);
+  const isChartReadOnly = (item) =>
+    !item?.frameworkPeriod && !item?.sourcePeriod && !item?.sourceDay &&
+    String(item?.priceSource || "").includes("independent_horizontal_line_reader");
+
   const prices = [];
   for (const item of sources) {
     // Structural candidates that failed the framework's own checks are noise.
     if (item?.structurallyValid === false) continue;
+    if (hasCompletedPeriodLevel && isChartReadOnly(item)) continue;
     const low = num(item?.zoneLow);
     const high = num(item?.zoneHigh);
     // The selector reports candidates as chartReconciledPrice/frameworkPrice,
