@@ -1,6 +1,7 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
+import { chooseWatchReferences } from "./watch-references.js";
 import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage, shouldTagSignup } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
 import { createAnalysisSlots, normalizeQueueTicket } from "./analysis-slots.js";
@@ -28523,7 +28524,11 @@ function buildControlledFeedback({
             );
           })
       )
-    : referenceAreas.filter(isCloseToZone);
+    : chooseWatchReferences(referenceAreas, {
+        direction: facts.direction,
+        lastPrice: lastPriceForReferences,
+        isCloseToZone,
+      });
 
   // With no validated entry, a reference level on the wrong side of the bias
   // (a resistance under a bullish bias, a support under a bearish one) is not
