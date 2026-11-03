@@ -22033,7 +22033,7 @@ function rankChartNativeFallbackAreas({
     // No entry qualified. Offer the nearest levels that are on the right side of price and fit
     // the bias, and failed ONLY because they sit outside the ideal retracement zone, as
     // "levels to watch" (never as entries). The closest one is the most useful to a trader.
-    const nearbyLevelsToWatch = candidateEvaluations
+    const nearbyLevelsToWatchAll = candidateEvaluations
       .filter(
         (evaluation) =>
           evaluation &&
@@ -22056,8 +22056,8 @@ function rankChartNativeFallbackAreas({
           ? (price - Number(swingLow)) / frameRange
           : (Number(swingHigh) - price) / frameRange;
         const beyondZone = ratio > 0.618 ? ratio - 0.618 : ratio < 0.382 ? 0.382 - ratio : 0;
-        if (beyondZone > 0.12) return null;
         return {
+          beyondZone,
           direction: direction === "bearish" ? "sell" : "buy",
           areaType: String(candidate.areaType || "").toLowerCase().trim(),
           zoneLow: Math.min(low, high),
@@ -22076,8 +22076,24 @@ function rankChartNativeFallbackAreas({
         };
       })
       .filter(Boolean)
-      .sort((a, b) => a.distanceFromPrice - b.distanceFromPrice)
-      .slice(0, 2);
+      .sort((a, b) => a.distanceFromPrice - b.distanceFromPrice);
+
+    // Early in the week only one period is complete (Monday), and its high or low is the only
+    // level there is: when none is close to the zone, still offer the nearest one rather than leave
+    // the review to levels read off the chart picture.
+    const completedPeriods = new Set(
+      candidateEvaluations
+        .map((evaluation) => evaluation?.candidate?.sourcePeriod || evaluation?.candidate?.sourceDay)
+        .filter(Boolean)
+    );
+    const closeToZone = nearbyLevelsToWatchAll.filter((item) => item.beyondZone <= 0.12);
+    const nearbyLevelsToWatch = (
+      closeToZone.length || completedPeriods.size !== 1
+        ? closeToZone
+        : nearbyLevelsToWatchAll.slice(0, 1)
+    )
+      .slice(0, 2)
+      .map(({ beyondZone, ...item }) => item);
 
     return {
       areas: [],
