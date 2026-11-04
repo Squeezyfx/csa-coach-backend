@@ -81,7 +81,7 @@ import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodW
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
-import { lineMarksArea, markChartFromFrameworkLines } from "./marked-lines.js";
+import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines } from "./marked-lines.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -2984,6 +2984,13 @@ function sanitizeVisualReviewMarketPrices({
           extractionConfidence: safeUserText(
             item?.extractionConfidence || ""
           ),
+          matchedFrameworkPeriod: safeUserText(
+            item?.matchedFrameworkPeriod || ""
+          ),
+          matchedFrameworkSide: safeUserText(
+            item?.matchedFrameworkSide || ""
+          ),
+          matchTolerance: nullablePositiveNumber(item?.matchTolerance),
         }))
       : [],
     visibleHorizontalLines: Array.isArray(visualReview.visibleHorizontalLines)
@@ -8977,23 +8984,26 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
 
   return {
     ...visualReview,
-    visibleMarkedLevels: [
-      ...independentLevels,
-      ...exactLevels,
-      ...approximateLevels,
-      ...(Array.isArray(visualReview?.visibleMarkedLevels)
-        ? visualReview.visibleMarkedLevels
-        : []),
-    ]
-      .filter((item, index, items) => {
-        const price = nullablePositiveNumber(item?.displayedPrice);
-        if (price === null) return true;
-        return items.findIndex((candidate) => {
-          const candidatePrice = nullablePositiveNumber(candidate?.displayedPrice);
-          return candidatePrice !== null && Math.abs(candidatePrice - price) <= Number.EPSILON * 100;
-        }) === index;
-      })
-      .slice(0, 40),
+    visibleMarkedLevels: annotateMatchedLines(
+      [
+        ...independentLevels,
+        ...exactLevels,
+        ...approximateLevels,
+        ...(Array.isArray(visualReview?.visibleMarkedLevels)
+          ? visualReview.visibleMarkedLevels
+          : []),
+      ]
+        .filter((item, index, items) => {
+          const price = nullablePositiveNumber(item?.displayedPrice);
+          if (price === null) return true;
+          return items.findIndex((candidate) => {
+            const candidatePrice = nullablePositiveNumber(candidate?.displayedPrice);
+            return candidatePrice !== null && Math.abs(candidatePrice - price) <= Number.EPSILON * 100;
+          }) === index;
+        })
+        .slice(0, 40),
+      exactLevels
+    ),
     frameworkPriceMapDiagnostics: diagnostics,
   };
 }

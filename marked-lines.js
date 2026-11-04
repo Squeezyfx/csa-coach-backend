@@ -9,13 +9,35 @@ const positive = (value) => {
 const isExactLineRead = (item) =>
   item?.extractionSource === EXACT_LINE_SOURCE && positive(item?.displayedPrice) !== null;
 
+const sameLine = (a, b) => Math.abs(a - b) <= Number.EPSILON * 100;
+
+// The same drawn line is read twice: once on its own (no framework period) and once
+// matched to a framework level. Only the first copy survives the de-duplication, so
+// the match is copied onto it as extra fields that nothing else reads.
+export function annotateMatchedLines(levels = [], matchedLevels = []) {
+  const matched = (Array.isArray(matchedLevels) ? matchedLevels : []).filter(
+    (item) => isExactLineRead(item) && Boolean(item?.frameworkPeriodHint)
+  );
+  return (Array.isArray(levels) ? levels : []).map((item) => {
+    if (!isExactLineRead(item)) return item;
+    const match = matched.find((candidate) => sameLine(Number(candidate.displayedPrice), Number(item.displayedPrice)));
+    if (!match) return item;
+    return {
+      ...item,
+      matchedFrameworkPeriod: match.frameworkPeriodHint,
+      matchedFrameworkSide: match.frameworkSideHint || null,
+      matchTolerance: positive(match.matchTolerance),
+    };
+  });
+}
+
 // The price map only keeps a displayed price when it is within tolerance of one
 // framework level, so an exact read that names a framework period is a drawn
 // line sitting on a real previous high or low. Lines with no period behind them
 // (a gridline, the last-price line) are not.
 export function frameworkMatchedLineReads(levels = []) {
   return (Array.isArray(levels) ? levels : []).filter(
-    (item) => isExactLineRead(item) && Boolean(item?.frameworkPeriodHint)
+    (item) => isExactLineRead(item) && Boolean(item?.frameworkPeriodHint || item?.matchedFrameworkPeriod)
   );
 }
 
