@@ -81,6 +81,7 @@ import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodW
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
+import { lineMarksArea, markChartFromFrameworkLines } from "./marked-lines.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -8945,6 +8946,7 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
             : "per_target_framework_price_reader",
         extractionConfidence:
           match?.confidence || "high",
+        matchTolerance: nullablePositiveNumber(match?.selectedTolerance),
       });
       return;
     }
@@ -27008,19 +27010,6 @@ function buildValidatedAnalysisFacts({
     ? visualReview.visibleMarkedLevels
     : [];
 
-  const visibleUserMarkedPrices = visibleUserMarkedLevels
-    .filter(
-      (item) =>
-        item?.extractionSource ===
-          "independent_horizontal_line_reader_exact" &&
-        nullablePositiveNumber(item?.displayedPrice) !== null
-    )
-    .map(
-      (item) =>
-        nullablePositiveNumber(item?.displayedPrice)
-    )
-    .filter((price) => price !== null);
-
   const markedCenterTolerance = Math.max(
     getCleanBreakTolerance(submittedInstrument) * 0.5,
     Math.abs(Number(currentPrice || 0)) * 0.00001
@@ -27038,13 +27027,15 @@ function buildValidatedAnalysisFacts({
   // V4.10.14: credit a user's marked area only when an independently read
   // exact horizontal-line label matches the selected entry center. Values
   // inferred by the full review or calculated by the framework cannot prove
-  // what the trader marked.
+  // what the trader marked. A line matched to this level by the price map is
+  // credited within the tolerance it was matched with, since feeds differ by
+  // a few pips.
   const preferredAreaMarked =
     chartMarkingStatus === "marked" &&
-    preferredAreaCenter !== null &&
-    visibleUserMarkedPrices.some(
-      (price) =>
-        Math.abs(price - preferredAreaCenter) <= markedCenterTolerance
+    lineMarksArea(
+      visibleUserMarkedLevels,
+      preferredAreaCenter,
+      markedCenterTolerance
     );
 
   const normalizedSubmittedNotes = String(submittedNotes || "").trim();
@@ -33507,6 +33498,10 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       timeframe,
       symbol: normalizedSymbol || submittedInstrument,
     });
+
+    // A line the trader drew on a previous high or low marks the chart, even
+    // when the visual review called it unmarked.
+    visualReview = markChartFromFrameworkLines(visualReview);
 
     visualReview = sanitizeVisualReviewMarketPrices({
       visualReview,
