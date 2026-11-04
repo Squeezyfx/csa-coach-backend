@@ -26,9 +26,40 @@ export function annotateMatchedLines(levels = [], matchedLevels = []) {
       ...item,
       matchedFrameworkPeriod: match.frameworkPeriodHint,
       matchedFrameworkSide: match.frameworkSideHint || null,
+      matchedFrameworkPrice: positive(match.matchedFrameworkPrice),
+      matchedAreaType: String(match.matchedAreaType || ""),
       matchTolerance: positive(match.matchTolerance),
     };
   });
+}
+
+// The framework levels the trader's drawn lines sit on, nearest to price first.
+// Two lines on the same level count once.
+export function matchedFrameworkAreas(levels = [], referencePrice = null) {
+  const areas = [];
+  for (const item of frameworkMatchedLineReads(levels)) {
+    const price = positive(item?.matchedFrameworkPrice);
+    if (price === null || areas.some((area) => sameLine(area.price, price))) continue;
+    areas.push({ price, areaType: String(item?.matchedAreaType || "") });
+  }
+  const reference = positive(referencePrice);
+  return reference === null
+    ? areas
+    : areas.sort((a, b) => Math.abs(a.price - reference) - Math.abs(b.price - reference));
+}
+
+const COUNT_WORDS = { 2: "two", 3: "three", 4: "four", 5: "five", 6: "six" };
+
+// "You marked two framework levels: the A area around 1.2 and the B area around 1.1."
+// Only for two or more levels; one level is credited by the first-area strength.
+export function markedAreasStrength(areas = [], { label = (type) => type, format = String } = {}) {
+  if (!Array.isArray(areas) || areas.length < 2) return "";
+  const parts = areas.map((area) => {
+    const name = String(label(area.areaType) || "").trim();
+    return `the ${name ? `${name} area` : "level"} around ${format(area.price)}`;
+  });
+  const list = parts.length === 2 ? parts.join(" and ") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+  return `You marked ${COUNT_WORDS[areas.length] || areas.length} framework levels: ${list}.`;
 }
 
 // The price map only keeps a displayed price when it is within tolerance of one

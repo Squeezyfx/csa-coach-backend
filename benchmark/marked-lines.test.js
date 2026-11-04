@@ -2,7 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { annotateMatchedLines, frameworkMatchedLineReads, lineMarksArea, markChartFromFrameworkLines } from "../marked-lines.js";
+import {
+  annotateMatchedLines,
+  frameworkMatchedLineReads,
+  lineMarksArea,
+  markChartFromFrameworkLines,
+  markedAreasStrength,
+  matchedFrameworkAreas,
+} from "../marked-lines.js";
 
 const EXACT = "independent_horizontal_line_reader_exact";
 
@@ -99,10 +106,52 @@ test("the live EURAUD shape marks the chart and credits both areas", () => {
   assert.equal(markChartFromFrameworkLines({ chartMarkingStatus: "unclear", visibleMarkedLevels: survivors }).chartMarkingStatus, "unclear");
 });
 
+// Same two lines, now carrying which framework level each one sits on (EURAUD, 4 Nov 2026).
+const withPrices = [
+  { ...matchedCopies[0], matchedFrameworkPrice: 1.60259, matchedAreaType: "converted support" },
+  { ...matchedCopies[1], matchedFrameworkPrice: 1.59686, matchedAreaType: "demand" },
+];
+const plainLabel = (type) => (type === "converted support" ? "resistance-turned-support" : type);
+const fmt = (price) => price.toFixed(5);
+
+test("every drawn line on a framework level is listed, nearest to price first", () => {
+  const levels = annotateMatchedLines(survivors, withPrices);
+  assert.deepEqual(matchedFrameworkAreas(levels, 1.61656), [
+    { price: 1.60259, areaType: "converted support" },
+    { price: 1.59686, areaType: "demand" },
+  ]);
+  // Price below both lines flips the order.
+  assert.equal(matchedFrameworkAreas(levels, 1.58)[0].price, 1.59686);
+  // Two lines on the same framework level count once; a gridline adds nothing.
+  assert.equal(matchedFrameworkAreas([...levels, { ...levels[0], displayedPrice: 1.60268 }, gridline], 1.61656).length, 2);
+  assert.deepEqual(matchedFrameworkAreas([gridline]), []);
+});
+
+test("two or more marked framework levels are credited together, one level is left to the first-area strength", () => {
+  const two = matchedFrameworkAreas(annotateMatchedLines(survivors, withPrices), 1.61656);
+  assert.equal(
+    markedAreasStrength(two, { label: plainLabel, format: fmt }),
+    "You marked two framework levels: the resistance-turned-support area around 1.60259 and the demand area around 1.59686."
+  );
+  assert.equal(
+    markedAreasStrength([...two, { price: 1.58578, areaType: "support" }], { label: plainLabel, format: fmt }),
+    "You marked three framework levels: the resistance-turned-support area around 1.60259, the demand area around 1.59686 and the support area around 1.58578."
+  );
+  assert.equal(markedAreasStrength(two.slice(0, 1), { label: plainLabel, format: fmt }), "");
+  assert.equal(markedAreasStrength([], { label: plainLabel, format: fmt }), "");
+  // No weekday names in customer text, and a level with no known type still reads sensibly.
+  assert.doesNotMatch(markedAreasStrength(two, { label: plainLabel, format: fmt }), /monday|tuesday|wednesday/i);
+  assert.match(markedAreasStrength([{ price: 1.1, areaType: "" }, { price: 1.2, areaType: "" }], { format: fmt }), /the level around 1\.10000 and the level around 1\.20000/);
+});
+
 test("the review pipeline uses these helpers", () => {
   const serverSource = readFileSync(fileURLToPath(new URL("../server.js", import.meta.url)), "utf8");
   assert.match(serverSource, /visibleMarkedLevels: annotateMatchedLines\(/);
   assert.match(serverSource, /matchTolerance: nullablePositiveNumber\(item\?\.matchTolerance\)/);
+  assert.match(serverSource, /matchedFrameworkPrice: nullablePositiveNumber\(item\?\.matchedFrameworkPrice\)/);
+  assert.match(serverSource, /matchedFrameworkPrice: nullablePositiveNumber\(match\?\.frameworkPrice\)/);
+  assert.match(serverSource, /markedFrameworkAreas: matchedFrameworkAreas\(visibleUserMarkedLevels, currentPrice\)/);
+  assert.match(serverSource, /markedAreasStrength\(userEvidence\.markedFrameworkAreas/);
   assert.match(serverSource, /visualReview = markChartFromFrameworkLines\(visualReview\)/);
   assert.match(serverSource, /lineMarksArea\(\s*visibleUserMarkedLevels/);
   assert.match(serverSource, /matchTolerance: nullablePositiveNumber\(match\?\.selectedTolerance\)/);

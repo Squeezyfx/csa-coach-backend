@@ -81,7 +81,7 @@ import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodW
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
-import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines } from "./marked-lines.js";
+import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -2990,6 +2990,8 @@ function sanitizeVisualReviewMarketPrices({
           matchedFrameworkSide: safeUserText(
             item?.matchedFrameworkSide || ""
           ),
+          matchedFrameworkPrice: nullablePositiveNumber(item?.matchedFrameworkPrice),
+          matchedAreaType: safeUserText(item?.matchedAreaType || ""),
           matchTolerance: nullablePositiveNumber(item?.matchTolerance),
         }))
       : [],
@@ -8953,6 +8955,8 @@ function mergeDedicatedFrameworkPriceMapIntoVisualReview({
             : "per_target_framework_price_reader",
         extractionConfidence:
           match?.confidence || "high",
+        matchedFrameworkPrice: nullablePositiveNumber(match?.frameworkPrice),
+        matchedAreaType: String(match?.areaType || ""),
         matchTolerance: nullablePositiveNumber(match?.selectedTolerance),
       });
       return;
@@ -27144,6 +27148,7 @@ function buildValidatedAnalysisFacts({
         String(timeframe || "").trim() !== "",
       chartMarked: chartMarkingStatus === "marked",
       preferredAreaMarked,
+      markedFrameworkAreas: matchedFrameworkAreas(visibleUserMarkedLevels, currentPrice),
       visibleMarkedLevelCount: visibleUserMarkedLevels.length,
       planNotesProvided,
       entryPlanDescribed,
@@ -28660,7 +28665,17 @@ function buildControlledFeedback({
     );
   }
 
-  if (
+  // Every drawn line that sits on a framework level is credited, not only the first area.
+  const markedFrameworkAreasText = userEvidence.chartMarked
+    ? markedAreasStrength(userEvidence.markedFrameworkAreas, {
+        label: plainAreaTypeLabel,
+        format: formatPrice,
+      })
+    : "";
+
+  if (markedFrameworkAreasText) {
+    addStrength("entry", markedFrameworkAreasText, { short: "Your marked areas match" });
+  } else if (
     userEvidence.preferredAreaMarked &&
     hasValidatedArea
   ) {
