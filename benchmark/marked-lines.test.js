@@ -7,8 +7,10 @@ import {
   frameworkMatchedLineReads,
   lineMarksArea,
   markChartFromFrameworkLines,
+  markLinesOnAreas,
   markedAreasStrength,
   matchedFrameworkAreas,
+  matchLinesToAreas,
 } from "../marked-lines.js";
 
 const EXACT = "independent_horizontal_line_reader_exact";
@@ -144,6 +146,65 @@ test("two or more marked framework levels are credited together, one level is le
   assert.match(markedAreasStrength([{ price: 1.1, areaType: "" }, { price: 1.2, areaType: "" }], { format: fmt }), /the level around 1\.10000 and the level around 1\.20000/);
 });
 
+// EURAUD H1 pre-trade, 4 Nov 2026 15:53 (production log). The price map only knew the earlier bearish
+// target (Tuesday high 1.60729, 46 pips from the nearest line), so both drawn lines came back unmatched.
+// The final review then flipped bullish and chose 1.60226 and 1.59683 as its entries.
+const unmatched = [
+  { type: "label", displayedPrice: 1.60266, frameworkPeriodHint: null, frameworkSideHint: null, extractionSource: EXACT },
+  { type: "label", displayedPrice: 1.59734, frameworkPeriodHint: null, frameworkSideHint: null, extractionSource: EXACT },
+];
+const finalAreas = [
+  { price: 1.60226, areaType: "converted support", period: null },
+  { price: 1.59683, areaType: "demand", period: null },
+  { price: 1.60729, areaType: "converted resistance", period: "Tuesday" },
+];
+const liveTolerance = 0.0007555357142857036;
+
+test("lines left unmatched by the price map are compared with the final areas", () => {
+  const levels = matchLinesToAreas(unmatched, finalAreas, liveTolerance);
+  assert.equal(levels[0].matchedFrameworkPrice, 1.60226);
+  assert.equal(levels[0].matchedAreaType, "converted support");
+  assert.equal(levels[1].matchedFrameworkPrice, 1.59683);
+  assert.equal(levels[1].matchedAreaType, "demand");
+  assert.equal(levels[0].matchTolerance, liveTolerance);
+  // Nothing else about the line changes.
+  assert.equal(levels[0].displayedPrice, 1.60266);
+  assert.equal(levels[0].frameworkPeriodHint, null);
+});
+
+test("a line goes to the nearest final area, and only within the tolerance", () => {
+  const far = { ...unmatched[0], displayedPrice: 1.6045 };
+  assert.deepEqual(matchLinesToAreas([far], finalAreas, liveTolerance), [far]);
+  assert.deepEqual(matchLinesToAreas(unmatched, finalAreas, 0), unmatched);
+  assert.deepEqual(matchLinesToAreas(unmatched, [], liveTolerance), unmatched);
+  assert.equal(matchLinesToAreas(unmatched, finalAreas, liveTolerance)[0].matchedFrameworkPrice, 1.60226);
+});
+
+test("lines the price map already matched, and non-line items, are left alone", () => {
+  const already = { ...upper, matchedFrameworkPrice: 1.60259 };
+  const other = { type: "label", displayedPrice: 1.60226, extractionSource: "per_target_framework_price_reader" };
+  const result = matchLinesToAreas([already, other], finalAreas, liveTolerance);
+  assert.equal(result[0], already);
+  assert.equal(result[1], other);
+});
+
+test("the live pre-trade shape marks the chart and credits both final areas", () => {
+  const review = markLinesOnAreas({ chartMarkingStatus: "unclear", visibleMarkedLevels: unmatched }, finalAreas, liveTolerance);
+  assert.equal(review.chartMarkingStatus, "marked");
+  assert.equal(lineMarksArea(review.visibleMarkedLevels, 1.60226, 0.0001), true);
+  assert.equal(lineMarksArea(review.visibleMarkedLevels, 1.59683, 0.0001), true);
+  assert.equal(
+    markedAreasStrength(matchedFrameworkAreas(review.visibleMarkedLevels, 1.60261), { label: plainLabel, format: fmt }),
+    "You marked two framework levels: the resistance-turned-support area around 1.60226 and the demand area around 1.59683."
+  );
+});
+
+test("a chart with no line near any final area stays as it was", () => {
+  const review = { chartMarkingStatus: "unclear", visibleMarkedLevels: [{ ...unmatched[0], displayedPrice: 1.118 }] };
+  assert.equal(markLinesOnAreas(review, finalAreas, liveTolerance), review);
+  assert.equal(markLinesOnAreas({ chartMarkingStatus: "unclear" }, finalAreas, liveTolerance).chartMarkingStatus, "unclear");
+});
+
 test("the review pipeline uses these helpers", () => {
   const serverSource = readFileSync(fileURLToPath(new URL("../server.js", import.meta.url)), "utf8");
   assert.match(serverSource, /visibleMarkedLevels: annotateMatchedLines\(/);
@@ -155,4 +216,6 @@ test("the review pipeline uses these helpers", () => {
   assert.match(serverSource, /visualReview = markChartFromFrameworkLines\(visualReview\)/);
   assert.match(serverSource, /lineMarksArea\(\s*visibleUserMarkedLevels/);
   assert.match(serverSource, /matchTolerance: nullablePositiveNumber\(match\?\.selectedTolerance\)/);
+  assert.match(serverSource, /visualReview = markLinesOnAreas\(\s*visualReview,\s*\[\.\.\.rankedRawAreas, \.\.\.structuralReferenceAreas\]/);
+  assert.match(serverSource, /getExactLineMatchTolerances\(\{ marketReference, timeframe \}\)\.exactLabelTolerance/);
 });

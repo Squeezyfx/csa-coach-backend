@@ -33,6 +33,45 @@ export function annotateMatchedLines(levels = [], matchedLevels = []) {
   });
 }
 
+// The price map compares the drawn lines with the framework levels known when it runs, which
+// follow the earlier direction. When the final review flips direction (or picks other entries),
+// a line on one of the final areas was never compared with it. Compare the lines that have no
+// match yet with the final areas, within the same ATR-scaled tolerance.
+export function matchLinesToAreas(levels = [], areas = [], tolerance = 0) {
+  const list = Array.isArray(levels) ? levels : [];
+  const allowed = positive(tolerance);
+  const candidates = (Array.isArray(areas) ? areas : []).filter((area) => positive(area?.price) !== null);
+  if (allowed === null || !candidates.length) return list;
+  let changed = false;
+  const result = list.map((item) => {
+    if (!isExactLineRead(item) || item.frameworkPeriodHint || item.matchedFrameworkPeriod) return item;
+    const price = Number(item.displayedPrice);
+    const nearest = candidates
+      .map((area) => ({ area, distance: Math.abs(Number(area.price) - price) }))
+      .sort((a, b) => a.distance - b.distance)[0];
+    if (nearest.distance > allowed) return item;
+    changed = true;
+    return {
+      ...item,
+      matchedFrameworkPeriod: nearest.area.period || "framework",
+      matchedFrameworkSide: null,
+      matchedFrameworkPrice: Number(nearest.area.price),
+      matchedAreaType: String(nearest.area.areaType || ""),
+      matchTolerance: allowed,
+    };
+  });
+  return changed ? result : list;
+}
+
+// The visual review with its drawn lines compared with the final framework areas, and the chart
+// marked when one of them sits on a framework level.
+export function markLinesOnAreas(visualReview = {}, areas = [], tolerance = 0) {
+  const levels = Array.isArray(visualReview?.visibleMarkedLevels) ? visualReview.visibleMarkedLevels : [];
+  const matched = matchLinesToAreas(levels, areas, tolerance);
+  const review = matched === levels ? visualReview : { ...visualReview, visibleMarkedLevels: matched };
+  return markChartFromFrameworkLines(review);
+}
+
 // The framework levels the trader's drawn lines sit on, nearest to price first.
 // Two lines on the same level count once.
 export function matchedFrameworkAreas(levels = [], referencePrice = null) {

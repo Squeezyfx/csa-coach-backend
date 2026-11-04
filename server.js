@@ -81,7 +81,7 @@ import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodW
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
-import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
+import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -7059,6 +7059,28 @@ Return JSON only:
 }
 
 
+// How far a drawn line's printed price may sit from a framework level and still count as that
+// level. Feeds differ by a few pips, so the allowance scales with ATR.
+function getExactLineMatchTolerances({ marketReference, timeframe }) {
+  const atr = averageTrueRange(
+    Array.isArray(marketReference?.timeframeCandles)
+      ? marketReference.timeframeCandles
+      : [],
+    getStructureEngineConfig(timeframe).atrPeriod
+  );
+
+  const standardTolerance =
+    getFrameworkChartReconciliationTolerance({
+      symbol: marketReference?.symbol || "",
+      atr,
+    });
+
+  return {
+    standardTolerance,
+    exactLabelTolerance: Math.max(standardTolerance, Number(atr || 0) * 0.25),
+  };
+}
+
 async function readFrameworkPricesBatchFromChart({
   imageBase64,
   mimeType,
@@ -7135,23 +7157,8 @@ Return JSON only:
       };
     }
 
-    const atr = averageTrueRange(
-      Array.isArray(marketReference?.timeframeCandles)
-        ? marketReference.timeframeCandles
-        : [],
-      getStructureEngineConfig(timeframe).atrPeriod
-    );
-
-    const standardTolerance =
-      getFrameworkChartReconciliationTolerance({
-        symbol: marketReference?.symbol || "",
-        atr,
-      });
-
-    const exactLabelTolerance = Math.max(
-      standardTolerance,
-      Number(atr || 0) * 0.25
-    );
+    const { standardTolerance, exactLabelTolerance } =
+      getExactLineMatchTolerances({ marketReference, timeframe });
 
     const independentlyReadLines = rawLines
       .map((raw, index) => {
@@ -26836,6 +26843,20 @@ function buildValidatedAnalysisFacts({
     currentPrice,
     symbol: submittedInstrument,
   });
+
+  // The price map matched the trader's drawn lines before the final direction and entries were
+  // known. Compare the ones it left unmatched with the areas this review ended up with.
+  visualReview = markLinesOnAreas(
+    visualReview,
+    [...rankedRawAreas, ...structuralReferenceAreas]
+      .filter((area) => !/independent_horizontal_line_reader/.test(String(area?.priceSource || "")))
+      .map((area) => ({
+        price: asPositiveNumber(area?.authoritativeCenter),
+        areaType: area?.areaType,
+        period: area?.frameworkPeriod || null,
+      })),
+    getExactLineMatchTolerances({ marketReference, timeframe }).exactLabelTolerance
+  );
 
   const entryAreaValidation =
     rankedAreaResult?.validation || {
