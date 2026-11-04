@@ -27201,6 +27201,7 @@ function buildValidatedAnalysisFacts({
       authoritativeCenter: asPositiveNumber(candidate.authoritativeCenter),
       levelText: safeUserText(candidate.levelText || ""),
       frameworkPeriod: candidate.frameworkPeriod || null,
+      priceSource: candidate.priceSource || null,
       structuralScore: Number(candidate.structuralScore || 0),
       fibPassed: false,
       nearestFibLabel: candidate.nearestFibLabel || null,
