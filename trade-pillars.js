@@ -487,7 +487,11 @@ export function describeAccountRisk(risk, { planned = false } = {}) {
   if (level === "ok") {
     advice = "Keep your risk at 2% or less per trade.";
   } else if (risk.safeLots >= 0.01) {
-    advice = `Cut your lot size to about ${risk.safeLots.toFixed(2)} to risk about 1%.`;
+    // The safe lot size is rounded down so it never goes over 1%, which can leave it well under
+    // (0.01 lots at a 53-pip stop is about 0.5%), so say where it actually lands.
+    const safePct = (risk.pct * risk.safeLots) / risk.lots;
+    const landing = safePct < 0.95 ? ` (that risks about ${formatPercent(safePct)} at this stop)` : "";
+    advice = `Cut your lot size to about ${risk.safeLots.toFixed(2)} to stay at or under 1%${landing}.`;
   } else {
     advice = "Even the smallest lot risks too much at this stop distance. Use a closer stop or skip the trade.";
   }

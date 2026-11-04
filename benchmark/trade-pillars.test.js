@@ -8,6 +8,8 @@ import {
   priceDistance,
   scoreFromSignals,
   estimateRiskUsd,
+  accountRisk,
+  describeAccountRisk,
   collectStructuralLevels,
   averageCandleRange,
   typicalSpread,
@@ -378,7 +380,21 @@ test("account risk is worked out from balance, lot size and stop distance", () =
   // 25 pips x 1 lot = $250 on $5,000 = 5%.
   const high = run(withRiskInputs(eurusdSell(), 5000, 1), eurusdArea);
   assert.ok(has(high.weaknesses, "Risking $250 (5% of your account). That is on the high side."));
-  assert.match(high.next.risk, /Cut your lot size to about 0\.20 to risk about 1%\./);
+  assert.match(high.next.risk, /Cut your lot size to about 0\.20 to stay at or under 1%\./);
+});
+
+test("the lot-size advice says where the rounded-down lot actually lands", () => {
+  // GBPUSD H1, 4 Nov 2026: $1,000, 0.05 lots, 53.4-pip stop = $26.7 = 2.7%. 0.01 lots would risk only 0.5%.
+  const gbp = describeAccountRisk(accountRisk({ facts: { instrument: "GBPUSD", riskInputs: { balance: 1000, lots: 0.05 } }, distance: 0.00534, price: 1.3447 }), { planned: true });
+  assert.equal(gbp.level, "high");
+  assert.equal(gbp.short, "Risk per trade 2.7% (high)");
+  assert.equal(gbp.advice, "Cut your lot size to about 0.01 to stay at or under 1% (that risks about 0.5% at this stop).");
+  // When the safe lot lands at about 1% there is nothing to add.
+  const close = describeAccountRisk(accountRisk({ facts: { instrument: "EURUSD", riskInputs: { balance: 5000, lots: 1 } }, distance: 0.0025, price: 1.1 }));
+  assert.equal(close.advice, "Cut your lot size to about 0.20 to stay at or under 1%.");
+  // A stop so wide that even 0.01 lots is too much keeps its own message.
+  const wide = describeAccountRisk(accountRisk({ facts: { instrument: "EURUSD", riskInputs: { balance: 100, lots: 1 } }, distance: 0.0025, price: 1.1 }));
+  assert.match(wide.advice, /Even the smallest lot risks too much/);
 });
 
 test("a risk of 50% of the account triggers a fast-depletion warning", () => {
