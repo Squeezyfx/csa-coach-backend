@@ -328,6 +328,78 @@ export function reconcileWithHeaderFeedOffset({
   };
 }
 
+/**
+ * Verify the data feed when the screenshot runs PAST the cutoff the user chose.
+ *
+ * Exact historical time and End of selected day review a past moment on a chart that may
+ * continue well beyond it (back-testing). The provider candles stop at the cutoff, so the
+ * chart's final candle is not among them and the ordinary check calls the feed "unverified",
+ * which drops the market data and leaves a review read from the picture alone.
+ *
+ * The chart header's four prices identify one real candle. When that candle is found in the
+ * provider data AFTER the cutoff, the chart is this provider's own dataset (same instrument,
+ * same dates, a constant feed offset). The candles used for the review stay the ones up to the
+ * cutoff: the later candles are only evidence for the match and are never returned for analysis.
+ * The same safety rules as the header check apply: a tight shape fit, no second candle that
+ * fits nearly as well, and an offset within the same-instrument bound. Only a candle after the
+ * cutoff counts; a header that matches nothing later leaves the status as it was.
+ */
+export function verifyFeedPastCutoff({
+  chartDataMatch, candles = [], header = null, cutoff = "", tolerance, maxOffset = null, onDiagnostic = null,
+} = {}) {
+  if (!chartDataMatch || !["mismatch", "date_unverified", "time_unverified", "partial_or_unknown_candle"]
+    .includes(chartDataMatch.status)) {
+    return chartDataMatch;
+  }
+  const visible = visibleOhlcFromDetection({
+    latestVisibleOpen: header?.open, latestVisibleHigh: header?.high,
+    latestVisibleLow: header?.low, latestVisibleClose: header?.close,
+  });
+  const limit = normalizeCandleDatetime(cutoff);
+  if (!visible || !limit || !(Number(tolerance) > 0)) return chartDataMatch;
+
+  const later = (Array.isArray(candles) ? candles : [])
+    .filter((c) => c && c.datetime && FIELDS.every((f) => num(c[f]) !== null) && normalizeCandleDatetime(c.datetime) > limit);
+  const hits = [];
+  for (const candle of later) {
+    const r = ohlcAligned(visible, candle, tolerance, { maxOffset });
+    if (r.aligned) hits.push({ candle, ...r });
+  }
+  const finish = (reason, extra = {}) => {
+    if (typeof onDiagnostic === "function") onDiagnostic({ reason, hits: hits.length, window: later.length, ...extra });
+    return chartDataMatch;
+  };
+  if (!later.length) return finish("no_candles_after_cutoff");
+  if (!hits.length) return finish("no_candle_after_cutoff_fits_header");
+  hits.sort((a, b) => a.residual - b.residual || (normalizeCandleDatetime(a.candle.datetime) < normalizeCandleDatetime(b.candle.datetime) ? -1 : 1));
+  const hit = hits[0];
+  if (hit.residual > tolerance * 0.5) return finish("best_fit_too_loose", { residual: hit.residual });
+  const runnerUp = hits[1];
+  if (runnerUp) {
+    const gap = runnerUp.residual - hit.residual;
+    const exactFit = hit.residual <= tolerance * 0.02;
+    if (!(gap >= tolerance * 0.5 || (exactFit && gap >= tolerance * 0.08))) {
+      return finish("ambiguous_match", { residual: hit.residual, runnerUp: runnerUp.residual });
+    }
+  }
+  if (typeof onDiagnostic === "function") {
+    onDiagnostic({ reason: "upgraded", hits: hits.length, window: later.length, residual: hit.residual, offset: hit.offset, headerCandle: hit.candle.datetime });
+  }
+  return {
+    ...chartDataMatch,
+    status: "matched_reference",
+    matchMode: "header_feed_past_cutoff",
+    feedOffset: hit.offset,
+    ohlcResidual: hit.residual,
+    headerCandleDate: hit.candle.datetime,
+    // The comparison that proved the feed: the header against the candle it identified.
+    comparisons: FIELDS.map((field) => ({ field, chart: visible[field], provider: num(hit.candle[field]) })),
+    tolerance,
+    priorStatus: chartDataMatch.status,
+    reason: "The screenshot runs past the chosen cutoff. Its header identified a real provider candle after the cutoff, so the feed is the chart's own; the review still uses only candles up to the cutoff.",
+  };
+}
+
 function normalizeCandleDatetime(value = "") {
   return String(value || "").trim().replace("T", " ").slice(0, 19);
 }

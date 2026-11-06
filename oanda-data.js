@@ -136,3 +136,14 @@ export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,ti
  if(!values.size)throw fail('No completed OANDA candles before cutoff','history_unavailable');
  return {values:[...values.entries()].sort((a,b)=>a[0]-b[0]).map(([,v])=>v),providerSymbol:instrument.replace('_','/'),source:'OANDA',priceComponent:price,timezone,alignmentCandle};
 }
+
+// Candles after a past cutoff, fetched only to prove that a screenshot running beyond the cutoff comes
+// from this feed (see verifyFeedPastCutoff). They are never part of the review.
+export async function fetchCandlesAfterCutoff({symbol,interval,cutoff,timezone='UTC',token,environment='practice',price='B',days=7,now=Date.now(),fetchImpl=fetch}={}){
+ const cutoffText=String(cutoff||'').slice(0,19);
+ const cutoffMs=localToUtc(cutoffText,timezone);
+ const endMs=Math.min(now,cutoffMs+days*86400000);
+ if(endMs<=cutoffMs)return [];
+ const series=await fetchOandaSeries({symbol,interval,startDate:cutoffText.slice(0,10),endDateTime:localString(endMs,timezone),timezone,token,environment,price,fetchImpl});
+ return series.values.filter(row=>row.datetime>cutoffText);
+}

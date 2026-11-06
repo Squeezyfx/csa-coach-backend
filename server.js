@@ -1,6 +1,6 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
-import { fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
+import { fetchCandlesAfterCutoff, fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
 import { chooseWatchReferences } from "./watch-references.js";
 import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage, shouldTagSignup } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
@@ -28,7 +28,7 @@ import {
   describeAccount,
 } from "./indicator-access.js";
 import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields, supplementLivePeriod } from "./framework-periods.js";
-import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch, reconcileWithHeaderFeedOffset } from "./candle-alignment.js";
+import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch, reconcileWithHeaderFeedOffset, verifyFeedPastCutoff } from "./candle-alignment.js";
 import { periodCompleteAtCutoff } from "./period-completion.js";
 import { resolveFrameworkBias, calendarMapping, newWeekWithoutCompletedDay } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
@@ -32241,8 +32241,53 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
           chartDataMatch = headerReconciled;
         }
       }
+      // Exact historical time / end of selected day on a screenshot that runs past the chosen
+      // cutoff: the provider candles stop at the cutoff, so the chart's final candle is not among
+      // them and every check above reports the feed as unverified. The header's candle, found in
+      // the provider data after the cutoff, proves the feed; the review keeps only the candles up
+      // to the cutoff (see verifyFeedPastCutoff).
+      if (String(process.env.PAST_CUTOFF_FEED_CHECK || "on").toLowerCase() !== "off" &&
+          ["exact", "selected_day"].includes(normalizedRequestedCutoffMode) &&
+          marketReference.dataProvider === "OANDA" &&
+          ["mismatch", "date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(chartDataMatch?.status)) {
+        try {
+          const headerPrices = {
+            open: chartDetection?.headerOpen,
+            high: chartDetection?.headerHigh,
+            low: chartDetection?.headerLow,
+            close: chartDetection?.headerClose,
+          };
+          const header = Object.values(headerPrices).every((v) => Number(v) > 0)
+            ? headerPrices
+            : (await readChartHeaderOhlc({ imageBase64, mimeType })) || headerPrices;
+          const laterCandles = await fetchCandlesAfterCutoff({
+            symbol: normalizedSymbol,
+            interval: selectedTimeframeProfile.interval,
+            cutoff: chartCutoff.endDateTime,
+            timezone: resolvedTimezone,
+            token: process.env.OANDA_API_TOKEN,
+            environment: process.env.OANDA_ENVIRONMENT || "practice",
+            price: process.env.OANDA_PRICE_COMPONENT || "B",
+          });
+          const pastCutoffMatch = verifyFeedPastCutoff({
+            onDiagnostic: (info) => console.log("[chart-data-match] past-cutoff feed check: " + JSON.stringify({ symbol: normalizedSymbol, status: chartDataMatch.status, cutoff: chartCutoff.endDateTime, header, ...info })),
+            chartDataMatch,
+            candles: laterCandles,
+            header,
+            cutoff: chartCutoff.endDateTime,
+            tolerance: getFinalVisiblePriceSyncTolerance({ marketReference, symbol: normalizedSymbol, targetPrice: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice }),
+            maxOffset: getCleanBreakTolerance(normalizedSymbol) * 5,
+          });
+          if (pastCutoffMatch !== chartDataMatch) {
+            console.log("[chart-data-match] past-cutoff feed verified: " + JSON.stringify({ symbol: normalizedSymbol, from: chartDataMatch.status, to: pastCutoffMatch.status, headerCandle: pastCutoffMatch.headerCandleDate, feedOffset: pastCutoffMatch.feedOffset }));
+            chartDataMatch = pastCutoffMatch;
+          }
+        } catch (error) {
+          console.log("[chart-data-match] past-cutoff feed check failed: " + (error?.message || error));
+        }
+      }
       marketReference.chartDataMatch = chartDataMatch;
-      if (marketReference.dataProvider === "OANDA" && chartDataMatch.status === "matched_reference" && marketReference.oandaAlignmentCandle) {
+      if (marketReference.dataProvider === "OANDA" && chartDataMatch.status === "matched_reference" && chartDataMatch.matchMode !== "header_feed_past_cutoff" && marketReference.oandaAlignmentCandle) {
         const snapshot = {datetime:marketReference.oandaAlignmentCandle.datetime,
           open:Number(chartDetection.latestVisibleOpen),high:Number(chartDetection.latestVisibleHigh),low:Number(chartDetection.latestVisibleLow),close:Number(chartDetection.latestVisibleClose),source:"printed_chart_header_snapshot"};
         if ([snapshot.open,snapshot.high,snapshot.low,snapshot.close].every(n=>Number.isFinite(n)&&n>0) && snapshot.high>=Math.max(snapshot.open,snapshot.close) && snapshot.low<=Math.min(snapshot.open,snapshot.close)) {
