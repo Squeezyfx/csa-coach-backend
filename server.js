@@ -33377,9 +33377,19 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       if (marketInventoryVerified || marketInventoryProvisional) {
         inventoryPriceConflicts.push(...marketPeriodIntegrity.issues);
       }
+      // Exact historical time and End of selected day review a past moment on a screenshot that may
+      // run on well past it, so the screenshot's last price belongs to a later time (or is a hovered
+      // header's close). The week's bias and the entry selector's price must be the market price at
+      // the cutoff; the screenshot price decides only when there is no market data to use.
+      const reviewsPastMoment =
+        normalizeCutoffMode(marketReference?.chartCutoff?.mode || "final_visible") !== "final_visible";
+      const cutoffMarketPrice = reviewsPastMoment && marketReference?.ok === true
+        ? nullablePositiveNumber(extractLastMarketPrice(marketReference))
+        : null;
+      const frameworkCurrentPrice = cutoffMarketPrice ?? (chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice);
       const sharedFramework = analyzeFramework({
         timeframe, cutoff: inventoryDate, periodInventory: selectedPeriodInventory,
-        currentPrice: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
+        currentPrice: frameworkCurrentPrice,
         periodOpen: selectedPeriodInventory[0]?.open ?? mergedChartNativeFallback?.currentPeriodOpen,
         authority: marketInventoryVerified ? "provider_aligned" : chartOnlyInventoryVerified ? "chart_verified" : "estimate",
         calendarMappingVerified: marketInventoryVerified || chartOnlyInventoryVerified,
@@ -33391,6 +33401,7 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
         ...mergedChartNativeFallback,
         direction: fallbackDirection || mergedChartNativeFallback?.direction,
         currentPrice:
+          cutoffMarketPrice ||
           nullablePositiveNumber(chartDetection?.latestVisibleClose) ||
           nullablePositiveNumber(chartDetection?.latestVisiblePrice) ||
           nullablePositiveNumber(mergedChartNativeFallback?.currentPrice),
