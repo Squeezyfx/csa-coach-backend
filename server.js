@@ -80,6 +80,7 @@ import { buildVisiblePeriodFibonacciFrame, resolveCalendarPeriodDirection, resol
 import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodWickExtremesFromPixels } from "./chart-raster-reader.js";
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
+import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
 import crypto from "crypto";
@@ -27394,6 +27395,20 @@ function buildValidatedAnalysisFacts({
           fibonacciMatches: Array.isArray(candidate.fibonacciMatches) ? candidate.fibonacciMatches : [],
         }))
       : [],
+    // Where and when the pair has moved most lately, from the candles this review already has (up to its
+    // cutoff). Shown to Elite as "best time to watch"; it never touches the grade or the entries.
+    activityProfile: (() => {
+      try {
+        return buildActivityProfile({
+          candles: marketReference?.impulseCandles?.length ? marketReference.impulseCandles : marketReference?.timeframeCandles,
+          timeframe,
+          timezone: marketReference?.timezone || "UTC",
+        });
+      } catch (error) {
+        console.log("Activity profile failed: " + (error?.message || error));
+        return null;
+      }
+    })(),
     activeEntryAreas: rankedRawAreas.map((candidate, index) => ({
       rank: candidate.executionOrder || index + 1,
       role: candidate.role || (index === 0 ? "primary" : index === 1 ? "secondary" : "alternative"),
@@ -29423,6 +29438,9 @@ function buildControlledFeedback({
           personalStrategyAssessment.strategyMatchScore ?? "Not enough evidence"
         }%.`
       : "- Personal strategy comparison was not selected for this review.",
+    "",
+    "BEST TIME TO WATCH:",
+    ...describeActivityProfile(facts?.activityProfile, { symbol: facts?.instrument || "this pair" }),
   ];
 
   const analysis =
