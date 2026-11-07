@@ -1480,7 +1480,31 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
           riskVerdict.short,
           { priority: riskVerdict.priority, why: riskVerdict.why }
         );
-        next.risk = `${rrText} ${riskVerdict.text} ${riskVerdict.level === "ok" ? "" : riskVerdict.advice}`.trim() + backupRiskText;
+        // Each backup entry has its own stop, so its own share of the account at risk. A sensible one
+        // needs no extra bullet; one that is high is flagged, so "sensible" never covers only Entry 1.
+        const backupAccount = backupPlans
+          .map((b) => {
+            const risk = accountRisk({ facts, distance: b.stopInfo.riskDistance, price: b.center });
+            if (!risk) return null;
+            const verdict = describeAccountRisk(risk, { planned: true });
+            return { order: b.order, verdict, text: verdict.text.replace("At that stop,", `At Entry ${b.order}'s stop,`) };
+          })
+          .filter(Boolean);
+        for (const item of backupAccount) {
+          if (item.verdict.level === "ok") continue;
+          add(
+            weaknesses,
+            "risk",
+            item.text,
+            `Entry ${item.order}: ${item.verdict.short.charAt(0).toLowerCase()}${item.verdict.short.slice(1)}`,
+            { priority: item.verdict.priority, why: item.verdict.why }
+          );
+        }
+        const backupAccountText = backupAccount.map((item) => ` ${item.text}`).join("");
+        next.risk =
+          `${rrText} ${riskVerdict.text} ${riskVerdict.level === "ok" ? "" : riskVerdict.advice}`.trim() +
+          backupRiskText +
+          backupAccountText;
       } else {
         next.risk = `${rrText} Risk only a small share of your account (many use 1%). ${RISK_UNKNOWN_HINT}${backupRiskText}`;
       }

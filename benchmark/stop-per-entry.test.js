@@ -123,3 +123,21 @@ test("the picture labels the stops by entry, and a single stop keeps its old lab
   });
   assert.ok(single.levels.map((level) => level.label).includes("Suggested stop"));
 });
+
+test("the account risk is given for each entry, and a high one is flagged even when Entry 1 is sensible", () => {
+  // $2,500, 0.35 lots: Entry 1's 13 pip stop risks about $45 (1.8%), Entry 2's 27 pip stop about $95 (3.8%).
+  const facts = gbpusd({ riskInputs: { balance: 2500, lots: 0.35 } });
+  const result = assessTradePillars({ facts, area: entry1, hasValidatedArea: true });
+  assert.match(result.next.risk, /At that stop, 0\.35 lots would risk \$45\.5 \(1\.8% of your account\)\. That is a sensible size\./);
+  assert.match(result.next.risk, /At Entry 2's stop, 0\.35 lots would risk \$95\.55 \(3\.8% of your account\)\. That is on the high side\./);
+  const flagged = result.weaknesses.filter((item) => item.pillar === "risk").map((item) => item.text);
+  assert.ok(flagged.some((text) => text.startsWith("At Entry 2's stop")), "the high Entry 2 risk is a weakness");
+  assert.ok(!flagged.some((text) => text.startsWith("At Entry 1")), "nothing is flagged for the sensible Entry 1");
+});
+
+test("when both entries are sensible there is no extra weakness, only the second figure", () => {
+  const facts = gbpusd({ riskInputs: { balance: 2500, lots: 0.18 } });
+  const result = assessTradePillars({ facts, area: entry1, hasValidatedArea: true });
+  assert.match(result.next.risk, /At Entry 2's stop, 0\.18 lots would risk \$49\.14 \(2% of your account\)\. That is a sensible size\./);
+  assert.equal(result.weaknesses.filter((item) => item.pillar === "risk").length, 0);
+});
