@@ -21540,6 +21540,79 @@ function buildPeriodInventoryStructuralCandidates({
   };
 }
 
+// One compact log line per review: what the entry selector considered and why it kept or dropped each
+// candidate, so a "no entry" or an unexpected level can be explained from the Render log alone. It
+// only reads what the selector already returned and must never change or break a review.
+function logEntrySelectionAudit({
+  rankedAreaResult = null,
+  structuralReferenceAreas = [],
+  direction = null,
+  phase = null,
+  currentPrice = null,
+  chartLastPrice = null,
+  symbol = "",
+  timeframe = "",
+} = {}) {
+  try {
+    const round = (value) => {
+      const number = Number(value);
+      return Number.isFinite(number) ? Number(number.toFixed(5)) : null;
+    };
+    const diagnostics = rankedAreaResult?.regressionDiagnostics || {};
+    const audit = diagnostics.transparencyAudit || {};
+    const fib = audit.fibonacciAudit || {};
+    const candidates = Array.isArray(audit.candidateEvaluationAudit) ? audit.candidateEvaluationAudit : [];
+    console.log("CSA ENTRY SELECTION AUDIT: " + JSON.stringify({
+      symbol,
+      timeframe,
+      direction,
+      phase,
+      currentPrice: round(currentPrice),
+      chartLastPrice: round(chartLastPrice),
+      fallbackSource: diagnostics.fallbackSource || rankedAreaResult?.validation?.fallbackSource || null,
+      validationErrors: rankedAreaResult?.validation?.errors || [],
+      frame: {
+        source: fib.source || diagnostics.fibonacci?.source || null,
+        verified: fib.verified ?? null,
+        chartDerivedUsable: fib.chartDerivedUsable ?? null,
+        swingHigh: round(fib.swingHigh ?? diagnostics.fibonacci?.swingHigh),
+        swingLow: round(fib.swingLow ?? diagnostics.fibonacci?.swingLow),
+        bandLow: round(fib.acceptedBandLow),
+        bandHigh: round(fib.acceptedBandHigh),
+      },
+      candidates: candidates.map((item) => ({
+        period: item.period,
+        extreme: item.extreme,
+        role: item.structuralRole,
+        was: item.originalRole,
+        price: round(item.price),
+        fibRatio: item.nearestFibRatio,
+        fibDistance: round(item.fibDistance),
+        inBand: item.insideAcceptedBand,
+        qualified: item.qualified,
+        reasons: item.rejectionReasons,
+      })),
+      selected: (Array.isArray(rankedAreaResult?.areas) ? rankedAreaResult.areas : []).map((area) => ({
+        price: round(area.authoritativeCenter),
+        role: area.areaType,
+        period: area.sourcePeriod || area.frameworkPeriod || null,
+        source: area.priceSource || null,
+      })),
+      references: (Array.isArray(structuralReferenceAreas) ? structuralReferenceAreas : []).map((area) => ({
+        price: round(area.authoritativeCenter),
+        role: area.areaType,
+        period: area.frameworkPeriod || area.sourcePeriod || null,
+        source: area.priceSource || null,
+        referenceOnly: area.referenceOnly === true,
+        outsideIdealZone: area.outsideIdealZone === true,
+        chartReconciled: area.chartReconciled === true,
+      })),
+    }));
+  } catch (error) {
+    console.log("CSA ENTRY SELECTION AUDIT failed: " + (error?.message || error));
+  }
+}
+
 function rankChartNativeFallbackAreas({
   visualReview = {},
   marketReference = {},
@@ -26842,6 +26915,17 @@ function buildValidatedAnalysisFacts({
     direction: lockedMarketState.direction,
     currentPrice,
     symbol: submittedInstrument,
+  });
+
+  logEntrySelectionAudit({
+    rankedAreaResult,
+    structuralReferenceAreas,
+    direction: lockedMarketState.direction,
+    phase: lockedMarketState.phase,
+    currentPrice,
+    chartLastPrice: chartDetection?.latestVisiblePrice,
+    symbol: submittedInstrument,
+    timeframe,
   });
 
   // The price map matched the trader's drawn lines before the final direction and entries were
