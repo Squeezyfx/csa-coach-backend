@@ -21550,6 +21550,7 @@ function logEntrySelectionAudit({
   phase = null,
   currentPrice = null,
   chartLastPrice = null,
+  sharedBias = null,
   symbol = "",
   timeframe = "",
 } = {}) {
@@ -21569,6 +21570,17 @@ function logEntrySelectionAudit({
       phase,
       currentPrice: round(currentPrice),
       chartLastPrice: round(chartLastPrice),
+      // The week's bias the selector actually used, and the price it was measured at.
+      sharedBias: sharedBias
+        ? {
+            direction: sharedBias.direction || null,
+            basis: sharedBias.source || null,
+            close: round(sharedBias.close),
+            open: round(sharedBias.open),
+            high: round(sharedBias.high),
+            low: round(sharedBias.low),
+          }
+        : null,
       fallbackSource: diagnostics.fallbackSource || rankedAreaResult?.validation?.fallbackSource || null,
       validationErrors: rankedAreaResult?.validation?.errors || [],
       frame: {
@@ -26924,6 +26936,7 @@ function buildValidatedAnalysisFacts({
     phase: lockedMarketState.phase,
     currentPrice,
     chartLastPrice: chartDetection?.latestVisiblePrice,
+    sharedBias: visualReview?.chartNativeEntryFallback?.sharedFramework?.bias || null,
     symbol: submittedInstrument,
     timeframe,
   });

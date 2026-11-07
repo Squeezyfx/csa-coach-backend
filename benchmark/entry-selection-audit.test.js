@@ -102,3 +102,11 @@ test("the server logs after the selector and the references are built, and only 
   assert.ok(call < server.indexOf("visualReview = markLinesOnAreas("));
   assert.ok(server.slice(start, end).includes("try {") && server.slice(start, end).includes("CSA ENTRY SELECTION AUDIT failed"));
 });
+
+test("the bias the selector used is logged with the price it was measured at", () => {
+  const sharedBias = { direction: "bearish", source: "calendar_open_close", close: 1.3349, open: 1.344, high: 1.35023, low: 1.33782 };
+  const audit = parse(run({ ...base, sharedBias })[0]);
+  assert.deepEqual(audit.sharedBias, { direction: "bearish", basis: "calendar_open_close", close: 1.3349, open: 1.344, high: 1.35023, low: 1.33782 });
+  assert.equal(parse(run(base)[0]).sharedBias, null);
+  assert.match(server, /sharedBias: visualReview\?\.chartNativeEntryFallback\?\.sharedFramework\?\.bias \|\| null,/);
+});
