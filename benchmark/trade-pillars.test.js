@@ -583,7 +583,7 @@ const sellArea = { direction: "sell", authoritativeCenter: 1.13097, zoneLow: 1.1
 test("the planned stop is not placed on the Backup entry and clears normal candle noise", () => {
   const { next } = run(sellAreaFacts(), sellArea);
   // 1.13227 is Entry 2, 1.1337 is beyond it: neither is a stop for Entry 1.
-  assert.match(next.exit, /^Stop loss: about 1\.13207, past the entry zone, normal candle moves and the spread\./);
+  assert.match(next.exit, /^Entry 1 stop loss: about 1\.13207, past the entry zone, normal candle moves and the spread\. Entry 2 stop loss: just above the key high at 1\.13370, with room for the spread\./);
   assert.match(next.risk, /risk 11 pips to make/);
 });
 
@@ -613,11 +613,11 @@ test("a stop is never tighter than one average candle, even on a daily chart", (
     selectorDiagnostics: levels([0.80515, 0.80441, 0.80419, 0.80402, 0.796, 0.78, 0.814]),
   };
   const withLevel = run(facts, buyArea);
-  assert.match(withLevel.next.exit, /^Stop loss: just below the key low at 0\.79600, with room for the spread\./);
+  assert.match(withLevel.next.exit, /^Entry 1 stop loss: just below the key low at 0\.79600, with room for the spread\./);
 
   facts.selectorDiagnostics = levels([0.80515, 0.80441, 0.80419, 0.80402, 0.78, 0.814]);
   const synthetic = run(facts, buyArea);
-  assert.match(synthetic.next.exit, /^Stop loss: about 0\.79905, past the entry zone/);
+  assert.match(synthetic.next.exit, /^Entry 1 stop loss: about 0\.79905, past the entry zone/);
   assert.match(synthetic.next.risk, /risk 61 pips/);
 });
 
@@ -877,7 +877,7 @@ test("prices that do not look like this chart are set aside and the trader told"
   const weaknesses = compilePillarItems(result.weaknesses);
   assert.ok(has(weaknesses, "The prices you entered don't look like this chart (price is about 1.12850)."));
   assert.deepEqual(result.snapshot, []);
-  assert.match(result.next.exit, /^Stop loss: about 1\.13207/);
+  assert.match(result.next.exit, /^Entry 1 stop loss: about 1\.13207/);
 });
 
 test("the risk of a planned stop uses the balance and lot size typed in", () => {

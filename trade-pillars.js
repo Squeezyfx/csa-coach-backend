@@ -1094,6 +1094,18 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     // average candle beyond the entry zone.
     const planStopInfo = center !== null ? planStopFor({ facts, area, center, levels, isSell }) : null;
     const planStop = planStopInfo ? planStopInfo.price : null;
+    // Every backup entry is its own trade, so it gets its own stop (Entry 1's stop above already sits
+    // in front of it). Only when the entries come from the review: a typed entry is the trader's plan.
+    const sameEntry = center !== null ? center * 0.00005 : 0;
+    const backupPlans =
+      dir && center !== null && planStopInfo && planned.entry === null
+        ? (Array.isArray(facts?.activeEntryAreas) ? facts.activeEntryAreas : [])
+            .map((a, index) => ({ area: a, center: num(a?.authoritativeCenter), order: Number(a?.rank) || index + 1 }))
+            .filter((b) => b.center !== null && (isSell ? b.center > center + sameEntry : b.center < center - sameEntry))
+            .sort((a, b) => Math.abs(a.center - center) - Math.abs(b.center - center))
+            .slice(0, 2)
+            .map((b) => ({ ...b, stopInfo: planStopFor({ facts, area: b.area, center: b.center, levels, isSell }) }))
+        : [];
     if (dir && center !== null) {
       geometry = {
         kind: "plan",
@@ -1105,6 +1117,9 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         stopTyped: planned.stop,
         targets: planLadder.map((t) => t.price),
         targetTyped: planned.target,
+        ...(backupPlans.length
+          ? { backups: backupPlans.map((b) => ({ order: b.order, entry: b.center, stop: b.stopInfo.price })) }
+          : {}),
       };
     }
     const stopText =
@@ -1117,6 +1132,19 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         : `Stop loss: about ${fmtPrice(planStop)}, past the entry zone, normal candle moves${
             planStopInfo.spread > 0 ? " and the spread" : ""
           }.`;
+    // With a backup entry, name which entry each stop belongs to.
+    const stopTextAll = backupPlans.length
+      ? [
+          stopText.replace(/^Stop loss:/, "Entry 1 stop loss:"),
+          ...backupPlans.map((b) =>
+            b.stopInfo.keyLevel
+              ? `Entry ${b.order} stop loss: just ${isSell ? "above" : "below"} the key ${protectWord} at ${fmtPrice(b.stopInfo.level)}${
+                  b.stopInfo.spread > 0 ? ", with room for the spread" : ""
+                }.`
+              : `Entry ${b.order} stop loss: about ${fmtPrice(b.stopInfo.price)}, past the entry zone.`
+          ),
+        ].join(" ")
+      : stopText;
     const review = hasPlan && dir && center !== null;
     const word = isSell ? "sell" : "buy";
     const aboveWord = isSell ? "above" : "below";
@@ -1373,9 +1401,9 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     next.exit = review
       ? exitParts.join(" ").trim()
       : dir && fromWatch
-      ? `If price holds the watch level at ${fmtPrice(center)} and you decide to ${word} from it: ${stopText} ${ladderText}`
+      ? `If price holds the watch level at ${fmtPrice(center)} and you decide to ${word} from it: ${stopTextAll} ${ladderText}`
       : dir
-      ? `${stopText} ${ladderText}`
+      ? `${stopTextAll} ${ladderText}`
       : "Put your stop just beyond the level that proves you wrong and your take profit at the next key support or resistance.";
 
     // Risk: the trader's own stop and target when typed, otherwise the
@@ -1403,8 +1431,20 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
           : userRisk === null && userReward === null
           ? "With the suggested stop and targets"
           : "With your prices and the suggested levels";
+      // Each backup entry has its own stop, so its own risk and reward to the same final target.
+      const backupRiskText = backupPlans
+        .map((b) => {
+          const risk = b.stopInfo.riskDistance;
+          const reward = planTarget !== null ? Math.abs(b.center - planTarget) : null;
+          return risk > 0 && reward !== null
+            ? ` Entry ${b.order}: you risk ${priceDistance(risk, symbol).text} to make ${priceDistance(reward, symbol).text}${atFinal} (${(reward / risk).toFixed(1)} times your risk).`
+            : "";
+        })
+        .join("");
+      // With a backup entry the first figures belong to Entry 1.
+      const rrLead = backupPlans.length ? `For Entry 1, ${rrFrom.charAt(0).toLowerCase()}${rrFrom.slice(1)}` : rrFrom;
       const rrText =
-        `${rrFrom} you risk ${priceDistance(riskDist, symbol).text} to make ${priceDistance(rewardDist, symbol).text}${atFinal} (${rr.toFixed(1)} times your risk). ${verdict}`;
+        `${rrLead} you risk ${priceDistance(riskDist, symbol).text} to make ${priceDistance(rewardDist, symbol).text}${atFinal} (${rr.toFixed(1)} times your risk). ${verdict}`;
       // Only the trader's own numbers are graded; the suggestion is not.
       if (userRisk !== null && userReward !== null) {
         const rrShort = rr.toFixed(1);
@@ -1440,9 +1480,9 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
           riskVerdict.short,
           { priority: riskVerdict.priority, why: riskVerdict.why }
         );
-        next.risk = `${rrText} ${riskVerdict.text} ${riskVerdict.level === "ok" ? "" : riskVerdict.advice}`.trim();
+        next.risk = `${rrText} ${riskVerdict.text} ${riskVerdict.level === "ok" ? "" : riskVerdict.advice}`.trim() + backupRiskText;
       } else {
-        next.risk = `${rrText} Risk only a small share of your account (many use 1%). ${RISK_UNKNOWN_HINT}`;
+        next.risk = `${rrText} Risk only a small share of your account (many use 1%). ${RISK_UNKNOWN_HINT}${backupRiskText}`;
       }
     }
     if (stopShown && targetShown) {
@@ -1494,7 +1534,19 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       // the first target), reaching the entry means passing through it anyway.
       const targetStillAhead =
         firstTarget !== null && (current === null || (isSell ? current > firstTarget : current < firstTarget));
-      next.cancel = `If a candle closes ${aboveWord} ${fmtPrice(planStopInfo.price)}, this ${word} idea is wrong.${
+      // With backup entries each stop retires its own entry; the last one retires the whole idea.
+      const cancelStops = [{ order: 1, price: planStopInfo.price }, ...backupPlans.map((b) => ({ order: b.order, price: b.stopInfo.price }))];
+      const cancelText = backupPlans.length
+        ? cancelStops
+            .map(
+              (stop, index) =>
+                `If a candle closes ${aboveWord} ${fmtPrice(stop.price)}, Entry ${stop.order} is wrong${
+                  index === cancelStops.length - 1 ? ` and so is the whole ${word} idea` : ""
+                }.`
+            )
+            .join(" ")
+        : `If a candle closes ${aboveWord} ${fmtPrice(planStopInfo.price)}, this ${word} idea is wrong.`;
+      next.cancel = `${cancelText}${
         targetStillAhead
           ? ` Skip it too if price reaches ${fmtPrice(firstTarget)} (your first take profit) before your entry fills.`
           : ""

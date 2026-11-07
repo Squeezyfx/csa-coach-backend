@@ -110,9 +110,14 @@ export function buildCleanChart({
     if (finite(trade.stopTyped)) add({ id: "TS", kind: "trade", style: "stop", label: "Your stop", price: trade.stopTyped });
     if (finite(trade.targetTyped)) add({ id: "TT", kind: "trade", style: "target", label: "Your take profit", price: trade.targetTyped });
     // The coach's suggested exits, drawn lighter than the trader's own.
+    // With backup entries each entry has its own stop: "Stop 1", "Stop 2", ... instead of one "Suggested stop".
+    const backups = (Array.isArray(trade.backups) ? trade.backups : []).filter((item) => finite(item?.stop));
     if (finite(trade.stop) && !(finite(trade.stopTyped) && sameLevel(trade.stop, num(trade.stopTyped), range))) {
-      add({ id: "SS", kind: "plan", style: "planStop", label: "Suggested stop", price: trade.stop });
+      add({ id: "SS", kind: "plan", style: "planStop", label: backups.length ? "Stop 1" : "Suggested stop", price: trade.stop });
     }
+    backups.forEach((item) => {
+      add({ id: `SS${item.order}`, kind: "plan", style: "planStop", label: `Stop ${item.order}`, price: item.stop });
+    });
     const targets = Array.isArray(trade.targets) ? trade.targets : [];
     targets.forEach((price, index) => {
       if (finite(trade.targetTyped) && sameLevel(num(price), num(trade.targetTyped), range)) return;
