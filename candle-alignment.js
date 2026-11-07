@@ -340,9 +340,11 @@ export function reconcileWithHeaderFeedOffset({
  * provider data AFTER the cutoff, the chart is this provider's own dataset (same instrument,
  * same dates, a constant feed offset). The candles used for the review stay the ones up to the
  * cutoff: the later candles are only evidence for the match and are never returned for analysis.
- * The same safety rules as the header check apply: a tight shape fit, no second candle that
- * fits nearly as well, and an offset within the same-instrument bound. Only a candle after the
- * cutoff counts; a header that matches nothing later leaves the status as it was.
+ * The safety rules: a tight shape fit, an offset within the same-instrument bound, and a fit
+ * that is selective (not most of the later candles). Unlike the header check above, a second
+ * candle that fits almost as well does not block the match, because only the feed is being
+ * proven here, not which candle the header shows. Only a candle after the cutoff counts; a
+ * header that matches nothing later leaves the status as it was.
  */
 export function verifyFeedPastCutoff({
   chartDataMatch, candles = [], header = null, cutoff = "", tolerance, maxOffset = null, onDiagnostic = null,
@@ -374,14 +376,11 @@ export function verifyFeedPastCutoff({
   hits.sort((a, b) => a.residual - b.residual || (normalizeCandleDatetime(a.candle.datetime) < normalizeCandleDatetime(b.candle.datetime) ? -1 : 1));
   const hit = hits[0];
   if (hit.residual > tolerance * 0.5) return finish("best_fit_too_loose", { residual: hit.residual });
-  const runnerUp = hits[1];
-  if (runnerUp) {
-    const gap = runnerUp.residual - hit.residual;
-    const exactFit = hit.residual <= tolerance * 0.02;
-    if (!(gap >= tolerance * 0.5 || (exactFit && gap >= tolerance * 0.08))) {
-      return finish("ambiguous_match", { residual: hit.residual, runnerUp: runnerUp.residual });
-    }
-  }
+  // The candle's identity is not used (only that the chart is this feed), so a second candle that
+  // fits nearly as well does not matter: on a quiet session several hourly candles look alike
+  // within an ATR-scaled tolerance. What does matter is that the fit is selective. A shape that
+  // fits most of the later candles proves nothing about the feed.
+  if (hits.length > later.length * 0.5) return finish("fit_not_selective", { residual: hit.residual });
   if (typeof onDiagnostic === "function") {
     onDiagnostic({ reason: "upgraded", hits: hits.length, window: later.length, residual: hit.residual, offset: hit.offset, headerCandle: hit.candle.datetime });
   }

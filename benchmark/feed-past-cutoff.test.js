@@ -101,11 +101,51 @@ test("a different instrument (large offset) is rejected", () => {
   assert.equal(verifyFeedPastCutoff({ ...base, header: far }), unverified);
 });
 
-test("two similar candles after the cutoff make the match a coincidence", () => {
+test("a second candle that fits almost as well does not block the match: only the feed is proven", () => {
   const twin = later.map((c) => ({ ...c }));
   twin[20] = { ...twin[20], open: last.open, high: last.high, low: last.low, close: last.close };
   twin[20] = { ...twin[20], high: Number((last.high + 0.00001).toFixed(5)) };
-  assert.equal(verifyFeedPastCutoff({ ...base, candles: twin }), unverified);
+  const result = verifyFeedPastCutoff({ ...base, candles: twin });
+  assert.equal(result.status, "matched_reference");
+  assert.equal(result.matchMode, "header_feed_past_cutoff");
+});
+
+test("the live EURAUD case: a 2.5 pip residual with 5 of 64 candles fitting is accepted at the ATR-scaled tolerance", () => {
+  // Quiet Friday session: five hourly candles share the header's shape within the tolerance (0.0007).
+  // The best fit is 2.55 pips off (the spread widens into the weekly close), the runner-up 4.05 pips.
+  const residuals = [0.000255, 0.000405, 0.0005, 0.00055, 0.0006];
+  const target = { open: 1.62337, high: 1.62368, low: 1.62197, close: 1.62246 };
+  const rows = Array.from({ length: 64 }, (_, i) => ({
+    datetime: `2026-11-05 ${String(i % 24).padStart(2, "0")}:00:00`,
+    open: 1.5, high: 1.5012, low: 1.4995, close: 1.5008, // far from the header: no fit
+  }));
+  residuals.forEach((residual, n) => {
+    // Same shape as the header, one field pushed away by the residual.
+    rows[10 + n * 9] = {
+      datetime: `2026-11-05 ${String(10 + n * 9).padStart(2, "0")}:00:00`,
+      open: target.open - 0.0004, high: target.high - 0.0004 - residual, low: target.low - 0.0004, close: target.close - 0.0004,
+    };
+  });
+  const seen = [];
+  const result = verifyFeedPastCutoff({
+    ...base, candles: rows, header: target, tolerance: 0.0007, maxOffset: 0.0015, onDiagnostic: (info) => seen.push(info),
+  });
+  assert.equal(result.status, "matched_reference");
+  assert.equal(seen[0].reason, "upgraded");
+  assert.equal(seen[0].hits, 5);
+});
+
+test("a shape that fits most of the later candles proves nothing and is rejected", () => {
+  const flat = later.map((c) => ({ ...c, open: last.open, high: last.high, low: last.low, close: last.close }));
+  const seen = [];
+  const result = verifyFeedPastCutoff({ ...base, candles: flat, onDiagnostic: (info) => seen.push(info.reason) });
+  assert.equal(result, unverified);
+  assert.deepEqual(seen, ["fit_not_selective"]);
+});
+
+test("a fit looser than half the tolerance is rejected", () => {
+  const loose = { open: last.open + OFFSET, high: last.high + OFFSET + 0.00019, low: last.low + OFFSET, close: last.close + OFFSET };
+  assert.equal(verifyFeedPastCutoff({ ...base, header: loose, tolerance: 0.0003 }), unverified);
 });
 
 test("no later candles, a missing header or a missing cutoff change nothing", () => {
