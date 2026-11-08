@@ -11932,7 +11932,7 @@ function prioritizeStarterWeaknesses(items = []) {
 
 const CSA_FEEDBACK_ENGINE_VERSION = "10.65.0";
 const CSA_BUILD_ID = "CSA-v4.74.1-second-weekly-aggregator-fix";
-const CSA_SCORING_MODEL_VERSION = "2.1.0-evidence-owned";
+const CSA_SCORING_MODEL_VERSION = "2.2.0-pretrade-setup-uncapped";
 
 // V4.10.17 — HISTORICAL BENCHMARK CONTRACTS
 // These checks never create, reorder, or promote an entry. They only audit the
@@ -28294,7 +28294,13 @@ function controlledScores(facts) {
     setup += 12;
   }
 
-  if (!area?.areaRetested) {
+  // A setup whose area price has not come back to is unproven, so it cannot score above 68 - except
+  // in a Pre-trade plan, where waiting for price to reach the area is exactly what a plan is. Capping
+  // it there made a clean, high-confluence plan read "Fair" however good it was. A placed trade (or a
+  // Post-trade chart) with an area price never reached keeps the cap.
+  const waitingForPrice =
+    facts?.analysisType === "pre-trade" && !tradeVisible;
+  if (!area?.areaRetested && !waitingForPrice) {
     setup = Math.min(setup, 68);
   }
 
