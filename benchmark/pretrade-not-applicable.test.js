@@ -62,6 +62,24 @@ test("real risk problems are still flagged: a typed lot size that is too large",
   assert.ok(weaknessTexts(big).some((text) => text.startsWith("Risk:")));
 });
 
+test("a Pre-trade plan with nothing entered does not list 'area not confirmed' or 'no trigger candle' as weaknesses", () => {
+  const start = server.indexOf("const pretradeNothingEntered =");
+  assert.ok(start > 0, "the Pre-trade rule exists");
+  const rule = server.slice(start, start + 600);
+  assert.match(rule, /facts\?\.analysisType === "pre-trade"/);
+  assert.match(rule, /facts\?\.trade\?\.visible !== true/);
+  assert.match(rule, /!hasExecutedOrder/);
+  for (const field of ["entry", "stop", "target"]) {
+    assert.match(rule, new RegExp(`!\\(Number\\(facts\\?\\.plannedTrade\\?\\.${field}\\) > 0\\)`), `typed ${field} switches the rule off`);
+  }
+  assert.match(rule, /!facts\?\.risk\?\.stopShown/);
+  assert.match(rule, /!facts\?\.risk\?\.targetShown/);
+  const after = server.slice(start, start + 2400);
+  assert.match(after, /const noTradeToJudge = \(isPostTrade && !facts\.trade\.visible\) \|\| pretradeNothingEntered;/);
+  assert.match(after, /!area\.areaRetested && !hasExecutedOrder && !noTradeToJudge/);
+  assert.match(after, /!area\.triggerPresent && !hasExecutedOrder && !noTradeToJudge/);
+});
+
 test("the review says plainly what is not applicable yet, only for a Pre-trade plan with nothing entered", () => {
   assert.match(server, /not applicable yet, because no trade or plan has been entered\. Suggested ones are under Next action\./);
   const start = server.indexOf('"- Stop loss, take profit, risk and trade management: not applicable yet');

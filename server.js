@@ -28961,7 +28961,18 @@ function buildControlledFeedback({
     // A post-trade review with no trade on the chart has nothing of the trader's to
     // judge, so the framework's "not retested / no trigger yet" notes are left to
     // Next action and Setup readiness rather than listed as weaknesses.
-    const noTradeToJudge = isPostTrade && !facts.trade.visible;
+    // The same goes for a Pre-trade plan with nothing entered: price has simply not come back to the
+    // area yet, which is waiting, not a mistake.
+    const pretradeNothingEntered =
+      facts?.analysisType === "pre-trade" &&
+      facts?.trade?.visible !== true &&
+      !hasExecutedOrder &&
+      !(Number(facts?.plannedTrade?.entry) > 0) &&
+      !(Number(facts?.plannedTrade?.stop) > 0) &&
+      !(Number(facts?.plannedTrade?.target) > 0) &&
+      !facts?.risk?.stopShown &&
+      !facts?.risk?.targetShown;
+    const noTradeToJudge = (isPostTrade && !facts.trade.visible) || pretradeNothingEntered;
     if (!area.areaRetested && !hasExecutedOrder && !noTradeToJudge) {
       addWeakness(
         "entry",
