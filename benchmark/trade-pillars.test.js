@@ -994,10 +994,13 @@ test("a chart with nothing marked still says what is missing for stop, target, r
   assert.ok(has(weaknesses, "Trade management: No trade is shown, so trade management"));
 });
 
-test("the pre-trade wording asks for a plan instead of blaming a missing trade", () => {
-  const { weaknesses } = run(bareChart("pre-trade"), { direction: "buy", authoritativeCenter: 1.41771 });
-  assert.ok(has(weaknesses, "Exit: No stop loss or take profit is marked on the chart or typed in"));
-  assert.ok(has(weaknesses, "Trade management: There is no trade to manage yet. Decide in advance"));
+test("a Pre-trade plan with nothing entered is not blamed for a missing stop, take profit, risk or management", () => {
+  const { weaknesses, next } = run(bareChart("pre-trade"), { direction: "buy", authoritativeCenter: 1.41771 });
+  assert.ok(!has(weaknesses, "Exit:"));
+  assert.ok(!has(weaknesses, "Risk:"));
+  assert.ok(!has(weaknesses, "Trade management:"));
+  // what to do is still said, under Next action
+  assert.match(next.management, /Plan ahead/);
 });
 
 test("risk names only what is actually missing when the stop and target are known", () => {

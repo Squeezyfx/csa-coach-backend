@@ -29424,6 +29424,17 @@ function buildControlledFeedback({
     `- Take profit marked on the chart: ${
       facts.risk.targetShown ? "yes" : Number(facts?.plannedTrade?.target) > 0 ? "no (the take profit you typed is checked above)" : "no"
     }.`,
+    // A Pre-trade plan with nothing entered is not that far yet: say so plainly (the review does not
+    // count it against the trader) instead of leaving a gap.
+    ...(facts?.analysisType === "pre-trade" &&
+    facts?.trade?.visible !== true &&
+    !hasExecutedOrder &&
+    !(Number(facts?.plannedTrade?.stop) > 0) &&
+    !(Number(facts?.plannedTrade?.target) > 0) &&
+    !facts?.risk?.stopShown &&
+    !facts?.risk?.targetShown
+      ? ["- Stop loss, take profit, risk and trade management: not applicable yet, because no trade or plan has been entered. Suggested ones are under Next action."]
+      : []),
   ];
 
   const eliteSections = [

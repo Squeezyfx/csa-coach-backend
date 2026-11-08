@@ -1589,8 +1589,13 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     const noTradeShown = !tradeVisible && !order;
     const stopKnown = stopShown || planned.stop !== null || num(order?.stopPrice) !== null;
     const targetKnown = targetShown || planned.target !== null || num(order?.targetPrice) !== null;
+    // A Pre-trade plan with no trade and no stop or take profit entered is simply not that far yet.
+    // There is nothing to judge, so a missing stop, take profit, risk figure or trade management is
+    // not a weakness (the suggested ones are in Next action, and unfilled boxes are never penalised).
+    // A Post-trade chart, a placed trade, or a stop/take profit the trader did enter is still judged.
+    const planningOnly = preTradeMode && noTradeShown && !stopKnown && !targetKnown;
 
-    if (!covered("exit") && !stopKnown && !targetKnown) {
+    if (!covered("exit") && !stopKnown && !targetKnown && !planningOnly) {
       add(
         weaknesses,
         "exit",
@@ -1602,7 +1607,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       );
     }
 
-    if (!covered("risk")) {
+    if (!covered("risk") && !planningOnly) {
       const inputs = readRiskInputs(facts);
       const reasons = [];
       if (!stopKnown && !targetKnown) reasons.push("there is no stop loss or take profit to measure it from");
@@ -1622,7 +1627,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       }
     }
 
-    if (!covered("management")) {
+    if (!covered("management") && !(preTradeMode && noTradeShown)) {
       add(
         weaknesses,
         "management",

@@ -235,8 +235,11 @@ chart or type them into the boxes."
 
 **Why does it list weaknesses like "No stop loss or take profit" when I didn't take a trade?**
 "Every review covers the same parts of a trade: entry area, entry point, stop loss and take profit, risk
-and trade management. When something isn't shown on the chart or typed in, the review says what is
-missing and why, so you know what to include next time."
+and trade management. In a Post-trade review, when something isn't shown on the chart or typed in, the
+review says what is missing and why, so you know what to include next time. In a Pre-trade review you are
+only planning, so nothing you haven't entered yet is counted against you: Setup readiness says 'not
+applicable yet', and the suggested stop, take profits and risk are under Next action. If you do type a
+stop, take profit, balance or lot size, those are checked."
 
 **Why did the review stop earlier than my chart, or miss a level I expected?**
 "Most often the mouse pointer was resting on the chart when the screenshot was taken. TradingView then
