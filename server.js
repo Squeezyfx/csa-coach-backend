@@ -1,6 +1,6 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
-import { fetchCandlesAfterCutoff, fetchOandaSeries, oandaInstrument } from "./oanda-data.js";
+import { fetchCandlesAfterCutoff, fetchOandaSeries, fetchRecentCandles, forexPipSize, oandaInstrument } from "./oanda-data.js";
 import { chooseWatchReferences } from "./watch-references.js";
 import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage, shouldTagSignup } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
@@ -28,8 +28,9 @@ import {
   describeAccount,
 } from "./indicator-access.js";
 import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields, supplementLivePeriod } from "./framework-periods.js";
-import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch, reconcileWithHeaderFeedOffset, verifyFeedPastCutoff } from "./candle-alignment.js";
+import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch, reconcileWithHeaderFeedOffset, verifyFeedPastCutoff, locateFinalVisibleCandle, FINAL_VISIBLE_LOOKBACK_DAYS } from "./candle-alignment.js";
 import { periodCompleteAtCutoff } from "./period-completion.js";
+import { buildDateCheck, describeDateCheck } from "./date-check.js";
 import { resolveFrameworkBias, calendarMapping, newWeekWithoutCompletedDay } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
@@ -27395,6 +27396,12 @@ function buildValidatedAnalysisFacts({
           fibonacciMatches: Array.isArray(candidate.fibonacciMatches) ? candidate.fibonacciMatches : [],
         }))
       : [],
+    // Set only when the date was not read from the chart and the review may be about another day (or
+    // the date was found from the chart's prices); shown as "DATE CHECK" in every plan.
+    dateCheck: buildDateCheck({
+      finalVisibleDate: chartDetection?.finalVisibleDate,
+      matchStatus: marketReference?.chartDataMatch?.status,
+    }),
     // Where and when the pair has moved most lately, from the candles this review already has (up to its
     // cutoff). Shown to Elite as "best time to watch"; it never touches the grade or the entries.
     activityProfile: (() => {
@@ -29381,6 +29388,9 @@ function buildControlledFeedback({
     ...(Array.isArray(pillars.snapshot) && pillars.snapshot.length
       ? ["", pillars.snapshotTitle || "YOUR TRADE SO FAR:", ...pillars.snapshot.map((item) => `- ${item}`)]
       : []),
+    // The date was not read from the chart: say whether it was found from the prices, or that the
+    // review may be about the wrong day.
+    ...(facts?.dateCheck ? ["", "DATE CHECK:", `- ${describeDateCheck(facts.dateCheck)}`] : []),
     "",
     "WHAT YOU DID WELL:",
     ...coachStrengths.map((item) => `- ${item}`),
@@ -31935,6 +31945,77 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       console.warn("[price-axis-calibration] skipped:", error?.message || error);
     }
 
+    // FINAL VISIBLE date fallback. In Final visible candle mode the chart's own date controls the
+    // review, but a screenshot that prints no date for its last candle (TradingView's axis shows day
+    // numbers only) leaves nothing to override a wrong typed date with, so the review silently used
+    // that date (seen 2026-11-09: a typed 23 Sep on a 9 Nov chart). The header's prices identify the
+    // candle instead: they are compared with the provider's newest candles, and only an unmistakable,
+    // unambiguous fit is used (see locateFinalVisibleCandle). FX pairs on OANDA only; anything else
+    // keeps the old behaviour plus the date warning in the review text.
+    if (String(process.env.FINAL_VISIBLE_DATE_FALLBACK || "on").toLowerCase() !== "off" &&
+        normalizedRequestedCutoffMode === "final_visible" &&
+        !isUsableChartDateDetection(chartDetection) &&
+        process.env.OANDA_API_TOKEN &&
+        String(process.env.FOREX_DATA_PROVIDER || "oanda").trim().toLowerCase() === "oanda" &&
+        FINAL_VISIBLE_LOOKBACK_DAYS[selectedTimeframeProfile?.interval] &&
+        forexPipSize(normalizedSymbol)) {
+      try {
+        const pip = forexPipSize(normalizedSymbol);
+        const headerPrices = {
+          open: chartDetection?.headerOpen,
+          high: chartDetection?.headerHigh,
+          low: chartDetection?.headerLow,
+          close: chartDetection?.headerClose,
+        };
+        const header = Object.values(headerPrices).every((v) => Number(v) > 0)
+          ? headerPrices
+          : (await readChartHeaderOhlc({ imageBase64, mimeType })) || headerPrices;
+        const recent = await fetchRecentCandles({
+          symbol: normalizedSymbol,
+          interval: selectedTimeframeProfile.interval,
+          days: FINAL_VISIBLE_LOOKBACK_DAYS[selectedTimeframeProfile.interval],
+          timezone: resolvedTimezone,
+          token: process.env.OANDA_API_TOKEN,
+          environment: process.env.OANDA_ENVIRONMENT || "practice",
+          price: process.env.OANDA_PRICE_COMPONENT || "B",
+        });
+        const located = locateFinalVisibleCandle({
+          header,
+          lastPrice: chartDetection?.latestVisiblePrice,
+          candles: recent.candles,
+          forming: recent.forming,
+          tolerance: pip,
+          maxOffset: pip * 1.5,
+        });
+        const matchedDate = located.ok ? String(located.candle.datetime).slice(0, 10) : null;
+        console.log("[date-fallback] " + JSON.stringify({
+          symbol: normalizedSymbol,
+          typedDate: selectedDateText || null,
+          header,
+          ok: located.ok,
+          mode: located.mode || null,
+          reason: located.reason || null,
+          hits: located.hits ?? null,
+          window: located.window ?? recent.candles.length,
+          matchedCandle: located.ok ? located.candle.datetime : null,
+          residual: located.residual ?? null,
+          offset: located.offset ?? null,
+          changed: Boolean(matchedDate && matchedDate !== (selectedDateText || "")),
+        }));
+        if (matchedDate && matchedDate !== (selectedDateText || "")) {
+          chartDetection = {
+            ...chartDetection,
+            latestVisibleDate: matchedDate,
+            dateConfidence: "medium",
+            latestVisibleDateEvidence: "provider_price_match",
+            datePriceMatch: { candle: located.candle.datetime, mode: located.mode, residual: located.residual },
+          };
+        }
+      } catch (error) {
+        console.log("[date-fallback] failed: " + (error?.message || error));
+      }
+    }
+
     let dateDecision = chooseFinalChartDate({
       selectedDate,
       detection: chartDetection,
@@ -31951,6 +32032,19 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       source: dateDecision.source,
       reason: dateDecision.reason,
     });
+
+    // What the review text says about the date when it was not read from the chart (see dateCheck in
+    // buildValidatedAnalysisFacts).
+    chartDetection = {
+      ...chartDetection,
+      finalVisibleDate: {
+        mode: normalizedRequestedCutoffMode,
+        source: dateDecision.source,
+        typedDate: dateDecision.selectedDateText || null,
+        reviewedDate: dateDecision.finalDateText || null,
+        priceMatched: chartDetection?.latestVisibleDateEvidence === "provider_price_match",
+      },
+    };
 
     let chartCutoff = resolveTwelveDataChartCutoff({
       chartDetection,

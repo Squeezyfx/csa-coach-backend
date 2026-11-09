@@ -399,6 +399,79 @@ export function verifyFeedPastCutoff({
   };
 }
 
+/**
+ * How many days of recent candles to search when the date of a Final visible candle screenshot
+ * could not be read. Only intraday and daily charts; weekly and monthly are left alone.
+ */
+export const FINAL_VISIBLE_LOOKBACK_DAYS = {
+  "1min": 1,
+  "5min": 2,
+  "15min": 4,
+  "30min": 6,
+  "1h": 14,
+  "4h": 30,
+  "1day": 60,
+};
+
+/**
+ * Finds the date of a screenshot from its prices when the chart's own date could not be read.
+ *
+ * The header's four prices (open, high, low, close of the last candle) are compared with recent
+ * provider candles. A candle is only accepted when the match is unmistakable:
+ *   - the chart's last price (the tag on the price axis) agrees with the header's close, so the
+ *     header describes the last candle and not one the mouse pointer was resting on;
+ *   - the shape fits within a tight tolerance (a few tenths of a pip's feed difference, not the
+ *     loose ATR tolerance used elsewhere, which a quiet week satisfies by coincidence);
+ *   - exactly one candle fits. A still-forming candle (the provider's incomplete latest candle)
+ *     counts as a fit when its open tracks the header's open and the header's high and low sit
+ *     inside it. If a completed candle and the forming one both fit, or several completed
+ *     candles do, the answer is "ambiguous" and nothing is changed.
+ *
+ * Returns { ok, mode, candle, residual, offset, hits, reason }.
+ */
+export function locateFinalVisibleCandle({
+  header = null, lastPrice = null, candles = [], forming = null, tolerance, maxOffset = null,
+} = {}) {
+  const visible = visibleOhlcFromDetection({
+    latestVisibleOpen: header?.open, latestVisibleHigh: header?.high,
+    latestVisibleLow: header?.low, latestVisibleClose: header?.close,
+  });
+  if (!visible) return { ok: false, reason: "no_header_prices" };
+  if (!(Number(tolerance) > 0)) return { ok: false, reason: "no_tolerance" };
+  const last = num(lastPrice);
+  if (last === null || last <= 0) return { ok: false, reason: "no_last_price" };
+  // A real last-candle header closes at the last price. If not, the pointer was on another candle.
+  if (Math.abs(last - visible.close) > tolerance) return { ok: false, reason: "header_not_last_candle" };
+
+  const usable = (Array.isArray(candles) ? candles : [])
+    .filter((c) => c && c.datetime && FIELDS.every((f) => num(c[f]) !== null));
+  const completed = [];
+  for (const candle of usable) {
+    const r = ohlcAligned(visible, candle, tolerance, { maxOffset });
+    if (r.aligned) completed.push({ candle, ...r });
+  }
+  completed.sort((a, b) => a.residual - b.residual);
+
+  let formingHit = null;
+  if (forming && forming.datetime && FIELDS.every((f) => num(forming[f]) !== null)) {
+    const r = ohlcAligned(visible, forming, tolerance, { partial: true, maxOffset });
+    if (r.aligned) formingHit = { candle: forming, ...r };
+  }
+
+  if (completed.length === 1 && !formingHit) {
+    return { ok: true, mode: "full_ohlc", candle: completed[0].candle, residual: completed[0].residual, offset: completed[0].offset, hits: 1 };
+  }
+  if (completed.length === 0 && formingHit) {
+    return { ok: true, mode: "forming_partial", candle: formingHit.candle, residual: formingHit.residual, offset: formingHit.offset, hits: 1 };
+  }
+  // Several fit: the best must be clearly better, not just first (two identical fits are a tie).
+  if (completed.length > 1 && !formingHit && completed[1].residual >= tolerance * 0.3 && completed[0].residual <= completed[1].residual * 0.35) {
+    return { ok: true, mode: "full_ohlc", candle: completed[0].candle, residual: completed[0].residual, offset: completed[0].offset, hits: completed.length };
+  }
+  if (!completed.length && !formingHit) return { ok: false, reason: "no_candle_fits_header", window: usable.length };
+  return { ok: false, reason: "ambiguous", hits: completed.length + (formingHit ? 1 : 0), window: usable.length };
+}
+
 function normalizeCandleDatetime(value = "") {
   return String(value || "").trim().replace("T", " ").slice(0, 19);
 }

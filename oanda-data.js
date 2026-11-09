@@ -137,6 +137,15 @@ export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,ti
  return {values:[...values.entries()].sort((a,b)=>a[0]-b[0]).map(([,v])=>v),providerSymbol:instrument.replace('_','/'),source:'OANDA',priceComponent:price,timezone,alignmentCandle};
 }
 
+// The newest candles up to now: the completed ones, and the still-forming latest candle on its own.
+// Used only to find the date of a screenshot whose own date could not be read (see
+// locateFinalVisibleCandle); never part of a review.
+export async function fetchRecentCandles({symbol,interval,days=14,timezone='UTC',token,environment='practice',price='B',now=Date.now(),fetchImpl=fetch}={}){
+ const startMs=now-days*86400000;
+ const series=await fetchOandaSeries({symbol,interval,startDate:localString(startMs,timezone).slice(0,10),endDateTime:localString(now,timezone),timezone,token,environment,price,fetchImpl});
+ return {candles:series.values,forming:series.alignmentCandle||null};
+}
+
 // Candles after a past cutoff, fetched only to prove that a screenshot running beyond the cutoff comes
 // from this feed (see verifyFeedPastCutoff). They are never part of the review.
 export async function fetchCandlesAfterCutoff({symbol,interval,cutoff,timezone='UTC',token,environment='practice',price='B',days=7,now=Date.now(),fetchImpl=fetch}={}){
