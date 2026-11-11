@@ -82,7 +82,7 @@ import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodW
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
-import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock } from "./chart-timezone.js";
+import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
@@ -1675,6 +1675,7 @@ Important:
 - When readable, return the latest visible candle time in 24-hour HH:mm format.
 - latestVisibleTime must describe where the uploaded screenshot stops, not the current time and not a later market time.
 - Return chartTimezone ONLY from text printed on the chart itself, usually beside the clock at the bottom-right of the time axis (for example "14:29:28 UTC" or "UTC+1"). Return it as "UTC", "UTC+1", "UTC-5" and so on. If no timezone is printed, return null. Never infer it from the user's location, the instrument or the session.
+- Return chartClock as the time shown on that same clock, exactly as printed, with its seconds and ALL its digits (for example "20:11:58 UTC" gives chartClock "20:11:58"; never drop the hour or keep only "11:58"). It is the time the screenshot was taken, not a candle time. If no clock is printed, return null.
 - Read the final visible candle OPEN, HIGH, LOW and CLOSE from the top-left chart header ONLY when that header belongs to the LAST candle at the right edge of the chart. If a mouse cursor or crosshair is on the chart, the header shows the candle UNDER THE CURSOR, not the last candle. In that case take latestVisibleClose and latestVisiblePrice from the last-price tag on the right-hand price axis (the highlighted label level with the last candle) and return null for latestVisibleOpen, latestVisibleHigh and latestVisibleLow. When the header is clearly the last candle, return all four exact values and prefer them over visual wick estimates. latestVisiblePrice must equal latestVisibleClose.
 - Separately, ALWAYS transcribe the four open, high, low and close values printed in the top-left chart header into headerOpen, headerHigh, headerLow and headerClose exactly as shown, for whichever candle the header describes (the last candle, or the candle under the mouse pointer). These four values are used only to verify the data feed; they are not the final candle when a pointer is on the chart. Return null for any value that is not printed.
 - A boxed label on the bottom time axis that shows a full date AND time with the year (for example "20 Oct '26 08:00"), usually with a vertical dashed line above it, is the CROSSHAIR position under the mouse pointer. It is NOT the final candle. Never use its date or time for latestVisibleDate, latestVisibleTime or latestPrintedAxisDate, and never list it in timeAxisTimestamps or timeAxisDates. Work out the final candle from the ordinary printed ticks and the right edge of the chart instead.
@@ -1753,6 +1754,7 @@ Return exactly this JSON shape:
   "latestVisibleTime": "HH:mm in 24-hour time or null",
   "latestVisibleTimeConfidence": "high or medium or low",
   "chartTimezone": "UTC or UTC+1 or UTC-5 as printed beside the chart clock, or null",
+  "chartClock": "HH:mm:ss exactly as printed on the chart clock, or null",
   "latestVisiblePrice": 1.23456,
   "latestVisibleOpen": 1.23456,
   "latestVisibleHigh": 1.23456,
@@ -5651,6 +5653,7 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
     latestVisibleTime: null,
     latestVisibleTimeConfidence: "low",
     chartTimezone: null,
+    chartClock: null,
     latestVisiblePrice: null,
     latestVisibleOpen: null,
     latestVisibleHigh: null,
@@ -5978,6 +5981,7 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
           ? String(parsed?.latestVisibleTimeConfidence || "low").toLowerCase()
           : "low",
       chartTimezone: isTradingChart ? parseChartTimezoneLabel(parsed?.chartTimezone)?.label || null : null,
+      chartClock: isTradingChart && /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(String(parsed?.chartClock || "").trim()) ? String(parsed.chartClock).trim() : null,
       latestVisiblePrice:
         isTradingChart && Number.isFinite(Number(parsed?.latestVisibleClose ?? parsed?.latestVisiblePrice)) && Number(parsed.latestVisibleClose ?? parsed.latestVisiblePrice) > 0
           ? Number(parsed.latestVisibleClose ?? parsed.latestVisiblePrice)
@@ -32123,6 +32127,7 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
     chartCutoff.chartTimezone = parseChartTimezoneLabel(chartDetection?.chartTimezone)?.label || null;
     console.log("[chart-timezone] printed on the chart:", {
       chartTimezone: chartCutoff.chartTimezone,
+      chartClock: chartDetection?.chartClock || null,
       cutoffSource: chartCutoff.source,
       latestVisibleTime: chartDetection?.latestVisibleTime || null,
       latestVisibleTimeConfidence: chartDetection?.latestVisibleTimeConfidence || null,
@@ -32146,18 +32151,34 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
     // still forming IS the screenshot's final candle, so the feed check may compare against it even when the
     // chart reader was only "medium" sure of the clock. Otherwise a fast final candle (GBPUSD 2026-11-11,
     // about 100 pips in 19 minutes) matched no completed candle and the review lost its market data.
-    const finalCandleIsLive =
-      Boolean(staleClock) ||
-      isFreshChartClock({
-        chartDetection,
-        chartTimezone: chartDetection?.chartTimezone,
-        nowMs: Date.now(),
-        resolvedDate: chartCutoff.resolvedDate,
+    const freshClockNow = isFreshChartClock({
+      chartDetection,
+      chartTimezone: chartDetection?.chartTimezone,
+      nowMs: Date.now(),
+      resolvedDate: chartCutoff.resolvedDate,
+    });
+    const finalCandleIsLive = Boolean(staleClock) || freshClockNow;
+    // The feed labels a candle by its open time, so the live candle is the one opened at the clock rounded
+    // down to the timeframe (a clock of 17:19 is the 17:00 H1 candle). Read at call time, after the cutoff
+    // has been aligned and resolvedTimezone is the provider's.
+    const detectionForFeedMatch = (detection) => {
+      if (!finalCandleIsLive) return detection;
+      const openTime = liveCandleOpenTime({
+        chartDetection: detection,
+        chartTimezone: detection?.chartTimezone,
+        timeframe,
+        providerTimezone: resolvedTimezone,
       });
-    const detectionForFeedMatch = (detection) =>
-      finalCandleIsLive && detection?.latestVisibleTimeConfidence !== "high" && /^\d{2}:\d{2}/.test(String(detection?.latestVisibleTime || ""))
-        ? { ...detection, latestVisibleTimeConfidence: "high" }
-        : detection;
+      if (!openTime) return detection;
+      const adjusted = { ...detection, latestVisibleTime: openTime, latestVisibleTimeConfidence: "high" };
+      // A clock that agrees with the server's own clock also settles the date: the screenshot was taken
+      // minutes ago, so its date is today's (the reader's "inferred_axis" date evidence is no longer needed).
+      if (freshClockNow) {
+        adjusted.latestVisibleDateEvidence = "explicit_final_candle_timestamp";
+        adjusted.dateConfidence = "high";
+      }
+      return adjusted;
+    };
     const chartTimezoneAlignment = alignCutoffToChartTimezone({
       chartCutoff,
       chartTimezone: chartDetection?.chartTimezone,

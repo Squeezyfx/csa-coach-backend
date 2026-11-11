@@ -28,9 +28,11 @@ export function pageDataMatchStatus(status, marketDataAttempted) {
   return marketDataAttempted ? "mismatch" : text;
 }
 
-// A chart reader sometimes drops or adds a digit (1.3177 read as 1.3077). Given the live candle's close,
-// tries the one-digit slips of the printed price and returns the corrected price when the chart's price is
-// at least `limit` (0.65%, so a 0.01 slip on a 1.35 pair, 0.74%, still counts) from the live candle and exactly one slip lands within `tolerance` of it.
+// A chart reader sometimes gets one digit wrong (1.3277 read as 1.3077, 1.3177 as 1.3077). Given the live
+// candle's close, tries every single-digit change of the printed price's second decimal (0.01 place) and,
+// failing that, a +-1 change of the third decimal. Returns the corrected price when the chart's price is
+// at least `limit` (0.65%, so a 0.01 slip on a 1.35 pair, 0.74%, still counts) from the live candle and
+// exactly one candidate lands within `tolerance` (default 0.2%, about 25 pips) of it.
 // Returns { price, delta } or null. A price that already agrees with the live candle is never touched.
 export function correctPriceSlipAgainstLiveCandle({ price, liveClose, limit = SLIP_MIN_GAP, tolerance } = {}) {
   const chart = Number(price);
@@ -38,18 +40,21 @@ export function correctPriceSlipAgainstLiveCandle({ price, liveClose, limit = SL
   if (!(chart > 0) || !(live > 0)) return null;
   if (Math.abs(chart - live) / live <= limit) return null;
   const near = tolerance > 0 ? tolerance : live * 0.002;
-  // The two lowest digits a reader drops or adds: 0.01 and 0.001 on a 1.3xxx price, 1 and 0.1 on a 150.xx price.
   const magnitude = Math.floor(Math.log10(chart));
-  const steps = [10 ** (magnitude - 2), 10 ** (magnitude - 3)];
-  const decimals = 6;
-  const fits = [];
-  for (const step of steps) {
-    for (const sign of [-1, 1]) {
-      const candidate = Number((chart + sign * step).toFixed(decimals));
-      if (Math.abs(candidate - live) <= near) fits.push(candidate);
-    }
-  }
-  const unique = [...new Set(fits)];
-  if (unique.length !== 1) return null;
-  return { price: unique[0], delta: Number((unique[0] - chart).toFixed(decimals)) };
+  const round = (value) => Number(value.toFixed(6));
+  const unique = (values) => [...new Set(values)];
+  const pick = (candidates) => {
+    const fits = unique(candidates.filter((candidate) => candidate > 0 && Math.abs(candidate - live) <= near));
+    return fits.length === 1 ? { price: fits[0], delta: round(fits[0] - chart) } : null;
+  };
+  // 0.01 place on a 1.3xxx price (1 on a 150.xx price): any other digit in that place.
+  const big = 10 ** (magnitude - 2);
+  const digit = Math.floor(chart / big + 1e-9) % 10;
+  const bigSlips = [];
+  for (let d = 0; d <= 9; d++) if (d !== digit) bigSlips.push(round(chart + (d - digit) * big));
+  const first = pick(bigSlips);
+  if (first) return first;
+  // 0.001 place (0.1 on a 150.xx price): the neighbouring digits only.
+  const small = 10 ** (magnitude - 3);
+  return pick([round(chart - small), round(chart + small)]);
 }

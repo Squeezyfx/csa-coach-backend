@@ -47,8 +47,11 @@ test("a one-digit slip is corrected only when the live candle disagrees and exac
   // already agrees with the live candle
   assert.equal(correctPriceSlipAgainstLiveCandle({ price: 1.3177, liveClose: 1.319 }), null);
   // far from the live candle but no one-digit slip explains it
-  assert.equal(correctPriceSlipAgainstLiveCandle({ price: 1.3077, liveClose: 1.329 }), null);
+  assert.equal(correctPriceSlipAgainstLiveCandle({ price: 1.3077, liveClose: 1.325 }), null);
   assert.deepEqual(correctPriceSlipAgainstLiveCandle({ price: 1.35, liveClose: 1.36 }), { price: 1.36, delta: 0.01 });
+  // the 2026-11-11 reads: 1.3277 read as 1.3077 (a 0.02 slip) and 1.32777 read as 1.31777
+  assert.deepEqual(correctPriceSlipAgainstLiveCandle({ price: 1.3077, liveClose: 1.3277 }), { price: 1.3277, delta: 0.02 });
+  assert.deepEqual(correctPriceSlipAgainstLiveCandle({ price: 1.31777, liveClose: 1.3278 }), { price: 1.32777, delta: 0.01 });
   assert.equal(correctPriceSlipAgainstLiveCandle({ price: 0, liveClose: 1.3177 }), null);
   assert.equal(correctPriceSlipAgainstLiveCandle({ price: 1.3077, liveClose: null }), null);
 });

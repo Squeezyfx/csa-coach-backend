@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { parseChartTimezoneLabel, wallClockInTimezone, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, chartClockAgeMinutes, chartDateIsInFuture, rescueFutureChartDate, inferChartTimezoneFromLiveClock, timezoneOffsetMinutesAt } from "../chart-timezone.js";
+import { parseChartTimezoneLabel, wallClockInTimezone, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, chartClockAgeMinutes, chartDateIsInFuture, rescueFutureChartDate, inferChartTimezoneFromLiveClock, timezoneOffsetMinutesAt, chartClockTime, liveCandleOpenTime } from "../chart-timezone.js";
 
 test("the timezone label printed beside the chart clock is read", () => {
   assert.deepEqual(parseChartTimezoneLabel("UTC"), { label: "UTC", offsetMinutes: 0 });
@@ -121,7 +121,8 @@ test("the chart clock age follows the printed offset", () => {
 });
 
 test("the feed check may use the live candle when the chart clock is recent", () => {
-  assert.match(serverSource, /const finalCandleIsLive =\s*Boolean\(staleClock\) \|\|\s*isFreshChartClock\(/);
+  assert.match(serverSource, /const freshClockNow = isFreshChartClock(/);
+  assert.match(serverSource, /const finalCandleIsLive = Boolean(staleClock) || freshClockNow;/);
   assert.match(serverSource, /detection: detectionForFeedMatch\(chartDetection\),/);
 });
 
@@ -191,4 +192,38 @@ test("the inference is wired in before the cutoff is resolved", () => {
   assert.ok(inferAt > 0);
   assert.ok(inferAt < source.indexOf("FINAL VISIBLE date fallback"));
   assert.match(source, /INFER_CHART_TIMEZONE/);
+});
+
+test("the clock as printed wins over the last-candle time, so a dropped hour cannot send the review to the wrong hour", () => {
+  // 2026-11-11: the chart showed "20:11:58 UTC" and the reader returned latestVisibleTime "11:58"
+  const misread = { latestVisibleDate: "2026-11-11", latestVisibleTime: "11:58", latestVisibleTimeConfidence: "medium", chartClock: "20:11:58" };
+  assert.deepEqual(chartClockTime(misread), { time: "20:11", fromClock: true });
+  assert.deepEqual(chartClockTime({ latestVisibleTime: "17:19", latestVisibleTimeConfidence: "medium" }), { time: "17:19", fromClock: false });
+  assert.equal(chartClockTime({ latestVisibleTime: "17:19", latestVisibleTimeConfidence: "low" }), null);
+  assert.equal(chartClockTime({ chartClock: "25:99:00" }), null);
+  const now = Date.UTC(2026, 10, 11, 20, 12, 30);
+  assert.equal(isFreshChartClock({ chartDetection: misread, chartTimezone: "UTC", nowMs: now, resolvedDate: "2026-11-11" }), true);
+  assert.equal(staleClockCutoff({ chartCutoff: dayFallback, chartDetection: misread, chartTimezone: "UTC", nowMs: now }), null);
+  assert.equal(inferChartTimezoneFromLiveClock({ chartDetection: { ...misread, chartTimezone: null }, nowMs: now, deviceTimezone: "Africa/Lagos" }), "UTC");
+  // an old screenshot whose clock is read as printed is still cut off at that clock
+  const old = staleClockCutoff({ chartCutoff: dayFallback, chartDetection: { ...misread, chartClock: "11:58:02" }, chartTimezone: "UTC", nowMs: now });
+  assert.deepEqual(old, { endDateTime: "2026-11-11 11:58:59", ageMinutes: 494 });
+});
+
+test("the live candle is the one opened at the clock rounded down to the timeframe, on the provider's clock", () => {
+  const live = { latestVisibleDate: "2026-11-11", chartClock: "17:19:10" };
+  assert.equal(liveCandleOpenTime({ chartDetection: live, chartTimezone: "UTC", timeframe: "H1", providerTimezone: "UTC" }), "17:00");
+  assert.equal(liveCandleOpenTime({ chartDetection: live, chartTimezone: "UTC", timeframe: "M15", providerTimezone: "UTC" }), "17:15");
+  assert.equal(liveCandleOpenTime({ chartDetection: live, chartTimezone: "UTC", timeframe: "M5", providerTimezone: "UTC" }), "17:15");
+  assert.equal(liveCandleOpenTime({ chartDetection: live, chartTimezone: "UTC", timeframe: "H1", providerTimezone: "Africa/Lagos" }), "18:00");
+  assert.equal(liveCandleOpenTime({ chartDetection: live, chartTimezone: "UTC+1", timeframe: "H1", providerTimezone: "Africa/Lagos" }), "17:00");
+  assert.equal(liveCandleOpenTime({ chartDetection: live, chartTimezone: "UTC", timeframe: "H4", providerTimezone: "UTC" }), null);
+  assert.equal(liveCandleOpenTime({ chartDetection: live, chartTimezone: null, timeframe: "H1", providerTimezone: "UTC" }), null);
+  assert.equal(liveCandleOpenTime({ chartDetection: { chartClock: "17:19:10" }, chartTimezone: "UTC", timeframe: "H1", providerTimezone: "UTC" }), null);
+});
+
+test("the chart clock is asked for, parsed and used by the feed check", () => {
+  assert.match(serverSource, /"chartClock": "HH:mm:ss exactly as printed/);
+  assert.match(serverSource, /chartClock: isTradingChart && /);
+  assert.match(serverSource, /liveCandleOpenTime\(\{/);
 });

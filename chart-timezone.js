@@ -54,16 +54,28 @@ export function alignCutoffToChartTimezone({ chartCutoff, chartTimezone, deviceT
   return moved ? { ...unchanged, endDateTime: moved, applied: true, chartTimezone: chart.label } : unchanged;
 }
 
+// The clock time (HH:MM) the screenshot was taken at. The chart's own clock, read as printed ("20:11:58
+// UTC"), is preferred: the older latestVisibleTime field is a guess at the last candle's time and
+// sometimes holds only the minutes and seconds of the clock ("11:58"). A clock read as printed counts as a
+// confident read; the older field must be medium or high, and "00:00" there is treated as a placeholder.
+export function chartClockTime(chartDetection) {
+  const clock = /^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/.exec(String(chartDetection?.chartClock || "").trim());
+  if (clock) return { time: `${clock[1]}:${clock[2]}`, fromClock: true };
+  const time = String(chartDetection?.latestVisibleTime || "").trim();
+  const confidence = String(chartDetection?.latestVisibleTimeConfidence || "").toLowerCase();
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || time === "00:00" || !["high", "medium"].includes(confidence)) return null;
+  return { time, fromClock: false };
+}
+
 // How many minutes ago the chart's printed clock was, or null when the clock
 // cannot be trusted (no printed timezone, a placeholder or low-confidence time,
 // or a date other than the one being reviewed).
 export function chartClockAgeMinutes({ chartDetection, chartTimezone, nowMs, resolvedDate } = {}) {
   const chart = parseChartTimezoneLabel(chartTimezone);
   const date = String(chartDetection?.latestVisibleDate || "").trim();
-  const time = String(chartDetection?.latestVisibleTime || "").trim();
-  const confidence = String(chartDetection?.latestVisibleTimeConfidence || "").toLowerCase();
-  if (!chart || !Number.isFinite(nowMs) || date !== resolvedDate) return null;
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || time === "00:00" || !["high", "medium"].includes(confidence)) return null;
+  const clock = chartClockTime(chartDetection);
+  if (!chart || !clock || !Number.isFinite(nowMs) || date !== resolvedDate) return null;
+  const time = clock.time;
   const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
   if (!parts) return null;
   const instant =
@@ -80,7 +92,7 @@ export function staleClockCutoff({ chartCutoff, chartDetection, chartTimezone, n
   if (chartCutoff?.mode !== "final_visible" || chartCutoff?.source !== "chart-final-visible-day-fallback") return null;
   const age = chartClockAgeMinutes({ chartDetection, chartTimezone, nowMs, resolvedDate: chartCutoff.resolvedDate });
   if (age === null || age < staleMinutes) return null;
-  return { endDateTime: `${chartDetection.latestVisibleDate} ${chartDetection.latestVisibleTime}:59`, ageMinutes: Math.round(age) };
+  return { endDateTime: `${chartDetection.latestVisibleDate} ${chartClockTime(chartDetection).time}:59`, ageMinutes: Math.round(age) };
 }
 
 // True when the chart's clock is recent: the feed's candle that is still
@@ -138,11 +150,10 @@ export function timezoneOffsetMinutesAt(timezone, nowMs) {
 export function inferChartTimezoneFromLiveClock({ chartDetection, nowMs, deviceTimezone, windowMinutes = 6 } = {}) {
   if (parseChartTimezoneLabel(chartDetection?.chartTimezone)) return null;
   const date = String(chartDetection?.latestVisibleDate || "").trim();
-  const time = String(chartDetection?.latestVisibleTime || "").trim();
-  const confidence = String(chartDetection?.latestVisibleTimeConfidence || "").toLowerCase();
   const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
-  if (!parts || !Number.isFinite(nowMs)) return null;
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || time === "00:00" || !["high", "medium"].includes(confidence)) return null;
+  const clock = chartClockTime(chartDetection);
+  if (!parts || !clock || !Number.isFinite(nowMs)) return null;
+  const time = clock.time;
   const deviceOffset = deviceTimezone ? timezoneOffsetMinutesAt(deviceTimezone, nowMs) : null;
   const candidates = [0];
   if (deviceOffset !== null && deviceOffset % 60 === 0 && deviceOffset !== 0) candidates.push(deviceOffset);
@@ -156,4 +167,22 @@ export function inferChartTimezoneFromLiveClock({ chartDetection, nowMs, deviceT
   if (offset === 0) return "UTC";
   const sign = offset < 0 ? "-" : "+";
   return `UTC${sign}${Math.abs(offset) / 60}`;
+}
+
+const INTRADAY_MINUTES = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60 };
+
+// The open time (HH:MM, on the provider's clock) of the candle that was forming when the screenshot was
+// taken: the chart's clock rounded down to the timeframe. A feed candle is labelled by its open time, so
+// this is the time the feed check must find on the live candle (a clock of 17:19 is the 17:00 H1 candle).
+// Null for timeframes above H1 or when the clock, its timezone or the date is missing.
+export function liveCandleOpenTime({ chartDetection, chartTimezone, timeframe, providerTimezone } = {}) {
+  const minutes = INTRADAY_MINUTES[String(timeframe || "").toUpperCase()];
+  const chart = parseChartTimezoneLabel(chartTimezone);
+  const clock = chartClockTime(chartDetection);
+  const date = String(chartDetection?.latestVisibleDate || "").trim();
+  if (!minutes || !chart || !clock || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const wall = wallClockInTimezone(`${date} ${clock.time}:00`, chart.offsetMinutes, providerTimezone || "UTC");
+  if (!wall) return null;
+  const floored = Math.floor((Number(wall.slice(11, 13)) * 60 + Number(wall.slice(14, 16))) / minutes) * minutes;
+  return `${String(Math.floor(floored / 60)).padStart(2, "0")}:${String(floored % 60).padStart(2, "0")}`;
 }
