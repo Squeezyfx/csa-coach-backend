@@ -82,7 +82,7 @@ import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodW
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
-import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff } from "./chart-timezone.js";
+import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock } from "./chart-timezone.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
 import crypto from "crypto";
@@ -32086,6 +32086,22 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       chartCutoff.precision = "exact-visible";
       chartCutoff.exactVisibleCutoff = true;
     }
+    // When the chart's printed clock is recent (or was just used as the cutoff), the feed's candle that is
+    // still forming IS the screenshot's final candle, so the feed check may compare against it even when the
+    // chart reader was only "medium" sure of the clock. Otherwise a fast final candle (GBPUSD 2026-11-11,
+    // about 100 pips in 19 minutes) matched no completed candle and the review lost its market data.
+    const finalCandleIsLive =
+      Boolean(staleClock) ||
+      isFreshChartClock({
+        chartDetection,
+        chartTimezone: chartDetection?.chartTimezone,
+        nowMs: Date.now(),
+        resolvedDate: chartCutoff.resolvedDate,
+      });
+    const detectionForFeedMatch = (detection) =>
+      finalCandleIsLive && detection?.latestVisibleTimeConfidence !== "high" && /^\d{2}:\d{2}/.test(String(detection?.latestVisibleTime || ""))
+        ? { ...detection, latestVisibleTimeConfidence: "high" }
+        : detection;
     const chartTimezoneAlignment = alignCutoffToChartTimezone({
       chartCutoff,
       chartTimezone: chartDetection?.chartTimezone,
@@ -32248,7 +32264,7 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
     if (marketReference.ok) {
       chartDataMatch = assessChartDataMatch({
         candles: marketReference.impulseCandles?.length ? marketReference.impulseCandles : marketReference.timeframeCandles,
-        detection: chartDetection,
+        detection: detectionForFeedMatch(chartDetection),
         cutoff: chartCutoff.endDateTime,
         timeframe,
         symbol: normalizedSymbol,

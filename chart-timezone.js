@@ -54,24 +54,38 @@ export function alignCutoffToChartTimezone({ chartCutoff, chartTimezone, deviceT
   return moved ? { ...unchanged, endDateTime: moved, applied: true, chartTimezone: chart.label } : unchanged;
 }
 
+// How many minutes ago the chart's printed clock was, or null when the clock
+// cannot be trusted (no printed timezone, a placeholder or low-confidence time,
+// or a date other than the one being reviewed).
+export function chartClockAgeMinutes({ chartDetection, chartTimezone, nowMs, resolvedDate } = {}) {
+  const chart = parseChartTimezoneLabel(chartTimezone);
+  const date = String(chartDetection?.latestVisibleDate || "").trim();
+  const time = String(chartDetection?.latestVisibleTime || "").trim();
+  const confidence = String(chartDetection?.latestVisibleTimeConfidence || "").toLowerCase();
+  if (!chart || !Number.isFinite(nowMs) || date !== resolvedDate) return null;
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || time === "00:00" || !["high", "medium"].includes(confidence)) return null;
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!parts) return null;
+  const instant =
+    Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]), Number(time.slice(0, 2)), Number(time.slice(3, 5)), 59) -
+    chart.offsetMinutes * 60000;
+  return (nowMs - instant) / 60000;
+}
+
 // A screenshot analysed long after it was taken falls back to "end of the
 // chart's day", which pulls in every candle printed since. When the chart
 // prints its timezone and a readable clock, that clock is the better cutoff for
 // such a stale screenshot. Fresh screenshots keep the end-of-day fallback.
 export function staleClockCutoff({ chartCutoff, chartDetection, chartTimezone, nowMs, staleMinutes = 45 } = {}) {
-  const chart = parseChartTimezoneLabel(chartTimezone);
-  if (!chart || chartCutoff?.mode !== "final_visible" || chartCutoff?.source !== "chart-final-visible-day-fallback") return null;
-  const date = String(chartDetection?.latestVisibleDate || "").trim();
-  const time = String(chartDetection?.latestVisibleTime || "").trim();
-  const confidence = String(chartDetection?.latestVisibleTimeConfidence || "").toLowerCase();
-  if (date !== chartCutoff.resolvedDate || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || time === "00:00") return null;
-  if (!["high", "medium"].includes(confidence)) return null;
-  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
-  if (!parts || !Number.isFinite(nowMs)) return null;
-  const instant =
-    Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]), Number(time.slice(0, 2)), Number(time.slice(3, 5)), 59) -
-    chart.offsetMinutes * 60000;
-  const ageMinutes = (nowMs - instant) / 60000;
-  if (ageMinutes < staleMinutes) return null;
-  return { endDateTime: `${date} ${time}:59`, ageMinutes: Math.round(ageMinutes) };
+  if (chartCutoff?.mode !== "final_visible" || chartCutoff?.source !== "chart-final-visible-day-fallback") return null;
+  const age = chartClockAgeMinutes({ chartDetection, chartTimezone, nowMs, resolvedDate: chartCutoff.resolvedDate });
+  if (age === null || age < staleMinutes) return null;
+  return { endDateTime: `${chartDetection.latestVisibleDate} ${chartDetection.latestVisibleTime}:59`, ageMinutes: Math.round(age) };
+}
+
+// True when the chart's clock is recent: the feed's candle that is still
+// forming right now is then the screenshot's own final candle.
+export function isFreshChartClock({ chartDetection, chartTimezone, nowMs, resolvedDate, freshMinutes = 45, futureMinutes = 10 } = {}) {
+  const age = chartClockAgeMinutes({ chartDetection, chartTimezone, nowMs, resolvedDate });
+  return age !== null && age >= -futureMinutes && age < freshMinutes;
 }
