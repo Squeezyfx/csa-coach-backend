@@ -1062,3 +1062,33 @@ test("a Post-trade review with no trade on the chart still draws the suggested s
   assert.ok(Math.abs(result.geometry.stop - 1.13724) < 1e-9);
   assert.ok(result.geometry.targets.length > 0);
 });
+
+const gbpusdLivePlan = (liveLow) => ({
+  instrument: "GBPUSD",
+  direction: "bearish",
+  analysisType: "pre-trade",
+  trade: { visible: false },
+  executedOrder: null,
+  risk: {},
+  currentPrice: 1.32735,
+  plannedTrade: { entry: 1.3338, stop: 1.3355, target: 1.33 },
+  selectorDiagnostics: {
+    ...levels([1.33413, 1.34585]),
+    inProgressPeriodInventory: [{ periodLabel: "Wednesday", high: 1.33548, low: liveLow }],
+  },
+});
+const gbpusdArea = { direction: "sell", authoritativeCenter: 1.33413 };
+
+test("today's unfinished low can be the next key low for a take profit", () => {
+  const { weaknesses, next } = run(gbpusdLivePlan(1.3322), gbpusdArea);
+  assert.ok(has(weaknesses, "Planned take profit at 1.33000 is beyond the next key low (1.33220)."));
+  assert.match(next.exit, /Consider taking some profit at the next key low \(1\.33220\)\./);
+});
+
+test("today's unfinished high and low never become entry or stop levels", () => {
+  const facts = gbpusdLivePlan(1.3322);
+  assert.deepEqual(collectStructuralLevels(facts), [1.33413, 1.34585]);
+  assert.deepEqual(collectStructuralLevels(facts, { includeInProgress: true }), [1.3322, 1.33413, 1.33548, 1.34585]);
+  const { next } = run(facts, gbpusdArea);
+  assert.doesNotMatch(next.exit, /1\.33548/);
+});

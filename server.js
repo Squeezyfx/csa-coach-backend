@@ -82,6 +82,7 @@ import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodW
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
+import { parseChartTimezoneLabel, alignCutoffToChartTimezone } from "./chart-timezone.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
 import crypto from "crypto";
@@ -1672,6 +1673,7 @@ Important:
 - Set latestVisibleCandleComplete=true only if visible evidence confirms the final candle has closed. Never infer completion from a bearish/bullish body or a calendar date alone; use null when unknown.
 - When readable, return the latest visible candle time in 24-hour HH:mm format.
 - latestVisibleTime must describe where the uploaded screenshot stops, not the current time and not a later market time.
+- Return chartTimezone ONLY from text printed on the chart itself, usually beside the clock at the bottom-right of the time axis (for example "14:29:28 UTC" or "UTC+1"). Return it as "UTC", "UTC+1", "UTC-5" and so on. If no timezone is printed, return null. Never infer it from the user's location, the instrument or the session.
 - Read the final visible candle OPEN, HIGH, LOW and CLOSE from the top-left chart header ONLY when that header belongs to the LAST candle at the right edge of the chart. If a mouse cursor or crosshair is on the chart, the header shows the candle UNDER THE CURSOR, not the last candle. In that case take latestVisibleClose and latestVisiblePrice from the last-price tag on the right-hand price axis (the highlighted label level with the last candle) and return null for latestVisibleOpen, latestVisibleHigh and latestVisibleLow. When the header is clearly the last candle, return all four exact values and prefer them over visual wick estimates. latestVisiblePrice must equal latestVisibleClose.
 - Separately, ALWAYS transcribe the four open, high, low and close values printed in the top-left chart header into headerOpen, headerHigh, headerLow and headerClose exactly as shown, for whichever candle the header describes (the last candle, or the candle under the mouse pointer). These four values are used only to verify the data feed; they are not the final candle when a pointer is on the chart. Return null for any value that is not printed.
 - A boxed label on the bottom time axis that shows a full date AND time with the year (for example "20 Oct '26 08:00"), usually with a vertical dashed line above it, is the CROSSHAIR position under the mouse pointer. It is NOT the final candle. Never use its date or time for latestVisibleDate, latestVisibleTime or latestPrintedAxisDate, and never list it in timeAxisTimestamps or timeAxisDates. Work out the final candle from the ordinary printed ticks and the right edge of the chart instead.
@@ -1749,6 +1751,7 @@ Return exactly this JSON shape:
   "visibleTimeAxisYear": 2026,
   "latestVisibleTime": "HH:mm in 24-hour time or null",
   "latestVisibleTimeConfidence": "high or medium or low",
+  "chartTimezone": "UTC or UTC+1 or UTC-5 as printed beside the chart clock, or null",
   "latestVisiblePrice": 1.23456,
   "latestVisibleOpen": 1.23456,
   "latestVisibleHigh": 1.23456,
@@ -5643,6 +5646,7 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
     priceAxisTicks: [],
     latestVisibleTime: null,
     latestVisibleTimeConfidence: "low",
+    chartTimezone: null,
     latestVisiblePrice: null,
     latestVisibleOpen: null,
     latestVisibleHigh: null,
@@ -5969,6 +5973,7 @@ async function detectChartContextFromImage({ imageBase64, mimeType, submittedIns
         isTradingChart
           ? String(parsed?.latestVisibleTimeConfidence || "low").toLowerCase()
           : "low",
+      chartTimezone: isTradingChart ? parseChartTimezoneLabel(parsed?.chartTimezone)?.label || null : null,
       latestVisiblePrice:
         isTradingChart && Number.isFinite(Number(parsed?.latestVisibleClose ?? parsed?.latestVisiblePrice)) && Number(parsed.latestVisibleClose ?? parsed.latestVisiblePrice) > 0
           ? Number(parsed.latestVisibleClose ?? parsed.latestVisiblePrice)
@@ -31622,7 +31627,7 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
     // Selected-day reviews use a stable UTC day boundary.
     // Never allow the browser/device timezone to silently move the cutoff
     // into the previous or next trading day.
-    const resolvedTimezone =
+    let resolvedTimezone =
       normalizedRequestedCutoffMode === "selected_day"
         ? "UTC"
         : normalizeRequestedTimezone({
@@ -32056,6 +32061,23 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       analysisType: mode,
     });
 
+    const chartTimezoneAlignment = alignCutoffToChartTimezone({
+      chartCutoff,
+      chartTimezone: chartDetection?.chartTimezone,
+      deviceTimezone: resolvedTimezone,
+    });
+    if (chartTimezoneAlignment.applied) {
+      console.log("[chart-timezone] cutoff read in the chart's own timezone:", {
+        chartTimezone: chartTimezoneAlignment.chartTimezone,
+        deviceTimezone: resolvedTimezone,
+        printedCutoff: chartCutoff.endDateTime,
+        providerTimezone: chartTimezoneAlignment.timezone,
+        providerCutoff: chartTimezoneAlignment.endDateTime,
+      });
+      resolvedTimezone = chartTimezoneAlignment.timezone;
+      chartCutoff.endDateTime = chartTimezoneAlignment.endDateTime;
+      chartCutoff.chartTimezone = chartTimezoneAlignment.chartTimezone;
+    }
     chartCutoff.timezone = resolvedTimezone;
     chartCutoff.dayBoundary =
       chartCutoff.mode === "selected_day"
