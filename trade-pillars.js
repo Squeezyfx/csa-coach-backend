@@ -74,7 +74,7 @@ export function priceDistance(diff, symbol = "") {
 }
 
 // Every structural price the engine knows about, de-duplicated and sorted.
-export function collectStructuralLevels(facts = {}) {
+export function collectStructuralLevels(facts = {}, { includeInProgress = false } = {}) {
   const sources = [
     ...(Array.isArray(facts?.selectorDiagnostics?.structuralCandidates)
       ? facts.selectorDiagnostics.structuralCandidates
@@ -98,6 +98,18 @@ export function collectStructuralLevels(facts = {}) {
       num(item?.authoritativeCenter) ??
       (low !== null && high !== null ? (low + high) / 2 : null);
     if (price !== null && price > 0) prices.push(price);
+  }
+
+  // Today's unfinished period cannot source an entry, but its high/low so far
+  // is a fair take-profit target.
+  if (includeInProgress) {
+    const live = facts?.selectorDiagnostics?.inProgressPeriodInventory;
+    for (const period of Array.isArray(live) ? live : []) {
+      for (const value of [period?.high, period?.low]) {
+        const price = num(value);
+        if (price !== null && price > 0) prices.push(price);
+      }
+    }
   }
 
   // The chart's own last-price line is sometimes read as a "level" (EURCHF W1
@@ -555,6 +567,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
   const protectWord = isSell ? "high" : "low";
   const targetWord = isSell ? "low" : "high";
   const levels = collectStructuralLevels(facts);
+  const profitLevels = collectStructuralLevels(facts, { includeInProgress: true });
 
   const stopShown = facts?.risk?.stopShown === true;
   const targetShown = facts?.risk?.targetShown === true;
@@ -685,7 +698,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       .sort((a, b) => (isSell ? a - b : b - a));
     const nearestProtect = protectLevels.length ? protectLevels[0] : null;
 
-    const targetLevels = levels
+    const targetLevels = profitLevels
       .filter((l) => (isSell ? l < entry - small : l > entry + small))
       .sort((a, b) => (isSell ? b - a : a - b));
     const nearestTarget = targetLevels.length ? targetLevels[0] : null;
@@ -694,14 +707,14 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     // BOTH the entry and wherever price is now, in the profit direction.
     const reference =
       current !== null ? (isSell ? Math.min(entry, current) : Math.max(entry, current)) : entry;
-    const suggestionLevels = levels
+    const suggestionLevels = profitLevels
       .filter((l) => (isSell ? l < reference - small : l > reference + small))
       .sort((a, b) => (isSell ? b - a : a - b));
     const tpSuggestion = suggestionLevels.length ? suggestionLevels[0] : null;
 
     // Suggested take profits: key levels on the way, ending at the main swing.
     const suggestionLadder = buildTargetLadder({
-      levels,
+      levels: profitLevels,
       origin: reference,
       isSell,
       finalTarget: finalSwingTarget(facts, reference, isSell),
@@ -1064,7 +1077,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     let planLadder = [];
     if (center !== null) {
       planLadder = buildTargetLadder({
-        levels,
+        levels: profitLevels,
         origin: center,
         isSell,
         finalTarget: finalSwingTarget(facts, center, isSell),
@@ -1314,7 +1327,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         } else {
           userReward = Math.abs(planned.target - center);
           const mainSwing = finalSwingTarget(facts, center, isSell);
-          const nearestTarget = levels
+          const nearestTarget = profitLevels
             .filter((l) => (isSell ? l < center - small : l > center + small))
             .sort((a, b) => (isSell ? b - a : a - b))[0];
           const tpLimit = mainSwing !== null ? mainSwing : nearestTarget ?? null;
