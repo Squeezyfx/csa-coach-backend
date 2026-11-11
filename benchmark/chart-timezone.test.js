@@ -100,7 +100,16 @@ test("a fresh screenshot, or one without a trustworthy clock, keeps the end-of-d
 
 test("the stale-screenshot cutoff can be switched off", () => {
   assert.match(serverSource, /STALE_SCREENSHOT_CLOCK_CUTOFF/);
-  assert.match(serverSource, /staleClockCutoff\(\{ chartCutoff, chartDetection, chartTimezone: chartDetection\?\.chartTimezone, nowMs: Date\.now\(\) \}\)/);
+  assert.match(serverSource, /staleClockCutoff\(\{ chartCutoff, chartDetection, chartTimezone: chartDetection\?\.chartTimezone, nowMs: Date\.now\(\), staleMinutes: -10 \}\)/);
+});
+
+test("a fresh screenshot is also cut off at its clock, so today stays a partial period", () => {
+  const fresh = { chartDetection: { ...detection, latestVisibleTime: "20:11" }, chartCutoff: dayFallback, chartTimezone: "UTC" };
+  const now = Date.UTC(2026, 10, 11, 20, 21, 0);
+  assert.equal(staleClockCutoff({ ...fresh, nowMs: now }), null, "the default still waits for 45 minutes");
+  assert.deepEqual(staleClockCutoff({ ...fresh, nowMs: now, staleMinutes: -10 }), { endDateTime: "2026-11-11 20:11:59", ageMinutes: 9 });
+  // a clock more than 10 minutes ahead of the server is not trusted
+  assert.equal(staleClockCutoff({ ...fresh, nowMs: Date.UTC(2026, 10, 11, 19, 55, 0), staleMinutes: -10 }), null);
 });
 
 test("a recent chart clock means the candle still forming in the feed is the screenshot's final candle", () => {

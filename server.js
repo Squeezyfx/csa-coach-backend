@@ -32133,12 +32133,16 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       latestVisibleTimeConfidence: chartDetection?.latestVisibleTimeConfidence || null,
       latestVisibleDateEvidence: chartDetection?.latestVisibleDateEvidence || null,
     });
-    // STALE_SCREENSHOT_CLOCK_CUTOFF=off turns this off.
+    // A trustworthy chart clock is the cutoff, for an old screenshot AND a fresh one (staleMinutes: -10 lets
+    // a clock up to 10 minutes ahead of the server through). With the end-of-day cutoff a fresh screenshot
+    // made today's period "complete", so today's in-progress high became Entry 2 (GBPUSD 2026-11-11 20:21).
+    // Entries come from completed periods only; today stays partial. STALE_SCREENSHOT_CLOCK_CUTOFF=off turns
+    // this off.
     const staleClock = String(process.env.STALE_SCREENSHOT_CLOCK_CUTOFF || "on").toLowerCase() === "off"
       ? null
-      : staleClockCutoff({ chartCutoff, chartDetection, chartTimezone: chartDetection?.chartTimezone, nowMs: Date.now() });
+      : staleClockCutoff({ chartCutoff, chartDetection, chartTimezone: chartDetection?.chartTimezone, nowMs: Date.now(), staleMinutes: -10 });
     if (staleClock) {
-      console.log("[chart-timezone] old screenshot: cut off at the chart clock instead of the end of the day:", {
+      console.log("[chart-timezone] cut off at the chart clock instead of the end of the day (today stays a partial period):", {
         endDateTime: staleClock.endDateTime,
         ageMinutes: staleClock.ageMinutes,
       });
