@@ -82,8 +82,8 @@ import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodW
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
-import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate } from "./chart-timezone.js";
-import { chartPriceFarFromFeed, pageDataMatchStatus } from "./feed-price-guard.js";
+import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock } from "./chart-timezone.js";
+import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
 import crypto from "crypto";
@@ -31990,6 +31990,25 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
           };
     }
 
+    // The chart reader often returns no timezone. A printed clock within minutes of the server's own clock,
+    // at UTC or the device's offset, gives it away (INFER_CHART_TIMEZONE=off turns this off).
+    if (String(process.env.INFER_CHART_TIMEZONE || "on").toLowerCase() !== "off") {
+      const inferredTimezone = inferChartTimezoneFromLiveClock({
+        chartDetection,
+        nowMs: Date.now(),
+        deviceTimezone: resolvedTimezone,
+      });
+      if (inferredTimezone) {
+        console.log("[chart-timezone] none printed or read; inferred from the live clock:", {
+          inferredTimezone,
+          latestVisibleDate: chartDetection?.latestVisibleDate || null,
+          latestVisibleTime: chartDetection?.latestVisibleTime || null,
+          deviceTimezone: resolvedTimezone,
+        });
+        chartDetection = { ...chartDetection, chartTimezone: inferredTimezone, chartTimezoneInferred: true };
+      }
+    }
+
     // FINAL VISIBLE date fallback. In Final visible candle mode the chart's own date controls the
     // review, but a screenshot that prints no date for its last candle (TradingView's axis shows day
     // numbers only) leaves nothing to override a wrong typed date with, so the review silently used
@@ -32299,6 +32318,38 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
     completedPeriodReferences.source = marketReference.dataProvider || "Twelve Data";
     let chartDataMatch = null;
     if (marketReference.ok) {
+      // A one-digit slip in the chart's price (1.3077 read for 1.3177) is corrected only for a screenshot
+      // whose last candle is still the feed's live candle, and only when that candle disagrees by more than
+      // PRICE_GAP_LIMIT and exactly one slip lands near it. The header's open/high/low take the same slip
+      // when it moves them closer to the live candle (PRICE_SLIP_CORRECTION=off turns this off).
+      const liveCandle = marketReference.oandaAlignmentCandle || null;
+      if (finalCandleIsLive && liveCandle && String(process.env.PRICE_SLIP_CORRECTION || "on").toLowerCase() !== "off") {
+        const printedPrice = Number(chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice);
+        const slip = correctPriceSlipAgainstLiveCandle({
+          price: printedPrice,
+          liveClose: Number(liveCandle.close),
+        });
+        if (slip) {
+          const slipped = { ...chartDetection, latestVisiblePriceSource: "digit_slip_corrected_to_live_feed", printedPriceBeforeCorrection: printedPrice };
+          for (const field of ["Close", "Price"]) {
+            if (Number(chartDetection?.[`latestVisible${field}`]) > 0) slipped[`latestVisible${field}`] = slip.price;
+          }
+          for (const field of ["Open", "High", "Low"]) {
+            const printed = Number(chartDetection?.[`latestVisible${field}`]);
+            const live = Number(liveCandle[field.toLowerCase()]);
+            if (printed > 0 && live > 0 && Math.abs(printed + slip.delta - live) < Math.abs(printed - live)) {
+              slipped[`latestVisible${field}`] = Number((printed + slip.delta).toFixed(6));
+            }
+          }
+          console.log("[chart-price] one-digit slip corrected against the live candle:", {
+            printed: printedPrice,
+            corrected: slip.price,
+            liveCandleClose: Number(liveCandle.close),
+            liveCandleTime: liveCandle.datetime || null,
+          });
+          chartDetection = slipped;
+        }
+      }
       chartDataMatch = assessChartDataMatch({
         candles: marketReference.impulseCandles?.length ? marketReference.impulseCandles : marketReference.timeframeCandles,
         detection: detectionForFeedMatch(chartDetection),

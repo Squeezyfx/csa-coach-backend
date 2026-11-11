@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { parseChartTimezoneLabel, wallClockInTimezone, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, chartClockAgeMinutes, chartDateIsInFuture, rescueFutureChartDate } from "../chart-timezone.js";
+import { parseChartTimezoneLabel, wallClockInTimezone, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, chartClockAgeMinutes, chartDateIsInFuture, rescueFutureChartDate, inferChartTimezoneFromLiveClock, timezoneOffsetMinutesAt } from "../chart-timezone.js";
 
 test("the timezone label printed beside the chart clock is read", () => {
   assert.deepEqual(parseChartTimezoneLabel("UTC"), { label: "UTC", offsetMinutes: 0 });
@@ -151,4 +151,44 @@ test("a future chart date is replaced by the typed date when that date is possib
 test("the future-date guard is applied before the date decision", () => {
   assert.match(serverSource, /const futureDate = rescueFutureChartDate\(/);
   assert.ok(serverSource.indexOf("const futureDate = rescueFutureChartDate(") < serverSource.indexOf("let dateDecision = chooseFinalChartDate("));
+});
+
+const inferNow = Date.UTC(2026, 10, 11, 17, 25, 0);
+const clock = (time, extra = {}) => ({ latestVisibleDate: "2026-11-11", latestVisibleTime: time, latestVisibleTimeConfidence: "medium", chartTimezone: null, ...extra });
+
+test("the offset of a timezone is worked out for a given moment", () => {
+  assert.equal(timezoneOffsetMinutesAt("Africa/Lagos", inferNow), 60);
+  assert.equal(timezoneOffsetMinutesAt("UTC", inferNow), 0);
+  assert.equal(timezoneOffsetMinutesAt("America/New_York", inferNow), -300);
+  assert.equal(timezoneOffsetMinutesAt("Not/AZone", inferNow), null);
+});
+
+test("a clock within minutes of the server's, at UTC or the device offset, names the chart timezone", () => {
+  assert.equal(inferChartTimezoneFromLiveClock({ chartDetection: clock("17:22"), nowMs: inferNow, deviceTimezone: "Africa/Lagos" }), "UTC");
+  assert.equal(inferChartTimezoneFromLiveClock({ chartDetection: clock("18:22"), nowMs: inferNow, deviceTimezone: "Africa/Lagos" }), "UTC+1");
+  assert.equal(inferChartTimezoneFromLiveClock({ chartDetection: clock("17:19"), nowMs: inferNow, deviceTimezone: "Africa/Lagos" }), "UTC");
+  assert.equal(inferChartTimezoneFromLiveClock({ chartDetection: clock("12:22"), nowMs: inferNow, deviceTimezone: "America/New_York" }), "UTC-5");
+});
+
+test("no timezone is inferred when the clock is old, the date is off, the read is weak or a timezone was already read", () => {
+  const args = { nowMs: inferNow, deviceTimezone: "Africa/Lagos" };
+  assert.equal(inferChartTimezoneFromLiveClock({ chartDetection: clock("15:25"), ...args }), null);
+  assert.equal(inferChartTimezoneFromLiveClock({ chartDetection: clock("17:22", { latestVisibleDate: "2026-11-10" }), ...args }), null);
+  assert.equal(inferChartTimezoneFromLiveClock({ chartDetection: clock("17:22", { latestVisibleDate: null }), ...args }), null);
+  assert.equal(inferChartTimezoneFromLiveClock({ chartDetection: clock("17:22", { latestVisibleTimeConfidence: "low" }), ...args }), null);
+  assert.equal(inferChartTimezoneFromLiveClock({ chartDetection: clock("00:00"), ...args }), null);
+  assert.equal(inferChartTimezoneFromLiveClock({ chartDetection: clock("17:22", { chartTimezone: "UTC+2" }), ...args }), null);
+  assert.equal(inferChartTimezoneFromLiveClock({ chartDetection: clock("17:40"), ...args }), null);
+});
+
+test("a device in UTC does not produce two competing answers", () => {
+  assert.equal(inferChartTimezoneFromLiveClock({ chartDetection: clock("17:22"), nowMs: inferNow, deviceTimezone: "UTC" }), "UTC");
+});
+
+test("the inference is wired in before the cutoff is resolved", () => {
+  const source = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  const inferAt = source.indexOf("inferChartTimezoneFromLiveClock({");
+  assert.ok(inferAt > 0);
+  assert.ok(inferAt < source.indexOf("FINAL VISIBLE date fallback"));
+  assert.match(source, /INFER_CHART_TIMEZONE/);
 });

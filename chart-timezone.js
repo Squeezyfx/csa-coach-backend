@@ -114,3 +114,46 @@ export function rescueFutureChartDate({ chartDetection, chartTimezone, nowMs, se
   const usable = typed !== null && !chartDateIsInFuture({ chartDetection: { ...chartDetection, latestVisibleDate: typed }, chartTimezone, nowMs });
   return { rejectedDate: chartDetection.latestVisibleDate, date: usable ? typed : null };
 }
+
+// The UTC offset (minutes) of an IANA timezone at a given instant, or null when it cannot be worked out.
+export function timezoneOffsetMinutesAt(timezone, nowMs) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: timezone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+    }).formatToParts(new Date(nowMs));
+    const get = (type) => Number(parts.find((p) => p.type === type)?.value);
+    const wall = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"));
+    if (!Number.isFinite(wall)) return null;
+    return Math.round((wall - Math.floor(nowMs / 60000) * 60000) / 60000);
+  } catch {
+    return null;
+  }
+}
+
+// When the chart reader returned no timezone, the printed clock can still give it away: a screenshot taken
+// minutes ago shows a clock within a few minutes of the server's own clock, at a whole-hour offset from UTC.
+// Only UTC and the device's own timezone are considered (TradingView prints one of those), so an old
+// screenshot whose age happens to be a whole number of hours is not mistaken for another timezone. The
+// printed date must agree too. Returns a label such as "UTC+1", or null when there is no single clear answer.
+export function inferChartTimezoneFromLiveClock({ chartDetection, nowMs, deviceTimezone, windowMinutes = 6 } = {}) {
+  if (parseChartTimezoneLabel(chartDetection?.chartTimezone)) return null;
+  const date = String(chartDetection?.latestVisibleDate || "").trim();
+  const time = String(chartDetection?.latestVisibleTime || "").trim();
+  const confidence = String(chartDetection?.latestVisibleTimeConfidence || "").toLowerCase();
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!parts || !Number.isFinite(nowMs)) return null;
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || time === "00:00" || !["high", "medium"].includes(confidence)) return null;
+  const deviceOffset = deviceTimezone ? timezoneOffsetMinutesAt(deviceTimezone, nowMs) : null;
+  const candidates = [0];
+  if (deviceOffset !== null && deviceOffset % 60 === 0 && deviceOffset !== 0) candidates.push(deviceOffset);
+  const printedLocal = Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]), Number(time.slice(0, 2)), Number(time.slice(3, 5)), 0);
+  const fits = candidates.filter((offset) => {
+    const ageMinutes = (nowMs - (printedLocal - offset * 60000)) / 60000;
+    return ageMinutes >= -windowMinutes && ageMinutes <= windowMinutes;
+  });
+  if (fits.length !== 1) return null;
+  const offset = fits[0];
+  if (offset === 0) return "UTC";
+  const sign = offset < 0 ? "-" : "+";
+  return `UTC${sign}${Math.abs(offset) / 60}`;
+}

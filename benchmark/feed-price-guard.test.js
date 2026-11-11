@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { chartPriceFarFromFeed, pageDataMatchStatus } from "../feed-price-guard.js";
+import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle } from "../feed-price-guard.js";
 
 const candles = [
   { datetime: "2026-11-11 15:00:00", close: 1.32836 },
@@ -39,4 +39,24 @@ test("the guards are wired into the response and the review text", () => {
   // only the helper itself may read the raw price
   assert.equal((pillarsSource.match(/num\(facts\?\.currentPrice\)/g) || []).length, 1);
   assert.match(pillarsSource, /facts\?\.priceUnreliable === true \? null/);
+});
+
+test("a one-digit slip is corrected only when the live candle disagrees and exactly one slip lands near it", () => {
+  assert.deepEqual(correctPriceSlipAgainstLiveCandle({ price: 1.3077, liveClose: 1.3177 }), { price: 1.3177, delta: 0.01 });
+  assert.deepEqual(correctPriceSlipAgainstLiveCandle({ price: 1.3277, liveClose: 1.3177 }), { price: 1.3177, delta: -0.01 });
+  // already agrees with the live candle
+  assert.equal(correctPriceSlipAgainstLiveCandle({ price: 1.3177, liveClose: 1.319 }), null);
+  // far from the live candle but no one-digit slip explains it
+  assert.equal(correctPriceSlipAgainstLiveCandle({ price: 1.3077, liveClose: 1.329 }), null);
+  assert.deepEqual(correctPriceSlipAgainstLiveCandle({ price: 1.35, liveClose: 1.36 }), { price: 1.36, delta: 0.01 });
+  assert.equal(correctPriceSlipAgainstLiveCandle({ price: 0, liveClose: 1.3177 }), null);
+  assert.equal(correctPriceSlipAgainstLiveCandle({ price: 1.3077, liveClose: null }), null);
+});
+
+test("the slip correction is wired in before the feed check and only for a live final candle", () => {
+  const at = serverSource.indexOf("correctPriceSlipAgainstLiveCandle({");
+  assert.ok(at > 0);
+  assert.ok(at < serverSource.indexOf("chartDataMatch = assessChartDataMatch({"));
+  assert.match(serverSource, /finalCandleIsLive && liveCandle/);
+  assert.match(serverSource, /PRICE_SLIP_CORRECTION/);
 });
