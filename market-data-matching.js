@@ -1,4 +1,4 @@
-import { forexComparisonTolerance } from "./oanda-data.js";
+import { forexComparisonTolerance, syntheticIndexTolerance } from "./oanda-data.js";
 // Provider reference checks are not a claim of broker-feed equivalence.
 const CRYPTO_BASES = "BTC|ETH|DOGE|SOL|XRP|ADA|LTC|BCH|BNB|AVAX|LINK|DOT|MATIC|TRX|SHIB|PEPE";
 /**
@@ -135,7 +135,7 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
       providerCoverage: { lastProviderCandleDate: providerDate, requestedCutoffDate: cutoffDate, lagDays, weekendSessionLag, weekdaySessionLag, intradaySessionLag, weeklySessionLag },
     });
   }
-  const forexLimit = forexComparisonTolerance(symbol);
+  const forexLimit = forexComparisonTolerance(symbol) ?? syntheticIndexTolerance(symbol);
   const limit = forexLimit ?? Math.max(Number(tolerance) || 0, price * 0.0005);
   const comparisons = [{ field: "close", chart: price, provider: Number(last.close) }];
   // D1 header extrema describe the last daily candle, not the whole month.

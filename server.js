@@ -1,6 +1,6 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
-import { fetchCandlesAfterCutoff, fetchOandaSeries, fetchRecentCandles, forexPipSize, oandaInstrument } from "./oanda-data.js";
+import { fetchCandlesAfterCutoff, fetchOandaSeries, fetchRecentCandles, forexPipSize, oandaInstrument, isSyntheticInstrument } from "./oanda-data.js";
 import { chooseWatchReferences } from "./watch-references.js";
 import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage, shouldTagSignup } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
@@ -32520,7 +32520,7 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       // values below, gaining nothing since the remaining "mismatch" is
       // already known to be a small, real gap, not a data problem an
       // alternate provider could fix.
-      if (marketReference.dataProvider === "OANDA" && fallbackEnabled && process.env.TWELVE_DATA_API_KEY && chartDataMatch.yearCorrected !== true && chartDataMatch.smallResidualGap !== true && fallbackStatuses.has(chartDataMatch.status)) {
+      if (marketReference.dataProvider === "OANDA" && fallbackEnabled && !isSyntheticInstrument(normalizedSymbol) && process.env.TWELVE_DATA_API_KEY && chartDataMatch.yearCorrected !== true && chartDataMatch.smallResidualGap !== true && fallbackStatuses.has(chartDataMatch.status)) {
         const primaryAttempt = {
           provider: "OANDA",
           symbol: marketReference.providerSymbol || marketReference.symbol || normalizedSymbol,

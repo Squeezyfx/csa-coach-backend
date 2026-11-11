@@ -13,7 +13,19 @@ const GRANULARITY={'1min':'M1','5min':'M5','15min':'M15','30min':'M30','1h':'H1'
 const CFD_INSTRUMENTS={USA100:'NAS100_USD',NAS100:'NAS100_USD',USTEC:'NAS100_USD',
  USA500:'SPX500_USD',US500:'SPX500_USD',SPX500:'SPX500_USD',USA30:'US30_USD',US30:'US30_USD',
  UK100:'UK100_GBP',GER30:'DE30_EUR',GER40:'DE40_EUR',DE30:'DE30_EUR',DE40:'DE40_EUR',
- JP225:'JP225_USD',USOIL:'WTICO_USD',WTICO:'WTICO_USD',UKOIL:'BCO_USD',UKBRENT:'BCO_USD'};
+ JP225:'JP225_USD',USOIL:'WTICO_USD',WTICO:'WTICO_USD',UKOIL:'BCO_USD',UKBRENT:'BCO_USD',
+ // Added 2026-11-11 (same caveat as above: OANDA's published v20 codes, availability depends on the account).
+ FRA40:'FR40_EUR',FR40:'FR40_EUR',EU50:'EU50_EUR',STOXX50:'EU50_EUR',ESP35:'ES35_EUR',ES35:'ES35_EUR',
+ HK50:'HK33_HKD',HK33:'HK33_HKD',AUS200:'AU200_AUD',AU200:'AU200_AUD',CHINA50:'CN50_USD',CN50:'CN50_USD',
+ NATGAS:'NATGAS_USD',
+ // The US Dollar Index has no data feed of its own at either provider, so it is built from the six currency
+ // pairs that make it up (see fetchSyntheticDxy).
+ DXY:'DXY_INDEX',USDINDEX:'DXY_INDEX',USDIDX:'DXY_INDEX'};
+export const DXY_INSTRUMENT='DXY_INDEX';
+// ICE US Dollar Index formula: 50.14348112 x EURUSD^-0.576 x USDJPY^0.136 x GBPUSD^-0.119 x USDCAD^0.091 x USDSEK^0.042 x USDCHF^0.036.
+const DXY_FORMULA={constant:50.14348112,parts:[['EUR_USD',-0.576],['USD_JPY',0.136],['GBP_USD',-0.119],['USD_CAD',0.091],['USD_SEK',0.042],['USD_CHF',0.036]]};
+// Finer candles the index is computed from, then rolled up to the requested candle size.
+const SYNTHETIC_FINER={'1min':'1min','5min':'1min','15min':'5min','30min':'5min','1h':'15min','4h':'15min','1day':'1h','1week':'4h'};
 export function oandaInstrument(symbol='') {
  const raw=String(symbol).toUpperCase().replace(/^#/,'').replace(/[/_]/g,'');
  if(CFD_INSTRUMENTS[raw])return CFD_INSTRUMENTS[raw];
@@ -27,6 +39,10 @@ export function oandaInstrument(symbol='') {
 function isForexPair(pair){const p=String(pair||'').split('_');return p.length===2&&CURRENCIES.has(p[0])&&CURRENCIES.has(p[1]);}
 export function forexPipSize(symbol) {const pair=oandaInstrument(symbol);return isForexPair(pair)?(pair.endsWith('_JPY')?.01:.0001):null;}
 export function forexComparisonTolerance(symbol){const pip=forexPipSize(symbol);return pip===null?null:Number((3*pip).toFixed(8));}
+// The computed Dollar Index is an approximation of the broker's index (different weights of rounding, no
+// intra-candle extremes), so its chart check is wider than a currency pair's: 0.25 index points (about 0.25%).
+export function syntheticIndexTolerance(symbol){return oandaInstrument(symbol)===DXY_INSTRUMENT?0.25:null;}
+export function isSyntheticInstrument(symbol){return oandaInstrument(symbol)===DXY_INSTRUMENT;}
 function fail(message,category='provider_error'){return Object.assign(new Error(message),{category});}
 export function normalizeOandaConfig({token="",environment="practice",price="B"}={}) {
  let cleaned=String(token).trim();
@@ -80,10 +96,51 @@ function endOfCandle(start,granularity,timezone){
  if(granularity==='M')d.setUTCMonth(d.getUTCMonth()+1);else d.setUTCDate(d.getUTCDate()+(granularity==='W'?7:1));
  return localToUtc(d.toISOString().slice(0,19),timezone);
 }
+const BUCKET_MINUTES={'1min':1,'5min':5,'15min':15,'30min':30,'1h':60,'4h':240,'1day':1440,'1week':10080};
+// Wall-clock helpers for 'YYYY-MM-DD HH:MM:SS' strings that are already in the requested timezone.
+function addMinutesLocal(text,minutes){const d=new Date(text.replace(' ','T')+'Z');d.setUTCMinutes(d.getUTCMinutes()+minutes);return d.toISOString().slice(0,19).replace('T',' ');}
+function bucketStartLocal(text,interval){
+ const date=text.slice(0,10);
+ if(interval==='1day')return `${date} 00:00:00`;
+ if(interval==='1week'){const d=new Date(`${date}T00:00:00Z`);d.setUTCDate(d.getUTCDate()-(d.getUTCDay()+6)%7);return `${d.toISOString().slice(0,10)} 00:00:00`;}
+ const minutes=Number(text.slice(11,13))*60+Number(text.slice(14,16)),size=BUCKET_MINUTES[interval],start=minutes-minutes%size;
+ return `${date} ${String(Math.floor(start/60)).padStart(2,'0')}:${String(start%60).padStart(2,'0')}:00`;
+}
+// US Dollar Index built from the six currency pairs OANDA does serve. Index values are worked out for every
+// finer candle (open and close), then rolled up to the requested candle size. Highs and lows therefore come
+// from those finer opens/closes, not from true intra-candle extremes, so they can sit a little inside the real
+// ones; the result is an approximation and is reported as such (synthetic: true).
+async function fetchSyntheticDxy({interval,startDate,endDateTime,timezone='UTC',token,environment='practice',price='B',fetchImpl=fetch,maxPages=100}={}){
+ const fine=SYNTHETIC_FINER[interval];
+ if(!fine)throw fail('The US Dollar Index is not available for this candle size','symbol_unavailable');
+ const series=await Promise.all(DXY_FORMULA.parts.map(([pair])=>fetchOandaSeries({symbol:pair,interval:fine,startDate,endDateTime,timezone,token,environment,price,fetchImpl,maxPages})));
+ const maps=series.map(s=>new Map(s.values.map(row=>[row.datetime,row])));
+ const indexAt=(rows,field)=>{let v=DXY_FORMULA.constant;DXY_FORMULA.parts.forEach(([,weight],i)=>{v*=Math.pow(rows[i][field],weight);});return v;};
+ const buckets=new Map();
+ for(const datetime of [...maps[0].keys()].sort()){
+  const rows=maps.map(m=>m.get(datetime));
+  if(rows.some(r=>!r))continue;
+  const open=indexAt(rows,'open'),close=indexAt(rows,'close'),key=bucketStartLocal(datetime,interval),b=buckets.get(key);
+  if(!b)buckets.set(key,{datetime:key,open,high:Math.max(open,close),low:Math.min(open,close),close});
+  else{b.high=Math.max(b.high,open,close);b.low=Math.min(b.low,open,close);b.close=close;}
+ }
+ const cutoff=String(endDateTime).replace('T',' ').slice(0,19);
+ const isLiveWindow=Date.now()-localToUtc(endDateTime,timezone)<6*3600000;
+ const round=row=>({datetime:row.datetime,open:Number(row.open.toFixed(4)),high:Number(row.high.toFixed(4)),low:Number(row.low.toFixed(4)),close:Number(row.close.toFixed(4))});
+ const values=[];let alignmentCandle=null;
+ for(const row of [...buckets.values()].sort((a,b)=>a.datetime.localeCompare(b.datetime))){
+  const forming=addMinutesLocal(row.datetime,BUCKET_MINUTES[interval])>cutoff;
+  if(forming&&isLiveWindow){alignmentCandle=round(row);continue;}
+  values.push(round(row));
+ }
+ if(!values.length)throw fail('No completed index candles before cutoff','history_unavailable');
+ return {values,providerSymbol:'DXY',source:'OANDA (computed US Dollar Index)',priceComponent:price,timezone,alignmentCandle,synthetic:true};
+}
 export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,timezone='UTC',token,environment='practice',price='B',fetchImpl=fetch,maxPages=100}={}){
  const instrument=oandaInstrument(symbol),granularity=GRANULARITY[interval];
  if(!instrument)throw fail('OANDA forex adapter does not support this instrument','symbol_unavailable');
  if(!granularity)throw fail('Unsupported OANDA candle interval');
+ if(instrument===DXY_INSTRUMENT)return fetchSyntheticDxy({interval,startDate,endDateTime,timezone,token,environment,price,fetchImpl,maxPages});
  ({token,environment,price}=normalizeOandaConfig({token,environment,price}));
  const start=localToUtc(`${startDate} 00:00:00`,timezone),end=localToUtc(endDateTime,timezone);
  if(end<=start)throw fail('Empty historical window','history_unavailable');
