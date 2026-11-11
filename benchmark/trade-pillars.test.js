@@ -1114,3 +1114,23 @@ test("a suggested stop clears the entry area as well as the typed entry", () => 
   assert.match(next.exit, /Stop loss: about 1\.3360\d, past the entry zone/);
   assert.doesNotMatch(next.exit, /1\.33548/);
 });
+
+test("a price far from unmatched market data is not quoted as the distance from the entry", () => {
+  const planned = { entry: 1.3338, stop: 1.3355, target: 1.33 };
+  const facts = {
+    instrument: "GBPUSD",
+    direction: "bearish",
+    analysisType: "pre-trade",
+    trade: { visible: false },
+    executedOrder: null,
+    risk: {},
+    currentPrice: 1.3077,
+    plannedTrade: planned,
+    selectorDiagnostics: levels([1.33413, 1.34585]),
+  };
+  const area = { direction: "sell", authoritativeCenter: 1.33413 };
+  const trusted = assessTradePillars({ facts, area, hasValidatedArea: true });
+  assert.ok(trusted.snapshot.some((line) => line.startsWith("Price is now 1.30770")));
+  const distrusted = assessTradePillars({ facts: { ...facts, priceUnreliable: true }, area, hasValidatedArea: true });
+  assert.ok(!distrusted.snapshot.some((line) => line.startsWith("Price is now")));
+});

@@ -43,6 +43,9 @@ const num = (value) => {
   return Number.isFinite(n) ? n : null;
 };
 
+// The chart's last price, or null when it is far from market data that could not be matched to it.
+const readCurrentPrice = (facts) => (facts?.priceUnreliable === true ? null : num(facts?.currentPrice));
+
 const compactSymbol = (symbol = "") =>
   String(symbol || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 
@@ -124,7 +127,7 @@ export function collectStructuralLevels(facts = {}, { includeInProgress = false 
   // The chart's own last-price line is sometimes read as a "level" (EURCHF W1
   // reported a resistance at exactly the close, 0.93173). A target or stop
   // sitting on the current price is not a key level, so leave it out.
-  const current = num(facts?.currentPrice);
+  const current = readCurrentPrice(facts);
   const notOnCurrentPrice = (price) =>
     current === null || Math.abs(price - current) > price * 0.00003;
   const keyPrices = prices.filter(notOnCurrentPrice);
@@ -573,7 +576,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
   // chart's price; judging them would only produce nonsense, so they are set
   // aside (and the trader is told).
   const typedPlan = order ? { entry: null, stop: null, target: null } : readPlannedTrade(facts);
-  const chartPrice = num(facts?.currentPrice);
+  const chartPrice = readCurrentPrice(facts);
   const offChart =
     chartPrice !== null &&
     chartPrice > 0 &&
@@ -607,7 +610,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
   if (order && orderDir && entry !== null) {
     const sl = num(order.stopPrice);
     const tp = num(order.targetPrice);
-    const current = num(facts?.currentPrice);
+    const current = readCurrentPrice(facts);
     const small = entry * 0.00005;
     const beTol = entry * 0.00008;
     const flatTol = entry * 0.0003;
@@ -1078,7 +1081,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     const areaCenter = hasValidatedArea ? num(area?.authoritativeCenter) : null;
     const hasPlan = planned.entry !== null || planned.stop !== null || planned.target !== null;
     const preTrade = facts?.analysisType === "pre-trade";
-    const current = num(facts?.currentPrice);
+    const current = readCurrentPrice(facts);
     if (offChart) {
       add(
         weaknesses,

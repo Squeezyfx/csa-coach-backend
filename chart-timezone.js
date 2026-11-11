@@ -89,3 +89,28 @@ export function isFreshChartClock({ chartDetection, chartTimezone, nowMs, resolv
   const age = chartClockAgeMinutes({ chartDetection, chartTimezone, nowMs, resolvedDate });
   return age !== null && age >= -futureMinutes && age < freshMinutes;
 }
+
+// A screenshot cannot be from the future. True when the chart's date (and clock, when readable) lies
+// ahead of the server's now. Without a printed timezone the furthest-ahead timezone (UTC+14) is allowed.
+export function chartDateIsInFuture({ chartDetection, chartTimezone, nowMs, graceMinutes = 10 } = {}) {
+  const date = String(chartDetection?.latestVisibleDate || "").trim();
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!parts || !Number.isFinite(nowMs)) return false;
+  const time = String(chartDetection?.latestVisibleTime || "").trim();
+  const hasTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(time);
+  const chart = parseChartTimezoneLabel(chartTimezone);
+  const offsetMinutes = chart ? chart.offsetMinutes : 14 * 60;
+  const instant =
+    Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]), hasTime ? Number(time.slice(0, 2)) : 0, hasTime ? Number(time.slice(3, 5)) : 0, 0) -
+    offsetMinutes * 60000;
+  return instant > nowMs + graceMinutes * 60000;
+}
+
+// When the chart reader's date is in the future (the empty axis space to the right of the last candle
+// can read as tomorrow), the typed date replaces it if that date is possible. Null when the date is fine.
+export function rescueFutureChartDate({ chartDetection, chartTimezone, nowMs, selectedDateText } = {}) {
+  if (!chartDateIsInFuture({ chartDetection, chartTimezone, nowMs })) return null;
+  const typed = /^\d{4}-\d{2}-\d{2}$/.test(String(selectedDateText || "")) ? String(selectedDateText) : null;
+  const usable = typed !== null && !chartDateIsInFuture({ chartDetection: { ...chartDetection, latestVisibleDate: typed }, chartTimezone, nowMs });
+  return { rejectedDate: chartDetection.latestVisibleDate, date: usable ? typed : null };
+}

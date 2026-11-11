@@ -82,7 +82,8 @@ import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodW
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
-import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock } from "./chart-timezone.js";
+import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate } from "./chart-timezone.js";
+import { chartPriceFarFromFeed, pageDataMatchStatus } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
 import crypto from "crypto";
@@ -27579,6 +27580,9 @@ function buildValidatedAnalysisFacts({
     // How far one normal candle travels on this chart; sizes the planned stop.
     volatility: { avgRange: averageCandleRange(marketReference?.timeframeCandles) },
     currentPrice,
+    // The chart's price is far from market data that could not be matched to it (a misread price), so
+    // the review must not state a distance from it.
+    priceUnreliable: chartPriceFarFromFeed({ chartDetection, marketReference }),
     chartCutoff: {
       latestVisibleDate: chartDetection?.latestVisibleDate || null,
       latestVisibleTime: chartDetection?.latestVisibleTime || null,
@@ -31953,6 +31957,39 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       console.warn("[price-axis-calibration] skipped:", error?.message || error);
     }
 
+    // A screenshot cannot be from the future. The empty axis space to the right of the last candle can
+    // read as tomorrow (GBPUSD 2026-11-11 read as the 12th, which overrode the typed date and left the
+    // review with no candles). Such a date is dropped and the typed date used when it is possible.
+    const futureDate = rescueFutureChartDate({
+      chartDetection,
+      chartTimezone: chartDetection?.chartTimezone,
+      nowMs: Date.now(),
+      selectedDateText,
+    });
+    if (futureDate) {
+      console.log("[chart-date] the chart's date is in the future, so it was ignored:", {
+        rejectedDate: futureDate.rejectedDate,
+        latestVisibleTime: chartDetection?.latestVisibleTime || null,
+        usedInstead: futureDate.date,
+      });
+      chartDetection = futureDate.date
+        ? {
+            ...chartDetection,
+            latestVisibleDate: futureDate.date,
+            dateConfidence: "medium",
+            latestVisibleDateEvidence: "typed_date_after_future_rejection",
+            rejectedFutureDate: futureDate.rejectedDate,
+          }
+        : {
+            ...chartDetection,
+            latestVisibleDate: null,
+            latestVisibleTime: null,
+            dateConfidence: "low",
+            latestVisibleTimeConfidence: "low",
+            rejectedFutureDate: futureDate.rejectedDate,
+          };
+    }
+
     // FINAL VISIBLE date fallback. In Final visible candle mode the chart's own date controls the
     // review, but a screenshot that prints no date for its last candle (TradingView's axis shows day
     // numbers only) leaves nothing to override a wrong typed date with, so the review silently used
@@ -34135,7 +34172,10 @@ ${(visualReview?.strategyMissingInformation || []).length
         instrument: submittedInstrument,
         timeframe,
         analysisType: mode,
-        dataMatchStatus: marketReference?.chartDataMatch?.status || "",
+        dataMatchStatus: pageDataMatchStatus(
+          marketReference?.chartDataMatch?.status,
+          Boolean(marketReference?.dataProvider || marketReference?.chartDataMatch)
+        ),
       });
     } catch (error) {
       console.warn("[clean-chart] skipped:", error?.message || error);

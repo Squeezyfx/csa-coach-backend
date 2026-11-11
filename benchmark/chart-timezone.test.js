@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { parseChartTimezoneLabel, wallClockInTimezone, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, chartClockAgeMinutes } from "../chart-timezone.js";
+import { parseChartTimezoneLabel, wallClockInTimezone, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, chartClockAgeMinutes, chartDateIsInFuture, rescueFutureChartDate } from "../chart-timezone.js";
 
 test("the timezone label printed beside the chart clock is read", () => {
   assert.deepEqual(parseChartTimezoneLabel("UTC"), { label: "UTC", offsetMinutes: 0 });
@@ -123,4 +123,32 @@ test("the chart clock age follows the printed offset", () => {
 test("the feed check may use the live candle when the chart clock is recent", () => {
   assert.match(serverSource, /const finalCandleIsLive =\s*Boolean\(staleClock\) \|\|\s*isFreshChartClock\(/);
   assert.match(serverSource, /detection: detectionForFeedMatch\(chartDetection\),/);
+});
+
+const readerDetection = { latestVisibleDate: "2026-11-12", latestVisibleTime: "17:19", latestVisibleTimeConfidence: "medium" };
+const nowAt1732 = Date.UTC(2026, 10, 11, 17, 32, 12);
+
+test("a chart date in the future is detected with or without a printed timezone", () => {
+  assert.equal(chartDateIsInFuture({ chartDetection: readerDetection, chartTimezone: "UTC", nowMs: nowAt1732 }), true);
+  assert.equal(chartDateIsInFuture({ chartDetection: { ...readerDetection, latestVisibleDate: "2026-11-11" }, chartTimezone: "UTC", nowMs: nowAt1732 }), false);
+  // a clock a few minutes ahead is tolerated
+  assert.equal(chartDateIsInFuture({ chartDetection: { ...readerDetection, latestVisibleDate: "2026-11-11", latestVisibleTime: "17:38" }, chartTimezone: "UTC", nowMs: nowAt1732 }), false);
+  assert.equal(chartDateIsInFuture({ chartDetection: { ...readerDetection, latestVisibleDate: "2026-11-11", latestVisibleTime: "18:30" }, chartTimezone: "UTC", nowMs: nowAt1732 }), true);
+  // no printed timezone: tomorrow could be real in UTC+14, two days ahead cannot
+  assert.equal(chartDateIsInFuture({ chartDetection: { latestVisibleDate: "2026-11-12" }, chartTimezone: null, nowMs: nowAt1732 }), false);
+  assert.equal(chartDateIsInFuture({ chartDetection: { latestVisibleDate: "2026-11-13" }, chartTimezone: null, nowMs: nowAt1732 }), true);
+  assert.equal(chartDateIsInFuture({ chartDetection: {}, chartTimezone: "UTC", nowMs: nowAt1732 }), false);
+});
+
+test("a future chart date is replaced by the typed date when that date is possible", () => {
+  const base = { chartDetection: readerDetection, chartTimezone: "UTC", nowMs: nowAt1732 };
+  assert.deepEqual(rescueFutureChartDate({ ...base, selectedDateText: "2026-11-11" }), { rejectedDate: "2026-11-12", date: "2026-11-11" });
+  assert.deepEqual(rescueFutureChartDate({ ...base, selectedDateText: "2026-11-12" }), { rejectedDate: "2026-11-12", date: null });
+  assert.deepEqual(rescueFutureChartDate({ ...base, selectedDateText: "" }), { rejectedDate: "2026-11-12", date: null });
+  assert.equal(rescueFutureChartDate({ ...base, chartDetection: { ...readerDetection, latestVisibleDate: "2026-11-11" }, selectedDateText: "2026-11-11" }), null);
+});
+
+test("the future-date guard is applied before the date decision", () => {
+  assert.match(serverSource, /const futureDate = rescueFutureChartDate\(/);
+  assert.ok(serverSource.indexOf("const futureDate = rescueFutureChartDate(") < serverSource.indexOf("let dateDecision = chooseFinalChartDate("));
 });
