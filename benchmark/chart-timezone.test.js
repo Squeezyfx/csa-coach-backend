@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { parseChartTimezoneLabel, wallClockInTimezone, alignCutoffToChartTimezone } from "../chart-timezone.js";
 
 test("the timezone label printed beside the chart clock is read", () => {
@@ -49,4 +50,11 @@ test("nothing changes without a printed timezone or an exact visible cutoff", ()
     assert.equal(result.timezone, device);
     assert.equal(result.endDateTime, input.chartCutoff.endDateTime);
   }
+});
+
+const serverSource = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+
+test("a chart that prints its timezone does not borrow the evening before Monday", () => {
+  assert.match(serverSource, /chartCutoff\.chartTimezone = parseChartTimezoneLabel\(chartDetection\?\.chartTimezone\)/);
+  assert.match(serverSource, /if \(!chartCutoff\?\.chartTimezone\) \{\s*dailyLevels = extendPeriodsAcrossSessionBoundary\(/);
 });

@@ -4489,7 +4489,11 @@ async function fetchTwelveDataStructureLevels({
         };
   });
 
-  dailyLevels = extendPeriodsAcrossSessionBoundary(dailyLevels, impulseCandles, profile);
+  // A chart that prints its timezone (TradingView: "UTC") has its own day
+  // boundary, so no broker server-time lag is borrowed from the evening before.
+  if (!chartCutoff?.chartTimezone) {
+    dailyLevels = extendPeriodsAcrossSessionBoundary(dailyLevels, impulseCandles, profile);
+  }
 
   const sourceIntegrityWarnings = dailyLevels
     .filter((level) => level?.sourceIntegrityWarning === true)
@@ -32061,6 +32065,11 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       analysisType: mode,
     });
 
+    chartCutoff.chartTimezone = parseChartTimezoneLabel(chartDetection?.chartTimezone)?.label || null;
+    console.log("[chart-timezone] printed on the chart:", {
+      chartTimezone: chartCutoff.chartTimezone,
+      cutoffSource: chartCutoff.source,
+    });
     const chartTimezoneAlignment = alignCutoffToChartTimezone({
       chartCutoff,
       chartTimezone: chartDetection?.chartTimezone,
@@ -32076,7 +32085,6 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       });
       resolvedTimezone = chartTimezoneAlignment.timezone;
       chartCutoff.endDateTime = chartTimezoneAlignment.endDateTime;
-      chartCutoff.chartTimezone = chartTimezoneAlignment.chartTimezone;
     }
     chartCutoff.timezone = resolvedTimezone;
     chartCutoff.dayBoundary =
