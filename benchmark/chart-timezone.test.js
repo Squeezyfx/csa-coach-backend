@@ -121,8 +121,8 @@ test("the chart clock age follows the printed offset", () => {
 });
 
 test("the feed check may use the live candle when the chart clock is recent", () => {
-  assert.match(serverSource, /const freshClockNow = isFreshChartClock(/);
-  assert.match(serverSource, /const finalCandleIsLive = Boolean(staleClock) || freshClockNow;/);
+  assert.match(serverSource, /const freshClockNow = isFreshChartClock\(/);
+  assert.match(serverSource, /const finalCandleIsLive = Boolean\(staleClock\) \|\| freshClockNow;/);
   assert.match(serverSource, /detection: detectionForFeedMatch\(chartDetection\),/);
 });
 
