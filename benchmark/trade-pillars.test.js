@@ -1092,3 +1092,25 @@ test("today's unfinished high is used for the suggested stop but never for the e
   const { next } = run(facts, gbpusdArea);
   assert.match(next.exit, /^Stop loss: just above the key high at 1\.33548/);
 });
+
+test("a suggested stop clears the entry area as well as the typed entry", () => {
+  const facts = {
+    instrument: "GBPUSD",
+    direction: "bearish",
+    analysisType: "pre-trade",
+    trade: { visible: false },
+    executedOrder: null,
+    risk: {},
+    volatility: { avgRange: 0.0012 },
+    plannedTrade: { entry: 1.3338 },
+    selectorDiagnostics: {
+      ...levels([1.33586, 1.3443, 1.34585]),
+      inProgressPeriodInventory: [{ periodLabel: "Wednesday", high: 1.33548, low: 1.32692 }],
+    },
+  };
+  const area = { direction: "sell", authoritativeCenter: 1.33586, zoneLow: 1.33586, zoneHigh: 1.33586 };
+  const { next } = run(facts, area);
+  // today's high (1.33548) is below the area, so it cannot protect a sell that only fills above the area
+  assert.match(next.exit, /Stop loss: about 1\.3360\d, past the entry zone/);
+  assert.doesNotMatch(next.exit, /1\.33548/);
+});

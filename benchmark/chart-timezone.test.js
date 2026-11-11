@@ -54,9 +54,10 @@ test("nothing changes without a printed timezone or an exact visible cutoff", ()
 
 const serverSource = readFileSync(new URL("../server.js", import.meta.url), "utf8");
 
-test("a chart that prints its timezone does not borrow the evening before Monday", () => {
+test("the Sunday reopen is added to Monday whatever timezone the chart prints", () => {
   assert.match(serverSource, /chartCutoff\.chartTimezone = parseChartTimezoneLabel\(chartDetection\?\.chartTimezone\)/);
-  assert.match(serverSource, /if \(!chartCutoff\?\.chartTimezone\) \{\s*dailyLevels = extendPeriodsAcrossSessionBoundary\(/);
+  assert.match(serverSource, /\n {2}dailyLevels = extendPeriodsAcrossSessionBoundary\(dailyLevels, impulseCandles, profile\);/);
+  assert.doesNotMatch(serverSource, /if \(!chartCutoff\?\.chartTimezone\) \{\s*dailyLevels = extendPeriodsAcrossSessionBoundary/);
 });
 
 const dayFallback = {

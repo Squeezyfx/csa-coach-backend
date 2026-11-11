@@ -352,8 +352,12 @@ function planStopFor({ facts, area, center, levels, isSell }) {
   const nearestBackup = backups.length ? Math.min(...backups.map((p) => Math.abs(p - center))) : null;
   const roomBeforeBackup = nearestBackup !== null && nearestBackup > minDist;
 
+  // A typed entry on the near side of the area only fills after price has crossed the area, so the
+  // stop has to clear the area as well as the entry.
+  const areaEdge = isSell ? num(area?.zoneHigh) : num(area?.zoneLow);
+  const clearOf = areaEdge === null ? center : isSell ? Math.max(center, areaEdge) : Math.min(center, areaEdge);
   const candidates = levels
-    .filter((l) => (isSell ? l > center : l < center))
+    .filter((l) => (isSell ? l > clearOf : l < clearOf))
     .filter((l) => {
       const dist = Math.abs(l - center);
       if (dist < minDist || dist > maxDist || isBackup(l)) return false;
@@ -371,7 +375,7 @@ function planStopFor({ facts, area, center, levels, isSell }) {
     };
   }
 
-  const edge = isSell ? num(area?.zoneHigh) : num(area?.zoneLow);
+  const edge = areaEdge;
   const edgeDist = edge !== null ? Math.max(0, isSell ? edge - center : center - edge) : 0;
   let dist = Math.max(minDist, edgeDist + buffer) + spread;
   if (roomBeforeBackup && dist >= nearestBackup) dist = Math.max(minDist + spread, nearestBackup - buffer);

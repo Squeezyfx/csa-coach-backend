@@ -4489,11 +4489,10 @@ async function fetchTwelveDataStructureLevels({
         };
   });
 
-  // A chart that prints its timezone (TradingView: "UTC") has its own day
-  // boundary, so no broker server-time lag is borrowed from the evening before.
-  if (!chartCutoff?.chartTimezone) {
-    dailyLevels = extendPeriodsAcrossSessionBoundary(dailyLevels, impulseCandles, profile);
-  }
+  // The forex week opens on Sunday evening (22:00 UTC, 5pm New York), a few
+  // candles before Monday's UTC date label, and that reopen belongs to Monday
+  // whatever timezone the chart prints.
+  dailyLevels = extendPeriodsAcrossSessionBoundary(dailyLevels, impulseCandles, profile);
 
   const sourceIntegrityWarnings = dailyLevels
     .filter((level) => level?.sourceIntegrityWarning === true)
