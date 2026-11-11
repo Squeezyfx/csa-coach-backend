@@ -1085,10 +1085,10 @@ test("today's unfinished low can be the next key low for a take profit", () => {
   assert.match(next.exit, /Consider taking some profit at the next key low \(1\.33220\)\./);
 });
 
-test("today's unfinished high and low never become entry or stop levels", () => {
-  const facts = gbpusdLivePlan(1.3322);
+test("today's unfinished high is used for the suggested stop but never for the entry area", () => {
+  const facts = { ...gbpusdLivePlan(1.3322), plannedTrade: {} };
   assert.deepEqual(collectStructuralLevels(facts), [1.33413, 1.34585]);
   assert.deepEqual(collectStructuralLevels(facts, { includeInProgress: true }), [1.3322, 1.33413, 1.33548, 1.34585]);
   const { next } = run(facts, gbpusdArea);
-  assert.doesNotMatch(next.exit, /1\.33548/);
+  assert.match(next.exit, /^Stop loss: just above the key high at 1\.33548/);
 });

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { parseChartTimezoneLabel, wallClockInTimezone, alignCutoffToChartTimezone } from "../chart-timezone.js";
+import { parseChartTimezoneLabel, wallClockInTimezone, alignCutoffToChartTimezone, staleClockCutoff } from "../chart-timezone.js";
 
 test("the timezone label printed beside the chart clock is read", () => {
   assert.deepEqual(parseChartTimezoneLabel("UTC"), { label: "UTC", offsetMinutes: 0 });
@@ -20,7 +20,7 @@ test("a wall clock is rewritten as the same instant in another timezone", () => 
   assert.equal(wallClockInTimezone("not a time", 0, "UTC"), null);
 });
 
-const finalVisible = { mode: "final_visible", exactVisibleCutoff: true, endDateTime: "2026-11-11 14:29:59" };
+const finalVisible = { mode: "final_visible", precision: "exact-visible", exactVisibleCutoff: true, endDateTime: "2026-11-11 14:29:59" };
 
 test("a UTC chart read on a Lagos device is fetched in UTC, so the last candle is not cut off", () => {
   const result = alignCutoffToChartTimezone({ chartCutoff: finalVisible, chartTimezone: "UTC", deviceTimezone: "Africa/Lagos" });
@@ -41,7 +41,7 @@ test("nothing changes without a printed timezone or an exact visible cutoff", ()
   for (const input of [
     { chartCutoff: finalVisible, chartTimezone: null },
     { chartCutoff: finalVisible, chartTimezone: "Europe/London" },
-    { chartCutoff: { ...finalVisible, exactVisibleCutoff: false }, chartTimezone: "UTC" },
+    { chartCutoff: { ...finalVisible, precision: "invalid" }, chartTimezone: "UTC" },
     { chartCutoff: { ...finalVisible, mode: "selected_day" }, chartTimezone: "UTC" },
     { chartCutoff: { mode: "exact", exactVisibleCutoff: true, endDateTime: "2026-11-11 06:00:59" }, chartTimezone: "UTC" },
   ]) {
@@ -57,4 +57,47 @@ const serverSource = readFileSync(new URL("../server.js", import.meta.url), "utf
 test("a chart that prints its timezone does not borrow the evening before Monday", () => {
   assert.match(serverSource, /chartCutoff\.chartTimezone = parseChartTimezoneLabel\(chartDetection\?\.chartTimezone\)/);
   assert.match(serverSource, /if \(!chartCutoff\?\.chartTimezone\) \{\s*dailyLevels = extendPeriodsAcrossSessionBoundary\(/);
+});
+
+const dayFallback = {
+  mode: "final_visible",
+  precision: "day",
+  source: "chart-final-visible-day-fallback",
+  resolvedDate: "2026-11-11",
+  endDateTime: "2026-11-11 23:59:59",
+};
+
+test("the end-of-day fallback also follows the chart's own timezone", () => {
+  const utc = alignCutoffToChartTimezone({ chartCutoff: dayFallback, chartTimezone: "UTC", deviceTimezone: "Africa/Lagos" });
+  assert.equal(utc.applied, true);
+  assert.equal(utc.timezone, "UTC");
+  assert.equal(utc.endDateTime, "2026-11-11 23:59:59");
+  const shifted = alignCutoffToChartTimezone({ chartCutoff: dayFallback, chartTimezone: "UTC+1", deviceTimezone: "America/New_York" });
+  assert.equal(shifted.timezone, "America/New_York");
+  assert.equal(shifted.endDateTime, "2026-11-11 17:59:59");
+});
+
+const detection = { latestVisibleDate: "2026-11-11", latestVisibleTime: "14:29", latestVisibleTimeConfidence: "high" };
+const at = (hour, minute) => Date.UTC(2026, 10, 11, hour, minute);
+
+test("an old screenshot is cut off at its own chart clock instead of the end of the day", () => {
+  const result = staleClockCutoff({ chartCutoff: dayFallback, chartDetection: detection, chartTimezone: "UTC", nowMs: at(16, 34) });
+  assert.deepEqual(result, { endDateTime: "2026-11-11 14:29:59", ageMinutes: 124 });
+  const shifted = staleClockCutoff({ chartCutoff: dayFallback, chartDetection: detection, chartTimezone: "UTC+1", nowMs: at(16, 34) });
+  assert.deepEqual(shifted, { endDateTime: "2026-11-11 14:29:59", ageMinutes: 184 });
+});
+
+test("a fresh screenshot, or one without a trustworthy clock, keeps the end-of-day fallback", () => {
+  const base = { chartCutoff: dayFallback, chartDetection: detection, chartTimezone: "UTC", nowMs: at(16, 34) };
+  assert.equal(staleClockCutoff({ ...base, nowMs: at(14, 40) }), null);
+  assert.equal(staleClockCutoff({ ...base, chartTimezone: null }), null);
+  assert.equal(staleClockCutoff({ ...base, chartDetection: { ...detection, latestVisibleTimeConfidence: "low" } }), null);
+  assert.equal(staleClockCutoff({ ...base, chartDetection: { ...detection, latestVisibleTime: "00:00" } }), null);
+  assert.equal(staleClockCutoff({ ...base, chartDetection: { ...detection, latestVisibleDate: "2026-11-10" } }), null);
+  assert.equal(staleClockCutoff({ ...base, chartCutoff: { ...dayFallback, source: "chart-final-visible-candle" } }), null);
+});
+
+test("the stale-screenshot cutoff can be switched off", () => {
+  assert.match(serverSource, /STALE_SCREENSHOT_CLOCK_CUTOFF/);
+  assert.match(serverSource, /staleClockCutoff\(\{ chartCutoff, chartDetection, chartTimezone: chartDetection\?\.chartTimezone, nowMs: Date\.now\(\) \}\)/);
 });

@@ -110,7 +110,7 @@ export function collectStructuralLevels(facts = {}, { includeInProgress = false 
   }
 
   // Today's unfinished period cannot source an entry, but its high/low so far
-  // is a fair take-profit target.
+  // is a fair take-profit target or place to put a stop.
   if (includeInProgress) {
     const live = facts?.selectorDiagnostics?.inProgressPeriodInventory;
     for (const period of Array.isArray(live) ? live : []) {
@@ -583,7 +583,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
   const protectWord = isSell ? "high" : "low";
   const targetWord = isSell ? "low" : "high";
   const levels = collectStructuralLevels(facts);
-  const profitLevels = collectStructuralLevels(facts, { includeInProgress: true });
+  const liveLevels = collectStructuralLevels(facts, { includeInProgress: true });
 
   const stopShown = facts?.risk?.stopShown === true;
   const targetShown = facts?.risk?.targetShown === true;
@@ -709,12 +709,12 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     const tpOnProfitSide = tp !== null && (isSell ? tp < entry : tp > entry);
     const rewardDist = tpOnProfitSide ? Math.abs(tp - entry) : null;
 
-    const protectLevels = levels
+    const protectLevels = liveLevels
       .filter((l) => (isSell ? l > entry + small : l < entry - small))
       .sort((a, b) => (isSell ? a - b : b - a));
     const nearestProtect = protectLevels.length ? protectLevels[0] : null;
 
-    const targetLevels = profitLevels
+    const targetLevels = liveLevels
       .filter((l) => (isSell ? l < entry - small : l > entry + small))
       .sort((a, b) => (isSell ? b - a : a - b));
     const nearestTarget = targetLevels.length ? targetLevels[0] : null;
@@ -723,14 +723,14 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     // BOTH the entry and wherever price is now, in the profit direction.
     const reference =
       current !== null ? (isSell ? Math.min(entry, current) : Math.max(entry, current)) : entry;
-    const suggestionLevels = profitLevels
+    const suggestionLevels = liveLevels
       .filter((l) => (isSell ? l < reference - small : l > reference + small))
       .sort((a, b) => (isSell ? b - a : a - b));
     const tpSuggestion = suggestionLevels.length ? suggestionLevels[0] : null;
 
     // Suggested take profits: key levels on the way, ending at the main swing.
     const suggestionLadder = buildTargetLadder({
-      levels: profitLevels,
+      levels: liveLevels,
       origin: reference,
       isSell,
       finalTarget: finalSwingTarget(facts, reference, isSell),
@@ -1093,7 +1093,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     let planLadder = [];
     if (center !== null) {
       planLadder = buildTargetLadder({
-        levels: profitLevels,
+        levels: liveLevels,
         origin: center,
         isSell,
         finalTarget: finalSwingTarget(facts, center, isSell),
@@ -1105,7 +1105,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
     // candle away) and never on the Backup entry, which is a separate trade
     // taken after this stop is hit. With no suitable key level, it sits one
     // average candle beyond the entry zone.
-    const planStopInfo = center !== null ? planStopFor({ facts, area, center, levels, isSell }) : null;
+    const planStopInfo = center !== null ? planStopFor({ facts, area, center, levels: liveLevels, isSell }) : null;
     const planStop = planStopInfo ? planStopInfo.price : null;
     // Every backup entry is its own trade, so it gets its own stop (Entry 1's stop above already sits
     // in front of it). Only when the entries come from the review: a typed entry is the trader's plan.
@@ -1117,7 +1117,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
             .filter((b) => b.center !== null && (isSell ? b.center > center + sameEntry : b.center < center - sameEntry))
             .sort((a, b) => Math.abs(a.center - center) - Math.abs(b.center - center))
             .slice(0, 2)
-            .map((b) => ({ ...b, stopInfo: planStopFor({ facts, area: b.area, center: b.center, levels, isSell }) }))
+            .map((b) => ({ ...b, stopInfo: planStopFor({ facts, area: b.area, center: b.center, levels: liveLevels, isSell }) }))
         : [];
     if (dir && center !== null) {
       geometry = {
@@ -1278,7 +1278,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       const maxDist = avgRange !== null ? Math.max(avgRange, minimumStopFloor(symbol)) * 2.5 : Infinity;
       const nearestBackup = backups.length ? Math.min(...backups.map((p) => Math.abs(p - center))) : null;
       const roomBeforeBackup = nearestBackup !== null && nearestBackup > minDist;
-      const protectLevels = levels
+      const protectLevels = liveLevels
         .filter((l) => (isSell ? l > center + small : l < center - small) && !isBackup(l))
         .filter((l) => {
           const dist = Math.abs(l - center);
@@ -1371,7 +1371,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         } else {
           userReward = Math.abs(planned.target - center);
           const mainSwing = finalSwingTarget(facts, center, isSell);
-          const nearestTarget = profitLevels
+          const nearestTarget = liveLevels
             .filter((l) => (isSell ? l < center - small : l > center + small))
             .sort((a, b) => (isSell ? b - a : a - b))[0];
           const tpLimit = mainSwing !== null ? mainSwing : nearestTarget ?? null;

@@ -82,7 +82,7 @@ import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodW
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
-import { parseChartTimezoneLabel, alignCutoffToChartTimezone } from "./chart-timezone.js";
+import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff } from "./chart-timezone.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
 import crypto from "crypto";
@@ -32069,7 +32069,24 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
     console.log("[chart-timezone] printed on the chart:", {
       chartTimezone: chartCutoff.chartTimezone,
       cutoffSource: chartCutoff.source,
+      latestVisibleTime: chartDetection?.latestVisibleTime || null,
+      latestVisibleTimeConfidence: chartDetection?.latestVisibleTimeConfidence || null,
+      latestVisibleDateEvidence: chartDetection?.latestVisibleDateEvidence || null,
     });
+    // STALE_SCREENSHOT_CLOCK_CUTOFF=off turns this off.
+    const staleClock = String(process.env.STALE_SCREENSHOT_CLOCK_CUTOFF || "on").toLowerCase() === "off"
+      ? null
+      : staleClockCutoff({ chartCutoff, chartDetection, chartTimezone: chartDetection?.chartTimezone, nowMs: Date.now() });
+    if (staleClock) {
+      console.log("[chart-timezone] old screenshot: cut off at the chart clock instead of the end of the day:", {
+        endDateTime: staleClock.endDateTime,
+        ageMinutes: staleClock.ageMinutes,
+      });
+      chartCutoff.endDateTime = staleClock.endDateTime;
+      chartCutoff.source = "chart-clock-stale-screenshot";
+      chartCutoff.precision = "exact-visible";
+      chartCutoff.exactVisibleCutoff = true;
+    }
     const chartTimezoneAlignment = alignCutoffToChartTimezone({
       chartCutoff,
       chartTimezone: chartDetection?.chartTimezone,
