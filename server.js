@@ -82,7 +82,7 @@ import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodW
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
-import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap } from "./chart-timezone.js";
+import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
@@ -31964,11 +31964,18 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
     // A screenshot cannot be from the future. The empty axis space to the right of the last candle can
     // read as tomorrow (GBPUSD 2026-11-11 read as the 12th, which overrode the typed date and left the
     // review with no candles). Such a date is dropped and the typed date used when it is possible.
+    // With no printed timezone a readable clock can be at most about +5h ahead of UTC (MT4 servers sit at +2/+3), or the
+    // device's own offset when that is larger. A dollar-index chart read as 13 Nov 03:00 at 18:07 UTC on 12 Nov slipped
+    // through the old +14h allowance and left the review with no candles. FUTURE_DATE_STRICT_OFFSET=off restores +14h.
+    const strictFutureOffset = String(process.env.FUTURE_DATE_STRICT_OFFSET || "on").toLowerCase() !== "off";
     const futureDate = rescueFutureChartDate({
       chartDetection,
       chartTimezone: chartDetection?.chartTimezone,
       nowMs: Date.now(),
       selectedDateText,
+      unprintedMaxOffsetMinutes: strictFutureOffset
+        ? Math.max(5 * 60, timezoneOffsetMinutesAt(resolvedTimezone, Date.now()) ?? 0)
+        : 14 * 60,
     });
     if (futureDate) {
       console.log("[chart-date] the chart's date is in the future, so it was ignored:", {

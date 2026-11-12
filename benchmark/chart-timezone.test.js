@@ -158,6 +158,32 @@ test("a future chart date is replaced by the typed date when that date is possib
   assert.equal(rescueFutureChartDate({ ...base, chartDetection: { ...readerDetection, latestVisibleDate: "2026-11-11" }, selectedDateText: "2026-11-11" }), null);
 });
 
+// 2026-11-12 18:07 UTC: an MT4 dollar-index chart (no printed timezone) was read as 13 Nov 03:00, 8 hours ahead.
+test("with no printed timezone a readable clock is held to a plausible server offset", () => {
+  const now = Date.UTC(2026, 10, 12, 18, 8, 0);
+  const misread = { latestVisibleDate: "2026-11-13", latestVisibleTime: "03:00" };
+  // the old UTC+14 allowance let it through, the +5h allowance does not
+  assert.equal(chartDateIsInFuture({ chartDetection: misread, chartTimezone: null, nowMs: now }), false);
+  assert.equal(chartDateIsInFuture({ chartDetection: misread, chartTimezone: null, nowMs: now, unprintedMaxOffsetMinutes: 5 * 60 }), true);
+  // a real MT4 server clock (UTC+3) a little ahead of UTC is fine
+  assert.equal(chartDateIsInFuture({ chartDetection: { latestVisibleDate: "2026-11-12", latestVisibleTime: "21:05" }, chartTimezone: null, nowMs: now, unprintedMaxOffsetMinutes: 5 * 60 }), false);
+  // a date with no clock keeps the wide allowance
+  assert.equal(chartDateIsInFuture({ chartDetection: { latestVisibleDate: "2026-11-13" }, chartTimezone: null, nowMs: now, unprintedMaxOffsetMinutes: 5 * 60 }), false);
+  // a printed timezone still wins over the allowance
+  assert.equal(chartDateIsInFuture({ chartDetection: misread, chartTimezone: "UTC+2", nowMs: now, unprintedMaxOffsetMinutes: 5 * 60 }), true);
+  // the typed date replaces the misread one
+  assert.deepEqual(
+    rescueFutureChartDate({ chartDetection: misread, chartTimezone: null, nowMs: now, selectedDateText: "2026-11-12", unprintedMaxOffsetMinutes: 5 * 60 }),
+    { rejectedDate: "2026-11-13", date: "2026-11-12" }
+  );
+});
+
+test("the server passes the stricter allowance, with an off switch", () => {
+  assert.match(serverSource, /FUTURE_DATE_STRICT_OFFSET/);
+  assert.match(serverSource, /unprintedMaxOffsetMinutes: strictFutureOffset/);
+  assert.match(serverSource, /timezoneOffsetMinutesAt\(resolvedTimezone/);
+});
+
 test("the future-date guard is applied before the date decision", () => {
   assert.match(serverSource, /const futureDate = rescueFutureChartDate\(/);
   assert.ok(serverSource.indexOf("const futureDate = rescueFutureChartDate(") < serverSource.indexOf("let dateDecision = chooseFinalChartDate("));
