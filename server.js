@@ -34284,7 +34284,8 @@ ${(visualReview?.strategyMissingInformation || []).length
         analysisType: mode,
         dataMatchStatus: pageDataMatchStatus(
           marketReference?.chartDataMatch?.status,
-          Boolean(marketReference?.dataProvider || marketReference?.chartDataMatch)
+          Boolean(marketReference?.dataProvider || marketReference?.chartDataMatch),
+          isSyntheticInstrument(submittedInstrument)
         ),
       });
     } catch (error) {

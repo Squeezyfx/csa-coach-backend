@@ -63,3 +63,21 @@ test("the slip correction is wired in before the feed check and only for a live 
   assert.match(serverSource, /finalCandleIsLive && liveCandle/);
   assert.match(serverSource, /PRICE_SLIP_CORRECTION/);
 });
+
+test("a computed feed (the US Dollar Index) does not show the lower-confidence warning for unverified time or date", () => {
+  for (const status of ["time_unverified", "date_unverified", "partial_or_unknown_candle"]) {
+    assert.equal(pageDataMatchStatus(status, true, true), "partial_reference");
+    // Ordinary feeds keep the warning.
+    assert.equal(pageDataMatchStatus(status, true, false), status);
+    assert.equal(pageDataMatchStatus(status, true), status);
+  }
+  // A real price disagreement still warns, even for the computed feed.
+  assert.equal(pageDataMatchStatus("mismatch", true, true), "mismatch");
+  // Matched stays matched, and no market data at all still warns.
+  assert.equal(pageDataMatchStatus("matched_reference", true, true), "matched_reference");
+  assert.equal(pageDataMatchStatus("session_unverified", true, true), "mismatch");
+});
+
+test("the clean chart is told the instrument's feed is computed", () => {
+  assert.match(serverSource, /isSyntheticInstrument\(submittedInstrument\)/);
+});

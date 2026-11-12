@@ -6,6 +6,7 @@ export const SLIP_MIN_GAP = 0.0065;
 
 const MATCHED = ["matched_reference", "partial_reference"];
 const PAGE_WEAK = ["date_unverified", "time_unverified", "mismatch", "partial_or_unknown_candle"];
+const APPROXIMATE_FEED_UNVERIFIED = ["date_unverified", "time_unverified", "partial_or_unknown_candle"];
 
 // True when the market data could not be matched to the chart and the chart's last price is far from
 // the data's newest close, which usually means the price was misread from the picture.
@@ -22,8 +23,12 @@ export function chartPriceFarFromFeed({ chartDetection, marketReference, limit =
 
 // The match status the page uses to decide whether to show "Lower confidence". It only knows four weak
 // statuses, so any other unmatched outcome of an attempted market-data check is reported as "mismatch".
-export function pageDataMatchStatus(status, marketDataAttempted) {
+export function pageDataMatchStatus(status, marketDataAttempted, approximateFeed = false) {
   const text = String(status || "");
+  // A feed that is computed rather than quoted (the US Dollar Index) can never be matched to the chart's last
+  // candle exactly, so "time/date could not be verified" is its normal state and not a warning. A real price
+  // disagreement ("mismatch") still is one.
+  if (approximateFeed && APPROXIMATE_FEED_UNVERIFIED.includes(text)) return "partial_reference";
   if (MATCHED.includes(text) || PAGE_WEAK.includes(text)) return text;
   return marketDataAttempted ? "mismatch" : text;
 }
