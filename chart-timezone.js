@@ -1,3 +1,4 @@
+import { normalizeFrameworkTimeframe } from "./framework-calendar.js";
 // The timezone a chart prints beside its clock ("UTC", "UTC+1", "UTC-5:30").
 export function parseChartTimezoneLabel(value) {
   const text = String(value ?? "").trim().toUpperCase().replace(/\s+/g, "");
@@ -185,4 +186,34 @@ export function liveCandleOpenTime({ chartDetection, chartTimezone, timeframe, p
   if (!wall) return null;
   const floored = Math.floor((Number(wall.slice(11, 13)) * 60 + Number(wall.slice(14, 16))) / minutes) * minutes;
   return `${String(Math.floor(floored / 60)).padStart(2, "0")}:${String(floored % 60).padStart(2, "0")}`;
+}
+
+// The first hour of a trading day (the first candle of the chart's size, for example 00:00-00:59 on H1): the
+// day's first candle is still forming, so the feed holds no finished candle for today and the review has no
+// row for today's period. Without that row the week's Fibonacci frame cannot be verified and no entry is
+// found (DXY 2026-11-12 00:49 UTC). The earlier days are complete and unchanged, so the review is taken
+// as of the end of the previous day instead: { endDateTime, resolvedDate } or null when it does not apply.
+// Applies only to day-based frameworks (M1-H1) on Tuesday to Friday for session markets: Monday's first hour
+// belongs to the Sunday-evening open, and crypto trades every day. `candles` are the feed's finished candles.
+export function firstCandleOfDayGap({ endDateTime, timeframe, candles = [], tradesOnWeekends = false } = {}) {
+  if (tradesOnWeekends) return null;
+  const minutes = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60 }[normalizeFrameworkTimeframe(timeframe)];
+  const end = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})/.exec(String(endDateTime || ""));
+  if (!minutes || !end) return null;
+  if (Number(end[2]) * 60 + Number(end[3]) >= minutes) return null;
+  const today = new Date(`${end[1]}T00:00:00Z`);
+  const weekday = today.getUTCDay();
+  if (!Number.isFinite(weekday) || weekday < 2 || weekday > 5) return null;
+  const latest = (Array.isArray(candles) ? candles : [])
+    .map((candle) => String(candle?.datetime || "").slice(0, 10))
+    .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+    .sort()
+    .at(-1);
+  if (!latest) return null;
+  today.setUTCDate(today.getUTCDate() - 1);
+  const previous = today.toISOString().slice(0, 10);
+  // Only when the feed stops exactly at the end of yesterday: today already has a candle, or the feed is
+  // missing more than today's first candle, and neither is this case.
+  if (latest !== previous) return null;
+  return { endDateTime: `${previous} 23:59:59`, resolvedDate: previous };
 }

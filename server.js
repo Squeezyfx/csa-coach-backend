@@ -82,7 +82,7 @@ import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodW
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
-import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime } from "./chart-timezone.js";
+import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
@@ -32215,7 +32215,7 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       });
     }
 
-    const resolvedAnalysisDate = parseISODateOnly(chartCutoff.resolvedDate);
+    let resolvedAnalysisDate = parseISODateOnly(chartCutoff.resolvedDate);
 
     const marketReferenceStartedAt =
       csaNowMs();
@@ -32228,6 +32228,40 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       analysisType: mode,
       chartCutoff,
     });
+
+    // First hour of a trading day: today's first candle is still forming, so the feed has no finished candle
+    // for today and the week's frame cannot be verified (DXY 2026-11-12 00:49 UTC: no entry). Earlier days
+    // are complete, so take the review as of the end of the previous day. FIRST_HOUR_ROLLBACK=off disables.
+    const firstHourGap = marketReference?.ok === true && String(process.env.FIRST_HOUR_ROLLBACK || "on").toLowerCase() !== "off"
+      ? firstCandleOfDayGap({
+          endDateTime: chartCutoff.endDateTime,
+          timeframe,
+          candles: marketReference.timeframeCandles || [],
+          tradesOnWeekends: isCryptoSymbol(normalizedSymbol || ""),
+        })
+      : null;
+    if (firstHourGap) {
+      console.log("[first-hour] no finished candle yet today, so the review is cut at the end of the previous day:", {
+        was: chartCutoff.endDateTime,
+        now: firstHourGap.endDateTime,
+        resolvedDate: firstHourGap.resolvedDate,
+      });
+      chartCutoff.firstHourRolledBackFrom = chartCutoff.endDateTime;
+      chartCutoff.endDateTime = firstHourGap.endDateTime;
+      chartCutoff.resolvedDate = firstHourGap.resolvedDate;
+      chartCutoff.source = "chart-first-hour-previous-day";
+      chartCutoff.precision = "day";
+      chartCutoff.exactVisibleCutoff = false;
+      resolvedAnalysisDate = parseISODateOnly(chartCutoff.resolvedDate);
+      marketReference = await fetchTwelveDataStructureLevels({
+        symbol: normalizedSymbol,
+        chartDate: resolvedAnalysisDate,
+        timeframe,
+        timezone: resolvedTimezone,
+        analysisType: mode,
+        chartCutoff,
+      });
+    }
 
     csaTimingLog(
       "market_reference_fetch",

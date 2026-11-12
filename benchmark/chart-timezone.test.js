@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { parseChartTimezoneLabel, wallClockInTimezone, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, chartClockAgeMinutes, chartDateIsInFuture, rescueFutureChartDate, inferChartTimezoneFromLiveClock, timezoneOffsetMinutesAt, chartClockTime, liveCandleOpenTime } from "../chart-timezone.js";
+import { firstCandleOfDayGap, parseChartTimezoneLabel, wallClockInTimezone, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, chartClockAgeMinutes, chartDateIsInFuture, rescueFutureChartDate, inferChartTimezoneFromLiveClock, timezoneOffsetMinutesAt, chartClockTime, liveCandleOpenTime } from "../chart-timezone.js";
 
 test("the timezone label printed beside the chart clock is read", () => {
   assert.deepEqual(parseChartTimezoneLabel("UTC"), { label: "UTC", offsetMinutes: 0 });
@@ -235,4 +235,54 @@ test("the chart clock is asked for, parsed and used by the feed check", () => {
   assert.match(serverSource, /"chartClock": "HH:mm:ss exactly as printed/);
   assert.match(serverSource, /chartClock: isTradingChart && /);
   assert.match(serverSource, /liveCandleOpenTime\(\{/);
+});
+
+// First hour of a trading day: no finished candle yet today (DXY 2026-11-12 00:49 UTC had no entry).
+const candlesThroughWednesday = [
+  { datetime: "2026-11-10 23:00:00" },
+  { datetime: "2026-11-11 22:00:00" },
+  { datetime: "2026-11-11 23:00:00" },
+];
+test("in the first hour of the day the review is taken as of the end of the previous day", () => {
+  assert.deepEqual(
+    firstCandleOfDayGap({ endDateTime: "2026-11-12 00:49:59", timeframe: "H1", candles: candlesThroughWednesday }),
+    { endDateTime: "2026-11-11 23:59:59", resolvedDate: "2026-11-11" }
+  );
+  assert.deepEqual(
+    firstCandleOfDayGap({ endDateTime: "2026-11-12 00:14:59", timeframe: "M15", candles: candlesThroughWednesday }),
+    { endDateTime: "2026-11-11 23:59:59", resolvedDate: "2026-11-11" }
+  );
+  assert.deepEqual(
+    firstCandleOfDayGap({ endDateTime: "2026-11-12 00:00:30", timeframe: "1h", candles: candlesThroughWednesday }),
+    { endDateTime: "2026-11-11 23:59:59", resolvedDate: "2026-11-11" }
+  );
+});
+
+test("the first-hour roll-back does not apply when today already has a finished candle or the day is not a plain weekday", () => {
+  // The first H1 candle of the day has finished (it is 01:10): nothing to roll back.
+  assert.equal(firstCandleOfDayGap({ endDateTime: "2026-11-12 01:10:59", timeframe: "H1", candles: candlesThroughWednesday }), null);
+  // M15 chart at 00:20: the 00:00 candle is finished.
+  assert.equal(firstCandleOfDayGap({ endDateTime: "2026-11-12 00:20:59", timeframe: "M15", candles: candlesThroughWednesday }), null);
+  // The feed already holds a candle for today (a historical chart whose 00:00 candle is complete).
+  assert.equal(
+    firstCandleOfDayGap({ endDateTime: "2026-11-12 00:49:59", timeframe: "H1", candles: [...candlesThroughWednesday, { datetime: "2026-11-12 00:00:00" }] }),
+    null
+  );
+  // The feed stops earlier than yesterday: a different gap, not this one.
+  assert.equal(firstCandleOfDayGap({ endDateTime: "2026-11-12 00:49:59", timeframe: "H1", candles: [{ datetime: "2026-11-10 23:00:00" }] }), null);
+  // Monday (Sunday-evening open), Saturday, Sunday and crypto are left alone.
+  assert.equal(firstCandleOfDayGap({ endDateTime: "2026-11-09 00:30:00", timeframe: "H1", candles: [{ datetime: "2026-11-08 23:00:00" }] }), null);
+  assert.equal(firstCandleOfDayGap({ endDateTime: "2026-11-12 00:49:59", timeframe: "H1", candles: candlesThroughWednesday, tradesOnWeekends: true }), null);
+  // Frameworks that are not day-based (H4, D1) never roll back; end-of-day cutoffs neither.
+  assert.equal(firstCandleOfDayGap({ endDateTime: "2026-11-12 00:49:59", timeframe: "H4", candles: candlesThroughWednesday }), null);
+  assert.equal(firstCandleOfDayGap({ endDateTime: "2026-11-11 23:59:59", timeframe: "H1", candles: candlesThroughWednesday }), null);
+  assert.equal(firstCandleOfDayGap({ endDateTime: "", timeframe: "H1", candles: candlesThroughWednesday }), null);
+  assert.equal(firstCandleOfDayGap({}), null);
+});
+
+test("the first-hour roll-back is wired into the market-data fetch and can be switched off", () => {
+  assert.match(serverSource, /firstCandleOfDayGap\(\{/);
+  assert.match(serverSource, /FIRST_HOUR_ROLLBACK/);
+  assert.match(serverSource, /chartCutoff\.source = "chart-first-hour-previous-day"/);
+  assert.match(serverSource, /let resolvedAnalysisDate = parseISODateOnly\(chartCutoff\.resolvedDate\);/);
 });
