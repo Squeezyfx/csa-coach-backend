@@ -82,6 +82,7 @@ import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodW
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
+import { fetchHighImpactNews, describeNewsToday } from "./news-calendar.js";
 import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
@@ -26453,6 +26454,7 @@ function buildValidatedAnalysisFacts({
   submittedNotes = "",
   riskInputs = null,
   plannedTrade = null,
+  newsTodayLines = [],
 }) {
   const fallbackPreferredArea =
     visualReview?.preferredEntryArea &&
@@ -27417,6 +27419,8 @@ function buildValidatedAnalysisFacts({
     }),
     // Where and when the pair has moved most lately, from the candles this review already has (up to its
     // cutoff). Shown to Elite as "best time to watch"; it never touches the grade or the entries.
+    // Plain-words lines about scheduled high-impact news (Pro and Elite); empty when there is nothing to say.
+    newsTodayLines: Array.isArray(newsTodayLines) ? newsTodayLines.filter((line) => typeof line === "string" && line) : [],
     activityProfile: (() => {
       try {
         return buildActivityProfile({
@@ -29472,6 +29476,8 @@ function buildControlledFeedback({
     !facts?.risk?.targetShown
       ? ["- Stop loss, take profit, risk and trade management: not applicable yet, because no trade or plan has been entered. Suggested ones are under Next action."]
       : []),
+    // Scheduled high-impact news for this instrument (Pro and Elite). Left out when the calendar is off or down.
+    ...(Array.isArray(facts?.newsTodayLines) && facts.newsTodayLines.length ? ["", "NEWS TODAY:", ...facts.newsTodayLines] : []),
   ];
 
   const eliteSections = [
@@ -34162,6 +34168,25 @@ ${(visualReview?.strategyMissingInformation || []).length
     const setupScoreMatch = String(analysis).match(/Overall Setup Score:\s*\n- (\d+)\/10/i);
     const setupScore = setupScoreMatch ? Number(setupScoreMatch[1]) : 0;
 
+    // High-impact news for this instrument over the next day, from Finance Calendar. Only for a review taken
+    // about now (a historical chart says nothing about today's calendar), and only when FC_API_KEY is set.
+    // It can never fail a review: every problem returns no lines. NEWS_CALENDAR=off turns it off.
+    let newsTodayLines = [];
+    try {
+      const cutoffMs = Date.parse(String(chartCutoff?.endDateTime || "").replace(" ", "T") + "Z");
+      const reviewIsCurrent = !Number.isFinite(cutoffMs) || Math.abs(Date.now() - cutoffMs) < 36 * 3600000;
+      if (reviewIsCurrent && String(process.env.NEWS_CALENDAR || "on").toLowerCase() !== "off") {
+        const news = await fetchHighImpactNews({ symbol: normalizedSymbol || submittedInstrument, nowMs: Date.now() });
+        newsTodayLines = describeNewsToday(news, {
+          symbol: submittedInstrument || normalizedSymbol || "this instrument",
+          timezone: resolvedTimezone || "UTC",
+          nowMs: Date.now(),
+        });
+      }
+    } catch (error) {
+      console.log("[news] skipped:", error?.message || error);
+    }
+
     const analysisFacts = buildValidatedAnalysisFacts({
       visualReview,
       marketReference,
@@ -34174,6 +34199,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       submittedNotes,
       riskInputs: submittedRiskInputs,
       plannedTrade: submittedPlannedTrade,
+      newsTodayLines,
     });
 
     // Replace any model-suggested entry areas with the deterministic CSA
