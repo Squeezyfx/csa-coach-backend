@@ -353,7 +353,7 @@ export function reconcileWithHeaderFeedOffset({
  */
 export function verifyFeedPastCutoff({
   chartDataMatch, candles = [], header = null, cutoff = "", tolerance, maxOffset = null, onDiagnostic = null,
-  forming = null, selectiveTolerance = null,
+  forming = null, selectiveTolerance = null, clock = null, intervalMinutes = null,
 } = {}) {
   if (!chartDataMatch || !["mismatch", "date_unverified", "time_unverified", "partial_or_unknown_candle"]
     .includes(chartDataMatch.status)) {
@@ -415,6 +415,25 @@ export function verifyFeedPastCutoff({
       reason: "The screenshot runs past the chosen cutoff. Its header identified a real provider candle after the cutoff, so the feed is the chart's own; the review still uses only candles up to the cutoff.",
     };
   };
+  // The chart prints the time the screenshot was taken, and the header is the candle that time falls
+  // in (12:41 on an hourly chart: the 12:00 candle). That names the one candle to check, so similar
+  // quiet candles around it cannot make the proof ambiguous (AUDUSD 13 Nov: 4 candidates, 1 right).
+  const slot = candleSlotFromClock(clock, intervalMinutes);
+  if (slot) {
+    const pool = [...later];
+    if (forming && forming.datetime && FIELDS.every((f) => num(forming[f]) !== null) &&
+        normalizeCandleDatetime(forming.datetime) > limit) pool.push(forming);
+    const named = [];
+    for (const candle of pool.filter((c) => normalizeCandleDatetime(c.datetime).slice(11, 16) === slot)) {
+      const r = ohlcAligned(visible, candle, tightTolerance, { partial: true, maxOffset });
+      if (r.aligned && Math.abs(r.diffs?.open ?? Infinity) <= tightTolerance) named.push({ candle, ...r });
+    }
+    // One candle at that time of day per day: more than two fitting days is not an identification.
+    if (named.length >= 1 && named.length <= 2) {
+      named.sort((a, b) => Math.abs(a.diffs.open) - Math.abs(b.diffs.open));
+      return upgrade(named[0], "clock_candle", { clock, slot, named: named.length });
+    }
+  }
   if (!later.length && !formingHit) return finish("no_candles_after_cutoff");
   if (!hits.length && !formingHit && !grownHits.length) return finish("no_candle_after_cutoff_fits_header");
   hits.sort((a, b) => a.residual - b.residual || (normalizeCandleDatetime(a.candle.datetime) < normalizeCandleDatetime(b.candle.datetime) ? -1 : 1));
@@ -515,6 +534,26 @@ export function locateFinalVisibleCandle({
   }
   if (!completed.length && !formingHit) return { ok: false, reason: "no_candle_fits_header", window: usable.length };
   return { ok: false, reason: "ambiguous", hits: completed.length + (formingHit ? 1 : 0), window: usable.length };
+}
+
+/**
+ * "12:41:56" on a 60-minute chart is the "12:00" candle. Only intervals up to an hour, which start on
+ * clock multiples; 4-hour and daily candles start where the provider says, so nothing is named.
+ */
+export function intervalToMinutes(interval) {
+  const m = /^(\d+)\s*(min|m|h|hour)$/i.exec(String(interval || "").trim());
+  if (!m) return null;
+  const n = Number(m[1]);
+  return /^h/i.test(m[2]) ? n * 60 : n;
+}
+
+export function candleSlotFromClock(clock, intervalMinutes) {
+  const step = Number(intervalMinutes);
+  const t = /^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/.exec(String(clock || "").trim());
+  if (!t || !(step >= 1 && step <= 60) || 60 % step !== 0) return null;
+  const minutes = Number(t[1]) * 60 + Number(t[2]);
+  const start = Math.floor(minutes / step) * step;
+  return `${String(Math.floor(start / 60)).padStart(2, "0")}:${String(start % 60).padStart(2, "0")}`;
 }
 
 function normalizeCandleDatetime(value = "") {

@@ -28,7 +28,7 @@ import {
   describeAccount,
 } from "./indicator-access.js";
 import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields, supplementLivePeriod } from "./framework-periods.js";
-import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch, reconcileWithHeaderFeedOffset, verifyFeedPastCutoff, locateFinalVisibleCandle, FINAL_VISIBLE_LOOKBACK_DAYS } from "./candle-alignment.js";
+import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch, reconcileWithHeaderFeedOffset, verifyFeedPastCutoff, intervalToMinutes, locateFinalVisibleCandle, FINAL_VISIBLE_LOOKBACK_DAYS } from "./candle-alignment.js";
 import { periodCompleteAtCutoff } from "./period-completion.js";
 import { buildDateCheck, describeDateCheck } from "./date-check.js";
 import { isPrintedAxisTick } from "./axis-ticks.js";
@@ -32740,6 +32740,9 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
             // (the ATR-scaled tolerance below is too loose for a short window of later candles).
             forming: later.forming,
             selectiveTolerance: forexPipSize(normalizedSymbol) || null,
+            // The time printed on the chart clock names the candle the header shows.
+            clock: chartDetection?.chartClock || null,
+            intervalMinutes: intervalToMinutes(selectedTimeframeProfile.interval),
             header,
             cutoff: chartCutoff.endDateTime,
             tolerance: getFinalVisiblePriceSyncTolerance({ marketReference, symbol: normalizedSymbol, targetPrice: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice }),

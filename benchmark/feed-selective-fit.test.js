@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { verifyFeedPastCutoff } from "../candle-alignment.js";
+import { verifyFeedPastCutoff, candleSlotFromClock, intervalToMinutes } from "../candle-alignment.js";
 import { fetchLaterCandles } from "../oanda-data.js";
 import { isPrintedAxisTick } from "../axis-ticks.js";
 
@@ -187,4 +187,75 @@ test("many candles with the same open and a wide range are not selective", () =>
     chartDataMatch: unverified, candles: rows, header, cutoff: CUTOFF, tolerance: LOOSE, maxOffset: PIP * 5, selectiveTolerance: PIP,
   });
   assert.equal(r.status, "date_unverified");
+});
+
+// AUDUSD 13 Nov, reviewed at 14:26 from a 12:41 screenshot: four quiet candles look like the header.
+const lookalikes = () => [
+  ...Array.from({ length: 10 }, (_, i) => far(i)),
+  candle("2026-11-13 10:00:00", 0.67948, 0.67961, 0.67812, 0.67844),
+  candle("2026-11-13 11:00:00", 0.67950, 0.67990, 0.67860, 0.67960),
+  candle("2026-11-13 12:00:00", 0.67953, 0.68010, 0.67861, 0.67990), // the header's candle, grown since 12:41
+  far(13),
+];
+const formingLate = candle("2026-11-13 14:00:00", 0.67940, 0.67970, 0.67850, 0.67930);
+const lookalikeArgs = (extra = {}) => ({
+  chartDataMatch: unverified, candles: lookalikes(), header, cutoff: CUTOFF, tolerance: LOOSE, maxOffset: PIP * 5,
+  selectiveTolerance: PIP, forming: formingLate, ...extra,
+});
+
+test("without the clock, four lookalike candles are not selective", () => {
+  const r = verifyFeedPastCutoff(lookalikeArgs());
+  assert.equal(r.status, "date_unverified");
+});
+
+test("the chart clock names the header's candle, so lookalikes do not matter", () => {
+  let diag = null;
+  const r = verifyFeedPastCutoff(lookalikeArgs({ clock: "12:41:56", intervalMinutes: 60, onDiagnostic: (i) => (diag = i) }));
+  assert.equal(r.status, "matched_reference");
+  assert.equal(diag.basis, "clock_candle");
+  assert.equal(r.headerCandleDate, "2026-11-13 12:00:00");
+});
+
+test("a clock whose candle does not fit the header proves nothing", () => {
+  const r = verifyFeedPastCutoff(lookalikeArgs({ clock: "09:30:00", intervalMinutes: 60 }));
+  assert.equal(r.status, "date_unverified");
+});
+
+test("a clock with no matching candle after the cutoff falls through to the other rules", () => {
+  const r = verifyFeedPastCutoff(lookalikeArgs({ clock: "20:05:00", intervalMinutes: 60 }));
+  assert.equal(r.status, "date_unverified");
+});
+
+test("a clock candle must still hold the header's open and range", () => {
+  // Only the named candle is a lookalike, and it has the wrong open: nothing else may rescue the match.
+  const rows = lookalikes().map((c) => (c.datetime.endsWith("12:00:00") ? candle(c.datetime, 0.67900, 0.68300, 0.67700, 0.68000) : /(10|11):00:00$/.test(c.datetime) ? far(Number(c.datetime.slice(11, 13))) : c));
+  const r = verifyFeedPastCutoff(lookalikeArgs({ candles: rows, forming: null, clock: "12:41:56", intervalMinutes: 60 }));
+  assert.equal(r.status, "date_unverified");
+});
+
+test("the candle named by a clock", () => {
+  assert.equal(candleSlotFromClock("12:41:56", 60), "12:00");
+  assert.equal(candleSlotFromClock("12:41", 15), "12:30");
+  assert.equal(candleSlotFromClock("00:04:10", 5), "00:00");
+  assert.equal(candleSlotFromClock("12:41:56", 240), null);
+  assert.equal(candleSlotFromClock(null, 60), null);
+  assert.equal(candleSlotFromClock("25:61", 60), null);
+  assert.equal(candleSlotFromClock("12:41:56", 7), null);
+});
+
+test("chart timeframes as minutes", () => {
+  assert.equal(intervalToMinutes("1h"), 60);
+  assert.equal(intervalToMinutes("15min"), 15);
+  assert.equal(intervalToMinutes("5min"), 5);
+  assert.equal(intervalToMinutes("4h"), 240);
+  assert.equal(intervalToMinutes("1day"), null);
+  assert.equal(intervalToMinutes(""), null);
+});
+
+test("server: the chart clock and timeframe are passed to the past-cutoff check", () => {
+  const start = server.indexOf("const pastCutoffMatch = verifyFeedPastCutoff(");
+  assert.ok(start > 0);
+  const block = server.slice(start, start + 2200);
+  assert.match(block, /clock: chartDetection\?\.chartClock/);
+  assert.match(block, /intervalMinutes: intervalToMinutes\(selectedTimeframeProfile\.interval\)/);
 });
