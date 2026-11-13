@@ -43,6 +43,7 @@ export function buildCleanChart({
   timeframe = "",
   analysisType = "",
   dataMatchStatus = "",
+  entryWord = "Entry",
 } = {}) {
   const source = Array.isArray(marketReference?.timeframeCandles) ? marketReference.timeframeCandles : [];
   const rows = source
@@ -92,7 +93,7 @@ export function buildCleanChart({
   // Entries the framework selected.
   [finalFeedback?.entry1, finalFeedback?.entry2, finalFeedback?.entry3].forEach((entry, index) => {
     if (entry && finite(entry.authoritativeCenter)) {
-      add({ id: `E${index + 1}`, kind: "entry", style: "entry", label: `Entry ${index + 1}`, price: entry.authoritativeCenter });
+      add({ id: `E${index + 1}`, kind: "entry", style: "entry", label: `${entryWord} ${index + 1}`, price: entry.authoritativeCenter });
     }
   });
 

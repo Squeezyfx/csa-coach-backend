@@ -82,6 +82,7 @@ import { extractMt4PngMonthlyInventory, readMt4PriceAxisCalibration, readPeriodW
 import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
+import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "./entry-labels.js";
 import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
@@ -34240,6 +34241,15 @@ ${(visualReview?.strategyMissingInformation || []).length
 
     analysis = finalFeedback.analysis;
 
+    // "Buy 1" / "Sell 1" instead of "Entry 1" in what the trader reads (chart labels, legend, written
+    // feedback), so the direction is obvious to a beginner. Display only, applied at the very end; the engine,
+    // its logs and the saved numbers keep entry1 / entry2 / entry3. Benchmark runs keep the old wording so
+    // their output does not change. BUY_SELL_LABELS=off turns it off.
+    const entryWord =
+      String(process.env.BUY_SELL_LABELS || "on").toLowerCase() === "off" || benchmarkDryRun || benchmarkDiagnosticOnly
+        ? "Entry"
+        : entryWordForDirection(analysisFacts?.direction);
+
     const dashboardFeedback = applyControlledFeedbackToDashboard(
       legacyDashboardFeedback,
       finalFeedback
@@ -34289,6 +34299,7 @@ ${(visualReview?.strategyMissingInformation || []).length
         instrument: submittedInstrument,
         timeframe,
         analysisType: mode,
+        entryWord,
         dataMatchStatus: pageDataMatchStatus(
           marketReference?.chartDataMatch?.status,
           Boolean(marketReference?.dataProvider || marketReference?.chartDataMatch),
@@ -34556,13 +34567,13 @@ ${(visualReview?.strategyMissingInformation || []).length
           selectedDateText ||
           null,
         analysis:
-          normalizeUserFacingTypographyDeep(analysis),
+          normalizeUserFacingTypographyDeep(relabelEntriesDeep(analysis, entryWord)),
         chartDetection,
         visualReview:
           normalizeUserFacingTypographyDeep(visualReview),
         marketReference,
         dashboardFeedback:
-          normalizeUserFacingTypographyDeep(dashboardFeedback),
+          normalizeUserFacingTypographyDeep(relabelEntriesDeep(dashboardFeedback, entryWord)),
         dateDecision,
         analysisFramework:
           selectedStrategy.analysisFramework,
@@ -34591,7 +34602,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       }
     }
 
-    finalClientResponse = normalizeUserFacingTypographyDeep({
+    finalClientResponse = normalizeUserFacingTypographyDeep(relabelCustomerText({
       ...finalClientResponse,
       savedToJournal:
         journalSave.savedToJournal,
@@ -34603,7 +34614,7 @@ ${(visualReview?.strategyMissingInformation || []).length
         journalSave.chartImagePath,
       entitlement:
         updatedEntitlement,
-    });
+    }, entryWord));
 
     csaTimingLog(
       "total_analysis_to_commit",
