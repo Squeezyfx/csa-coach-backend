@@ -213,3 +213,16 @@ export async function fetchCandlesAfterCutoff({symbol,interval,cutoff,timezone='
  const series=await fetchOandaSeries({symbol,interval,startDate:cutoffText.slice(0,10),endDateTime:localString(endMs,timezone),timezone,token,environment,price,fetchImpl});
  return series.values.filter(row=>row.datetime>cutoffText);
 }
+
+// The same, plus the still-forming latest candle on its own. A screenshot taken within the last hours
+// shows that candle in its header, and a window of only a few completed candles is too small to prove
+// the feed by itself (see verifyFeedPastCutoff).
+export async function fetchLaterCandles({symbol,interval,cutoff,timezone='UTC',token,environment='practice',price='B',days=7,now=Date.now(),fetchImpl=fetch}={}){
+ const cutoffText=String(cutoff||'').slice(0,19);
+ const cutoffMs=localToUtc(cutoffText,timezone);
+ const endMs=Math.min(now,cutoffMs+days*86400000);
+ if(endMs<=cutoffMs)return {candles:[],forming:null};
+ const series=await fetchOandaSeries({symbol,interval,startDate:cutoffText.slice(0,10),endDateTime:localString(endMs,timezone),timezone,token,environment,price,fetchImpl});
+ const forming=series.alignmentCandle&&series.alignmentCandle.datetime>cutoffText?series.alignmentCandle:null;
+ return {candles:series.values.filter(row=>row.datetime>cutoffText),forming};
+}

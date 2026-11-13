@@ -1,6 +1,6 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
-import { fetchCandlesAfterCutoff, fetchOandaSeries, fetchRecentCandles, forexPipSize, oandaInstrument, isSyntheticInstrument } from "./oanda-data.js";
+import { fetchCandlesAfterCutoff, fetchLaterCandles, fetchOandaSeries, fetchRecentCandles, forexPipSize, oandaInstrument, isSyntheticInstrument } from "./oanda-data.js";
 import { chooseWatchReferences } from "./watch-references.js";
 import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage, shouldTagSignup } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
@@ -31,6 +31,7 @@ import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields
 import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch, reconcileWithHeaderFeedOffset, verifyFeedPastCutoff, locateFinalVisibleCandle, FINAL_VISIBLE_LOOKBACK_DAYS } from "./candle-alignment.js";
 import { periodCompleteAtCutoff } from "./period-completion.js";
 import { buildDateCheck, describeDateCheck } from "./date-check.js";
+import { isPrintedAxisTick } from "./axis-ticks.js";
 import { resolveFrameworkBias, calendarMapping, newWeekWithoutCompletedDay } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
@@ -26171,6 +26172,7 @@ function supplementReferencesWithExactChartLevels({
   direction = "range",
   currentPrice = null,
   symbol = "",
+  axisTickPrices = [],
 }) {
   const result = references.map((reference) => ({ ...reference }));
   const atr = averageTrueRange(
@@ -26352,6 +26354,12 @@ function supplementReferencesWithExactChartLevels({
     // period. Preserve it as reference-only so exact visible S/R is not lost.
     // It can never enter the candidate/Fib path from this reference function.
     if (!matchingFrameworkArea) {
+      // A "line" read exactly at a printed axis number, with no framework level behind it, is the
+      // axis number itself (AUDUSD, 13 Nov 2026: 0.68000 shown as "Level to watch" with no line drawn).
+      if (isPrintedAxisTick(price, axisTickPrices)) {
+        console.log("[axis-tick] ignored a line read at a printed axis number: " + price);
+        continue;
+      }
       const chartReferenceType = price < Number(currentPrice)
         ? "support"
         : "resistance";
@@ -26943,6 +26951,7 @@ function buildValidatedAnalysisFacts({
     direction: lockedMarketState.direction,
     currentPrice,
     symbol: submittedInstrument,
+    axisTickPrices: chartDetection?.priceAxisTicks,
   });
 
   logEntrySelectionAudit({
@@ -32714,7 +32723,7 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
           const header = Object.values(headerPrices).every((v) => Number(v) > 0)
             ? headerPrices
             : (await readChartHeaderOhlc({ imageBase64, mimeType })) || headerPrices;
-          const laterCandles = await fetchCandlesAfterCutoff({
+          const later = await fetchLaterCandles({
             symbol: normalizedSymbol,
             interval: selectedTimeframeProfile.interval,
             cutoff: chartCutoff.endDateTime,
@@ -32726,7 +32735,11 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
           const pastCutoffMatch = verifyFeedPastCutoff({
             onDiagnostic: (info) => console.log("[chart-data-match] past-cutoff feed check: " + JSON.stringify({ symbol: normalizedSymbol, status: chartDataMatch.status, cutoff: chartCutoff.endDateTime, header, ...info })),
             chartDataMatch,
-            candles: laterCandles,
+            candles: later.candles,
+            // The still-forming candle, and a one-pip tolerance for judging how selective the fit is
+            // (the ATR-scaled tolerance below is too loose for a short window of later candles).
+            forming: later.forming,
+            selectiveTolerance: forexPipSize(normalizedSymbol) || null,
             header,
             cutoff: chartCutoff.endDateTime,
             tolerance: getFinalVisiblePriceSyncTolerance({ marketReference, symbol: normalizedSymbol, targetPrice: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice }),

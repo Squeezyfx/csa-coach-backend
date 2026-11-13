@@ -345,9 +345,15 @@ export function reconcileWithHeaderFeedOffset({
  * candle that fits almost as well does not block the match, because only the feed is being
  * proven here, not which candle the header shows. Only a candle after the cutoff counts; a
  * header that matches nothing later leaves the status as it was.
+ *
+ * Short windows (a screenshot taken hours after the cutoff has only a few later candles) are judged
+ * at a tight tolerance instead, with the provider's still-forming candle as one more possible match:
+ * the loose ATR tolerance fits most of a few quiet candles (AUDUSD 13 Nov: 8 of 12) and used to end
+ * in "fit_not_selective", dropping the market data. A tight fit by one or two candles is enough.
  */
 export function verifyFeedPastCutoff({
   chartDataMatch, candles = [], header = null, cutoff = "", tolerance, maxOffset = null, onDiagnostic = null,
+  forming = null, selectiveTolerance = null,
 } = {}) {
   if (!chartDataMatch || !["mismatch", "date_unverified", "time_unverified", "partial_or_unknown_candle"]
     .includes(chartDataMatch.status)) {
@@ -367,36 +373,60 @@ export function verifyFeedPastCutoff({
     const r = ohlcAligned(visible, candle, tolerance, { maxOffset });
     if (r.aligned) hits.push({ candle, ...r });
   }
+  // The still-forming candle (the provider's incomplete latest one) is what a live screenshot's
+  // header usually shows. Its range only grows, so it must contain the header's high and low, and
+  // its open must track the header's open; that is judged at the tight tolerance below.
+  const tightTolerance = Number(selectiveTolerance) > 0 ? Number(selectiveTolerance) : tolerance * 0.25;
+  let formingHit = null;
+  if (forming && forming.datetime && FIELDS.every((f) => num(forming[f]) !== null) &&
+      normalizeCandleDatetime(forming.datetime) > limit) {
+    const r = ohlcAligned(visible, forming, tightTolerance, { partial: true, maxOffset });
+    if (r.aligned) formingHit = { candle: forming, ...r };
+  }
   const finish = (reason, extra = {}) => {
-    if (typeof onDiagnostic === "function") onDiagnostic({ reason, hits: hits.length, window: later.length, ...extra });
+    if (typeof onDiagnostic === "function") onDiagnostic({ reason, hits: hits.length, window: later.length, forming: Boolean(formingHit), ...extra });
     return chartDataMatch;
   };
-  if (!later.length) return finish("no_candles_after_cutoff");
-  if (!hits.length) return finish("no_candle_after_cutoff_fits_header");
+  const upgrade = (hit, basis, extra = {}) => {
+    if (typeof onDiagnostic === "function") {
+      onDiagnostic({ reason: "upgraded", basis, hits: hits.length, window: later.length, residual: hit.residual, offset: hit.offset, headerCandle: hit.candle.datetime, ...extra });
+    }
+    return {
+      ...chartDataMatch,
+      status: "matched_reference",
+      matchMode: "header_feed_past_cutoff",
+      feedOffset: hit.offset,
+      ohlcResidual: hit.residual,
+      headerCandleDate: hit.candle.datetime,
+      // The comparison that proved the feed: the header against the candle it identified.
+      comparisons: FIELDS.map((field) => ({ field, chart: visible[field], provider: num(hit.candle[field]) })),
+      tolerance,
+      priorStatus: chartDataMatch.status,
+      reason: "The screenshot runs past the chosen cutoff. Its header identified a real provider candle after the cutoff, so the feed is the chart's own; the review still uses only candles up to the cutoff.",
+    };
+  };
+  if (!later.length && !formingHit) return finish("no_candles_after_cutoff");
+  if (!hits.length && !formingHit) return finish("no_candle_after_cutoff_fits_header");
   hits.sort((a, b) => a.residual - b.residual || (normalizeCandleDatetime(a.candle.datetime) < normalizeCandleDatetime(b.candle.datetime) ? -1 : 1));
-  const hit = hits[0];
-  if (hit.residual > tolerance * 0.5) return finish("best_fit_too_loose", { residual: hit.residual });
+  const hit = hits[0] || null;
   // The candle's identity is not used (only that the chart is this feed), so a second candle that
   // fits nearly as well does not matter: on a quiet session several hourly candles look alike
   // within an ATR-scaled tolerance. What does matter is that the fit is selective. A shape that
   // fits most of the later candles proves nothing about the feed.
-  if (hits.length > later.length * 0.5) return finish("fit_not_selective", { residual: hit.residual });
-  if (typeof onDiagnostic === "function") {
-    onDiagnostic({ reason: "upgraded", hits: hits.length, window: later.length, residual: hit.residual, offset: hit.offset, headerCandle: hit.candle.datetime });
+  if (hit && hit.residual <= tolerance * 0.5 && hits.length <= later.length * 0.5) return upgrade(hit, "loose_fit");
+
+  // Short windows: a screenshot taken hours after the cutoff has only a few later candles, and a
+  // small still-forming header fits most of them within the loose tolerance (AUDUSD, 13 Nov: 8 of
+  // 12). Judge selectivity at the tight tolerance instead: only a candle that fits to a fraction of
+  // the loose tolerance counts, and it must be one of very few.
+  const tightHits = hits.filter((h) => h.residual <= tightTolerance);
+  const tightCount = tightHits.length + (formingHit ? 1 : 0);
+  if (tightCount >= 1 && tightCount <= Math.max(2, Math.floor(later.length * 0.25))) {
+    const proof = tightHits[0] && (!formingHit || tightHits[0].residual <= formingHit.residual) ? tightHits[0] : formingHit;
+    return upgrade(proof, tightHits[0] === proof ? "tight_fit" : "forming_candle", { tightHits: tightHits.length });
   }
-  return {
-    ...chartDataMatch,
-    status: "matched_reference",
-    matchMode: "header_feed_past_cutoff",
-    feedOffset: hit.offset,
-    ohlcResidual: hit.residual,
-    headerCandleDate: hit.candle.datetime,
-    // The comparison that proved the feed: the header against the candle it identified.
-    comparisons: FIELDS.map((field) => ({ field, chart: visible[field], provider: num(hit.candle[field]) })),
-    tolerance,
-    priorStatus: chartDataMatch.status,
-    reason: "The screenshot runs past the chosen cutoff. Its header identified a real provider candle after the cutoff, so the feed is the chart's own; the review still uses only candles up to the cutoff.",
-  };
+  if (hit && hit.residual > tolerance * 0.5 && !tightCount) return finish("best_fit_too_loose", { residual: hit.residual });
+  return finish("fit_not_selective", { residual: hit ? hit.residual : null, tightHits: tightHits.length });
 }
 
 /**
