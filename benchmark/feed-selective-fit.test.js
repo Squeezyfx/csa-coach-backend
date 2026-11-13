@@ -16,7 +16,7 @@ const CUTOFF = "2026-11-12 23:59:59";
 const LOOSE = 7 * PIP;
 
 // A completed candle that fits the header loosely (residual about 3 pips) but not tightly.
-const loose = (hour) => candle(`2026-11-13 ${String(hour).padStart(2, "0")}:00:00`, 0.67953, 0.6799, 0.6785, 0.679);
+const loose = (hour) => candle(`2026-11-13 ${String(hour).padStart(2, "0")}:00:00`, 0.67930, 0.6799, 0.6785, 0.679);
 // A candle nowhere near the header.
 const far = (hour) => candle(`2026-11-13 ${String(hour).padStart(2, "0")}:00:00`, 0.6821, 0.6828, 0.6815, 0.6824);
 // 12 later candles: eight fit loosely, four do not (the real log: hits 8 of window 12).
@@ -145,4 +145,46 @@ test("server: a line read at a printed axis number is not promoted to a level to
   const before = server.slice(start - 500, start);
   assert.match(before, /if \(!matchingFrameworkArea\) \{/, "only for a line with no framework level behind it");
   assert.match(server, /axisTickPrices: chartDetection\?\.priceAxisTicks,/);
+});
+
+// The review ran 13:30, an hour after the 12:41 screenshot: the header's candle (12:00) has completed
+// and grown, so the full four-price fit no longer holds, and the new 13:00 candle is not the header's.
+test("a completed candle that has grown past the header (same open, range contains it) proves the feed", () => {
+  const grown = candle("2026-11-13 12:00:00", 0.67953, 0.68010, 0.67861, 0.67990);
+  const rows = [...twelve().slice(0, 8), far(8), far(9), far(10), far(11), grown];
+  let diag = null;
+  const r = verifyFeedPastCutoff({
+    chartDataMatch: unverified, candles: rows, header, cutoff: CUTOFF, tolerance: LOOSE, maxOffset: PIP * 5,
+    selectiveTolerance: PIP, onDiagnostic: (i) => (diag = i),
+  });
+  assert.equal(r.status, "matched_reference");
+  assert.equal(diag.basis, "grown_candle");
+  assert.equal(r.headerCandleDate, "2026-11-13 12:00:00");
+});
+
+test("a candle with a different open is not a grown match, however wide its range", () => {
+  const wide = candle("2026-11-13 12:00:00", 0.67900, 0.68300, 0.67700, 0.68000);
+  const rows = [...twelve().slice(0, 8), far(8), far(9), far(10), far(11), wide];
+  const r = verifyFeedPastCutoff({
+    chartDataMatch: unverified, candles: rows, header, cutoff: CUTOFF, tolerance: LOOSE, maxOffset: PIP * 5, selectiveTolerance: PIP,
+  });
+  assert.equal(r.status, "date_unverified");
+});
+
+test("a candle whose range does not contain the header's is not a grown match", () => {
+  const narrow = candle("2026-11-13 12:00:00", 0.67953, 0.67958, 0.67900, 0.67930);
+  const rows = [...twelve().slice(0, 8), far(8), far(9), far(10), far(11), narrow];
+  const r = verifyFeedPastCutoff({
+    chartDataMatch: unverified, candles: rows, header, cutoff: CUTOFF, tolerance: LOOSE, maxOffset: PIP * 5, selectiveTolerance: PIP,
+  });
+  assert.equal(r.status, "date_unverified");
+});
+
+test("many candles with the same open and a wide range are not selective", () => {
+  const same = (h) => candle(`2026-11-13 ${String(h).padStart(2, "0")}:00:00`, 0.67953, 0.68100, 0.67700, 0.67990);
+  const rows = [same(0), same(1), same(2), same(3), same(4), same(5), far(6), far(7), far(8), far(9), far(10), far(11)];
+  const r = verifyFeedPastCutoff({
+    chartDataMatch: unverified, candles: rows, header, cutoff: CUTOFF, tolerance: LOOSE, maxOffset: PIP * 5, selectiveTolerance: PIP,
+  });
+  assert.equal(r.status, "date_unverified");
 });

@@ -383,6 +383,16 @@ export function verifyFeedPastCutoff({
     const r = ohlcAligned(visible, forming, tightTolerance, { partial: true, maxOffset });
     if (r.aligned) formingHit = { candle: forming, ...r };
   }
+  // A header is a snapshot of a candle that was still forming. By the time the review runs (often an
+  // hour or more later: AUDUSD 13 Nov, screenshot 12:41, review 13:30) that candle has completed and
+  // its range has grown, so a full four-price fit no longer holds. It is still recognisable: its open
+  // is the header's open (an open never moves) and its high and low contain the header's.
+  const grownHits = [];
+  for (const candle of later) {
+    const r = ohlcAligned(visible, candle, tightTolerance, { partial: true, maxOffset });
+    if (r.aligned && Math.abs(r.diffs?.open ?? Infinity) <= tightTolerance) grownHits.push({ candle, ...r });
+  }
+  grownHits.sort((a, b) => Math.abs(a.diffs.open) - Math.abs(b.diffs.open));
   const finish = (reason, extra = {}) => {
     if (typeof onDiagnostic === "function") onDiagnostic({ reason, hits: hits.length, window: later.length, forming: Boolean(formingHit), ...extra });
     return chartDataMatch;
@@ -406,7 +416,7 @@ export function verifyFeedPastCutoff({
     };
   };
   if (!later.length && !formingHit) return finish("no_candles_after_cutoff");
-  if (!hits.length && !formingHit) return finish("no_candle_after_cutoff_fits_header");
+  if (!hits.length && !formingHit && !grownHits.length) return finish("no_candle_after_cutoff_fits_header");
   hits.sort((a, b) => a.residual - b.residual || (normalizeCandleDatetime(a.candle.datetime) < normalizeCandleDatetime(b.candle.datetime) ? -1 : 1));
   const hit = hits[0] || null;
   // The candle's identity is not used (only that the chart is this feed), so a second candle that
@@ -420,13 +430,18 @@ export function verifyFeedPastCutoff({
   // 12). Judge selectivity at the tight tolerance instead: only a candle that fits to a fraction of
   // the loose tolerance counts, and it must be one of very few.
   const tightHits = hits.filter((h) => h.residual <= tightTolerance);
-  const tightCount = tightHits.length + (formingHit ? 1 : 0);
+  const seen = new Set(tightHits.map((h) => normalizeCandleDatetime(h.candle.datetime)));
+  const extraGrown = grownHits.filter((h) => !seen.has(normalizeCandleDatetime(h.candle.datetime)));
+  const tightCount = tightHits.length + extraGrown.length + (formingHit ? 1 : 0);
   if (tightCount >= 1 && tightCount <= Math.max(2, Math.floor(later.length * 0.25))) {
-    const proof = tightHits[0] && (!formingHit || tightHits[0].residual <= formingHit.residual) ? tightHits[0] : formingHit;
-    return upgrade(proof, tightHits[0] === proof ? "tight_fit" : "forming_candle", { tightHits: tightHits.length });
+    let proof = formingHit;
+    let basis = "forming_candle";
+    if (extraGrown[0] && !proof) { proof = extraGrown[0]; basis = "grown_candle"; }
+    if (tightHits[0] && (!proof || tightHits[0].residual <= proof.residual)) { proof = tightHits[0]; basis = "tight_fit"; }
+    return upgrade(proof, basis, { tightHits: tightHits.length, grownHits: extraGrown.length });
   }
   if (hit && hit.residual > tolerance * 0.5 && !tightCount) return finish("best_fit_too_loose", { residual: hit.residual });
-  return finish("fit_not_selective", { residual: hit ? hit.residual : null, tightHits: tightHits.length });
+  return finish("fit_not_selective", { residual: hit ? hit.residual : null, tightHits: tightHits.length, grownHits: extraGrown.length });
 }
 
 /**
