@@ -26199,6 +26199,17 @@ function supplementReferencesWithExactChartLevels({
         "per_target_framework_price_reader",
       ].includes(String(item?.extractionSource || ""))
     )
+    // The independent line reader sometimes returns a printed axis number as a "drawn line". Reconciling
+    // a framework level to it would move that level onto the axis number (AUDUSD, 13 Nov 2026: Thursday's
+    // low 0.67971 became "TP2 0.68000", three pips above the real low). A price read at a printed tick is
+    // not evidence of a drawn line, so it is set aside before any level is reconciled to it.
+    .filter((item) => {
+      if (String(item?.extractionSource || "") !== "independent_horizontal_line_reader_exact") return true;
+      const price = nullablePositiveNumber(item?.displayedPrice);
+      if (price === null || !isPrintedAxisTick(price, axisTickPrices)) return true;
+      console.log("[axis-tick] ignored a line read at a printed axis number: " + price);
+      return false;
+    })
     .map((item) => nullablePositiveNumber(item?.displayedPrice))
     .filter((price) => price !== null)
     .filter((price, index, prices) =>
