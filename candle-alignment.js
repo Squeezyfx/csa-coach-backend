@@ -393,13 +393,15 @@ export function verifyFeedPastCutoff({
     if (r.aligned && Math.abs(r.diffs?.open ?? Infinity) <= tightTolerance) grownHits.push({ candle, ...r });
   }
   grownHits.sort((a, b) => Math.abs(a.diffs.open) - Math.abs(b.diffs.open));
+  // What the chart clock contributed, shown in every diagnostic so a miss can be explained from the log.
+  let clockCheck = { clock: clock || null, intervalMinutes: intervalMinutes ?? null, slot: null };
   const finish = (reason, extra = {}) => {
-    if (typeof onDiagnostic === "function") onDiagnostic({ reason, hits: hits.length, window: later.length, forming: Boolean(formingHit), ...extra });
+    if (typeof onDiagnostic === "function") onDiagnostic({ reason, hits: hits.length, window: later.length, forming: Boolean(formingHit), clockCheck, ...extra });
     return chartDataMatch;
   };
   const upgrade = (hit, basis, extra = {}) => {
     if (typeof onDiagnostic === "function") {
-      onDiagnostic({ reason: "upgraded", basis, hits: hits.length, window: later.length, residual: hit.residual, offset: hit.offset, headerCandle: hit.candle.datetime, ...extra });
+      onDiagnostic({ reason: "upgraded", basis, hits: hits.length, window: later.length, residual: hit.residual, offset: hit.offset, headerCandle: hit.candle.datetime, clockCheck, ...extra });
     }
     return {
       ...chartDataMatch,
@@ -424,9 +426,16 @@ export function verifyFeedPastCutoff({
     if (forming && forming.datetime && FIELDS.every((f) => num(forming[f]) !== null) &&
         normalizeCandleDatetime(forming.datetime) > limit) pool.push(forming);
     const named = [];
+    // The candle is named by the clock, so only sanity bounds are needed: the feeds' opens may differ
+    // by a pip or two (the chart's feed is not the provider's), and its range must contain the header's.
+    const clockTolerance = tightTolerance * 2;
+    clockCheck = { clock, slot, candidates: [] };
     for (const candle of pool.filter((c) => normalizeCandleDatetime(c.datetime).slice(11, 16) === slot)) {
-      const r = ohlcAligned(visible, candle, tightTolerance, { partial: true, maxOffset });
-      if (r.aligned && Math.abs(r.diffs?.open ?? Infinity) <= tightTolerance) named.push({ candle, ...r });
+      const r = ohlcAligned(visible, candle, clockTolerance, { partial: true, maxOffset });
+      const openDiff = r.diffs?.open ?? null;
+      const ok = r.aligned && Math.abs(openDiff ?? Infinity) <= clockTolerance;
+      clockCheck.candidates.push({ at: candle.datetime, openDiff, ok, why: ok ? null : r.reason || "open_too_far" });
+      if (ok) named.push({ candle, ...r });
     }
     // One candle at that time of day per day: more than two fitting days is not an identification.
     if (named.length >= 1 && named.length <= 2) {

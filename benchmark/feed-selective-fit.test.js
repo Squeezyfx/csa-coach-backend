@@ -259,3 +259,24 @@ test("server: the chart clock and timeframe are passed to the past-cutoff check"
   assert.match(block, /clock: chartDetection\?\.chartClock/);
   assert.match(block, /intervalMinutes: intervalToMinutes\(selectedTimeframeProfile\.interval\)/);
 });
+
+test("the clock candle may differ from the header's open by a pip or two (the chart's feed is not the provider's)", () => {
+  // Open 1.5 pips away, range still contains the header's.
+  const rows = lookalikes().map((c) => (c.datetime.endsWith("12:00:00") ? candle(c.datetime, 0.67938, 0.68010, 0.67861, 0.67990) : /(10|11):00:00$/.test(c.datetime) ? far(Number(c.datetime.slice(11, 13))) : c));
+  let diag = null;
+  const r = verifyFeedPastCutoff(lookalikeArgs({ candles: rows, forming: null, clock: "12:41:56", intervalMinutes: 60, onDiagnostic: (i) => (diag = i) }));
+  assert.equal(r.status, "matched_reference");
+  assert.equal(diag.basis, "clock_candle");
+});
+
+test("every diagnostic says what the clock contributed, so a miss can be explained from the log", () => {
+  let diag = null;
+  verifyFeedPastCutoff(lookalikeArgs({ clock: "09:30:00", intervalMinutes: 60, onDiagnostic: (i) => (diag = i) }));
+  assert.equal(diag.clockCheck.slot, "09:00");
+  assert.equal(diag.clockCheck.candidates.length, 1);
+  assert.equal(diag.clockCheck.candidates[0].ok, false);
+  let none = null;
+  verifyFeedPastCutoff(lookalikeArgs({ onDiagnostic: (i) => (none = i) }));
+  assert.equal(none.clockCheck.clock, null);
+  assert.equal(none.clockCheck.slot, null);
+});
