@@ -34385,6 +34385,8 @@ ${(visualReview?.strategyMissingInformation || []).length
         timeframe,
         analysisType: mode,
         entryWord,
+        // Stop size on the stop tags ("Stop 1 (97.42 pts)"). CHART_STOP_DISTANCE=off hides it.
+        showStopDistance: String(process.env.CHART_STOP_DISTANCE || "").trim().toLowerCase() !== "off",
         dataMatchStatus: pageDataMatchStatus(
           marketReference?.chartDataMatch?.status,
           Boolean(marketReference?.dataProvider || marketReference?.chartDataMatch),

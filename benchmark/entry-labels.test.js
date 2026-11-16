@@ -87,7 +87,7 @@ test('the server applies it at the end of the review, skips benchmark runs and h
   assert.match(serverSource, /import \{ entryWordForDirection, relabelEntriesDeep, relabelCustomerText \} from "\.\/entry-labels\.js";/);
   assert.match(serverSource, /BUY_SELL_LABELS/);
   assert.match(serverSource, /benchmarkDryRun \|\| benchmarkDiagnosticOnly\s*\? "Entry"\s*: entryWordForDirection\(analysisFacts\?\.direction\)/);
-  assert.match(serverSource, /entryWord,\r?\n\s+dataMatchStatus: pageDataMatchStatus\(/);
+  assert.match(serverSource, /entryWord,\r?\n(?:\s+\/\/[^\n]*\n)?\s+showStopDistance: [^\n]+\n\s+dataMatchStatus: pageDataMatchStatus\(/);
   assert.match(serverSource, /relabelEntriesDeep\(analysis, entryWord\)/);
   assert.match(serverSource, /relabelEntriesDeep\(dashboardFeedback, entryWord\)/);
   assert.match(serverSource, /relabelCustomerText\(\{\s+\.\.\.finalClientResponse,/);

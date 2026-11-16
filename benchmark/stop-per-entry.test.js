@@ -110,6 +110,7 @@ test("the picture labels the stops by entry, and a single stop keeps its old lab
   const two = buildCleanChart({
     marketReference: { timeframeCandles: candles },
     finalFeedback: { entry1: { authoritativeCenter: 1.34475 }, entry2: { authoritativeCenter: 1.34318 }, chartGeometry: { trade: geometry } },
+    showStopDistance: false,
   });
   const labels = two.levels.map((level) => level.label);
   assert.ok(labels.includes("Stop 1") && labels.includes("Stop 2"));
@@ -120,6 +121,7 @@ test("the picture labels the stops by entry, and a single stop keeps its old lab
   const single = buildCleanChart({
     marketReference: { timeframeCandles: candles },
     finalFeedback: { entry1: { authoritativeCenter: 1.34475 }, chartGeometry: { trade: { ...geometry, backups: undefined } } },
+    showStopDistance: false,
   });
   assert.ok(single.levels.map((level) => level.label).includes("Suggested stop"));
 });

@@ -11,6 +11,8 @@
  * fraction of a pip to a few pips from their own platform. The page says so under the picture.
  */
 
+import { priceDistance } from "./trade-pillars.js";
+
 export const CLEAN_CHART_VERSION = "1.0.0";
 export const CLEAN_CHART_MAX_CANDLES = 150;
 const MIN_CANDLES = 10;
@@ -36,6 +38,15 @@ function sameLevel(a, b, range) {
   return Math.abs(a - b) <= Math.max(range * 0.004, Math.abs(a) * 0.00003);
 }
 
+// "97.4 points" on gold and indices, "12 pips" on forex pairs, shortened for the small name tag.
+// Empty when either price is missing, so a label never shows a made-up size.
+export function stopDistanceText(entryPrice, stopPrice, instrument = "") {
+  const a = num(entryPrice);
+  const b = num(stopPrice);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0 || a === b) return "";
+  return priceDistance(a - b, instrument).text.replace(/ points$/, " pts");
+}
+
 export function buildCleanChart({
   marketReference = null,
   finalFeedback = null,
@@ -44,6 +55,7 @@ export function buildCleanChart({
   analysisType = "",
   dataMatchStatus = "",
   entryWord = "Entry",
+  showStopDistance = true,
 } = {}) {
   const source = Array.isArray(marketReference?.timeframeCandles) ? marketReference.timeframeCandles : [];
   const rows = source
@@ -102,22 +114,30 @@ export function buildCleanChart({
     add({ id: "W", kind: "watch", style: "watch", label: "Level to watch", price: item.price });
   });
 
+  // The size of a stop, measured from the entry it belongs to: "Stop 1 (97.42 pts)".
+  const withSize = (label, entryPrice, stopPrice) => {
+    if (!showStopDistance) return label;
+    const size = stopDistanceText(entryPrice, stopPrice, instrument);
+    return size ? `${label} (${size})` : label;
+  };
+  const firstEntryPrice = finite(trade?.entry) ? trade.entry : finalFeedback?.entry1?.authoritativeCenter;
+
   if (trade && trade.kind === "placed") {
     add({ id: "TE", kind: "trade", style: "yourEntry", label: "Your entry", price: trade.entry });
-    if (finite(trade.stop)) add({ id: "TS", kind: "trade", style: "stop", label: "Your stop", price: trade.stop });
+    if (finite(trade.stop)) add({ id: "TS", kind: "trade", style: "stop", label: withSize("Your stop", trade.entry, trade.stop), price: trade.stop });
     (trade.targets || []).forEach((price) => add({ id: "TT", kind: "trade", style: "target", label: "Your take profit", price }));
   } else if (trade && trade.kind === "plan") {
     if (trade.entryTyped) add({ id: "TE", kind: "trade", style: "yourEntry", label: "Your entry", price: trade.entry });
-    if (finite(trade.stopTyped)) add({ id: "TS", kind: "trade", style: "stop", label: "Your stop", price: trade.stopTyped });
+    if (finite(trade.stopTyped)) add({ id: "TS", kind: "trade", style: "stop", label: withSize("Your stop", firstEntryPrice, trade.stopTyped), price: trade.stopTyped });
     if (finite(trade.targetTyped)) add({ id: "TT", kind: "trade", style: "target", label: "Your take profit", price: trade.targetTyped });
     // The coach's suggested exits, drawn lighter than the trader's own.
     // With backup entries each entry has its own stop: "Stop 1", "Stop 2", ... instead of one "Suggested stop".
     const backups = (Array.isArray(trade.backups) ? trade.backups : []).filter((item) => finite(item?.stop));
     if (finite(trade.stop) && !(finite(trade.stopTyped) && sameLevel(trade.stop, num(trade.stopTyped), range))) {
-      add({ id: "SS", kind: "plan", style: "planStop", label: backups.length ? "Stop 1" : "Suggested stop", price: trade.stop });
+      add({ id: "SS", kind: "plan", style: "planStop", label: withSize(backups.length ? "Stop 1" : "Suggested stop", firstEntryPrice, trade.stop), price: trade.stop });
     }
     backups.forEach((item) => {
-      add({ id: `SS${item.order}`, kind: "plan", style: "planStop", label: `Stop ${item.order}`, price: item.stop });
+      add({ id: `SS${item.order}`, kind: "plan", style: "planStop", label: withSize(`Stop ${item.order}`, item.entry, item.stop), price: item.stop });
     });
     const targets = Array.isArray(trade.targets) ? trade.targets : [];
     targets.forEach((price, index) => {
