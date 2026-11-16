@@ -60,6 +60,7 @@ import {
   getMarketDataSymbolCandidates,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
+  hasSupplyDemandFailed,
   isMostRecentStructureCompatibleImpulse,
   shouldApplyFinalVisibleTerminalImpulse,
   isSupportedInstrumentCode,
@@ -21209,6 +21210,14 @@ function deriveVerifiedFixedPeriodBias(options = {}) {
   return resolveFrameworkBias(options);
 }
 
+// How many closes in a row beyond a supply/demand zone fail it (default 2). ZONE_FAILURE_CLOSES=0 is off.
+function zoneFailureClosesSetting() {
+  const raw = String(process.env.ZONE_FAILURE_CLOSES ?? "2").trim().toLowerCase();
+  if (raw === "off") return 0;
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n >= 0 && n <= 10 ? n : 2;
+}
+
 function buildPeriodInventoryStructuralCandidates({
   periodInventory = [],
   visualReview = {},
@@ -21219,6 +21228,10 @@ function buildPeriodInventoryStructuralCandidates({
   inventoryProvenanceVerified = true,
   referencePeriods = [],
   verifiedReferencePeriods = [],
+  // Chart-timeframe candles up to the cutoff, and how many closes beyond a supply/demand
+  // zone fail it (0 = rule off). See hasSupplyDemandFailed.
+  executionCandles = [],
+  zoneFailureCloses = 0,
 } = {}) {
   // Independently verified per-period high/low (passed its own integrity
   // audit - see completedPeriodReferences) is strictly more trustworthy than
@@ -21293,11 +21306,47 @@ function buildPeriodInventoryStructuralCandidates({
     periods.map((period, index) => [String(period.periodLabel), index])
   );
 
+  const failedZoneCandidates = [];
   const periodCandidates = frameworkAreas.map((area) => {
     const price = asPositiveNumber(area?.price);
     const originalType = String(area?.type || "").toLowerCase();
     const periodLabel = String(area?.period || area?.day || "");
     const periodIndex = periodIndexByLabel.get(periodLabel) ?? -1;
+    // A supply or demand zone that price has closed beyond (zoneFailureCloses closes in a row on
+    // the chart timeframe) is spent: it is dropped here, never used and never converted into
+    // support/resistance. True support/resistance keeps its own conversion memory below.
+    if (
+      zoneFailureCloses > 0 &&
+      ["supply", "demand"].includes(originalType) &&
+      price !== null &&
+      periodIndex >= 0
+    ) {
+      const nextPeriod = periods[periodIndex + 1] || inProgressPeriods[0] || null;
+      const nextDate = normalizePeriodDateForCompare(nextPeriod?.date ?? nextPeriod?.key ?? "");
+      if (nextDate) {
+        const failure = hasSupplyDemandFailed({
+          type: originalType,
+          price,
+          candles: executionCandles,
+          afterDate: nextDate,
+          requiredCloses: zoneFailureCloses,
+        });
+        if (failure.failed) {
+          failedZoneCandidates.push({
+            price,
+            zoneLow: price,
+            zoneHigh: price,
+            areaType: originalType,
+            originalType,
+            sourcePeriod: periodLabel,
+            provenanceVerified: false,
+            requiresReview: false,
+            rejectionReason: `${originalType} zone failed: price closed beyond it ${zoneFailureCloses} times in a row (from ${failure.at})`,
+          });
+          return null;
+        }
+      }
+    }
     const laterPeriods = periodIndex >= 0 ? periods.slice(periodIndex + 1) : [];
     // The live period is never an entry source, but it can prove that an
     // earlier high/low has been broken. Without that confirmation a prior
@@ -21358,8 +21407,13 @@ function buildPeriodInventoryStructuralCandidates({
         : "unverified_chart_estimated_period_inventory",
       _sourcePeriodIndex: periodIndex,
     };
-  });
+  }).filter(Boolean);
 
+  if (failedZoneCandidates.length) {
+    console.log("[zone-failed] dropped failed supply/demand zones: " + JSON.stringify(
+      failedZoneCandidates.map((zone) => ({ period: zone.sourcePeriod, type: zone.areaType, price: zone.price, why: zone.rejectionReason }))
+    ));
+  }
   const rejectedPeriodCandidates = [];
   const referenceExtremes = (Array.isArray(referencePeriods) ? referencePeriods : [])
     .map((ref) => ({
@@ -21551,7 +21605,7 @@ function buildPeriodInventoryStructuralCandidates({
 
   return {
     candidates,
-    rejectedVisualCandidates: [...rejectedVisualCandidates, ...rejectedPeriodCandidates, ...supersededPeriodCandidates],
+    rejectedVisualCandidates: [...rejectedVisualCandidates, ...rejectedPeriodCandidates, ...supersededPeriodCandidates, ...failedZoneCandidates],
     periods,
     inProgressPeriods,
   };
@@ -21755,6 +21809,10 @@ function rankChartNativeFallbackAreas({
     verifiedReferencePeriods: Array.isArray(fallback?.completedPeriodReferences?.periods)
       ? fallback.completedPeriodReferences.periods
       : [],
+    // A supply/demand zone that price has closed beyond twice in a row is spent and is not used.
+    // ZONE_FAILURE_CLOSES=0 turns the rule off (back to the earlier behaviour); default 2.
+    executionCandles: Array.isArray(marketReference?.timeframeCandles) ? marketReference.timeframeCandles : [],
+    zoneFailureCloses: zoneFailureClosesSetting(),
   });
   if (inventoryAuthority === "provider_reference_provisional") {
     for (const candidate of authoritativeInventory.candidates) {
