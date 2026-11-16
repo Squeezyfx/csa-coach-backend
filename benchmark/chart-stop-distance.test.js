@@ -33,8 +33,13 @@ test("the stop tags carry the stop size measured from each stop's own entry (gol
   const chart = buildCleanChart({ marketReference: { timeframeCandles: candles(3800, 4750) }, finalFeedback: goldFeedback, instrument: "XAUUSD", entryWord: "Sell" });
   const labels = chart.levels.map((level) => level.label);
   assert.ok(labels.includes("Stop 1 (97.42 pts)"), labels.join(" | "));
-  // Stops 2 and 3 share one price, so they share one line, each keeping its own size.
-  assert.ok(labels.includes("Stop 2 (192.3 pts) / Stop 3 (116.2 pts)"), labels.join(" | "));
+  // Stops 2 and 3 share one price, so they share one line and one price tag. The sizes follow the
+  // names together, in the same order, so the shared price clearly belongs to both.
+  assert.ok(labels.includes("Stop 2 / Stop 3 (192.3 / 116.2 pts)"), labels.join(" | "));
+  const shared = chart.levels.find((level) => level.label.startsWith("Stop 2 / Stop 3"));
+  assert.equal(Math.round(shared.price * 100) / 100, 4890);
+  // The sizes are an internal detail and are not sent to the page as a separate field.
+  assert.ok(chart.levels.every((level) => !("sizes" in level) && !("size" in level)));
   // Entries and take profits are not touched.
   assert.ok(labels.includes("Sell 1") && labels.includes("Sell 2") && labels.includes("Sell 3"));
   assert.ok(labels.includes("TP1") && labels.includes("Final TP"));
@@ -62,6 +67,18 @@ test("a stop the trader actually placed shows its size too", () => {
     instrument: "EURUSD",
   });
   assert.ok(chart.levels.some((level) => level.label === "Your stop (20 pips)"));
+});
+
+test("two forex stops on one line read 'Stop 1 / Stop 2 (25 / 15 pips)'", () => {
+  const chart = buildCleanChart({
+    marketReference: { timeframeCandles: candles(1.10, 1.14) },
+    finalFeedback: {
+      entry1: { authoritativeCenter: 1.1130 },
+      chartGeometry: { trade: { kind: "plan", entry: 1.1130, stop: 1.1155, targets: [1.108], backups: [{ order: 2, entry: 1.1140, stop: 1.1155 }] } },
+    },
+    instrument: "EURUSD",
+  });
+  assert.ok(chart.levels.some((level) => level.label === "Stop 1 / Stop 2 (25 / 15 pips)"), chart.levels.map((l) => l.label).join(" | "));
 });
 
 test("the switch turns the sizes off and the old labels come back", () => {

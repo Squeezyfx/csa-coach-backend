@@ -96,10 +96,24 @@ export function buildCleanChart({
     // Two labels for one price share a line instead of drawing on top of each other.
     const twin = levels.find((existing) => existing.style === item.style && sameLevel(existing.price, price, range));
     if (twin) {
-      if (!twin.label.includes(item.label)) twin.label += ` / ${item.label}`;
+      if (!twin.label.includes(item.label)) {
+        twin.label += ` / ${item.label}`;
+        if (item.size) twin.sizes.push(item.size);
+      }
       return;
     }
-    levels.push({ ...item, price });
+    const { size, ...rest } = item;
+    levels.push({ ...rest, price, sizes: size ? [size] : [] });
+  };
+  // "Stop 2 / Stop 3" share one line and one price, so their sizes follow the names together:
+  // "Stop 2 / Stop 3 (192.3 / 116.2 pts)", with the shared price after it on the tag.
+  const labelWithSizes = (level) => {
+    const sizes = level.sizes || [];
+    if (!sizes.length) return level.label;
+    const unit = (text) => text.replace(/^[\d.,]+\s*/, "");
+    const sameUnit = sizes.length > 1 && sizes.every((text) => unit(text) === unit(sizes[0]));
+    const text = sameUnit ? `${sizes.map((s) => s.slice(0, s.length - unit(s).length).trim()).join(" / ")} ${unit(sizes[0])}` : sizes.join(" / ");
+    return `${level.label} (${text})`;
   };
 
   // Entries the framework selected.
@@ -115,29 +129,25 @@ export function buildCleanChart({
   });
 
   // The size of a stop, measured from the entry it belongs to: "Stop 1 (97.42 pts)".
-  const withSize = (label, entryPrice, stopPrice) => {
-    if (!showStopDistance) return label;
-    const size = stopDistanceText(entryPrice, stopPrice, instrument);
-    return size ? `${label} (${size})` : label;
-  };
+  const sizeOf = (entryPrice, stopPrice) => (showStopDistance ? stopDistanceText(entryPrice, stopPrice, instrument) : "");
   const firstEntryPrice = finite(trade?.entry) ? trade.entry : finalFeedback?.entry1?.authoritativeCenter;
 
   if (trade && trade.kind === "placed") {
     add({ id: "TE", kind: "trade", style: "yourEntry", label: "Your entry", price: trade.entry });
-    if (finite(trade.stop)) add({ id: "TS", kind: "trade", style: "stop", label: withSize("Your stop", trade.entry, trade.stop), price: trade.stop });
+    if (finite(trade.stop)) add({ id: "TS", kind: "trade", style: "stop", label: "Your stop", size: sizeOf(trade.entry, trade.stop), price: trade.stop });
     (trade.targets || []).forEach((price) => add({ id: "TT", kind: "trade", style: "target", label: "Your take profit", price }));
   } else if (trade && trade.kind === "plan") {
     if (trade.entryTyped) add({ id: "TE", kind: "trade", style: "yourEntry", label: "Your entry", price: trade.entry });
-    if (finite(trade.stopTyped)) add({ id: "TS", kind: "trade", style: "stop", label: withSize("Your stop", firstEntryPrice, trade.stopTyped), price: trade.stopTyped });
+    if (finite(trade.stopTyped)) add({ id: "TS", kind: "trade", style: "stop", label: "Your stop", size: sizeOf(firstEntryPrice, trade.stopTyped), price: trade.stopTyped });
     if (finite(trade.targetTyped)) add({ id: "TT", kind: "trade", style: "target", label: "Your take profit", price: trade.targetTyped });
     // The coach's suggested exits, drawn lighter than the trader's own.
     // With backup entries each entry has its own stop: "Stop 1", "Stop 2", ... instead of one "Suggested stop".
     const backups = (Array.isArray(trade.backups) ? trade.backups : []).filter((item) => finite(item?.stop));
     if (finite(trade.stop) && !(finite(trade.stopTyped) && sameLevel(trade.stop, num(trade.stopTyped), range))) {
-      add({ id: "SS", kind: "plan", style: "planStop", label: withSize(backups.length ? "Stop 1" : "Suggested stop", firstEntryPrice, trade.stop), price: trade.stop });
+      add({ id: "SS", kind: "plan", style: "planStop", label: backups.length ? "Stop 1" : "Suggested stop", size: sizeOf(firstEntryPrice, trade.stop), price: trade.stop });
     }
     backups.forEach((item) => {
-      add({ id: `SS${item.order}`, kind: "plan", style: "planStop", label: withSize(`Stop ${item.order}`, item.entry, item.stop), price: item.stop });
+      add({ id: `SS${item.order}`, kind: "plan", style: "planStop", label: `Stop ${item.order}`, size: sizeOf(item.entry, item.stop), price: item.stop });
     });
     const targets = Array.isArray(trade.targets) ? trade.targets : [];
     targets.forEach((price, index) => {
@@ -159,7 +169,9 @@ export function buildCleanChart({
   const pad = range * 0.6;
   const visible = [];
   const offChart = [];
-  for (const level of levels) {
+  for (const entry of levels) {
+    const { sizes, ...level } = entry;
+    level.label = labelWithSizes(entry);
     if (level.price >= low - pad && level.price <= high + pad) visible.push(level);
     else offChart.push({ label: level.label, price: level.price });
   }
