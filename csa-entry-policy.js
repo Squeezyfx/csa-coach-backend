@@ -1041,7 +1041,19 @@ export function aggregateH4CandlesIntoWeeklyInventory({
   // Monday's actual date instead - not by whether the candle's OWN month
   // matches - includes that opening week's earlier days correctly.
   const openingMonday = new Date(Date.UTC(cutoffYear, cutoffMonth, 1));
-  openingMonday.setUTCDate(openingMonday.getUTCDate() - ((openingMonday.getUTCDay() + 6) % 7));
+  const firstOfMonthWeekday = openingMonday.getUTCDay();
+  openingMonday.setUTCDate(openingMonday.getUTCDate() - ((firstOfMonthWeekday + 6) % 7));
+  // A month that opens on a Saturday or Sunday (November 2026, August 2026)
+  // has no session-market trading day in the Monday-Friday week that contains
+  // its 1st, so that week belongs to the previous month and W1 is the next
+  // Monday. framework-calendar.js calendarMapping already skips it for that
+  // reason; without the same rule here the inventory returned one more week
+  // than the calendar expected (4 vs 3 for November 2026), the date sequence
+  // failed, the weekly frame was never verified, and a clear breakdown got no
+  // entry area. Crypto trades weekends, so its weeks are left as they were.
+  if (!tradesOnWeekends && (firstOfMonthWeekday === 0 || firstOfMonthWeekday === 6)) {
+    openingMonday.setUTCDate(openingMonday.getUTCDate() + 7);
+  }
   const grouped = new Map();
 
   for (const candle of Array.isArray(candles) ? candles : []) {
