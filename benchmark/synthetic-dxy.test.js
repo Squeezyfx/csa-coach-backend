@@ -106,10 +106,48 @@ test('a moment missing for one pair is skipped, not guessed', async () => {
   assert.equal(first.close, Number(dxy(rates(2.5)).toFixed(4)));
 });
 
-test('candle sizes with no finer source are refused rather than invented', async () => {
+test('a monthly index candle is rolled up from H1 candles by calendar month (the framework candle of a daily chart)', async () => {
+  // USDINDEX D1 on 17 Nov 2026 failed with "not available for this candle size": every daily chart asks for monthly framework candles.
+  const calls = [];
+  const firstMs = Date.UTC(2026, 9, 30, 0, 0, 0); // 30 Oct 00:00, 96 hourly candles to 3 Nov 00:00
+  const result = await fetchOandaSeries({
+    symbol: 'USDINDEX', interval: '1month', startDate: '2026-10-01', endDateTime: '2026-12-05 00:00:00', token: 'test',
+    fetchImpl: makeFetch({ firstMs, count: 96, minutes: 60, calls }),
+  });
+  assert.ok(calls.length === 6 && calls.every((c) => c.granularity === 'H1'));
+  assert.equal(result.synthetic, true);
+  assert.deepEqual(result.values.map((v) => v.datetime), ['2026-10-01 00:00:00', '2026-11-01 00:00:00']);
+  const [oct, nov] = result.values;
+  const rates = (n) => Object.fromEntries(Object.keys(BASE).map((pair) => [pair, rateAt(pair, n)]));
+  // October holds hourly candles 0..47 and November 48..95; EUR_USD only rises so the index only falls.
+  assert.equal(oct.open, Number(dxy(rates(0)).toFixed(4)));
+  assert.equal(oct.close, Number(dxy(rates(47.5)).toFixed(4)));
+  assert.equal(oct.high, oct.open);
+  assert.equal(oct.low, oct.close);
+  assert.equal(nov.open, Number(dxy(rates(48)).toFixed(4)));
+  assert.equal(nov.close, Number(dxy(rates(95.5)).toFixed(4)));
+});
+
+test('the month still running at a live cutoff is the comparison candle, not part of the history', async () => {
+  const realNow = Date.now;
+  Date.now = () => Date.UTC(2026, 10, 17, 2, 55, 0);
+  try {
+    const firstMs = Date.UTC(2026, 9, 30, 0, 0, 0);
+    const result = await fetchOandaSeries({
+      symbol: 'DXY', interval: '1month', startDate: '2026-10-01', endDateTime: '2026-11-17 02:54:59', token: 'test',
+      fetchImpl: makeFetch({ firstMs, count: 24 * 19, minutes: 60 }),
+    });
+    assert.deepEqual(result.values.map((v) => v.datetime), ['2026-10-01 00:00:00']);
+    assert.equal(result.alignmentCandle.datetime, '2026-11-01 00:00:00');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('a size OANDA has no code for is still refused rather than invented', async () => {
   await assert.rejects(
-    fetchOandaSeries({ symbol: 'DXY', interval: '1month', startDate: '2026-01-01', endDateTime: '2026-11-10 22:30:59', token: 'test', fetchImpl: async () => { throw new Error('should not be called'); } }),
-    (e) => e.category === 'symbol_unavailable'
+    fetchOandaSeries({ symbol: 'DXY', interval: '1year', startDate: '2026-01-01', endDateTime: '2026-11-10 22:30:59', token: 'test', fetchImpl: async () => { throw new Error('should not be called'); } }),
+    (e) => /Unsupported OANDA candle interval/.test(e.message)
   );
 });
 

@@ -25,7 +25,9 @@ export const DXY_INSTRUMENT='DXY_INDEX';
 // ICE US Dollar Index formula: 50.14348112 x EURUSD^-0.576 x USDJPY^0.136 x GBPUSD^-0.119 x USDCAD^0.091 x USDSEK^0.042 x USDCHF^0.036.
 const DXY_FORMULA={constant:50.14348112,parts:[['EUR_USD',-0.576],['USD_JPY',0.136],['GBP_USD',-0.119],['USD_CAD',0.091],['USD_SEK',0.042],['USD_CHF',0.036]]};
 // Finer candles the index is computed from, then rolled up to the requested candle size.
-const SYNTHETIC_FINER={'1min':'1min','5min':'1min','15min':'5min','30min':'5min','1h':'15min','4h':'15min','1day':'1h','1week':'4h'};
+// '1month' (the framework candle of every daily chart) is built from hourly candles: a month's high and low then sit
+// within a few hundredths of a point of the true ones, closer than a daily roll-up would.
+const SYNTHETIC_FINER={'1min':'1min','5min':'1min','15min':'5min','30min':'5min','1h':'15min','4h':'15min','1day':'1h','1week':'4h','1month':'1h'};
 export function oandaInstrument(symbol='') {
  const raw=String(symbol).toUpperCase().replace(/^#/,'').replace(/[/_]/g,'');
  if(CFD_INSTRUMENTS[raw])return CFD_INSTRUMENTS[raw];
@@ -99,9 +101,15 @@ function endOfCandle(start,granularity,timezone){
 const BUCKET_MINUTES={'1min':1,'5min':5,'15min':15,'30min':30,'1h':60,'4h':240,'1day':1440,'1week':10080};
 // Wall-clock helpers for 'YYYY-MM-DD HH:MM:SS' strings that are already in the requested timezone.
 function addMinutesLocal(text,minutes){const d=new Date(text.replace(' ','T')+'Z');d.setUTCMinutes(d.getUTCMinutes()+minutes);return d.toISOString().slice(0,19).replace('T',' ');}
+// Where a candle that starts at `start` ends. A month is not a fixed number of minutes.
+function bucketEndLocal(start,interval){
+ if(interval==='1month'){const d=new Date(start.replace(' ','T')+'Z');d.setUTCMonth(d.getUTCMonth()+1);return d.toISOString().slice(0,19).replace('T',' ');}
+ return addMinutesLocal(start,BUCKET_MINUTES[interval]);
+}
 function bucketStartLocal(text,interval){
  const date=text.slice(0,10);
  if(interval==='1day')return `${date} 00:00:00`;
+ if(interval==='1month')return `${date.slice(0,7)}-01 00:00:00`;
  if(interval==='1week'){const d=new Date(`${date}T00:00:00Z`);d.setUTCDate(d.getUTCDate()-(d.getUTCDay()+6)%7);return `${d.toISOString().slice(0,10)} 00:00:00`;}
  const minutes=Number(text.slice(11,13))*60+Number(text.slice(14,16)),size=BUCKET_MINUTES[interval],start=minutes-minutes%size;
  return `${date} ${String(Math.floor(start/60)).padStart(2,'0')}:${String(start%60).padStart(2,'0')}:00`;
@@ -129,7 +137,7 @@ async function fetchSyntheticDxy({interval,startDate,endDateTime,timezone='UTC',
  const round=row=>({datetime:row.datetime,open:Number(row.open.toFixed(4)),high:Number(row.high.toFixed(4)),low:Number(row.low.toFixed(4)),close:Number(row.close.toFixed(4))});
  const values=[];let alignmentCandle=null;
  for(const row of [...buckets.values()].sort((a,b)=>a.datetime.localeCompare(b.datetime))){
-  const forming=addMinutesLocal(row.datetime,BUCKET_MINUTES[interval])>cutoff;
+  const forming=bucketEndLocal(row.datetime,interval)>cutoff;
   if(forming&&isLiveWindow){alignmentCandle=round(row);continue;}
   values.push(round(row));
  }
