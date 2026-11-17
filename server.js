@@ -86,7 +86,7 @@ import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
 import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "./entry-labels.js";
 import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt } from "./chart-timezone.js";
-import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle } from "./feed-price-guard.js";
+import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
 import crypto from "crypto";
@@ -33664,9 +33664,14 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
           return Math.abs(chartValue - providerValue) / Math.abs(chartValue);
         })
         .filter((value) => value !== null);
-      const sameInstrumentConfirmed =
-        feedDeviations.length > 0 &&
-        feedDeviations.every((value) => value <= SAME_INSTRUMENT_TOLERANCE_RATIO);
+      // When the chart's last candle could not be lined up with the data's (date/time unverified), only the
+      // close is compared: the chart's open/high/low can belong to a different session (see the function).
+      const sameInstrumentCheck = sameInstrumentFromFeed({
+        comparisons: feedComparisons,
+        status: marketReference?.chartDataMatch?.status,
+        ratio: SAME_INSTRUMENT_TOLERANCE_RATIO,
+      });
+      const sameInstrumentConfirmed = sameInstrumentCheck.confirmed;
       const providerInventoryAuthoritative =
         marketReference?.ok === true &&
         Array.isArray(marketReference?.providerPeriodAnalysis?.periods) &&
@@ -33717,6 +33722,11 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
         dataMatchStatus: marketReference?.chartDataMatch?.status || null,
         maxFeedDeviationPct: feedDeviations.length
           ? Number((Math.max(...feedDeviations) * 100).toFixed(4)) : null,
+        // Which prices were compared and which were judged (log only): the close alone when the chart's
+        // candle is not lined up with the data's.
+        feedComparisons: feedComparisons.map((item) => ({ field: item?.field, chart: item?.chart, provider: item?.provider })),
+        feedCandle: marketReference?.chartDataMatch?.candleDate || null,
+        closeOnly: sameInstrumentCheck.closeOnly,
         sameInstrumentConfirmed,
         providerInventoryAuthoritative,
         marketInventoryVerified,
