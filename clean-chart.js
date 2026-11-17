@@ -38,7 +38,7 @@ function sameLevel(a, b, range) {
   return Math.abs(a - b) <= Math.max(range * 0.004, Math.abs(a) * 0.00003);
 }
 
-// "97.4 points" on gold and indices, "12 pips" on forex pairs, shortened for the small name tag.
+// "974 pips" on gold, "45 pips" on the dollar index and forex pairs; "0.8 pts" on silver, crypto and other indices. Shortened for the small name tag.
 // Empty when either price is missing, so a label never shows a made-up size.
 export function stopDistanceText(entryPrice, stopPrice, instrument = "") {
   const a = num(entryPrice);
