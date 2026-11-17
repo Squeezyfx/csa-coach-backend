@@ -85,7 +85,7 @@ import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
 import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "./entry-labels.js";
-import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt } from "./chart-timezone.js";
+import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
@@ -32096,6 +32096,31 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
           deviceTimezone: resolvedTimezone,
         });
         chartDetection = { ...chartDetection, chartTimezone: inferredTimezone, chartTimezoneInferred: true };
+      }
+    }
+
+    // LIVE CLOCK DATE. A printed clock that matches the server's own clock means the screenshot is minutes
+    // old, so its last candle is today's, however far out the reader's month-label guess was (a dollar-index
+    // chart read as 16 Nov and USDCHF as 14 Nov at 02:47 UTC on 17 Nov: the review was cut off early, the
+    // feed no longer matched the chart and no entries were selected). Only replaces a date that was inferred,
+    // never an explicit one, and never on a weekend. LIVE_CLOCK_DATE=off turns it off.
+    if (String(process.env.LIVE_CLOCK_DATE || "on").toLowerCase() !== "off" && normalizedRequestedCutoffMode === "final_visible") {
+      const clockDate = liveClockDate({ chartDetection, chartTimezone: chartDetection?.chartTimezone, nowMs: Date.now() });
+      if (clockDate) {
+        console.log("[chart-date] the chart's clock matches the server's clock, so the screenshot is from today:", {
+          readDate: clockDate.readDate,
+          usedInstead: clockDate.date,
+          chartClock: chartDetection?.chartClock || null,
+          chartTimezone: chartDetection?.chartTimezone || null,
+        });
+        chartDetection = {
+          ...chartDetection,
+          latestVisibleDate: clockDate.date,
+          dateConfidence: "high",
+          latestVisibleDateEvidence: "explicit_final_candle_timestamp",
+          dateReadByChartReader: clockDate.readDate,
+          dateFromLiveClock: true,
+        };
       }
     }
 

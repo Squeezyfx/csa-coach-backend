@@ -103,6 +103,38 @@ export function isFreshChartClock({ chartDetection, chartTimezone, nowMs, resolv
   return age !== null && age >= -futureMinutes && age < freshMinutes;
 }
 
+// A printed clock that matches the server's own clock means the screenshot was taken minutes ago, so its
+// last candle is TODAY's, whatever date the chart reader guessed from month labels. A reader that sees
+// only "Nov" on a daily chart can be days out: at 02:47 UTC on 17 Nov a dollar-index chart was read as
+// 16 Nov and USDCHF as 14 Nov, which cut the review off a day or three early, left the feed unmatched
+// and gave no entries. Returns { date, readDate, ageMinutes } when the reader's date is replaced by
+// today's date in the chart's timezone, or null (reader's date already right, evidence explicit, no
+// trustworthy clock or timezone, a clock that is not fresh, or a weekend where the last candle is Friday's).
+const EXPLICIT_DATE_EVIDENCE = ["explicit_final_candle_timestamp", "verified_axis_bar_count", "verified_single_anchor_pixel_count", "verified_multi_anchor_axis_count"];
+export function liveClockDate({ chartDetection, chartTimezone, nowMs, freshMinutes = 45, futureMinutes = 10 } = {}) {
+  const chart = parseChartTimezoneLabel(chartTimezone);
+  const clock = chartClockTime(chartDetection);
+  if (!chart || !clock || !clock.fromClock || !Number.isFinite(nowMs)) return null;
+  if (EXPLICIT_DATE_EVIDENCE.includes(String(chartDetection?.latestVisibleDateEvidence || ""))) return null;
+  const readDate = String(chartDetection?.latestVisibleDate || "").trim();
+  const hour = Number(clock.time.slice(0, 2));
+  const minute = Number(clock.time.slice(3, 5));
+  // Today's date in the chart's own timezone, then the neighbours (a clock just either side of midnight).
+  const chartNow = new Date(nowMs + chart.offsetMinutes * 60000);
+  const base = Date.UTC(chartNow.getUTCFullYear(), chartNow.getUTCMonth(), chartNow.getUTCDate());
+  for (const dayShift of [0, -1, 1]) {
+    const day = new Date(base + dayShift * 86400000);
+    const instant = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), hour, minute, 59) - chart.offsetMinutes * 60000;
+    const age = (nowMs - instant) / 60000;
+    if (age < -futureMinutes || age >= freshMinutes) continue;
+    // Saturday and Sunday: markets are shut, the last candle is Friday's, so today's date is not the candle's date.
+    if (day.getUTCDay() === 0 || day.getUTCDay() === 6) return null;
+    const date = day.toISOString().slice(0, 10);
+    return date === readDate ? null : { date, readDate: readDate || null, ageMinutes: Math.round(age) || 0 };
+  }
+  return null;
+}
+
 // A screenshot cannot be from the future. True when the chart's date (and clock, when readable) lies
 // ahead of the server's now. Without a printed timezone the furthest-ahead timezone (UTC+14) is allowed.
 export function chartDateIsInFuture({ chartDetection, chartTimezone, nowMs, graceMinutes = 10, unprintedMaxOffsetMinutes = 14 * 60 } = {}) {
