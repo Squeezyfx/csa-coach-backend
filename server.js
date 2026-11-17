@@ -33717,6 +33717,9 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
         dataMatchStatus: marketReference?.chartDataMatch?.status || null,
         maxFeedDeviationPct: feedDeviations.length
           ? Number((Math.max(...feedDeviations) * 100).toFixed(4)) : null,
+        // Which price disagrees, and against which provider candle (log only, changes no decision).
+        feedComparisons: feedComparisons.map((item) => ({ field: item?.field, chart: item?.chart, provider: item?.provider })),
+        feedCandle: marketReference?.chartDataMatch?.candleDate || null,
         sameInstrumentConfirmed,
         providerInventoryAuthoritative,
         marketInventoryVerified,
