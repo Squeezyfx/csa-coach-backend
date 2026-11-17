@@ -63,3 +63,31 @@ export function correctPriceSlipAgainstLiveCandle({ price, liveClose, limit = SL
   const small = 10 ** (magnitude - 3);
   return pick([round(chart - small), round(chart + small)]);
 }
+
+// Does the chart show the same instrument as the market data? Wrong-symbol charts are off by whole percent,
+// a feed difference by a fraction of one, so every compared price must sit within `ratio` (0.5%) of price.
+// When the chart's last candle could not be lined up with the data's candle (the status is date/time
+// unverified), only the close is comparable: the printed open/high/low describe the chart's own candle,
+// which can be a different session from the data's day. Gold and FX charts start a new daily candle at
+// 17:00 New York (22:00 UTC), so for the first two hours of the UTC day the chart's candle is only minutes old
+// while the data's day candle is already a full day, and open/high/low are tens of points apart on the same
+// instrument. Env FEED_CLOSE_ONLY_WHEN_UNALIGNED=off restores comparing every price.
+export function sameInstrumentFromFeed({ comparisons = [], status = "", ratio = 0.005 } = {}) {
+  const unaligned = APPROXIMATE_FEED_UNVERIFIED.includes(String(status || ""));
+  const closeOnly = unaligned && String(process.env.FEED_CLOSE_ONLY_WHEN_UNALIGNED || "on").trim().toLowerCase() !== "off";
+  const deviations = (Array.isArray(comparisons) ? comparisons : [])
+    .filter((item) => !closeOnly || item?.field === "close")
+    .map((item) => {
+      const chartValue = Number(item?.chart);
+      const providerValue = Number(item?.provider);
+      if (!Number.isFinite(chartValue) || !Number.isFinite(providerValue) || chartValue === 0) return null;
+      return Math.abs(chartValue - providerValue) / Math.abs(chartValue);
+    })
+    .filter((value) => value !== null);
+  return {
+    deviations,
+    maxDeviation: deviations.length ? Math.max(...deviations) : null,
+    confirmed: deviations.length > 0 && deviations.every((value) => value <= ratio),
+    closeOnly,
+  };
+}

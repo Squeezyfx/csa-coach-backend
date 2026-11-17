@@ -81,3 +81,60 @@ test("a computed feed (the US Dollar Index) does not show the lower-confidence w
 test("the clean chart is told the instrument's feed is computed", () => {
   assert.match(serverSource, /isSyntheticInstrument\(submittedInstrument\)/);
 });
+
+import { sameInstrumentFromFeed } from "../feed-price-guard.js";
+
+// XAUUSD 17 Nov 23:20 UTC: the chart's daily candle had only been open since 22:00 UTC (range 10), the data's
+// day candle was the whole UTC day. Close agrees (0.2%), open/high/low are tens of points apart.
+const goldLate = [
+  { field: "close", chart: 3854.63, provider: 3846.8026 },
+  { field: "open", chart: 3848.97, provider: 3885.3 },
+  { field: "high", chart: 3855.54, provider: 3901.2 },
+  { field: "low", chart: 3845.4, provider: 3833.7 },
+];
+
+test("an unaligned chart candle is judged on its close only, so a new-session candle does not fail gold", () => {
+  const result = sameInstrumentFromFeed({ comparisons: goldLate, status: "date_unverified" });
+  assert.equal(result.confirmed, true);
+  assert.equal(result.closeOnly, true);
+  assert.equal(result.deviations.length, 1);
+});
+
+test("an aligned or matched chart keeps every price in the check", () => {
+  for (const status of ["matched_reference", "partial_reference", "mismatch"]) {
+    const result = sameInstrumentFromFeed({ comparisons: goldLate, status });
+    assert.equal(result.confirmed, false, status);
+    assert.equal(result.closeOnly, false, status);
+    assert.ok(result.maxDeviation > 0.005, status);
+  }
+});
+
+test("a wrong-symbol chart (close off by whole percent) still fails even when unaligned", () => {
+  const wrong = [{ field: "close", chart: 1.0850, provider: 1.1130 }, { field: "open", chart: 1.0830, provider: 1.1100 }];
+  assert.equal(sameInstrumentFromFeed({ comparisons: wrong, status: "date_unverified" }).confirmed, false);
+  // Gold read from a silver-priced chart, and no comparisons at all, are not confirmed either.
+  assert.equal(sameInstrumentFromFeed({ comparisons: [{ field: "close", chart: 30, provider: 3846 }], status: "time_unverified" }).confirmed, false);
+  assert.equal(sameInstrumentFromFeed({ comparisons: [], status: "date_unverified" }).confirmed, false);
+});
+
+test("unchanged for the passing gold case (all four prices within 0.09%) and the off switch restores the old check", () => {
+  const ok = [
+    { field: "close", chart: 3866.58, provider: 3867.1 },
+    { field: "open", chart: 3883.89, provider: 3884.3 },
+    { field: "high", chart: 3901.23, provider: 3900.0 },
+    { field: "low", chart: 3832.541, provider: 3833.0 },
+  ];
+  assert.equal(sameInstrumentFromFeed({ comparisons: ok, status: "date_unverified" }).confirmed, true);
+  const before = process.env.FEED_CLOSE_ONLY_WHEN_UNALIGNED;
+  process.env.FEED_CLOSE_ONLY_WHEN_UNALIGNED = "off";
+  try {
+    assert.equal(sameInstrumentFromFeed({ comparisons: goldLate, status: "date_unverified" }).confirmed, false);
+  } finally {
+    if (before === undefined) delete process.env.FEED_CLOSE_ONLY_WHEN_UNALIGNED; else process.env.FEED_CLOSE_ONLY_WHEN_UNALIGNED = before;
+  }
+});
+
+test("server wiring: the same-instrument check uses sameInstrumentFromFeed", () => {
+  const server = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  assert.match(server, /sameInstrumentFromFeed\(\{\s*comparisons: feedComparisons,\s*status: marketReference\?\.chartDataMatch\?\.status/);
+});
