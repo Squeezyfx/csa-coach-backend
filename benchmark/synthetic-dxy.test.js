@@ -114,7 +114,8 @@ test('a monthly index candle is rolled up from H1 candles by calendar month (the
     symbol: 'USDINDEX', interval: '1month', startDate: '2026-10-01', endDateTime: '2026-12-05 00:00:00', token: 'test',
     fetchImpl: makeFetch({ firstMs, count: 96, minutes: 60, calls }),
   });
-  assert.ok(calls.length === 6 && calls.every((c) => c.granularity === 'H1'));
+  assert.equal(new Set(calls.map((c) => c.pair)).size, 6);
+  assert.ok(calls.every((c) => c.granularity === 'H1'));
   assert.equal(result.synthetic, true);
   assert.deepEqual(result.values.map((v) => v.datetime), ['2026-10-01 00:00:00', '2026-11-01 00:00:00']);
   const [oct, nov] = result.values;
@@ -160,4 +161,65 @@ test('a daily index candle is rolled up from H1 candles by calendar day', async 
   });
   assert.ok(calls.every((c) => c.granularity === 'H1'));
   assert.deepEqual(result.values.map((v) => v.datetime), ['2026-11-09 00:00:00', '2026-11-10 00:00:00']);
+});
+
+// Five years of hourly candles, as a daily index chart asks for, served in pages. A page that is a candle or two short
+// of the page size must not end the history (USDINDEX D1 stopped at 2023-06-26 after exactly two pages).
+function longHistoryFetch({ shortBy = 0, calls = [] } = {}) {
+  const first = Date.UTC(2021, 10, 18, 0, 0, 0);
+  const lastMs = Date.UTC(2026, 10, 17, 2, 0, 0);
+  const all = [];
+  for (let t = first; t <= lastMs; t += 3600000) {
+    const d = new Date(t).getUTCDay();
+    if (d === 0 || d === 6) continue;
+    all.push(t);
+  }
+  return async (url) => {
+    const u = new URL(url);
+    const pair = u.pathname.split('/')[3];
+    const from = Date.parse(u.searchParams.get('from'));
+    const includeFirst = u.searchParams.get('includeFirst') === 'true';
+    const count = Number(u.searchParams.get('count')) - (includeFirst ? 0 : shortBy);
+    calls.push(pair);
+    const rows = all.filter((t) => (includeFirst ? t >= from : t > from)).slice(0, count);
+    const level = BASE[pair];
+    return {
+      ok: true,
+      json: async () => ({
+        instrument: pair, granularity: 'H1',
+        candles: rows.map((t) => ({ time: iso(t), complete: true, bid: { o: String(level), h: String(level), l: String(level), c: String(level) } })),
+      }),
+    };
+  };
+}
+
+test('a long hourly history still reaches the cutoff when later pages come back a candle short', async () => {
+  const realNow = Date.now;
+  Date.now = () => Date.UTC(2026, 10, 17, 2, 55, 0);
+  try {
+    const calls = [];
+    const result = await fetchOandaSeries({
+      symbol: 'USDINDEX', interval: '1day', startDate: '2021-11-18', endDateTime: '2026-11-17 02:54:59', token: 'test',
+      fetchImpl: longHistoryFetch({ shortBy: 1, calls }),
+    });
+    const days = result.values.map((v) => v.datetime);
+    assert.ok(days.length > 1250, 'days ' + days.length);
+    assert.equal(days[0], '2021-11-18 00:00:00');
+    assert.equal(days[days.length - 1], '2026-11-16 00:00:00');
+    assert.equal(result.alignmentCandle.datetime, '2026-11-17 00:00:00');
+    assert.ok(calls.length > 6 * 6, 'every pair was paged to the end');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('the ordinary pair fetch is unchanged: a short page still ends it', async () => {
+  const calls = [];
+  const result = await fetchOandaSeries({
+    symbol: 'EURUSD', interval: '1h', startDate: '2021-11-18', endDateTime: '2026-11-17 02:54:59', token: 'test',
+    fetchImpl: longHistoryFetch({ shortBy: 1, calls }),
+  });
+  // Page one is full (5000), page two is one short (4999) and ends the history, as before.
+  assert.ok(result.values.length >= 9999 && result.values.length <= 10000, 'n ' + result.values.length);
+  assert.equal(calls.length, 2);
 });

@@ -121,7 +121,9 @@ function bucketStartLocal(text,interval){
 async function fetchSyntheticDxy({interval,startDate,endDateTime,timezone='UTC',token,environment='practice',price='B',fetchImpl=fetch,maxPages=100}={}){
  const fine=SYNTHETIC_FINER[interval];
  if(!fine)throw fail('The US Dollar Index is not available for this candle size','symbol_unavailable');
- const series=await Promise.all(DXY_FORMULA.parts.map(([pair])=>fetchOandaSeries({symbol:pair,interval:fine,startDate,endDateTime,timezone,token,environment,price,fetchImpl,maxPages})));
+ const series=await Promise.all(DXY_FORMULA.parts.map(([pair])=>fetchOandaSeries({symbol:pair,interval:fine,startDate,endDateTime,timezone,token,environment,price,fetchImpl,maxPages,pageUntilEnd:true})));
+ // One line per fetch so a short history shows up in the log: pair, pages, candles, first and last.
+ try{console.log('[synthetic-dxy] '+interval+' from '+fine+' candles: '+series.map((s,i)=>DXY_FORMULA.parts[i][0]+' pages='+s.pages+' n='+s.values.length+' '+(s.values[0]?.datetime||'-')+'..'+(s.values[s.values.length-1]?.datetime||'-')).join(' | '));}catch{}
  const maps=series.map(s=>new Map(s.values.map(row=>[row.datetime,row])));
  const indexAt=(rows,field)=>{let v=DXY_FORMULA.constant;DXY_FORMULA.parts.forEach(([,weight],i)=>{v*=Math.pow(rows[i][field],weight);});return v;};
  const buckets=new Map();
@@ -144,7 +146,7 @@ async function fetchSyntheticDxy({interval,startDate,endDateTime,timezone='UTC',
  if(!values.length)throw fail('No completed index candles before cutoff','history_unavailable');
  return {values,providerSymbol:'DXY',source:'OANDA (computed US Dollar Index)',priceComponent:price,timezone,alignmentCandle,synthetic:true};
 }
-export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,timezone='UTC',token,environment='practice',price='B',fetchImpl=fetch,maxPages=100}={}){
+export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,timezone='UTC',token,environment='practice',price='B',fetchImpl=fetch,maxPages=100,pageUntilEnd=false}={}){
  const instrument=oandaInstrument(symbol),granularity=GRANULARITY[interval];
  if(!instrument)throw fail('OANDA forex adapter does not support this instrument','symbol_unavailable');
  if(!granularity)throw fail('Unsupported OANDA candle interval');
@@ -153,7 +155,7 @@ export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,ti
  const start=localToUtc(`${startDate} 00:00:00`,timezone),end=localToUtc(endDateTime,timezone);
  if(end<=start)throw fail('Empty historical window','history_unavailable');
  const origin=environment==='live'?'https://api-fxtrade.oanda.com':'https://api-fxpractice.oanda.com';
- const values=new Map();let cursor=start,includeFirst=true,finished=false,alignmentCandle=null;
+ const values=new Map();let cursor=start,includeFirst=true,finished=false,alignmentCandle=null,pages=1;
  // A candle whose own natural end extends past our requested cutoff is
  // genuinely still forming ONLY when that cutoff is close to the real
  // present moment - the live-analysis case this guards against look-ahead
@@ -194,12 +196,16 @@ export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,ti
    }
    values.set(time,row);
   }
-  if(last>=end||data.candles.length<5000){finished=true;break;}
-  if(last<=cursor)throw fail('OANDA pagination did not advance');cursor=last;includeFirst=false;
+  // A page one or two candles short of 5000 is not proof that the history ended (the US Dollar Index fetch stopped
+  // after two pages, about 10,000 hourly candles, and gave daily candles only up to June 2023). With pageUntilEnd the
+  // loop treats a short page as the end only when it already reaches within 8 days of the cutoff (weekends and holidays
+  // leave gaps of a few days), and otherwise asks again; it also stops at the cutoff, an empty page, or a page that adds nothing new.
+  if(last>=end||(data.candles.length<5000&&(!pageUntilEnd||end-last<8*86400000))){finished=true;break;}
+  if(last<=cursor){if(pageUntilEnd){finished=true;break;}throw fail('OANDA pagination did not advance');}cursor=last;includeFirst=false;pages++;
  }
  if(!finished)throw fail('OANDA history exceeded the page limit; partial history rejected','history_unavailable');
  if(!values.size)throw fail('No completed OANDA candles before cutoff','history_unavailable');
- return {values:[...values.entries()].sort((a,b)=>a[0]-b[0]).map(([,v])=>v),providerSymbol:instrument.replace('_','/'),source:'OANDA',priceComponent:price,timezone,alignmentCandle};
+ return {values:[...values.entries()].sort((a,b)=>a[0]-b[0]).map(([,v])=>v),providerSymbol:instrument.replace('_','/'),source:'OANDA',priceComponent:price,timezone,alignmentCandle,pages};
 }
 
 // The newest candles up to now: the completed ones, and the still-forming latest candle on its own.
