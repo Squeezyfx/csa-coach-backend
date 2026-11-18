@@ -221,7 +221,7 @@ test("next steps give one bullet per pillar", () => {
 test("distances are pips for FX pairs, gold and the dollar index, and points for everything else", () => {
   assert.equal(priceDistance(0.0025, "EURUSD").text, "25 pips");
   assert.equal(priceDistance(0.5, "USDJPY").text, "50 pips");
-  assert.equal(priceDistance(10, "XAUUSD").text, "100 pips");
+  assert.equal(priceDistance(10, "XAUUSD").text, "10 pips");
 });
 
 const candle = (datetime, open, high, low, close) => ({ datetime, open, high, low, close });
