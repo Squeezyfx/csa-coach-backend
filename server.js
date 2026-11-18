@@ -1,5 +1,6 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
+import { FORMING_FINER, formingCandleNeedsRebuild, rebuildFormingCandle } from "./forming-candle.js";
 import { fetchCandlesAfterCutoff, fetchLaterCandles, fetchOandaSeries, fetchRecentCandles, forexPipSize, oandaInstrument, isSyntheticInstrument } from "./oanda-data.js";
 import { chooseWatchReferences } from "./watch-references.js";
 import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage, shouldTagSignup } from "./ghl-access.js";
@@ -3476,6 +3477,38 @@ function normalizeTwelveDataDateTime(value = "") {
   return text.slice(0, 19);
 }
 
+// The provider's still-open candle reflects now, not the moment of an older screenshot (see forming-candle.js).
+// Rebuilds that one candle as it stood at the cutoff from finer candles; any failure keeps the provider's candle.
+async function formingValuesAtCutoff({ values = [], interval, providerSymbol, cutoff, timezone = "UTC", apiKey }) {
+  try {
+    const last = values[values.length - 1];
+    if (!formingCandleNeedsRebuild({ candle: last, interval, cutoff, timezone })) return values;
+    const params = new URLSearchParams({
+      symbol: providerSymbol,
+      interval: FORMING_FINER[interval],
+      start_date: `${String(last.datetime).slice(0, 10)} 00:00:00`,
+      timezone,
+      order: "ASC",
+      outputsize: "5000",
+      apikey: apiKey,
+    });
+    const response = await fetch(`${TWELVE_DATA_BASE_URL}?${params.toString()}`, { signal: AbortSignal.timeout(15000) });
+    const data = await response.json();
+    if (!response.ok || data.status === "error" || !Array.isArray(data.values)) return values;
+    const rebuilt = rebuildFormingCandle({ candle: last, fineRows: data.values, cutoff });
+    if (!rebuilt) return values;
+    console.log("[forming-candle] rebuilt at the chart cutoff: " + JSON.stringify({
+      interval, cutoff, candle: last.datetime,
+      was: { high: Number(last.high), low: Number(last.low), close: Number(last.close) },
+      now: { high: rebuilt.high, low: rebuilt.low, close: rebuilt.close },
+    }));
+    return [...values.slice(0, -1), { ...last, high: String(rebuilt.high), low: String(rebuilt.low), close: String(rebuilt.close) }];
+  } catch (error) {
+    console.log("[forming-candle] kept the provider candle: " + (error?.message || error));
+    return values;
+  }
+}
+
 async function fetchTwelveDataStructureLevels({
   symbol,
   chartDate,
@@ -3607,7 +3640,7 @@ async function fetchTwelveDataStructureLevels({
     preferredProviderSymbol = "",
   }) => {
     if (useOanda) {
-      const result = await fetchOandaSeries({symbol,interval,startDate,endDateTime,timezone,token:process.env.OANDA_API_TOKEN,environment:process.env.OANDA_ENVIRONMENT || "practice",price:process.env.OANDA_PRICE_COMPONENT || "B"});
+      const result = await fetchOandaSeries({symbol,interval,startDate,endDateTime,timezone,token:process.env.OANDA_API_TOKEN,environment:process.env.OANDA_ENVIRONMENT || "practice",price:process.env.OANDA_PRICE_COMPONENT || "B",formingAtCutoff:interval === profile.interval});
       if (interval === profile.interval) oandaAlignmentCandle = result.alignmentCandle || null;
       resolvedProviderSymbol = result.providerSymbol;
       return result;
@@ -3640,7 +3673,10 @@ async function fetchTwelveDataStructureLevels({
         const metadataError = validateProviderMetadata(data.meta, providerSymbol, interval);
         if (metadataError) throw new Error(metadataError);
         resolvedProviderSymbol = providerSymbol;
-        return { values: data.values || [], providerSymbol };
+        const providerValues = interval === profile.interval
+          ? await formingValuesAtCutoff({ values: data.values || [], interval, providerSymbol, cutoff: endDateTime, timezone, apiKey })
+          : (data.values || []);
+        return { values: providerValues, providerSymbol };
       }
 
       const message =
