@@ -146,7 +146,28 @@ async function fetchSyntheticDxy({interval,startDate,endDateTime,timezone='UTC',
  if(!values.length)throw fail('No completed index candles before cutoff','history_unavailable');
  return {values,providerSymbol:'DXY',source:'OANDA (computed US Dollar Index)',priceComponent:price,timezone,alignmentCandle,synthetic:true};
 }
-export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,timezone='UTC',token,environment='practice',price='B',fetchImpl=fetch,maxPages=100,pageUntilEnd=false}={}){
+// OANDA reports a still-forming candle as it stands NOW: its close is the latest price, and its high and low
+// include everything after the screenshot was taken. Held up against a chart captured earlier, a fast market
+// (0.6% in under two hours) pushes an otherwise correct screenshot outside the 0.5% same-instrument limit. When the cutoff is
+// more than a few minutes old, the candle is rebuilt from finer candles that end at the cutoff, so it shows what the
+// chart showed. Any failure keeps the snapshot as it was. FORMING_CANDLE_AT_CUTOFF=off restores the snapshot.
+const FORMING_FINER={'5min':'1min','15min':'1min','30min':'1min','1h':'1min','4h':'1min','1day':'1min','1week':'15min','1month':'1h'};
+const FORMING_SNAPSHOT_GRACE_MS=3*60000;
+async function formingCandleAtCutoff({alignmentCandle,symbol,interval,endDateTime,end,timezone,token,environment,price,fetchImpl,maxPages}){
+ if(String(process.env.FORMING_CANDLE_AT_CUTOFF||'').trim().toLowerCase()==='off')return alignmentCandle;
+ const fine=FORMING_FINER[interval];
+ if(!fine||Date.now()-end<=FORMING_SNAPSHOT_GRACE_MS)return alignmentCandle;
+ try{
+  const inner=await fetchOandaSeries({symbol,interval:fine,startDate:String(alignmentCandle.datetime).slice(0,10),endDateTime,timezone,token,environment,price,fetchImpl,maxPages,pageUntilEnd:true});
+  const rows=inner.values.filter(row=>row.datetime>=alignmentCandle.datetime);
+  if(!rows.length)return alignmentCandle;
+  return {datetime:alignmentCandle.datetime,open:rows[0].open,high:Math.max(...rows.map(r=>r.high)),low:Math.min(...rows.map(r=>r.low)),close:rows[rows.length-1].close,atCutoff:true};
+ }catch(error){
+  try{console.log('[forming-candle] kept the live snapshot: '+(error?.message||error));}catch{}
+  return alignmentCandle;
+ }
+}
+export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,timezone='UTC',token,environment='practice',price='B',fetchImpl=fetch,maxPages=100,pageUntilEnd=false,formingAtCutoff=false}={}){
  const instrument=oandaInstrument(symbol),granularity=GRANULARITY[interval];
  if(!instrument)throw fail('OANDA forex adapter does not support this instrument','symbol_unavailable');
  if(!granularity)throw fail('Unsupported OANDA candle interval');
@@ -205,6 +226,7 @@ export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,ti
  }
  if(!finished)throw fail('OANDA history exceeded the page limit; partial history rejected','history_unavailable');
  if(!values.size)throw fail('No completed OANDA candles before cutoff','history_unavailable');
+ if(formingAtCutoff&&alignmentCandle)alignmentCandle=await formingCandleAtCutoff({alignmentCandle,symbol,interval,endDateTime,end,timezone,token,environment,price,fetchImpl,maxPages});
  return {values:[...values.entries()].sort((a,b)=>a[0]-b[0]).map(([,v])=>v),providerSymbol:instrument.replace('_','/'),source:'OANDA',priceComponent:price,timezone,alignmentCandle,pages};
 }
 
