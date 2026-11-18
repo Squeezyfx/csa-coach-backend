@@ -59,13 +59,14 @@ export function fmtPrice(value) {
 }
 
 // Distance in pips for standard FX pairs, and for gold and the US Dollar Index with a fixed pip
-// (gold 0.10, dollar index 0.01: the usual broker convention). Anything else (silver, crypto,
-// other indices) stays in plain price points, where "pips" would mean different things.
-// Env GOLD_INDEX_PIPS=off puts gold and the dollar index back to points.
-const goldIndexPipSize = (code) => {
+// (gold 1.00, so 95.6 points is 95.6 pips; dollar index 0.01). Anything else (silver, crypto, other
+// indices) stays in plain price points, where "pips" would mean different things.
+// Gold is always shown to one decimal (95.6, 192.3). Env GOLD_INDEX_PIPS=off puts gold and the
+// dollar index back to points.
+const goldIndexPip = (code) => {
   if (String(process.env.GOLD_INDEX_PIPS || "").trim().toLowerCase() === "off") return null;
-  if (/^XAU[A-Z]{3}$/.test(code)) return 0.1;
-  if (/^(USDINDEX|DXY|USDOLLARINDEX|USDX)$/.test(code)) return 0.01;
+  if (/^XAU[A-Z]{3}$/.test(code)) return { size: 1, oneDecimal: true };
+  if (/^(USDINDEX|DXY|USDOLLARINDEX|USDX)$/.test(code)) return { size: 0.01, oneDecimal: false };
   return null;
 };
 
@@ -75,11 +76,11 @@ export function priceDistance(diff, symbol = "") {
   const code = compactSymbol(symbol);
   const isFxPair =
     /^[A-Z]{6}$/.test(code) && !/XAU|XAG|XPT|XPD|BTC|ETH|LTC|XRP/.test(code);
-  const fixedPip = goldIndexPipSize(code);
-  if (isFxPair || fixedPip) {
-    const pipSize = fixedPip || (code.includes("JPY") ? 0.01 : 0.0001);
+  const fixed = goldIndexPip(code);
+  if (isFxPair || fixed) {
+    const pipSize = fixed ? fixed.size : code.includes("JPY") ? 0.01 : 0.0001;
     const pips = abs / pipSize;
-    const rounded = pips >= 10 ? Math.round(pips) : Math.round(pips * 10) / 10;
+    const rounded = pips >= 10 && !fixed?.oneDecimal ? Math.round(pips) : Math.round(pips * 10) / 10;
     return { value: abs, text: `${rounded} ${rounded === 1 ? "pip" : "pips"}` };
   }
   const rounded = abs >= 100 ? Math.round(abs * 10) / 10 : Math.round(abs * 100) / 100;

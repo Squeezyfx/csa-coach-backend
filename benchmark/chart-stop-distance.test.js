@@ -30,13 +30,13 @@ const goldFeedback = {
   chartGeometry: { trade: goldTrade },
 };
 
-test("the stop tags carry the stop size measured from each stop's own entry (gold: pips)", () => {
+test("the stop tags carry the stop size measured from each stop's own entry (gold: pips of 1.00)", () => {
   const chart = buildCleanChart({ marketReference: { timeframeCandles: candles(3800, 4750) }, finalFeedback: goldFeedback, instrument: "XAUUSD", entryWord: "Sell" });
   const labels = chart.levels.map((level) => level.label);
-  assert.ok(labels.includes("Stop 1 (974 pips)"), labels.join(" | "));
+  assert.ok(labels.includes("Stop 1 (97.4 pips)"), labels.join(" | "));
   // Stops 2 and 3 share one price, so they share one line and one price tag. The sizes follow the
   // names together, in the same order, so the shared price clearly belongs to both.
-  assert.ok(labels.includes("Stop 2 / Stop 3 (1923 / 1162 pips)"), labels.join(" | "));
+  assert.ok(labels.includes("Stop 2 / Stop 3 (192.3 / 116.2 pips)"), labels.join(" | "));
   const shared = chart.levels.find((level) => level.label.startsWith("Stop 2 / Stop 3"));
   assert.equal(Math.round(shared.price * 100) / 100, 4890);
   // The sizes are an internal detail and are not sent to the page as a separate field.
@@ -93,7 +93,7 @@ test("no size is shown when it cannot be worked out, and never a made-up one", (
   assert.equal(stopDistanceText(1.2, undefined, "EURUSD"), "");
   assert.equal(stopDistanceText(1.2, 1.2, "EURUSD"), "");
   assert.equal(stopDistanceText(0, 1.2, "EURUSD"), "");
-  assert.equal(stopDistanceText(4511, 4608.42267, "XAUUSD"), "974 pips");
+  assert.equal(stopDistanceText(4511, 4608.42267, "XAUUSD"), "97.4 pips");
   assert.equal(stopDistanceText(1.1130, 1.1155, "EURUSD"), "25 pips");
   const chart = buildCleanChart({
     marketReference: { timeframeCandles: candles(1.10, 1.14) },
@@ -109,13 +109,13 @@ test("server wiring: the page's chart gets the setting and CHART_STOP_DISTANCE=o
   assert.match(server, /showStopDistance: String\(process\.env\.CHART_STOP_DISTANCE \|\| ""\)\.trim\(\)\.toLowerCase\(\) !== "off"/);
 });
 
-test("the dollar index counts in pips of 0.01 and gold in pips of 0.10, whatever the symbol spelling", () => {
+test("the dollar index counts in pips of 0.01 and gold in pips of 1.00, whatever the symbol spelling", () => {
   assert.equal(stopDistanceText(100.5685, 100.1175, "USDINDEX"), "45 pips");
   assert.equal(stopDistanceText(99.4305, 98.649, "US Dollar Index"), "78 pips");
   assert.equal(stopDistanceText(99.4305, 98.649, "USDINDEX"), "78 pips");
   assert.equal(stopDistanceText(99.4305, 98.649, "DXY"), "78 pips");
-  assert.equal(stopDistanceText(4511, 4513.5, "XAU/USD"), "25 pips");
-  assert.equal(priceDistance(0.1, "XAUUSD").text, "1 pip");
+  assert.equal(stopDistanceText(4511, 4513.5, "XAU/USD"), "2.5 pips");
+  assert.equal(priceDistance(1, "XAUUSD").text, "1 pip");
 });
 
 test("silver, crypto and other indices stay in points, and GOLD_INDEX_PIPS=off puts gold and the dollar index back", () => {
@@ -130,4 +130,15 @@ test("silver, crypto and other indices stay in points, and GOLD_INDEX_PIPS=off p
   } finally {
     if (before === undefined) delete process.env.GOLD_INDEX_PIPS; else process.env.GOLD_INDEX_PIPS = before;
   }
+});
+
+test("gold pips are 1.00 and always one decimal: 95.61 points is 95.6 pips, 192.34 is 192.3, 116.17 is 116.2", () => {
+  assert.equal(stopDistanceText(4511, 4606.61251, "XAUUSD"), "95.6 pips");
+  assert.equal(stopDistanceText(4697.66016, 4890.00020, "XAUUSD"), "192.3 pips");
+  assert.equal(stopDistanceText(4773.83008, 4890.00020, "XAUUSD"), "116.2 pips");
+  assert.equal(priceDistance(691.00847, "XAUUSD").text, "691 pips");
+  assert.equal(priceDistance(10, "XAUUSD").text, "10 pips");
+  // The dollar index and forex keep their own rounding.
+  assert.equal(stopDistanceText(100.5685, 100.0977, "USDINDEX"), "47 pips");
+  assert.equal(stopDistanceText(1.1130, 1.1155, "EURUSD"), "25 pips");
 });
