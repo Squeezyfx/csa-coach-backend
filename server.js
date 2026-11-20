@@ -89,7 +89,7 @@ import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "
 import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
-import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
+import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas } from "./marked-lines.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -28942,9 +28942,22 @@ function buildControlledFeedback({
     );
   }
 
-  // Every drawn line that sits on a framework level is credited, not only the first area.
+  // Every drawn line that sits on a framework level is credited, not only the first area. A marked level that
+  // is one of the entry areas says which one (AUDUSD H4 2026-11-20: the line on Entry 3 only got "You marked
+  // levels on the chart"). MARKED_ENTRY_NAMED=off restores the old wording.
+  const nameMarkedEntries = String(process.env.MARKED_ENTRY_NAMED || "on").toLowerCase() !== "off";
+  const markedEntryNumberList = userEvidence.chartMarked && nameMarkedEntries
+    ? markedEntryNumbers(userEvidence.markedFrameworkAreas, selectedEntryAreas)
+    : [];
   const markedFrameworkAreasText = userEvidence.chartMarked
     ? markedAreasStrength(userEvidence.markedFrameworkAreas, {
+        label: plainAreaTypeLabel,
+        format: formatPrice,
+        entryNumbers: markedEntryNumberList,
+      })
+    : "";
+  const markedSingleEntryText = userEvidence.chartMarked && nameMarkedEntries
+    ? markedEntryStrength(userEvidence.markedFrameworkAreas, markedEntryNumberList, {
         label: plainAreaTypeLabel,
         format: formatPrice,
       })
@@ -28961,6 +28974,8 @@ function buildControlledFeedback({
       `You marked the ${plainAreaTypeLabel(area.areaType)} area ${area.zoneText}, matching the framework's first area.`,
       { short: "Your marked area matches" }
     );
+  } else if (markedSingleEntryText) {
+    addStrength("entry", markedSingleEntryText, { short: "Your marked area matches" });
   } else if (userEvidence.chartMarked) {
     addStrength(
       "entry",

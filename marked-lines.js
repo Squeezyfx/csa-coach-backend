@@ -91,14 +91,50 @@ const COUNT_WORDS = { 2: "two", 3: "three", 4: "four", 5: "five", 6: "six" };
 
 // "You marked two framework levels: the A area around 1.2 and the B area around 1.1."
 // Only for two or more levels; one level is credited by the first-area strength.
-export function markedAreasStrength(areas = [], { label = (type) => type, format = String } = {}) {
+export function markedAreasStrength(areas = [], { label = (type) => type, format = String, entryNumbers = null } = {}) {
   if (!Array.isArray(areas) || areas.length < 2) return "";
   const parts = areas.map((area) => {
     const name = String(label(area.areaType) || "").trim();
     return `the ${name ? `${name} area` : "level"} around ${format(area.price)}`;
   });
   const list = parts.length === 2 ? parts.join(" and ") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
-  return `You marked ${COUNT_WORDS[areas.length] || areas.length} framework levels: ${list}.`;
+  // Which of the marked levels are entry areas ("Entry 3"), when the caller knows.
+  const entries = (Array.isArray(entryNumbers) ? entryNumbers : []).filter((number) => number > 0);
+  const named = entries.map((number) => `Entry ${number}`);
+  const entryNote = !named.length
+    ? ""
+    : named.length === 1
+    ? ` ${named[0]} is one of them.`
+    : ` ${named.slice(0, -1).join(", ")} and ${named[named.length - 1]} are among them.`;
+  return `You marked ${COUNT_WORDS[areas.length] || areas.length} framework levels: ${list}.${entryNote}`;
+}
+
+// Which entry (1, 2, 3 in the order they are listed) each marked framework area is; 0 when it is none of them.
+// The marked area carries the framework's own price, so the match is within a hair of exact.
+export function markedEntryNumbers(areas = [], entries = [], relativeTolerance = 0.00005) {
+  const list = Array.isArray(entries) ? entries : [];
+  return (Array.isArray(areas) ? areas : []).map((area) => {
+    const price = positive(area?.price);
+    if (price === null) return 0;
+    const index = list.findIndex((entry) => {
+      const center = positive(entry?.authoritativeCenter);
+      return center !== null && Math.abs(center - price) <= price * relativeTolerance + Number.EPSILON * 100;
+    });
+    return index + 1;
+  });
+}
+
+const ORDINAL_WORDS = ["first", "second", "third"];
+
+// One marked level that sits on one of the framework's entry areas: "You marked the ... area around 0.68538,
+// which is the framework's third entry area (Entry 3)." Several levels are credited by markedAreasStrength.
+export function markedEntryStrength(areas = [], entryNumbers = [], { label = (type) => type, format = String } = {}) {
+  if (!Array.isArray(areas) || areas.length !== 1) return "";
+  const number = Number(entryNumbers?.[0]);
+  if (!(number > 0)) return "";
+  const name = String(label(areas[0].areaType) || "").trim();
+  const ordinal = ORDINAL_WORDS[number - 1];
+  return `You marked the ${name ? `${name} area` : "level"} around ${format(areas[0].price)}, which is the framework's ${ordinal ? `${ordinal} ` : ""}entry area (Entry ${number}).`;
 }
 
 // The price map only keeps a displayed price when it is within tolerance of one

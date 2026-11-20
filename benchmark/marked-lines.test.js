@@ -9,6 +9,8 @@ import {
   markChartFromFrameworkLines,
   markLinesOnAreas,
   markedAreasStrength,
+  markedEntryNumbers,
+  markedEntryStrength,
   matchedFrameworkAreas,
   matchLinesToAreas,
 } from "../marked-lines.js";
@@ -218,4 +220,45 @@ test("the review pipeline uses these helpers", () => {
   assert.match(serverSource, /matchTolerance: nullablePositiveNumber\(match\?\.selectedTolerance\)/);
   assert.match(serverSource, /visualReview = markLinesOnAreas\(\s*visualReview,\s*\[\.\.\.rankedRawAreas, \.\.\.structuralReferenceAreas\]/);
   assert.match(serverSource, /getExactLineMatchTolerances\(\{ marketReference, timeframe \}\)\.exactLabelTolerance/);
+});
+
+// AUDUSD H4, 2026-11-20 22:37 UTC: the trader's one drawn line (0.68536) sat on the framework's third entry area
+// (0.68538) and the feedback only said "You marked levels on the chart, which makes review easier."
+test("a marked level that is an entry area says which entry it is", () => {
+  const entries = [{ authoritativeCenter: 0.67686 }, { authoritativeCenter: 0.67793 }, { authoritativeCenter: 0.68538 }];
+  const marked = [{ price: 0.68538, areaType: "converted support" }];
+  const numbers = markedEntryNumbers(marked, entries);
+  assert.deepEqual(numbers, [3]);
+  assert.equal(
+    markedEntryStrength(marked, numbers, { label: plainLabel, format: fmt }),
+    "You marked the resistance-turned-support area around 0.68538, which is the framework's third entry area (Entry 3)."
+  );
+  assert.match(markedEntryStrength(marked, [1], { label: plainLabel, format: fmt }), /framework's first entry area \(Entry 1\)/);
+  // a level that is no entry area, no entries at all, or several levels: nothing here (other wording applies)
+  assert.deepEqual(markedEntryNumbers([{ price: 0.7 }], entries), [0]);
+  assert.equal(markedEntryStrength([{ price: 0.7, areaType: "support" }], [0], { label: plainLabel, format: fmt }), "");
+  assert.deepEqual(markedEntryNumbers(marked, []), [0]);
+  assert.equal(markedEntryStrength([...marked, ...marked], [3, 3], { label: plainLabel, format: fmt }), "");
+  // a hair of difference still matches (feed rounding); a real gap does not
+  assert.deepEqual(markedEntryNumbers([{ price: 0.685381 }], entries), [3]);
+  assert.deepEqual(markedEntryNumbers([{ price: 0.6865 }], entries), [0]);
+});
+
+test("several marked levels name the entries among them, and read as before when none is an entry", () => {
+  const two = [{ price: 1.60259, areaType: "converted support" }, { price: 1.59686, areaType: "demand" }];
+  const base = "You marked two framework levels: the resistance-turned-support area around 1.60259 and the demand area around 1.59686.";
+  assert.equal(markedAreasStrength(two, { label: plainLabel, format: fmt }), base);
+  assert.equal(markedAreasStrength(two, { label: plainLabel, format: fmt, entryNumbers: [0, 0] }), base);
+  assert.equal(markedAreasStrength(two, { label: plainLabel, format: fmt, entryNumbers: [0, 2] }), `${base} Entry 2 is one of them.`);
+  assert.equal(markedAreasStrength(two, { label: plainLabel, format: fmt, entryNumbers: [1, 2] }), `${base} Entry 1 and Entry 2 are among them.`);
+});
+
+test("the server uses it after the first-area credit and before the generic line, with an off switch", () => {
+  const serverSource = readFileSync(fileURLToPath(new URL("../server.js", import.meta.url)), "utf8");
+  assert.match(serverSource, /MARKED_ENTRY_NAMED/);
+  assert.match(serverSource, /markedEntryNumbers\(userEvidence\.markedFrameworkAreas, selectedEntryAreas\)/);
+  const first = serverSource.indexOf("matching the framework's first area.");
+  const single = serverSource.indexOf("markedSingleEntryText) {");
+  const generic = serverSource.indexOf("You marked levels on the chart, which makes review easier.");
+  assert.ok(first > 0 && single > first && generic > single);
 });
