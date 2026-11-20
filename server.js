@@ -36,7 +36,7 @@ import { isPrintedAxisTick } from "./axis-ticks.js";
 import { resolveFrameworkBias, calendarMapping, newWeekWithoutCompletedDay } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
-import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData, isCryptoSymbol } from "./market-data-matching.js";
+import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData, shouldRetainProviderPeriods, isCryptoSymbol } from "./market-data-matching.js";
 import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences, reconcilePeriodMapping, buildNoEntryTransparencyAudit, normalizePeriodDateForCompare } from "./period-accuracy.js";
 import cors from "cors";
 import multer from "multer";
@@ -32940,10 +32940,18 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       // symbols (BTC, XAU) discard their framework candles on date_unverified
       // before the same-instrument check could run, which is why they reported
       // frameworkCandleCount: 0 despite a full execution series.
-      const retainCompletedOandaReference = ["OANDA", "Twelve Data"].includes(marketReference.dataProvider || "Twelve Data") &&
-        completedPeriodReferences.periods.length > 0 &&
-        (knownSmallGap ||
-          ["date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(chartDataMatch.status));
+      // A weekly-framework H4 chart (XAUUSD H4, 2026-11-20) has the provider's four weekly candles but no
+      // daily-style completed references, so it lost every level on a weak match: the provider's own framework
+      // periods count too (KEEP_PROVIDER_PERIODS_ON_WEAK_MATCH=off restores the old condition).
+      const retainCompletedOandaReference = shouldRetainProviderPeriods({
+        provider: marketReference.dataProvider,
+        completedPeriodCount: completedPeriodReferences.periods.length,
+        providerFrameworkPeriodCount: String(process.env.KEEP_PROVIDER_PERIODS_ON_WEAK_MATCH || "on").toLowerCase() === "off"
+          ? 0
+          : (Array.isArray(marketReference?.providerPeriodAnalysis?.periods) ? marketReference.providerPeriodAnalysis.periods.length : 0),
+        knownSmallGap,
+        status: chartDataMatch.status,
+      });
       if (!["matched_reference", "partial_reference"].includes(chartDataMatch.status) && !retainCompletedOandaReference) {
         // Do not pass mismatched prices to downstream AI or deterministic selection.
         marketReference = clearRejectedProviderData({ ...marketReference, error: chartDataMatch.reason,
