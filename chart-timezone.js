@@ -111,7 +111,10 @@ export function isFreshChartClock({ chartDetection, chartTimezone, nowMs, resolv
 // today's date in the chart's timezone, or null (reader's date already right, evidence explicit, no
 // trustworthy clock or timezone, a clock that is not fresh, or a weekend where the last candle is Friday's).
 const EXPLICIT_DATE_EVIDENCE = ["explicit_final_candle_timestamp", "verified_axis_bar_count", "verified_single_anchor_pixel_count", "verified_multi_anchor_axis_count"];
-export function liveClockDate({ chartDetection, chartTimezone, nowMs, freshMinutes = 45, futureMinutes = 10 } = {}) {
+// confirmed: true asks the opposite question: the reader's date is ALREADY today's date by the live clock
+// (for example the typed date that replaced a date in the future), so the clock proves it. Returns the same
+// shape, or null when the date differs or any of the conditions above fails.
+export function liveClockDate({ chartDetection, chartTimezone, nowMs, freshMinutes = 45, futureMinutes = 10, confirmed = false } = {}) {
   const chart = parseChartTimezoneLabel(chartTimezone);
   const clock = chartClockTime(chartDetection);
   if (!chart || !clock || !clock.fromClock || !Number.isFinite(nowMs)) return null;
@@ -130,9 +133,14 @@ export function liveClockDate({ chartDetection, chartTimezone, nowMs, freshMinut
     // Saturday and Sunday: markets are shut, the last candle is Friday's, so today's date is not the candle's date.
     if (day.getUTCDay() === 0 || day.getUTCDay() === 6) return null;
     const date = day.toISOString().slice(0, 10);
-    return date === readDate ? null : { date, readDate: readDate || null, ageMinutes: Math.round(age) || 0 };
+    if ((date === readDate) !== confirmed) return null;
+    return { date, readDate: readDate || null, ageMinutes: Math.round(age) || 0 };
   }
   return null;
+}
+
+export function liveClockConfirmsDate(args = {}) {
+  return liveClockDate({ ...args, confirmed: true });
 }
 
 // A screenshot cannot be from the future. True when the chart's date (and clock, when readable) lies

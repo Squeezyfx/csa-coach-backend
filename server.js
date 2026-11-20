@@ -86,7 +86,7 @@ import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
 import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "./entry-labels.js";
-import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt } from "./chart-timezone.js";
+import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
@@ -32157,6 +32157,33 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
           dateReadByChartReader: clockDate.readDate,
           dateFromLiveClock: true,
         };
+      } else {
+        // The date is already today's but only inferred, for example the typed date that replaced a reading in
+        // the future (XAUUSD H4, 2026-11-20 02:53 UTC: read as 6 Dec, replaced by the typed 20 Nov, which left the
+        // date "unverified", the provider data not trusted and no entries although the clock matched to the
+        // second). A fresh printed clock proves it, so it counts as verified. Only that rescued-date case and
+        // only intraday charts: a daily chart compares its open/high/low too, and a late-session candle can
+        // differ from the data's day (gold-late-session), so those keep the unverified route.
+        // LIVE_CLOCK_CONFIRMS_DATE=off disables.
+        const clockConfirms = String(process.env.LIVE_CLOCK_CONFIRMS_DATE || "on").toLowerCase() !== "off" &&
+          chartDetection?.latestVisibleDateEvidence === "typed_date_after_future_rejection" &&
+          ["M1", "M5", "M15", "M30", "H1", "H4"].includes(String(timeframe || "").toUpperCase())
+          ? liveClockConfirmsDate({ chartDetection, chartTimezone: chartDetection?.chartTimezone, nowMs: Date.now() })
+          : null;
+        if (clockConfirms) {
+          console.log("[chart-date] the chart's clock confirms the date:", {
+            date: clockConfirms.date,
+            evidenceWas: chartDetection?.latestVisibleDateEvidence || null,
+            chartClock: chartDetection?.chartClock || null,
+            chartTimezone: chartDetection?.chartTimezone || null,
+          });
+          chartDetection = {
+            ...chartDetection,
+            dateConfidence: "high",
+            latestVisibleDateEvidence: "explicit_final_candle_timestamp",
+            dateFromLiveClock: true,
+          };
+        }
       }
     }
 
