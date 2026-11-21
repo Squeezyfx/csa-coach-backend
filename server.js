@@ -89,7 +89,7 @@ import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "
 import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
-import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas } from "./marked-lines.js";
+import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, supersedingDrawnLine } from "./marked-lines.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -21612,12 +21612,30 @@ function buildPeriodInventoryStructuralCandidates({
   const drawnLinePrices = admittedVisualCandidates
     .filter((candidate) => candidate.priceSource === "independent_horizontal_line_reader_exact")
     .map((candidate) => Number(candidate.price));
+  // Beyond 0.05%: a line that was matched to a framework level within its match tolerance replaces the NEAREST
+  // period level too. Feeds differ (gold's weekly lows sit about 10 points from TradingView's, 0.27%), and the
+  // trader's line is the level on their own chart: XAUUSD H4 2026-11-21 gave Sell 1 3853.27 and the drawn
+  // 3863.59 as Sell 2, ten points apart. LINE_REPLACES_LEVEL=off keeps only the 0.05% rule.
+  const lineReplacesNearest = String(process.env.LINE_REPLACES_LEVEL || "on").toLowerCase() !== "off";
+  const drawnLineTolerances = new Map(
+    (Array.isArray(visualReview?.visibleMarkedLevels) ? visualReview.visibleMarkedLevels : [])
+      .filter((level) => level?.extractionSource === "independent_horizontal_line_reader_exact")
+      .map((level) => [asPositiveNumber(level?.displayedPrice), asPositiveNumber(level?.matchTolerance)])
+      .filter(([price, tolerance]) => price !== null && tolerance !== null)
+  );
+  const drawnLines = drawnLinePrices.map((price) => ({
+    price,
+    tolerance: lineReplacesNearest ? drawnLineTolerances.get(price) ?? 0 : 0,
+  }));
+  const periodCandidatePrices = filteredPeriodCandidates.map((candidate) => Number(candidate?.price)).filter((price) => price > 0);
   const supersededPeriodCandidates = [];
   const keptPeriodCandidates = filteredPeriodCandidates.filter((candidate) => {
     const periodPrice = Number(candidate?.price);
-    const line = drawnLinePrices.find((linePrice) => {
-      const gap = Math.abs(linePrice - periodPrice);
-      return gap > 0 && gap <= Math.abs(linePrice) * DRAWN_LINE_SUPERSEDES_FRACTION;
+    const line = supersedingDrawnLine({
+      candidatePrice: periodPrice,
+      candidatePrices: periodCandidatePrices,
+      lines: drawnLines,
+      fraction: DRAWN_LINE_SUPERSEDES_FRACTION,
     });
     if (line === undefined) return true;
     supersededPeriodCandidates.push({

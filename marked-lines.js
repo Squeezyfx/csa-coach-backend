@@ -182,3 +182,27 @@ export function markChartFromFrameworkLines(visualReview = {}) {
     chartSpecificWeaknesses: keep(visualReview?.chartSpecificWeaknesses),
   };
 }
+
+// The drawn line (if any) that replaces a period high/low as an entry candidate, or undefined. A line replaces a
+// level that is not identical to it when the gap is within `fraction` of price (the long-standing 0.05% rule), or
+// when the line has a match tolerance (how far it was matched to a framework level) and the level is the nearest
+// period level to the line and within that tolerance. The nearest-only rule keeps a line between two levels from
+// swallowing both.
+export function supersedingDrawnLine({ candidatePrice, candidatePrices = [], lines = [], fraction = 0.0005 } = {}) {
+  const price = positive(candidatePrice);
+  if (price === null) return undefined;
+  const others = (Array.isArray(candidatePrices) ? candidatePrices : []).map(positive).filter((value) => value !== null);
+  for (const line of Array.isArray(lines) ? lines : []) {
+    const linePrice = positive(line?.price);
+    if (linePrice === null) continue;
+    const gap = Math.abs(linePrice - price);
+    if (gap === 0) continue;
+    if (gap <= linePrice * fraction) return linePrice;
+    const tolerance = positive(line?.tolerance);
+    if (tolerance !== null && gap <= tolerance) {
+      const nearest = Math.min(...others.map((other) => Math.abs(linePrice - other)).filter((distance) => distance > 0), gap);
+      if (gap <= nearest) return linePrice;
+    }
+  }
+  return undefined;
+}

@@ -13,6 +13,7 @@ import {
   markedEntryStrength,
   matchedFrameworkAreas,
   matchLinesToAreas,
+  supersedingDrawnLine,
 } from "../marked-lines.js";
 
 const EXACT = "independent_horizontal_line_reader_exact";
@@ -261,4 +262,38 @@ test("the server uses it after the first-area credit and before the generic line
   const single = serverSource.indexOf("markedSingleEntryText) {");
   const generic = serverSource.indexOf("You marked levels on the chart, which makes review easier.");
   assert.ok(first > 0 && single > first && generic > single);
+});
+
+// XAUUSD H4 2026-11-21: the framework's week-3 low 3853.27 and the trader's line 3863.59 became Sell 1 and Sell 2,
+// ten points apart, because a line only replaced a level within 0.05% of price (about 1.9 points on gold).
+test("a drawn line replaces the nearest period level within its match tolerance, not only within 0.05%", () => {
+  const gold = [3853.26757, 3890.69156, 4147.60021, 4149.00711];
+  const line = [{ price: 3863.59, tolerance: 11.84 }];
+  assert.equal(supersedingDrawnLine({ candidatePrice: 3853.26757, candidatePrices: gold, lines: line }), 3863.59);
+  // the other levels stay
+  assert.equal(supersedingDrawnLine({ candidatePrice: 3890.69156, candidatePrices: gold, lines: line }), undefined);
+  assert.equal(supersedingDrawnLine({ candidatePrice: 4147.60021, candidatePrices: gold, lines: line }), undefined);
+  // without a match tolerance only the old 0.05% rule applies
+  assert.equal(supersedingDrawnLine({ candidatePrice: 3853.26757, candidatePrices: gold, lines: [{ price: 3863.59, tolerance: 0 }] }), undefined);
+  assert.equal(supersedingDrawnLine({ candidatePrice: 3853.26757, candidatePrices: gold, lines: [{ price: 3863.59 }] }), undefined);
+});
+
+test("a line between two period levels replaces only the nearer one; the 0.05% rule and identical prices are as before", () => {
+  const prices = [3853.26757, 3866.02108];
+  const line = [{ price: 3863.59, tolerance: 11.84 }];
+  assert.equal(supersedingDrawnLine({ candidatePrice: 3866.02108, candidatePrices: prices, lines: line }), 3863.59);
+  assert.equal(supersedingDrawnLine({ candidatePrice: 3853.26757, candidatePrices: prices, lines: line }), undefined);
+  // forex: 0.68536 over 0.68538 is within 0.05% (the old rule), with or without a tolerance
+  assert.equal(supersedingDrawnLine({ candidatePrice: 0.68538, candidatePrices: [0.68538, 0.67686], lines: [{ price: 0.68536 }] }), 0.68536);
+  // an identical price is not "replaced", and a level outside the tolerance stays
+  assert.equal(supersedingDrawnLine({ candidatePrice: 0.68536, candidatePrices: [0.68536], lines: [{ price: 0.68536, tolerance: 0.0007 }] }), undefined);
+  assert.equal(supersedingDrawnLine({ candidatePrice: 3890.69156, candidatePrices: [3890.69156], lines: line }), undefined);
+  assert.equal(supersedingDrawnLine({ candidatePrice: NaN, lines: line }), undefined);
+});
+
+test("the server feeds each line's match tolerance into the replacement, with an off switch", () => {
+  const serverSource = readFileSync(fileURLToPath(new URL("../server.js", import.meta.url)), "utf8");
+  assert.match(serverSource, /LINE_REPLACES_LEVEL/);
+  assert.match(serverSource, /supersedingDrawnLine\(\{\s+candidatePrice: periodPrice,\s+candidatePrices: periodCandidatePrices,\s+lines: drawnLines,\s+fraction: DRAWN_LINE_SUPERSEDES_FRACTION,/);
+  assert.match(serverSource, /asPositiveNumber\(level\?\.matchTolerance\)/);
 });
