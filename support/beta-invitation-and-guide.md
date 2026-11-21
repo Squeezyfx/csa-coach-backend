@@ -80,11 +80,17 @@ risk.*
 1. **Upload a chart.** Take a screenshot of a TradingView, MT4 or MT5 chart. Click the upload box, drag the
    image in, or paste it with **Ctrl + V**. You can also use the TradingView bar on the page and press
    **Use this chart for my review**.
+   - **On a phone:** that button doesn't appear, because phone browsers can't capture the page. Mark your
+     levels on the chart (on the page's chart or in your own TradingView, MT4 or MT5 app), take a normal phone
+     screenshot, then tap the upload box and choose it. Keep the chart filling the screen, with the pair,
+     timeframe, price scale and the date or time along the bottom all readable.
 2. **Move your mouse off the chart before you take the screenshot.** TradingView shows the price of the
    candle under your cursor in the top-left corner, and that can confuse the review. Rest the mouse outside the chart.
    Under the **Chart view** the review says "Reviewed up to ...". If your chart goes further than that, or you see
    a "Lower confidence" note, the pointer was probably on the chart: take a fresh screenshot and run it again.
-3. **Check the boxes.** Make sure **Pair** and **Timeframe** match the chart.
+3. **Check the boxes.** Make sure **Pair** and **Timeframe** match the chart. If they don't, a pop-up tells you
+   what you selected and what the chart shows, with a button to fix it. The same pop-up appears if you forgot
+   the screenshot or the date.
 4. **Pick a mode.**
    - **Pre-trade:** you're planning a trade. You can type a planned entry, stop loss and take profit and the
      coach checks them. It's a plan check, not a signal.
@@ -97,7 +103,7 @@ risk.*
 - One **Pre-trade** review with your own planned entry, stop and target typed in.
 - One **Post-trade** review of a trade you already took.
 - A chart with no clean setup. "No entry yet" is a normal, correct answer.
-- Using it on your phone, at least once.
+- Using it on your phone, at least once (screenshot the chart and upload it; see step 1).
 
 ### What I most want to hear (use the green **Give feedback** button, bottom right)
 - Was the **direction** (bullish or bearish) what you'd say yourself?

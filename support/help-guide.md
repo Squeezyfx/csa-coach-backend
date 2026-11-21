@@ -56,8 +56,12 @@ execution and your discipline. It does **not** predict the market or give trade 
 3. Get your chart in:
    - click the upload area and choose a screenshot, or drag one in, or paste it with **Ctrl + V**; or
    - open the **TradingView chart** bar, set up your chart, then press **Use this chart for my review**
-     (Chrome or Edge; the browser asks permission to capture the tab once).
-4. Check **Pair / Instrument** and **Timeframe** match the chart.
+     (desktop Chrome or Edge only; the browser asks permission to capture the tab once); or
+   - on a phone, take a normal screenshot of your chart (on the page's chart or in your TradingView, MT4 or
+     MT5 app) and upload it with the upload area. The **Use this chart for my review** button isn't shown on
+     phones.
+4. Check **Pair / Instrument** and **Timeframe** match the chart. If they don't, a pop-up shows what you
+   selected next to what the chart shows and lets you fix it.
 5. Press **Run AI Diagnostics**. The review appears below and is saved to your journal.
 
 Charts can come from MT4, MT5 or TradingView. Hide account details (balance, account number) before
@@ -222,6 +226,17 @@ can ask for a new one after a minute. If it still doesn't come, please tell us w
 "Open the TradingView chart bar, set your pair and timeframe, mark your levels, then press Use this
 chart for my review. Your browser asks once to share this tab. Pick Allow. It only captures the chart
 area. On a phone this button isn't available: take a screenshot with your phone and upload it instead."
+
+**How do I send a chart from my phone?**
+"Phone browsers can't capture the chart for you, so use a screenshot. Mark your levels on the chart, on
+the page's chart or in your own TradingView, MT4 or MT5 app. Take a normal phone screenshot with the
+chart filling the screen and the pair, timeframe, price scale and dates readable. Then tap the upload
+box and choose the screenshot. Check Pair and Timeframe, then press Run AI Diagnostics."
+
+**A pop-up says "Wrong pair selected" or "Wrong timeframe selected". What do I do?**
+"The pair or timeframe in the boxes isn't the one on your chart. The pop-up shows what you selected next
+to what the chart shows. Press the button to change the box, or upload the right chart, then run it
+again. A mismatch isn't saved to your journal and doesn't use a review."
 
 **Why does it say "No directional bias yet"?**
 "At the start of a trading week (Sunday evening, Monday) and over the weekend, there isn't enough price
