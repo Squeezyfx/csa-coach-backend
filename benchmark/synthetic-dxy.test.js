@@ -106,10 +106,49 @@ test('a moment missing for one pair is skipped, not guessed', async () => {
   assert.equal(first.close, Number(dxy(rates(2.5)).toFixed(4)));
 });
 
-test('candle sizes with no finer source are refused rather than invented', async () => {
+test('a monthly index candle is rolled up from H1 candles by calendar month (the framework candle of a daily chart)', async () => {
+  // USDINDEX D1 on 17 Nov 2026 failed with "not available for this candle size": every daily chart asks for monthly framework candles.
+  const calls = [];
+  const firstMs = Date.UTC(2026, 9, 30, 0, 0, 0); // 30 Oct 00:00, 96 hourly candles to 3 Nov 00:00
+  const result = await fetchOandaSeries({
+    symbol: 'USDINDEX', interval: '1month', startDate: '2026-10-01', endDateTime: '2026-12-05 00:00:00', token: 'test',
+    fetchImpl: makeFetch({ firstMs, count: 96, minutes: 60, calls }),
+  });
+  assert.equal(new Set(calls.map((c) => c.pair)).size, 6);
+  assert.ok(calls.every((c) => c.granularity === 'H1'));
+  assert.equal(result.synthetic, true);
+  assert.deepEqual(result.values.map((v) => v.datetime), ['2026-10-01 00:00:00', '2026-11-01 00:00:00']);
+  const [oct, nov] = result.values;
+  const rates = (n) => Object.fromEntries(Object.keys(BASE).map((pair) => [pair, rateAt(pair, n)]));
+  // October holds hourly candles 0..47 and November 48..95; EUR_USD only rises so the index only falls.
+  assert.equal(oct.open, Number(dxy(rates(0)).toFixed(4)));
+  assert.equal(oct.close, Number(dxy(rates(47.5)).toFixed(4)));
+  assert.equal(oct.high, oct.open);
+  assert.equal(oct.low, oct.close);
+  assert.equal(nov.open, Number(dxy(rates(48)).toFixed(4)));
+  assert.equal(nov.close, Number(dxy(rates(95.5)).toFixed(4)));
+});
+
+test('the month still running at a live cutoff is the comparison candle, not part of the history', async () => {
+  const realNow = Date.now;
+  Date.now = () => Date.UTC(2026, 10, 17, 2, 55, 0);
+  try {
+    const firstMs = Date.UTC(2026, 9, 30, 0, 0, 0);
+    const result = await fetchOandaSeries({
+      symbol: 'DXY', interval: '1month', startDate: '2026-10-01', endDateTime: '2026-11-17 02:54:59', token: 'test',
+      fetchImpl: makeFetch({ firstMs, count: 24 * 19, minutes: 60 }),
+    });
+    assert.deepEqual(result.values.map((v) => v.datetime), ['2026-10-01 00:00:00']);
+    assert.equal(result.alignmentCandle.datetime, '2026-11-01 00:00:00');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('a size OANDA has no code for is still refused rather than invented', async () => {
   await assert.rejects(
-    fetchOandaSeries({ symbol: 'DXY', interval: '1month', startDate: '2026-01-01', endDateTime: '2026-11-10 22:30:59', token: 'test', fetchImpl: async () => { throw new Error('should not be called'); } }),
-    (e) => e.category === 'symbol_unavailable'
+    fetchOandaSeries({ symbol: 'DXY', interval: '1year', startDate: '2026-01-01', endDateTime: '2026-11-10 22:30:59', token: 'test', fetchImpl: async () => { throw new Error('should not be called'); } }),
+    (e) => /Unsupported OANDA candle interval/.test(e.message)
   );
 });
 
@@ -122,4 +161,65 @@ test('a daily index candle is rolled up from H1 candles by calendar day', async 
   });
   assert.ok(calls.every((c) => c.granularity === 'H1'));
   assert.deepEqual(result.values.map((v) => v.datetime), ['2026-11-09 00:00:00', '2026-11-10 00:00:00']);
+});
+
+// Five years of hourly candles, as a daily index chart asks for, served in pages. A page that is a candle or two short
+// of the page size must not end the history (USDINDEX D1 stopped at 2023-06-26 after exactly two pages).
+function longHistoryFetch({ shortBy = 0, calls = [] } = {}) {
+  const first = Date.UTC(2021, 10, 18, 0, 0, 0);
+  const lastMs = Date.UTC(2026, 10, 17, 2, 0, 0);
+  const all = [];
+  for (let t = first; t <= lastMs; t += 3600000) {
+    const d = new Date(t).getUTCDay();
+    if (d === 0 || d === 6) continue;
+    all.push(t);
+  }
+  return async (url) => {
+    const u = new URL(url);
+    const pair = u.pathname.split('/')[3];
+    const from = Date.parse(u.searchParams.get('from'));
+    const includeFirst = u.searchParams.get('includeFirst') === 'true';
+    const count = Number(u.searchParams.get('count')) - (includeFirst ? 0 : shortBy);
+    calls.push(pair);
+    const rows = all.filter((t) => (includeFirst ? t >= from : t > from)).slice(0, count);
+    const level = BASE[pair];
+    return {
+      ok: true,
+      json: async () => ({
+        instrument: pair, granularity: 'H1',
+        candles: rows.map((t) => ({ time: iso(t), complete: true, bid: { o: String(level), h: String(level), l: String(level), c: String(level) } })),
+      }),
+    };
+  };
+}
+
+test('a long hourly history still reaches the cutoff when later pages come back a candle short', async () => {
+  const realNow = Date.now;
+  Date.now = () => Date.UTC(2026, 10, 17, 2, 55, 0);
+  try {
+    const calls = [];
+    const result = await fetchOandaSeries({
+      symbol: 'USDINDEX', interval: '1day', startDate: '2021-11-18', endDateTime: '2026-11-17 02:54:59', token: 'test',
+      fetchImpl: longHistoryFetch({ shortBy: 1, calls }),
+    });
+    const days = result.values.map((v) => v.datetime);
+    assert.ok(days.length > 1250, 'days ' + days.length);
+    assert.equal(days[0], '2021-11-18 00:00:00');
+    assert.equal(days[days.length - 1], '2026-11-16 00:00:00');
+    assert.equal(result.alignmentCandle.datetime, '2026-11-17 00:00:00');
+    assert.ok(calls.length > 6 * 6, 'every pair was paged to the end');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('the ordinary pair fetch is unchanged: a short page still ends it', async () => {
+  const calls = [];
+  const result = await fetchOandaSeries({
+    symbol: 'EURUSD', interval: '1h', startDate: '2021-11-18', endDateTime: '2026-11-17 02:54:59', token: 'test',
+    fetchImpl: longHistoryFetch({ shortBy: 1, calls }),
+  });
+  // Page one is full (5000), page two is one short (4999) and ends the history, as before.
+  assert.ok(result.values.length >= 9999 && result.values.length <= 10000, 'n ' + result.values.length);
+  assert.equal(calls.length, 2);
 });

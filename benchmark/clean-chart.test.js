@@ -73,7 +73,8 @@ test("a planned trade shows the trader's own lines and lighter suggested exits",
       },
     },
   });
-  const styles = Object.fromEntries(chart.levels.map((l) => [l.label, l.style]));
+  // Stop tags now carry their size, "Suggested stop (20 pips)"; the name is what this test is about.
+  const styles = Object.fromEntries(chart.levels.map((l) => [l.label.replace(/ \([^)]*\)$/, ""), l.style]));
   assert.equal(styles["Your stop"], "stop");
   assert.equal(styles["Suggested stop"], "planStop");
   assert.equal(styles["TP1"], "planTarget");
@@ -89,7 +90,7 @@ test("a placed trade shows entry, stop and take profit as the trader's own", () 
   });
   const labels = chart.levels.map((l) => l.label);
   assert.ok(labels.includes("Your entry"));
-  assert.ok(labels.includes("Your stop"));
+  assert.ok(labels.some((label) => /^Your stop( \([^)]*\))?$/.test(label)));
   assert.ok(labels.includes("Your take profit"));
 });
 

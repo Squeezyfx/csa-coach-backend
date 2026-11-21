@@ -25,7 +25,9 @@ export const DXY_INSTRUMENT='DXY_INDEX';
 // ICE US Dollar Index formula: 50.14348112 x EURUSD^-0.576 x USDJPY^0.136 x GBPUSD^-0.119 x USDCAD^0.091 x USDSEK^0.042 x USDCHF^0.036.
 const DXY_FORMULA={constant:50.14348112,parts:[['EUR_USD',-0.576],['USD_JPY',0.136],['GBP_USD',-0.119],['USD_CAD',0.091],['USD_SEK',0.042],['USD_CHF',0.036]]};
 // Finer candles the index is computed from, then rolled up to the requested candle size.
-const SYNTHETIC_FINER={'1min':'1min','5min':'1min','15min':'5min','30min':'5min','1h':'15min','4h':'15min','1day':'1h','1week':'4h'};
+// '1month' (the framework candle of every daily chart) is built from hourly candles: a month's high and low then sit
+// within a few hundredths of a point of the true ones, closer than a daily roll-up would.
+const SYNTHETIC_FINER={'1min':'1min','5min':'1min','15min':'5min','30min':'5min','1h':'15min','4h':'15min','1day':'1h','1week':'4h','1month':'1h'};
 export function oandaInstrument(symbol='') {
  const raw=String(symbol).toUpperCase().replace(/^#/,'').replace(/[/_]/g,'');
  if(CFD_INSTRUMENTS[raw])return CFD_INSTRUMENTS[raw];
@@ -99,9 +101,15 @@ function endOfCandle(start,granularity,timezone){
 const BUCKET_MINUTES={'1min':1,'5min':5,'15min':15,'30min':30,'1h':60,'4h':240,'1day':1440,'1week':10080};
 // Wall-clock helpers for 'YYYY-MM-DD HH:MM:SS' strings that are already in the requested timezone.
 function addMinutesLocal(text,minutes){const d=new Date(text.replace(' ','T')+'Z');d.setUTCMinutes(d.getUTCMinutes()+minutes);return d.toISOString().slice(0,19).replace('T',' ');}
+// Where a candle that starts at `start` ends. A month is not a fixed number of minutes.
+function bucketEndLocal(start,interval){
+ if(interval==='1month'){const d=new Date(start.replace(' ','T')+'Z');d.setUTCMonth(d.getUTCMonth()+1);return d.toISOString().slice(0,19).replace('T',' ');}
+ return addMinutesLocal(start,BUCKET_MINUTES[interval]);
+}
 function bucketStartLocal(text,interval){
  const date=text.slice(0,10);
  if(interval==='1day')return `${date} 00:00:00`;
+ if(interval==='1month')return `${date.slice(0,7)}-01 00:00:00`;
  if(interval==='1week'){const d=new Date(`${date}T00:00:00Z`);d.setUTCDate(d.getUTCDate()-(d.getUTCDay()+6)%7);return `${d.toISOString().slice(0,10)} 00:00:00`;}
  const minutes=Number(text.slice(11,13))*60+Number(text.slice(14,16)),size=BUCKET_MINUTES[interval],start=minutes-minutes%size;
  return `${date} ${String(Math.floor(start/60)).padStart(2,'0')}:${String(start%60).padStart(2,'0')}:00`;
@@ -113,7 +121,9 @@ function bucketStartLocal(text,interval){
 async function fetchSyntheticDxy({interval,startDate,endDateTime,timezone='UTC',token,environment='practice',price='B',fetchImpl=fetch,maxPages=100}={}){
  const fine=SYNTHETIC_FINER[interval];
  if(!fine)throw fail('The US Dollar Index is not available for this candle size','symbol_unavailable');
- const series=await Promise.all(DXY_FORMULA.parts.map(([pair])=>fetchOandaSeries({symbol:pair,interval:fine,startDate,endDateTime,timezone,token,environment,price,fetchImpl,maxPages})));
+ const series=await Promise.all(DXY_FORMULA.parts.map(([pair])=>fetchOandaSeries({symbol:pair,interval:fine,startDate,endDateTime,timezone,token,environment,price,fetchImpl,maxPages,pageUntilEnd:true})));
+ // One line per fetch so a short history shows up in the log: pair, pages, candles, first and last.
+ try{console.log('[synthetic-dxy] '+interval+' from '+fine+' candles: '+series.map((s,i)=>DXY_FORMULA.parts[i][0]+' pages='+s.pages+' n='+s.values.length+' '+(s.values[0]?.datetime||'-')+'..'+(s.values[s.values.length-1]?.datetime||'-')).join(' | '));}catch{}
  const maps=series.map(s=>new Map(s.values.map(row=>[row.datetime,row])));
  const indexAt=(rows,field)=>{let v=DXY_FORMULA.constant;DXY_FORMULA.parts.forEach(([,weight],i)=>{v*=Math.pow(rows[i][field],weight);});return v;};
  const buckets=new Map();
@@ -129,14 +139,35 @@ async function fetchSyntheticDxy({interval,startDate,endDateTime,timezone='UTC',
  const round=row=>({datetime:row.datetime,open:Number(row.open.toFixed(4)),high:Number(row.high.toFixed(4)),low:Number(row.low.toFixed(4)),close:Number(row.close.toFixed(4))});
  const values=[];let alignmentCandle=null;
  for(const row of [...buckets.values()].sort((a,b)=>a.datetime.localeCompare(b.datetime))){
-  const forming=addMinutesLocal(row.datetime,BUCKET_MINUTES[interval])>cutoff;
+  const forming=bucketEndLocal(row.datetime,interval)>cutoff;
   if(forming&&isLiveWindow){alignmentCandle=round(row);continue;}
   values.push(round(row));
  }
  if(!values.length)throw fail('No completed index candles before cutoff','history_unavailable');
  return {values,providerSymbol:'DXY',source:'OANDA (computed US Dollar Index)',priceComponent:price,timezone,alignmentCandle,synthetic:true};
 }
-export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,timezone='UTC',token,environment='practice',price='B',fetchImpl=fetch,maxPages=100}={}){
+// OANDA reports a still-forming candle as it stands NOW: its close is the latest price, and its high and low
+// include everything after the screenshot was taken. Held up against a chart captured earlier, a fast market
+// (0.6% in under two hours) pushes an otherwise correct screenshot outside the 0.5% same-instrument limit. When the cutoff is
+// more than a few minutes old, the candle is rebuilt from finer candles that end at the cutoff, so it shows what the
+// chart showed. Any failure keeps the snapshot as it was. FORMING_CANDLE_AT_CUTOFF=off restores the snapshot.
+const FORMING_FINER={'5min':'1min','15min':'1min','30min':'1min','1h':'1min','4h':'1min','1day':'1min','1week':'15min','1month':'1h'};
+const FORMING_SNAPSHOT_GRACE_MS=3*60000;
+async function formingCandleAtCutoff({alignmentCandle,symbol,interval,endDateTime,end,timezone,token,environment,price,fetchImpl,maxPages}){
+ if(String(process.env.FORMING_CANDLE_AT_CUTOFF||'').trim().toLowerCase()==='off')return alignmentCandle;
+ const fine=FORMING_FINER[interval];
+ if(!fine||Date.now()-end<=FORMING_SNAPSHOT_GRACE_MS)return alignmentCandle;
+ try{
+  const inner=await fetchOandaSeries({symbol,interval:fine,startDate:String(alignmentCandle.datetime).slice(0,10),endDateTime,timezone,token,environment,price,fetchImpl,maxPages,pageUntilEnd:true});
+  const rows=inner.values.filter(row=>row.datetime>=alignmentCandle.datetime);
+  if(!rows.length)return alignmentCandle;
+  return {datetime:alignmentCandle.datetime,open:rows[0].open,high:Math.max(...rows.map(r=>r.high)),low:Math.min(...rows.map(r=>r.low)),close:rows[rows.length-1].close,atCutoff:true};
+ }catch(error){
+  try{console.log('[forming-candle] kept the live snapshot: '+(error?.message||error));}catch{}
+  return alignmentCandle;
+ }
+}
+export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,timezone='UTC',token,environment='practice',price='B',fetchImpl=fetch,maxPages=100,pageUntilEnd=false,formingAtCutoff=false}={}){
  const instrument=oandaInstrument(symbol),granularity=GRANULARITY[interval];
  if(!instrument)throw fail('OANDA forex adapter does not support this instrument','symbol_unavailable');
  if(!granularity)throw fail('Unsupported OANDA candle interval');
@@ -145,7 +176,7 @@ export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,ti
  const start=localToUtc(`${startDate} 00:00:00`,timezone),end=localToUtc(endDateTime,timezone);
  if(end<=start)throw fail('Empty historical window','history_unavailable');
  const origin=environment==='live'?'https://api-fxtrade.oanda.com':'https://api-fxpractice.oanda.com';
- const values=new Map();let cursor=start,includeFirst=true,finished=false,alignmentCandle=null;
+ const values=new Map();let cursor=start,includeFirst=true,finished=false,alignmentCandle=null,pages=1;
  // A candle whose own natural end extends past our requested cutoff is
  // genuinely still forming ONLY when that cutoff is close to the real
  // present moment - the live-analysis case this guards against look-ahead
@@ -186,12 +217,17 @@ export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,ti
    }
    values.set(time,row);
   }
-  if(last>=end||data.candles.length<5000){finished=true;break;}
-  if(last<=cursor)throw fail('OANDA pagination did not advance');cursor=last;includeFirst=false;
+  // A page one or two candles short of 5000 is not proof that the history ended (the US Dollar Index fetch stopped
+  // after two pages, about 10,000 hourly candles, and gave daily candles only up to June 2023). With pageUntilEnd the
+  // loop treats a short page as the end only when it already reaches within 8 days of the cutoff (weekends and holidays
+  // leave gaps of a few days), and otherwise asks again; it also stops at the cutoff, an empty page, or a page that adds nothing new.
+  if(last>=end||(data.candles.length<5000&&(!pageUntilEnd||end-last<8*86400000))){finished=true;break;}
+  if(last<=cursor){if(pageUntilEnd){finished=true;break;}throw fail('OANDA pagination did not advance');}cursor=last;includeFirst=false;pages++;
  }
  if(!finished)throw fail('OANDA history exceeded the page limit; partial history rejected','history_unavailable');
  if(!values.size)throw fail('No completed OANDA candles before cutoff','history_unavailable');
- return {values:[...values.entries()].sort((a,b)=>a[0]-b[0]).map(([,v])=>v),providerSymbol:instrument.replace('_','/'),source:'OANDA',priceComponent:price,timezone,alignmentCandle};
+ if(formingAtCutoff&&alignmentCandle)alignmentCandle=await formingCandleAtCutoff({alignmentCandle,symbol,interval,endDateTime,end,timezone,token,environment,price,fetchImpl,maxPages});
+ return {values:[...values.entries()].sort((a,b)=>a[0]-b[0]).map(([,v])=>v),providerSymbol:instrument.replace('_','/'),source:'OANDA',priceComponent:price,timezone,alignmentCandle,pages};
 }
 
 // The newest candles up to now: the completed ones, and the still-forming latest candle on its own.
@@ -212,4 +248,17 @@ export async function fetchCandlesAfterCutoff({symbol,interval,cutoff,timezone='
  if(endMs<=cutoffMs)return [];
  const series=await fetchOandaSeries({symbol,interval,startDate:cutoffText.slice(0,10),endDateTime:localString(endMs,timezone),timezone,token,environment,price,fetchImpl});
  return series.values.filter(row=>row.datetime>cutoffText);
+}
+
+// The same, plus the still-forming latest candle on its own. A screenshot taken within the last hours
+// shows that candle in its header, and a window of only a few completed candles is too small to prove
+// the feed by itself (see verifyFeedPastCutoff).
+export async function fetchLaterCandles({symbol,interval,cutoff,timezone='UTC',token,environment='practice',price='B',days=7,now=Date.now(),fetchImpl=fetch}={}){
+ const cutoffText=String(cutoff||'').slice(0,19);
+ const cutoffMs=localToUtc(cutoffText,timezone);
+ const endMs=Math.min(now,cutoffMs+days*86400000);
+ if(endMs<=cutoffMs)return {candles:[],forming:null};
+ const series=await fetchOandaSeries({symbol,interval,startDate:cutoffText.slice(0,10),endDateTime:localString(endMs,timezone),timezone,token,environment,price,fetchImpl});
+ const forming=series.alignmentCandle&&series.alignmentCandle.datetime>cutoffText?series.alignmentCandle:null;
+ return {candles:series.values.filter(row=>row.datetime>cutoffText),forming};
 }

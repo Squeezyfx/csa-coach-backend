@@ -58,18 +58,29 @@ export function fmtPrice(value) {
   return n.toFixed(5);
 }
 
-// Distance in pips for standard FX pairs, in plain price points for anything
-// else (gold, crypto, indices), where "pips" would mean different things.
+// Distance in pips for standard FX pairs, and for gold and the US Dollar Index with a fixed pip
+// (gold 1.00, so 95.6 points is 95.6 pips; dollar index 0.01). Anything else (silver, crypto, other
+// indices) stays in plain price points, where "pips" would mean different things.
+// Gold is always shown to one decimal (95.6, 192.3). Env GOLD_INDEX_PIPS=off puts gold and the
+// dollar index back to points.
+const goldIndexPip = (code) => {
+  if (String(process.env.GOLD_INDEX_PIPS || "").trim().toLowerCase() === "off") return null;
+  if (/^XAU[A-Z]{3}$/.test(code)) return { size: 1, oneDecimal: true };
+  if (/^(USDINDEX|DXY|USDOLLARINDEX|USDX)$/.test(code)) return { size: 0.01, oneDecimal: false };
+  return null;
+};
+
 export function priceDistance(diff, symbol = "") {
   const abs = Math.abs(Number(diff));
   if (!Number.isFinite(abs)) return { value: null, text: "" };
   const code = compactSymbol(symbol);
   const isFxPair =
     /^[A-Z]{6}$/.test(code) && !/XAU|XAG|XPT|XPD|BTC|ETH|LTC|XRP/.test(code);
-  if (isFxPair) {
-    const pipSize = code.includes("JPY") ? 0.01 : 0.0001;
+  const fixed = goldIndexPip(code);
+  if (isFxPair || fixed) {
+    const pipSize = fixed ? fixed.size : code.includes("JPY") ? 0.01 : 0.0001;
     const pips = abs / pipSize;
-    const rounded = pips >= 10 ? Math.round(pips) : Math.round(pips * 10) / 10;
+    const rounded = pips >= 10 && !fixed?.oneDecimal ? Math.round(pips) : Math.round(pips * 10) / 10;
     return { value: abs, text: `${rounded} ${rounded === 1 ? "pip" : "pips"}` };
   }
   const rounded = abs >= 100 ? Math.round(abs * 10) / 10 : Math.round(abs * 100) / 100;

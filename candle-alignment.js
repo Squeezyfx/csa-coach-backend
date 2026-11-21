@@ -345,9 +345,15 @@ export function reconcileWithHeaderFeedOffset({
  * candle that fits almost as well does not block the match, because only the feed is being
  * proven here, not which candle the header shows. Only a candle after the cutoff counts; a
  * header that matches nothing later leaves the status as it was.
+ *
+ * Short windows (a screenshot taken hours after the cutoff has only a few later candles) are judged
+ * at a tight tolerance instead, with the provider's still-forming candle as one more possible match:
+ * the loose ATR tolerance fits most of a few quiet candles (AUDUSD 13 Nov: 8 of 12) and used to end
+ * in "fit_not_selective", dropping the market data. A tight fit by one or two candles is enough.
  */
 export function verifyFeedPastCutoff({
   chartDataMatch, candles = [], header = null, cutoff = "", tolerance, maxOffset = null, onDiagnostic = null,
+  forming = null, selectiveTolerance = null, clock = null, intervalMinutes = null,
 } = {}) {
   if (!chartDataMatch || !["mismatch", "date_unverified", "time_unverified", "partial_or_unknown_candle"]
     .includes(chartDataMatch.status)) {
@@ -367,36 +373,103 @@ export function verifyFeedPastCutoff({
     const r = ohlcAligned(visible, candle, tolerance, { maxOffset });
     if (r.aligned) hits.push({ candle, ...r });
   }
+  // The still-forming candle (the provider's incomplete latest one) is what a live screenshot's
+  // header usually shows. Its range only grows, so it must contain the header's high and low, and
+  // its open must track the header's open; that is judged at the tight tolerance below.
+  const tightTolerance = Number(selectiveTolerance) > 0 ? Number(selectiveTolerance) : tolerance * 0.25;
+  let formingHit = null;
+  if (forming && forming.datetime && FIELDS.every((f) => num(forming[f]) !== null) &&
+      normalizeCandleDatetime(forming.datetime) > limit) {
+    const r = ohlcAligned(visible, forming, tightTolerance, { partial: true, maxOffset });
+    if (r.aligned) formingHit = { candle: forming, ...r };
+  }
+  // A header is a snapshot of a candle that was still forming. By the time the review runs (often an
+  // hour or more later: AUDUSD 13 Nov, screenshot 12:41, review 13:30) that candle has completed and
+  // its range has grown, so a full four-price fit no longer holds. It is still recognisable: its open
+  // is the header's open (an open never moves) and its high and low contain the header's.
+  const grownHits = [];
+  for (const candle of later) {
+    const r = ohlcAligned(visible, candle, tightTolerance, { partial: true, maxOffset });
+    if (r.aligned && Math.abs(r.diffs?.open ?? Infinity) <= tightTolerance) grownHits.push({ candle, ...r });
+  }
+  grownHits.sort((a, b) => Math.abs(a.diffs.open) - Math.abs(b.diffs.open));
+  // What the chart clock contributed, shown in every diagnostic so a miss can be explained from the log.
+  let clockCheck = { clock: clock || null, intervalMinutes: intervalMinutes ?? null, slot: null };
   const finish = (reason, extra = {}) => {
-    if (typeof onDiagnostic === "function") onDiagnostic({ reason, hits: hits.length, window: later.length, ...extra });
+    if (typeof onDiagnostic === "function") onDiagnostic({ reason, hits: hits.length, window: later.length, forming: Boolean(formingHit), clockCheck, ...extra });
     return chartDataMatch;
   };
-  if (!later.length) return finish("no_candles_after_cutoff");
-  if (!hits.length) return finish("no_candle_after_cutoff_fits_header");
+  const upgrade = (hit, basis, extra = {}) => {
+    if (typeof onDiagnostic === "function") {
+      onDiagnostic({ reason: "upgraded", basis, hits: hits.length, window: later.length, residual: hit.residual, offset: hit.offset, headerCandle: hit.candle.datetime, clockCheck, ...extra });
+    }
+    return {
+      ...chartDataMatch,
+      status: "matched_reference",
+      matchMode: "header_feed_past_cutoff",
+      feedOffset: hit.offset,
+      ohlcResidual: hit.residual,
+      headerCandleDate: hit.candle.datetime,
+      // The comparison that proved the feed: the header against the candle it identified.
+      comparisons: FIELDS.map((field) => ({ field, chart: visible[field], provider: num(hit.candle[field]) })),
+      tolerance,
+      priorStatus: chartDataMatch.status,
+      reason: "The screenshot runs past the chosen cutoff. Its header identified a real provider candle after the cutoff, so the feed is the chart's own; the review still uses only candles up to the cutoff.",
+    };
+  };
+  // The chart prints the time the screenshot was taken, and the header is the candle that time falls
+  // in (12:41 on an hourly chart: the 12:00 candle). That names the one candle to check, so similar
+  // quiet candles around it cannot make the proof ambiguous (AUDUSD 13 Nov: 4 candidates, 1 right).
+  const slot = candleSlotFromClock(clock, intervalMinutes);
+  if (slot) {
+    const pool = [...later];
+    if (forming && forming.datetime && FIELDS.every((f) => num(forming[f]) !== null) &&
+        normalizeCandleDatetime(forming.datetime) > limit) pool.push(forming);
+    const named = [];
+    // The candle is named by the clock, so only sanity bounds are needed: the feeds' opens may differ
+    // by a pip or two (the chart's feed is not the provider's), and its range must contain the header's.
+    const clockTolerance = tightTolerance * 2;
+    clockCheck = { clock, slot, candidates: [] };
+    for (const candle of pool.filter((c) => normalizeCandleDatetime(c.datetime).slice(11, 16) === slot)) {
+      const r = ohlcAligned(visible, candle, clockTolerance, { partial: true, maxOffset });
+      const openDiff = r.diffs?.open ?? null;
+      const ok = r.aligned && Math.abs(openDiff ?? Infinity) <= clockTolerance;
+      clockCheck.candidates.push({ at: candle.datetime, openDiff, ok, why: ok ? null : r.reason || "open_too_far" });
+      if (ok) named.push({ candle, ...r });
+    }
+    // One candle at that time of day per day: more than two fitting days is not an identification.
+    if (named.length >= 1 && named.length <= 2) {
+      named.sort((a, b) => Math.abs(a.diffs.open) - Math.abs(b.diffs.open));
+      return upgrade(named[0], "clock_candle", { clock, slot, named: named.length });
+    }
+  }
+  if (!later.length && !formingHit) return finish("no_candles_after_cutoff");
+  if (!hits.length && !formingHit && !grownHits.length) return finish("no_candle_after_cutoff_fits_header");
   hits.sort((a, b) => a.residual - b.residual || (normalizeCandleDatetime(a.candle.datetime) < normalizeCandleDatetime(b.candle.datetime) ? -1 : 1));
-  const hit = hits[0];
-  if (hit.residual > tolerance * 0.5) return finish("best_fit_too_loose", { residual: hit.residual });
+  const hit = hits[0] || null;
   // The candle's identity is not used (only that the chart is this feed), so a second candle that
   // fits nearly as well does not matter: on a quiet session several hourly candles look alike
   // within an ATR-scaled tolerance. What does matter is that the fit is selective. A shape that
   // fits most of the later candles proves nothing about the feed.
-  if (hits.length > later.length * 0.5) return finish("fit_not_selective", { residual: hit.residual });
-  if (typeof onDiagnostic === "function") {
-    onDiagnostic({ reason: "upgraded", hits: hits.length, window: later.length, residual: hit.residual, offset: hit.offset, headerCandle: hit.candle.datetime });
+  if (hit && hit.residual <= tolerance * 0.5 && hits.length <= later.length * 0.5) return upgrade(hit, "loose_fit");
+
+  // Short windows: a screenshot taken hours after the cutoff has only a few later candles, and a
+  // small still-forming header fits most of them within the loose tolerance (AUDUSD, 13 Nov: 8 of
+  // 12). Judge selectivity at the tight tolerance instead: only a candle that fits to a fraction of
+  // the loose tolerance counts, and it must be one of very few.
+  const tightHits = hits.filter((h) => h.residual <= tightTolerance);
+  const seen = new Set(tightHits.map((h) => normalizeCandleDatetime(h.candle.datetime)));
+  const extraGrown = grownHits.filter((h) => !seen.has(normalizeCandleDatetime(h.candle.datetime)));
+  const tightCount = tightHits.length + extraGrown.length + (formingHit ? 1 : 0);
+  if (tightCount >= 1 && tightCount <= Math.max(2, Math.floor(later.length * 0.25))) {
+    let proof = formingHit;
+    let basis = "forming_candle";
+    if (extraGrown[0] && !proof) { proof = extraGrown[0]; basis = "grown_candle"; }
+    if (tightHits[0] && (!proof || tightHits[0].residual <= proof.residual)) { proof = tightHits[0]; basis = "tight_fit"; }
+    return upgrade(proof, basis, { tightHits: tightHits.length, grownHits: extraGrown.length });
   }
-  return {
-    ...chartDataMatch,
-    status: "matched_reference",
-    matchMode: "header_feed_past_cutoff",
-    feedOffset: hit.offset,
-    ohlcResidual: hit.residual,
-    headerCandleDate: hit.candle.datetime,
-    // The comparison that proved the feed: the header against the candle it identified.
-    comparisons: FIELDS.map((field) => ({ field, chart: visible[field], provider: num(hit.candle[field]) })),
-    tolerance,
-    priorStatus: chartDataMatch.status,
-    reason: "The screenshot runs past the chosen cutoff. Its header identified a real provider candle after the cutoff, so the feed is the chart's own; the review still uses only candles up to the cutoff.",
-  };
+  if (hit && hit.residual > tolerance * 0.5 && !tightCount) return finish("best_fit_too_loose", { residual: hit.residual });
+  return finish("fit_not_selective", { residual: hit ? hit.residual : null, tightHits: tightHits.length, grownHits: extraGrown.length });
 }
 
 /**
@@ -470,6 +543,26 @@ export function locateFinalVisibleCandle({
   }
   if (!completed.length && !formingHit) return { ok: false, reason: "no_candle_fits_header", window: usable.length };
   return { ok: false, reason: "ambiguous", hits: completed.length + (formingHit ? 1 : 0), window: usable.length };
+}
+
+/**
+ * "12:41:56" on a 60-minute chart is the "12:00" candle. Only intervals up to an hour, which start on
+ * clock multiples; 4-hour and daily candles start where the provider says, so nothing is named.
+ */
+export function intervalToMinutes(interval) {
+  const m = /^(\d+)\s*(min|m|h|hour)$/i.exec(String(interval || "").trim());
+  if (!m) return null;
+  const n = Number(m[1]);
+  return /^h/i.test(m[2]) ? n * 60 : n;
+}
+
+export function candleSlotFromClock(clock, intervalMinutes) {
+  const step = Number(intervalMinutes);
+  const t = /^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/.exec(String(clock || "").trim());
+  if (!t || !(step >= 1 && step <= 60) || 60 % step !== 0) return null;
+  const minutes = Number(t[1]) * 60 + Number(t[2]);
+  const start = Math.floor(minutes / step) * step;
+  return `${String(Math.floor(start / 60)).padStart(2, "0")}:${String(start % 60).padStart(2, "0")}`;
 }
 
 function normalizeCandleDatetime(value = "") {

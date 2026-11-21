@@ -1,6 +1,7 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
-import { fetchCandlesAfterCutoff, fetchOandaSeries, fetchRecentCandles, forexPipSize, oandaInstrument, isSyntheticInstrument } from "./oanda-data.js";
+import { FORMING_FINER, formingCandleNeedsRebuild, rebuildFormingCandle } from "./forming-candle.js";
+import { fetchCandlesAfterCutoff, fetchLaterCandles, fetchOandaSeries, fetchRecentCandles, forexPipSize, oandaInstrument, isSyntheticInstrument } from "./oanda-data.js";
 import { chooseWatchReferences } from "./watch-references.js";
 import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage, shouldTagSignup } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
@@ -28,13 +29,14 @@ import {
   describeAccount,
 } from "./indicator-access.js";
 import { analyseFrameworkEntries, toProviderInventoryRows, toProviderFrameFields, supplementLivePeriod } from "./framework-periods.js";
-import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch, reconcileWithHeaderFeedOffset, verifyFeedPastCutoff, locateFinalVisibleCandle, FINAL_VISIBLE_LOOKBACK_DAYS } from "./candle-alignment.js";
+import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlignedCandle, reconcileChartDataMatch, reconcileWithHeaderFeedOffset, verifyFeedPastCutoff, intervalToMinutes, locateFinalVisibleCandle, FINAL_VISIBLE_LOOKBACK_DAYS } from "./candle-alignment.js";
 import { periodCompleteAtCutoff } from "./period-completion.js";
 import { buildDateCheck, describeDateCheck } from "./date-check.js";
+import { isPrintedAxisTick } from "./axis-ticks.js";
 import { resolveFrameworkBias, calendarMapping, newWeekWithoutCompletedDay } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
-import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData, isCryptoSymbol } from "./market-data-matching.js";
+import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData, shouldRetainProviderPeriods, isCryptoSymbol } from "./market-data-matching.js";
 import { auditPeriodInventory, compareDatedPeriodInventories, isUnverifiedPeriodCandidate, buildCompletedPeriodReferences, reconcilePeriodMapping, buildNoEntryTransparencyAudit, normalizePeriodDateForCompare } from "./period-accuracy.js";
 import cors from "cors";
 import multer from "multer";
@@ -59,6 +61,7 @@ import {
   getMarketDataSymbolCandidates,
   getSupplyDemandClusterTolerance,
   hasIndependentChartPriceEvidence,
+  hasSupplyDemandFailed,
   isMostRecentStructureCompatibleImpulse,
   shouldApplyFinalVisibleTerminalImpulse,
   isSupportedInstrumentCode,
@@ -83,10 +86,11 @@ import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
 import { fetchHighImpactNews, describeNewsToday } from "./news-calendar.js";
-import { parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt } from "./chart-timezone.js";
-import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle } from "./feed-price-guard.js";
+import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "./entry-labels.js";
+import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate } from "./chart-timezone.js";
+import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
-import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, matchedFrameworkAreas } from "./marked-lines.js";
+import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas } from "./marked-lines.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -3474,6 +3478,38 @@ function normalizeTwelveDataDateTime(value = "") {
   return text.slice(0, 19);
 }
 
+// The provider's still-open candle reflects now, not the moment of an older screenshot (see forming-candle.js).
+// Rebuilds that one candle as it stood at the cutoff from finer candles; any failure keeps the provider's candle.
+async function formingValuesAtCutoff({ values = [], interval, providerSymbol, cutoff, timezone = "UTC", apiKey }) {
+  try {
+    const last = values[values.length - 1];
+    if (!formingCandleNeedsRebuild({ candle: last, interval, cutoff, timezone })) return values;
+    const params = new URLSearchParams({
+      symbol: providerSymbol,
+      interval: FORMING_FINER[interval],
+      start_date: `${String(last.datetime).slice(0, 10)} 00:00:00`,
+      timezone,
+      order: "ASC",
+      outputsize: "5000",
+      apikey: apiKey,
+    });
+    const response = await fetch(`${TWELVE_DATA_BASE_URL}?${params.toString()}`, { signal: AbortSignal.timeout(15000) });
+    const data = await response.json();
+    if (!response.ok || data.status === "error" || !Array.isArray(data.values)) return values;
+    const rebuilt = rebuildFormingCandle({ candle: last, fineRows: data.values, cutoff });
+    if (!rebuilt) return values;
+    console.log("[forming-candle] rebuilt at the chart cutoff: " + JSON.stringify({
+      interval, cutoff, candle: last.datetime,
+      was: { high: Number(last.high), low: Number(last.low), close: Number(last.close) },
+      now: { high: rebuilt.high, low: rebuilt.low, close: rebuilt.close },
+    }));
+    return [...values.slice(0, -1), { ...last, high: String(rebuilt.high), low: String(rebuilt.low), close: String(rebuilt.close) }];
+  } catch (error) {
+    console.log("[forming-candle] kept the provider candle: " + (error?.message || error));
+    return values;
+  }
+}
+
 async function fetchTwelveDataStructureLevels({
   symbol,
   chartDate,
@@ -3605,7 +3641,7 @@ async function fetchTwelveDataStructureLevels({
     preferredProviderSymbol = "",
   }) => {
     if (useOanda) {
-      const result = await fetchOandaSeries({symbol,interval,startDate,endDateTime,timezone,token:process.env.OANDA_API_TOKEN,environment:process.env.OANDA_ENVIRONMENT || "practice",price:process.env.OANDA_PRICE_COMPONENT || "B"});
+      const result = await fetchOandaSeries({symbol,interval,startDate,endDateTime,timezone,token:process.env.OANDA_API_TOKEN,environment:process.env.OANDA_ENVIRONMENT || "practice",price:process.env.OANDA_PRICE_COMPONENT || "B",formingAtCutoff:interval === profile.interval});
       if (interval === profile.interval) oandaAlignmentCandle = result.alignmentCandle || null;
       resolvedProviderSymbol = result.providerSymbol;
       return result;
@@ -3638,7 +3674,10 @@ async function fetchTwelveDataStructureLevels({
         const metadataError = validateProviderMetadata(data.meta, providerSymbol, interval);
         if (metadataError) throw new Error(metadataError);
         resolvedProviderSymbol = providerSymbol;
-        return { values: data.values || [], providerSymbol };
+        const providerValues = interval === profile.interval
+          ? await formingValuesAtCutoff({ values: data.values || [], interval, providerSymbol, cutoff: endDateTime, timezone, apiKey })
+          : (data.values || []);
+        return { values: providerValues, providerSymbol };
       }
 
       const message =
@@ -21208,6 +21247,14 @@ function deriveVerifiedFixedPeriodBias(options = {}) {
   return resolveFrameworkBias(options);
 }
 
+// How many closes in a row beyond a supply/demand zone fail it (default 2). ZONE_FAILURE_CLOSES=0 is off.
+function zoneFailureClosesSetting() {
+  const raw = String(process.env.ZONE_FAILURE_CLOSES ?? "2").trim().toLowerCase();
+  if (raw === "off") return 0;
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n >= 0 && n <= 10 ? n : 2;
+}
+
 function buildPeriodInventoryStructuralCandidates({
   periodInventory = [],
   visualReview = {},
@@ -21218,6 +21265,10 @@ function buildPeriodInventoryStructuralCandidates({
   inventoryProvenanceVerified = true,
   referencePeriods = [],
   verifiedReferencePeriods = [],
+  // Chart-timeframe candles up to the cutoff, and how many closes beyond a supply/demand
+  // zone fail it (0 = rule off). See hasSupplyDemandFailed.
+  executionCandles = [],
+  zoneFailureCloses = 0,
 } = {}) {
   // Independently verified per-period high/low (passed its own integrity
   // audit - see completedPeriodReferences) is strictly more trustworthy than
@@ -21292,11 +21343,47 @@ function buildPeriodInventoryStructuralCandidates({
     periods.map((period, index) => [String(period.periodLabel), index])
   );
 
+  const failedZoneCandidates = [];
   const periodCandidates = frameworkAreas.map((area) => {
     const price = asPositiveNumber(area?.price);
     const originalType = String(area?.type || "").toLowerCase();
     const periodLabel = String(area?.period || area?.day || "");
     const periodIndex = periodIndexByLabel.get(periodLabel) ?? -1;
+    // A supply or demand zone that price has closed beyond (zoneFailureCloses closes in a row on
+    // the chart timeframe) is spent: it is dropped here, never used and never converted into
+    // support/resistance. True support/resistance keeps its own conversion memory below.
+    if (
+      zoneFailureCloses > 0 &&
+      ["supply", "demand"].includes(originalType) &&
+      price !== null &&
+      periodIndex >= 0
+    ) {
+      const nextPeriod = periods[periodIndex + 1] || inProgressPeriods[0] || null;
+      const nextDate = normalizePeriodDateForCompare(nextPeriod?.date ?? nextPeriod?.key ?? "");
+      if (nextDate) {
+        const failure = hasSupplyDemandFailed({
+          type: originalType,
+          price,
+          candles: executionCandles,
+          afterDate: nextDate,
+          requiredCloses: zoneFailureCloses,
+        });
+        if (failure.failed) {
+          failedZoneCandidates.push({
+            price,
+            zoneLow: price,
+            zoneHigh: price,
+            areaType: originalType,
+            originalType,
+            sourcePeriod: periodLabel,
+            provenanceVerified: false,
+            requiresReview: false,
+            rejectionReason: `${originalType} zone failed: price closed beyond it ${zoneFailureCloses} times in a row (from ${failure.at})`,
+          });
+          return null;
+        }
+      }
+    }
     const laterPeriods = periodIndex >= 0 ? periods.slice(periodIndex + 1) : [];
     // The live period is never an entry source, but it can prove that an
     // earlier high/low has been broken. Without that confirmation a prior
@@ -21357,8 +21444,13 @@ function buildPeriodInventoryStructuralCandidates({
         : "unverified_chart_estimated_period_inventory",
       _sourcePeriodIndex: periodIndex,
     };
-  });
+  }).filter(Boolean);
 
+  if (failedZoneCandidates.length) {
+    console.log("[zone-failed] dropped failed supply/demand zones: " + JSON.stringify(
+      failedZoneCandidates.map((zone) => ({ period: zone.sourcePeriod, type: zone.areaType, price: zone.price, why: zone.rejectionReason }))
+    ));
+  }
   const rejectedPeriodCandidates = [];
   const referenceExtremes = (Array.isArray(referencePeriods) ? referencePeriods : [])
     .map((ref) => ({
@@ -21550,7 +21642,7 @@ function buildPeriodInventoryStructuralCandidates({
 
   return {
     candidates,
-    rejectedVisualCandidates: [...rejectedVisualCandidates, ...rejectedPeriodCandidates, ...supersededPeriodCandidates],
+    rejectedVisualCandidates: [...rejectedVisualCandidates, ...rejectedPeriodCandidates, ...supersededPeriodCandidates, ...failedZoneCandidates],
     periods,
     inProgressPeriods,
   };
@@ -21754,6 +21846,10 @@ function rankChartNativeFallbackAreas({
     verifiedReferencePeriods: Array.isArray(fallback?.completedPeriodReferences?.periods)
       ? fallback.completedPeriodReferences.periods
       : [],
+    // A supply/demand zone that price has closed beyond twice in a row is spent and is not used.
+    // ZONE_FAILURE_CLOSES=0 turns the rule off (back to the earlier behaviour); default 2.
+    executionCandles: Array.isArray(marketReference?.timeframeCandles) ? marketReference.timeframeCandles : [],
+    zoneFailureCloses: zoneFailureClosesSetting(),
   });
   if (inventoryAuthority === "provider_reference_provisional") {
     for (const candidate of authoritativeInventory.candidates) {
@@ -26171,6 +26267,7 @@ function supplementReferencesWithExactChartLevels({
   direction = "range",
   currentPrice = null,
   symbol = "",
+  axisTickPrices = [],
 }) {
   const result = references.map((reference) => ({ ...reference }));
   const atr = averageTrueRange(
@@ -26197,6 +26294,17 @@ function supplementReferencesWithExactChartLevels({
         "per_target_framework_price_reader",
       ].includes(String(item?.extractionSource || ""))
     )
+    // The independent line reader sometimes returns a printed axis number as a "drawn line". Reconciling
+    // a framework level to it would move that level onto the axis number (AUDUSD, 13 Nov 2026: Thursday's
+    // low 0.67971 became "TP2 0.68000", three pips above the real low). A price read at a printed tick is
+    // not evidence of a drawn line, so it is set aside before any level is reconciled to it.
+    .filter((item) => {
+      if (String(item?.extractionSource || "") !== "independent_horizontal_line_reader_exact") return true;
+      const price = nullablePositiveNumber(item?.displayedPrice);
+      if (price === null || !isPrintedAxisTick(price, axisTickPrices)) return true;
+      console.log("[axis-tick] ignored a line read at a printed axis number: " + price);
+      return false;
+    })
     .map((item) => nullablePositiveNumber(item?.displayedPrice))
     .filter((price) => price !== null)
     .filter((price, index, prices) =>
@@ -26352,6 +26460,12 @@ function supplementReferencesWithExactChartLevels({
     // period. Preserve it as reference-only so exact visible S/R is not lost.
     // It can never enter the candidate/Fib path from this reference function.
     if (!matchingFrameworkArea) {
+      // A "line" read exactly at a printed axis number, with no framework level behind it, is the
+      // axis number itself (AUDUSD, 13 Nov 2026: 0.68000 shown as "Level to watch" with no line drawn).
+      if (isPrintedAxisTick(price, axisTickPrices)) {
+        console.log("[axis-tick] ignored a line read at a printed axis number: " + price);
+        continue;
+      }
       const chartReferenceType = price < Number(currentPrice)
         ? "support"
         : "resistance";
@@ -26944,6 +27058,7 @@ function buildValidatedAnalysisFacts({
     direction: lockedMarketState.direction,
     currentPrice,
     symbol: submittedInstrument,
+    axisTickPrices: chartDetection?.priceAxisTicks,
   });
 
   logEntrySelectionAudit({
@@ -28831,9 +28946,22 @@ function buildControlledFeedback({
     );
   }
 
-  // Every drawn line that sits on a framework level is credited, not only the first area.
+  // Every drawn line that sits on a framework level is credited, not only the first area. A marked level that
+  // is one of the entry areas says which one (AUDUSD H4 2026-11-20: the line on Entry 3 only got "You marked
+  // levels on the chart"). MARKED_ENTRY_NAMED=off restores the old wording.
+  const nameMarkedEntries = String(process.env.MARKED_ENTRY_NAMED || "on").toLowerCase() !== "off";
+  const markedEntryNumberList = userEvidence.chartMarked && nameMarkedEntries
+    ? markedEntryNumbers(userEvidence.markedFrameworkAreas, selectedEntryAreas)
+    : [];
   const markedFrameworkAreasText = userEvidence.chartMarked
     ? markedAreasStrength(userEvidence.markedFrameworkAreas, {
+        label: plainAreaTypeLabel,
+        format: formatPrice,
+        entryNumbers: markedEntryNumberList,
+      })
+    : "";
+  const markedSingleEntryText = userEvidence.chartMarked && nameMarkedEntries
+    ? markedEntryStrength(userEvidence.markedFrameworkAreas, markedEntryNumberList, {
         label: plainAreaTypeLabel,
         format: formatPrice,
       })
@@ -28850,6 +28978,8 @@ function buildControlledFeedback({
       `You marked the ${plainAreaTypeLabel(area.areaType)} area ${area.zoneText}, matching the framework's first area.`,
       { short: "Your marked area matches" }
     );
+  } else if (markedSingleEntryText) {
+    addStrength("entry", markedSingleEntryText, { short: "Your marked area matches" });
   } else if (userEvidence.chartMarked) {
     addStrength(
       "entry",
@@ -32026,6 +32156,58 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       }
     }
 
+    // LIVE CLOCK DATE. A printed clock that matches the server's own clock means the screenshot is minutes
+    // old, so its last candle is today's, however far out the reader's month-label guess was (a dollar-index
+    // chart read as 16 Nov and USDCHF as 14 Nov at 02:47 UTC on 17 Nov: the review was cut off early, the
+    // feed no longer matched the chart and no entries were selected). Only replaces a date that was inferred,
+    // never an explicit one, and never on a weekend. LIVE_CLOCK_DATE=off turns it off.
+    if (String(process.env.LIVE_CLOCK_DATE || "on").toLowerCase() !== "off" && normalizedRequestedCutoffMode === "final_visible") {
+      const clockDate = liveClockDate({ chartDetection, chartTimezone: chartDetection?.chartTimezone, nowMs: Date.now() });
+      if (clockDate) {
+        console.log("[chart-date] the chart's clock matches the server's clock, so the screenshot is from today:", {
+          readDate: clockDate.readDate,
+          usedInstead: clockDate.date,
+          chartClock: chartDetection?.chartClock || null,
+          chartTimezone: chartDetection?.chartTimezone || null,
+        });
+        chartDetection = {
+          ...chartDetection,
+          latestVisibleDate: clockDate.date,
+          dateConfidence: "high",
+          latestVisibleDateEvidence: "explicit_final_candle_timestamp",
+          dateReadByChartReader: clockDate.readDate,
+          dateFromLiveClock: true,
+        };
+      } else {
+        // The date is already today's but only inferred, for example the typed date that replaced a reading in
+        // the future (XAUUSD H4, 2026-11-20 02:53 UTC: read as 6 Dec, replaced by the typed 20 Nov, which left the
+        // date "unverified", the provider data not trusted and no entries although the clock matched to the
+        // second). A fresh printed clock proves it, so it counts as verified. Only that rescued-date case and
+        // only intraday charts: a daily chart compares its open/high/low too, and a late-session candle can
+        // differ from the data's day (gold-late-session), so those keep the unverified route.
+        // LIVE_CLOCK_CONFIRMS_DATE=off disables.
+        const clockConfirms = String(process.env.LIVE_CLOCK_CONFIRMS_DATE || "on").toLowerCase() !== "off" &&
+          chartDetection?.latestVisibleDateEvidence === "typed_date_after_future_rejection" &&
+          ["M1", "M5", "M15", "M30", "H1", "H4"].includes(String(timeframe || "").toUpperCase())
+          ? liveClockConfirmsDate({ chartDetection, chartTimezone: chartDetection?.chartTimezone, nowMs: Date.now() })
+          : null;
+        if (clockConfirms) {
+          console.log("[chart-date] the chart's clock confirms the date:", {
+            date: clockConfirms.date,
+            evidenceWas: chartDetection?.latestVisibleDateEvidence || null,
+            chartClock: chartDetection?.chartClock || null,
+            chartTimezone: chartDetection?.chartTimezone || null,
+          });
+          chartDetection = {
+            ...chartDetection,
+            dateConfidence: "high",
+            latestVisibleDateEvidence: "explicit_final_candle_timestamp",
+            dateFromLiveClock: true,
+          };
+        }
+      }
+    }
+
     // FINAL VISIBLE date fallback. In Final visible candle mode the chart's own date controls the
     // review, but a screenshot that prints no date for its last candle (TradingView's axis shows day
     // numbers only) leaves nothing to override a wrong typed date with, so the review silently used
@@ -32719,7 +32901,7 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
           const header = Object.values(headerPrices).every((v) => Number(v) > 0)
             ? headerPrices
             : (await readChartHeaderOhlc({ imageBase64, mimeType })) || headerPrices;
-          const laterCandles = await fetchCandlesAfterCutoff({
+          const later = await fetchLaterCandles({
             symbol: normalizedSymbol,
             interval: selectedTimeframeProfile.interval,
             cutoff: chartCutoff.endDateTime,
@@ -32731,7 +32913,14 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
           const pastCutoffMatch = verifyFeedPastCutoff({
             onDiagnostic: (info) => console.log("[chart-data-match] past-cutoff feed check: " + JSON.stringify({ symbol: normalizedSymbol, status: chartDataMatch.status, cutoff: chartCutoff.endDateTime, header, ...info })),
             chartDataMatch,
-            candles: laterCandles,
+            candles: later.candles,
+            // The still-forming candle, and a one-pip tolerance for judging how selective the fit is
+            // (the ATR-scaled tolerance below is too loose for a short window of later candles).
+            forming: later.forming,
+            selectiveTolerance: forexPipSize(normalizedSymbol) || null,
+            // The time printed on the chart clock names the candle the header shows.
+            clock: chartDetection?.chartClock || null,
+            intervalMinutes: intervalToMinutes(selectedTimeframeProfile.interval),
             header,
             cutoff: chartCutoff.endDateTime,
             tolerance: getFinalVisiblePriceSyncTolerance({ marketReference, symbol: normalizedSymbol, targetPrice: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice }),
@@ -32772,10 +32961,18 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       // symbols (BTC, XAU) discard their framework candles on date_unverified
       // before the same-instrument check could run, which is why they reported
       // frameworkCandleCount: 0 despite a full execution series.
-      const retainCompletedOandaReference = ["OANDA", "Twelve Data"].includes(marketReference.dataProvider || "Twelve Data") &&
-        completedPeriodReferences.periods.length > 0 &&
-        (knownSmallGap ||
-          ["date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(chartDataMatch.status));
+      // A weekly-framework H4 chart (XAUUSD H4, 2026-11-20) has the provider's four weekly candles but no
+      // daily-style completed references, so it lost every level on a weak match: the provider's own framework
+      // periods count too (KEEP_PROVIDER_PERIODS_ON_WEAK_MATCH=off restores the old condition).
+      const retainCompletedOandaReference = shouldRetainProviderPeriods({
+        provider: marketReference.dataProvider,
+        completedPeriodCount: completedPeriodReferences.periods.length,
+        providerFrameworkPeriodCount: String(process.env.KEEP_PROVIDER_PERIODS_ON_WEAK_MATCH || "on").toLowerCase() === "off"
+          ? 0
+          : (Array.isArray(marketReference?.providerPeriodAnalysis?.periods) ? marketReference.providerPeriodAnalysis.periods.length : 0),
+        knownSmallGap,
+        status: chartDataMatch.status,
+      });
       if (!["matched_reference", "partial_reference"].includes(chartDataMatch.status) && !retainCompletedOandaReference) {
         // Do not pass mismatched prices to downstream AI or deterministic selection.
         marketReference = clearRejectedProviderData({ ...marketReference, error: chartDataMatch.reason,
@@ -33559,9 +33756,14 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
           return Math.abs(chartValue - providerValue) / Math.abs(chartValue);
         })
         .filter((value) => value !== null);
-      const sameInstrumentConfirmed =
-        feedDeviations.length > 0 &&
-        feedDeviations.every((value) => value <= SAME_INSTRUMENT_TOLERANCE_RATIO);
+      // When the chart's last candle could not be lined up with the data's (date/time unverified), only the
+      // close is compared: the chart's open/high/low can belong to a different session (see the function).
+      const sameInstrumentCheck = sameInstrumentFromFeed({
+        comparisons: feedComparisons,
+        status: marketReference?.chartDataMatch?.status,
+        ratio: SAME_INSTRUMENT_TOLERANCE_RATIO,
+      });
+      const sameInstrumentConfirmed = sameInstrumentCheck.confirmed;
       const providerInventoryAuthoritative =
         marketReference?.ok === true &&
         Array.isArray(marketReference?.providerPeriodAnalysis?.periods) &&
@@ -33612,6 +33814,11 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
         dataMatchStatus: marketReference?.chartDataMatch?.status || null,
         maxFeedDeviationPct: feedDeviations.length
           ? Number((Math.max(...feedDeviations) * 100).toFixed(4)) : null,
+        // Which prices were compared and which were judged (log only): the close alone when the chart's
+        // candle is not lined up with the data's.
+        feedComparisons: feedComparisons.map((item) => ({ field: item?.field, chart: item?.chart, provider: item?.provider })),
+        feedCandle: marketReference?.chartDataMatch?.candleDate || null,
+        closeOnly: sameInstrumentCheck.closeOnly,
         sameInstrumentConfirmed,
         providerInventoryAuthoritative,
         marketInventoryVerified,
@@ -34266,6 +34473,15 @@ ${(visualReview?.strategyMissingInformation || []).length
 
     analysis = finalFeedback.analysis;
 
+    // "Buy 1" / "Sell 1" instead of "Entry 1" in what the trader reads (chart labels, legend, written
+    // feedback), so the direction is obvious to a beginner. Display only, applied at the very end; the engine,
+    // its logs and the saved numbers keep entry1 / entry2 / entry3. Benchmark runs keep the old wording so
+    // their output does not change. BUY_SELL_LABELS=off turns it off.
+    const entryWord =
+      String(process.env.BUY_SELL_LABELS || "on").toLowerCase() === "off" || benchmarkDryRun || benchmarkDiagnosticOnly
+        ? "Entry"
+        : entryWordForDirection(analysisFacts?.direction);
+
     const dashboardFeedback = applyControlledFeedbackToDashboard(
       legacyDashboardFeedback,
       finalFeedback
@@ -34315,6 +34531,9 @@ ${(visualReview?.strategyMissingInformation || []).length
         instrument: submittedInstrument,
         timeframe,
         analysisType: mode,
+        entryWord,
+        // Stop size on the stop tags ("Stop 1 (97.42 pts)"). CHART_STOP_DISTANCE=off hides it.
+        showStopDistance: String(process.env.CHART_STOP_DISTANCE || "").trim().toLowerCase() !== "off",
         dataMatchStatus: pageDataMatchStatus(
           marketReference?.chartDataMatch?.status,
           Boolean(marketReference?.dataProvider || marketReference?.chartDataMatch),
@@ -34582,13 +34801,13 @@ ${(visualReview?.strategyMissingInformation || []).length
           selectedDateText ||
           null,
         analysis:
-          normalizeUserFacingTypographyDeep(analysis),
+          normalizeUserFacingTypographyDeep(relabelEntriesDeep(analysis, entryWord)),
         chartDetection,
         visualReview:
           normalizeUserFacingTypographyDeep(visualReview),
         marketReference,
         dashboardFeedback:
-          normalizeUserFacingTypographyDeep(dashboardFeedback),
+          normalizeUserFacingTypographyDeep(relabelEntriesDeep(dashboardFeedback, entryWord)),
         dateDecision,
         analysisFramework:
           selectedStrategy.analysisFramework,
@@ -34617,7 +34836,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       }
     }
 
-    finalClientResponse = normalizeUserFacingTypographyDeep({
+    finalClientResponse = normalizeUserFacingTypographyDeep(relabelCustomerText({
       ...finalClientResponse,
       savedToJournal:
         journalSave.savedToJournal,
@@ -34629,7 +34848,7 @@ ${(visualReview?.strategyMissingInformation || []).length
         journalSave.chartImagePath,
       entitlement:
         updatedEntitlement,
-    });
+    }, entryWord));
 
     csaTimingLog(
       "total_analysis_to_commit",

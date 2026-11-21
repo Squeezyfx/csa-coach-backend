@@ -202,6 +202,21 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
   });
 }
 
+// Weak matches: the chart's last candle could not be lined up with the data's (date, time or close), which says
+// nothing against the data's COMPLETED periods. A wrong chart (another symbol, a wrong date) is a "mismatch".
+export const WEAK_MATCH_STATUSES = ["date_unverified", "time_unverified", "partial_or_unknown_candle"];
+
+// Keep the provider's completed framework periods when the match is only weak? They are the authority for the
+// week's levels, and the same-instrument check (whole percent apart means another symbol) runs on what is kept.
+// The periods that count are the chart-aligned references OR, for charts whose framework is weekly or monthly
+// (XAUUSD H4: four weekly candles loaded, but no daily references built), the provider's own framework periods:
+// before, those charts lost their levels on any weak match and fell back to a picture-only review with no entries.
+export function shouldRetainProviderPeriods({ provider = "", completedPeriodCount = 0, providerFrameworkPeriodCount = 0, knownSmallGap = false, status = "" } = {}) {
+  if (!["OANDA", "Twelve Data"].includes(provider || "Twelve Data")) return false;
+  if (!(Number(completedPeriodCount) > 0) && !(Number(providerFrameworkPeriodCount) > 0)) return false;
+  return Boolean(knownSmallGap) || WEAK_MATCH_STATUSES.includes(String(status || ""));
+}
+
 export function clearRejectedProviderData(reference = {}) {
   const safe = {};
   // structureRangeDiagnostics added alongside: needed to see the actual

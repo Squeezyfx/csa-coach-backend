@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData } from "../market-data-matching.js";
+import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData, shouldRetainProviderPeriods, WEAK_MATCH_STATUSES } from "../market-data-matching.js";
 
 test("variable length crypto and metals normalize without substituting quotes", () => {
   for (const [input, expected] of [["DOGEUSD","DOGE/USD"],["XPTUSD","XPT/USD"],["Platinum","XPT/USD"],["BTCUSDT","BTC/USDT"],["COCOA","COCOA"],["USDINDEX","USDINDEX"],["SPX","SPX"]]) assert.equal(providerSymbol(input), expected);
@@ -102,4 +102,30 @@ test("server gates inventory approval and UI exposes source failures", () => {
   assert.match(server, /!marketReference.chartDataMatch &&\s*normalizedRequestedCutoffMode/);
   assert.match(ui, /Provider reference; not broker-exact/);
   assert.match(ui, /providerFailure.reason/);
+});
+
+// XAUUSD H4, 2026-11-20 02:53 UTC: four weekly candles loaded from Twelve Data, but no daily-style completed
+// references, so any weak match (date unverified, then a close 3.3 points off) wiped the levels and the review fell back
+// to a picture-only read with no entries. EURUSD/AUDUSD H4 passed only because their match was exact.
+test("a weak match keeps the provider's framework periods, a mismatch still clears them", () => {
+  const gold = { provider: "Twelve Data", completedPeriodCount: 0, providerFrameworkPeriodCount: 4, knownSmallGap: false };
+  for (const status of WEAK_MATCH_STATUSES) assert.equal(shouldRetainProviderPeriods({ ...gold, status }), true, status);
+  assert.equal(shouldRetainProviderPeriods({ ...gold, status: "mismatch" }), false);
+  assert.equal(shouldRetainProviderPeriods({ ...gold, status: "chart_mismatch" }), false);
+  // daily-style references keep working exactly as before
+  assert.equal(shouldRetainProviderPeriods({ provider: "OANDA", completedPeriodCount: 3, providerFrameworkPeriodCount: 0, status: "date_unverified" }), true);
+  // nothing to keep, or another provider: no change
+  assert.equal(shouldRetainProviderPeriods({ ...gold, providerFrameworkPeriodCount: 0, status: "date_unverified" }), false);
+  assert.equal(shouldRetainProviderPeriods({ ...gold, provider: "Other", status: "date_unverified" }), false);
+  // a known small gap keeps them on any status
+  assert.equal(shouldRetainProviderPeriods({ ...gold, knownSmallGap: true, status: "mismatch" }), true);
+  assert.deepEqual(WEAK_MATCH_STATUSES, ["date_unverified", "time_unverified", "partial_or_unknown_candle"]);
+});
+
+test("the server decides keep-or-clear with that rule and has an off switch", () => {
+  const server = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  assert.match(server, /shouldRetainProviderPeriods\(\{\s+provider: marketReference\.dataProvider,/);
+  assert.match(server, /KEEP_PROVIDER_PERIODS_ON_WEAK_MATCH/);
+  assert.match(server, /marketReference\?\.providerPeriodAnalysis\?\.periods\)/);
+  assert.match(server, /clearRejectedProviderData\(\{ \.\.\.marketReference, error: chartDataMatch\.reason,/);
 });

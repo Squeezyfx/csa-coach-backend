@@ -1041,7 +1041,19 @@ export function aggregateH4CandlesIntoWeeklyInventory({
   // Monday's actual date instead - not by whether the candle's OWN month
   // matches - includes that opening week's earlier days correctly.
   const openingMonday = new Date(Date.UTC(cutoffYear, cutoffMonth, 1));
-  openingMonday.setUTCDate(openingMonday.getUTCDate() - ((openingMonday.getUTCDay() + 6) % 7));
+  const firstOfMonthWeekday = openingMonday.getUTCDay();
+  openingMonday.setUTCDate(openingMonday.getUTCDate() - ((firstOfMonthWeekday + 6) % 7));
+  // A month that opens on a Saturday or Sunday (November 2026, August 2026)
+  // has no session-market trading day in the Monday-Friday week that contains
+  // its 1st, so that week belongs to the previous month and W1 is the next
+  // Monday. framework-calendar.js calendarMapping already skips it for that
+  // reason; without the same rule here the inventory returned one more week
+  // than the calendar expected (4 vs 3 for November 2026), the date sequence
+  // failed, the weekly frame was never verified, and a clear breakdown got no
+  // entry area. Crypto trades weekends, so its weeks are left as they were.
+  if (!tradesOnWeekends && (firstOfMonthWeekday === 0 || firstOfMonthWeekday === 6)) {
+    openingMonday.setUTCDate(openingMonday.getUTCDate() + 7);
+  }
   const grouped = new Map();
 
   for (const candle of Array.isArray(candles) ? candles : []) {
@@ -1615,4 +1627,44 @@ export function consolidateQualifiedSupplyDemandClusters(
   }
 
   return consolidated;
+}
+
+/**
+ * Has a supply or demand zone failed? A zone fails when price CLOSES beyond its
+ * extreme `requiredCloses` times in a row (above a supply, below a demand) on a
+ * candle that starts after the period that made it. A wick through the zone, or
+ * a single close, does not fail it. A failed zone is spent for good: it stays
+ * out even if price comes back, and it is never converted into support or
+ * resistance (only true support/resistance has that memory).
+ * The last candle is skipped because it may still be forming; a failure that
+ * only the live candle shows is not confirmed yet.
+ */
+export function hasSupplyDemandFailed({
+  type = "",
+  price = null,
+  candles = [],
+  afterDate = "",
+  requiredCloses = 2,
+} = {}) {
+  const kind = String(type || "").toLowerCase();
+  const level = Number(price);
+  const needed = Math.max(1, Math.floor(Number(requiredCloses) || 0));
+  if (!["supply", "demand"].includes(kind) || !Number.isFinite(level) || level <= 0 || !Array.isArray(candles)) {
+    return { failed: false, at: null };
+  }
+  const after = String(afterDate || "").slice(0, 10);
+  const ordered = candles
+    .filter((c) => c && c.datetime && Number.isFinite(Number(c.close)))
+    .map((c) => ({ day: String(c.datetime).slice(0, 10), datetime: String(c.datetime), close: Number(c.close) }))
+    .sort((a, b) => a.datetime.localeCompare(b.datetime));
+  // Everything but the final candle, which may still be forming.
+  const settled = ordered.slice(0, Math.max(0, ordered.length - 1));
+  let run = 0;
+  for (const candle of settled) {
+    if (after && candle.day < after) continue;
+    const beyond = kind === "supply" ? candle.close > level : candle.close < level;
+    run = beyond ? run + 1 : 0;
+    if (run >= needed) return { failed: true, at: candle.datetime };
+  }
+  return { failed: false, at: null };
 }
