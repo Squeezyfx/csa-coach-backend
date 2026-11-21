@@ -81,9 +81,11 @@ export function buildCleanChart({
     };
   }
 
-  const decimals = decimalsFor(rows.flatMap((r) => [r.o, r.h, r.l, r.c]));
   const high = Math.max(...rows.map((r) => r.h));
   const low = Math.min(...rows.map((r) => r.l));
+  // A price in the thousands (gold, indices, crypto) is never meaningful to five decimals: the data carries
+  // them, the trader's chart shows two (gold tags read 3853.26757 beside the text's 3853.27).
+  const decimals = high >= 1000 ? Math.min(2, decimalsFor(rows.flatMap((r) => [r.o, r.h, r.l, r.c]))) : decimalsFor(rows.flatMap((r) => [r.o, r.h, r.l, r.c]));
   const range = high - low || Math.abs(high) * 0.001;
   const last = rows[rows.length - 1].c;
 

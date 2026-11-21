@@ -34511,7 +34511,13 @@ ${(visualReview?.strategyMissingInformation || []).length
         dataMatchStatus: pageDataMatchStatus(
           marketReference?.chartDataMatch?.status,
           Boolean(marketReference?.dataProvider || marketReference?.chartDataMatch),
-          isSyntheticInstrument(submittedInstrument)
+          // "Lower confidence" warns that levels may be missing. When the framework's own periods are verified
+          // (same instrument confirmed, entries found) and only the chart's last candle could not be lined up
+          // with the data's, there is nothing missing, so the warning is left off (XAUUSD H4, AUDUSD H4
+          // 2026-11-20/21). A real "mismatch" still warns. BANNER_HIDE_WHEN_VERIFIED=off restores it.
+          isSyntheticInstrument(submittedInstrument) ||
+            (String(process.env.BANNER_HIDE_WHEN_VERIFIED || "on").toLowerCase() !== "off" &&
+              chartDetection?.marketInventoryDiagnostics?.marketInventoryVerified === true)
         ),
       });
     } catch (error) {
