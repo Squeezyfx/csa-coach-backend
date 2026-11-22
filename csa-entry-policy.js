@@ -19,6 +19,8 @@ const INSTRUMENT_ALIASES = new Map([
   ["EU50", "EU50"], ["STOXX50", "EU50"], ["CHINA50", "CHINA50"],
   ["WTI", "USOIL"], ["USOIL", "USOIL"], ["BRENT", "UKOIL"], ["UKOIL", "UKOIL"],
   ["USDINDEX", "USDINDEX"], ["DXY", "USDINDEX"], ["PLATINUM", "XPTUSD"], ["COCOA", "COCOA"],
+  // Brokers print the dollar index name cut short ("USDINDE" on ThinkMarkets) or as USDIDX / "Dollar Index".
+  ["USDINDE", "USDINDEX"], ["USDIDX", "USDINDEX"], ["DOLLARINDEX", "USDINDEX"],
 ]);
 
 const SUPPORTED_INSTRUMENTS = new Set([

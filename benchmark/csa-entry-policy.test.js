@@ -654,6 +654,25 @@ test("normalizes common index aliases while preserving broker index tickers", ()
   assert.equal(canonicalInstrumentCode("USA500.S,Daily"), "US500");
 });
 
+test("every way the dollar index name is written or cut off reads as the same instrument", () => {
+  // A ThinkMarkets chart prints the name cut short ("USDINDE" or "USDINDEX"); typing USDINDEX or DXY must still match it.
+  for (const written of ["USDINDEX", "USDINDE", "USDIDX", "DXY", "DXY,H4", "US Dollar Index", "Dollar Index", "USDINDEX.cash"]) {
+    assert.equal(canonicalInstrumentCode(written), "USDINDEX", written);
+  }
+  assert.equal(hasStrongInstrumentMismatchForTest("USDINDEX", "USDINDE"), false);
+  assert.equal(hasStrongInstrumentMismatchForTest("DXY", "USDINDE"), false);
+  assert.equal(hasStrongInstrumentMismatchForTest("XAUUSD", "USDINDE"), true);
+  assert.equal(hasStrongInstrumentMismatchForTest("EURUSD", "USDINDEX"), true);
+});
+
+// The server's own rule (hasStrongInstrumentMismatch in server.js): two comparable codes of 6+ characters that differ.
+function hasStrongInstrumentMismatchForTest(selected, detected) {
+  const a = canonicalInstrumentCode(selected);
+  const b = canonicalInstrumentCode(detected);
+  if (!a || !b || a.length < 6 || b.length < 6) return false;
+  return a !== b;
+}
+
 test("maps broker index names to provider candidates without changing CSA identity", () => {
   assert.deepEqual(getMarketDataSymbolCandidates("USA30"), ["DJI", "USA30"]);
   assert.deepEqual(getMarketDataSymbolCandidates("US30.cash"), ["DJI", "USA30"]);
