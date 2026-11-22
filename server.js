@@ -89,7 +89,7 @@ import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "
 import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate, correctChartDateYear } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
-import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, supersedingDrawnLine } from "./marked-lines.js";
+import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, supersedingDrawnLine } from "./marked-lines.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -27577,6 +27577,8 @@ function buildValidatedAnalysisFacts({
       frameworkCenter: asPositiveNumber(candidate.frameworkCenter),
       chartReconciledCenter: asPositiveNumber(candidate.chartReconciledCenter),
       levelText: safeUserText(candidate.levelText || ""),
+      // Where the price came from; "independent_horizontal_line_reader_exact" is the trader's own drawn line.
+      priceSource: candidate.priceSource || null,
       state: candidate.state,
       sourceReason: safeUserText(candidate.sourceReason || ""),
       distanceFromPrice:
@@ -28964,18 +28966,28 @@ function buildControlledFeedback({
   // is one of the entry areas says which one (AUDUSD H4 2026-11-20: the line on Entry 3 only got "You marked
   // levels on the chart"). MARKED_ENTRY_NAMED=off restores the old wording.
   const nameMarkedEntries = String(process.env.MARKED_ENTRY_NAMED || "on").toLowerCase() !== "off";
-  const markedEntryNumberList = userEvidence.chartMarked && nameMarkedEntries
-    ? markedEntryNumbers(userEvidence.markedFrameworkAreas, selectedEntryAreas)
+  // A drawn line that reached no framework period but became an entry in its own right is credited too
+  // (USDINDEX H4 2026-11-22: the line at 102.227 was Buy 2 and got no credit). Only when no line was matched
+  // to a framework level, so a matched line is never counted twice. DRAWN_ENTRY_CREDIT=off turns it off.
+  const drawnEntryCredit =
+    String(process.env.DRAWN_ENTRY_CREDIT || "on").toLowerCase() !== "off" &&
+    !(Array.isArray(userEvidence.markedFrameworkAreas) && userEvidence.markedFrameworkAreas.length)
+      ? drawnLineEntryCredit(selectedEntryAreas)
+      : { areas: [], numbers: [] };
+  const creditAreas = drawnEntryCredit.areas.length ? drawnEntryCredit.areas : userEvidence.markedFrameworkAreas;
+  const creditMarked = userEvidence.chartMarked || drawnEntryCredit.areas.length > 0;
+  const markedEntryNumberList = creditMarked && nameMarkedEntries
+    ? (drawnEntryCredit.areas.length ? drawnEntryCredit.numbers : markedEntryNumbers(userEvidence.markedFrameworkAreas, selectedEntryAreas))
     : [];
-  const markedFrameworkAreasText = userEvidence.chartMarked
-    ? markedAreasStrength(userEvidence.markedFrameworkAreas, {
+  const markedFrameworkAreasText = creditMarked
+    ? markedAreasStrength(creditAreas, {
         label: plainAreaTypeLabel,
         format: formatPrice,
         entryNumbers: markedEntryNumberList,
       })
     : "";
-  const markedSingleEntryText = userEvidence.chartMarked && nameMarkedEntries
-    ? markedEntryStrength(userEvidence.markedFrameworkAreas, markedEntryNumberList, {
+  const markedSingleEntryText = creditMarked && nameMarkedEntries
+    ? markedEntryStrength(creditAreas, markedEntryNumberList, {
         label: plainAreaTypeLabel,
         format: formatPrice,
       })

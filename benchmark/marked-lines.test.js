@@ -7,6 +7,7 @@ import {
   frameworkMatchedLineReads,
   lineMarksArea,
   markChartFromFrameworkLines,
+  drawnLineEntryCredit,
   markLinesOnAreas,
   markedAreasStrength,
   markedEntryNumbers,
@@ -215,7 +216,8 @@ test("the review pipeline uses these helpers", () => {
   assert.match(serverSource, /matchedFrameworkPrice: nullablePositiveNumber\(item\?\.matchedFrameworkPrice\)/);
   assert.match(serverSource, /matchedFrameworkPrice: nullablePositiveNumber\(match\?\.frameworkPrice\)/);
   assert.match(serverSource, /markedFrameworkAreas: matchedFrameworkAreas\(visibleUserMarkedLevels, currentPrice\)/);
-  assert.match(serverSource, /markedAreasStrength\(userEvidence\.markedFrameworkAreas/);
+  assert.match(serverSource, /const creditAreas = drawnEntryCredit\.areas\.length \? drawnEntryCredit\.areas : userEvidence\.markedFrameworkAreas/);
+  assert.match(serverSource, /markedAreasStrength\(creditAreas/);
   assert.match(serverSource, /visualReview = markChartFromFrameworkLines\(visualReview\)/);
   assert.match(serverSource, /lineMarksArea\(\s*visibleUserMarkedLevels/);
   assert.match(serverSource, /matchTolerance: nullablePositiveNumber\(match\?\.selectedTolerance\)/);
@@ -296,4 +298,59 @@ test("the server feeds each line's match tolerance into the replacement, with an
   assert.match(serverSource, /LINE_REPLACES_LEVEL/);
   assert.match(serverSource, /supersedingDrawnLine\(\{\s+candidatePrice: periodPrice,\s+candidatePrices: periodCandidatePrices,\s+lines: drawnLines,\s+fraction: DRAWN_LINE_SUPERSEDES_FRACTION,/);
   assert.match(serverSource, /asPositiveNumber\(level\?\.matchTolerance\)/);
+});
+
+// USDINDEX H4, 22 Nov 2026: Buy 1 = last week-of-2-Nov high 102.3448 (period inventory), Buy 2 = the trader's own line at
+// 102.227 (line reader). No line reached a framework period, so nothing credited the line.
+const dxyEntries = [
+  { priceSource: "deterministic_period_high_low_inventory", authoritativeCenter: 102.3448, areaType: "converted support" },
+  { priceSource: EXACT, authoritativeCenter: 102.227, areaType: "converted support" },
+];
+
+test("a drawn line that became an entry is found, with its entry number", () => {
+  const credit = drawnLineEntryCredit(dxyEntries);
+  assert.deepEqual(credit.numbers, [2]);
+  assert.deepEqual(credit.areas, [{ price: 102.227, areaType: "converted support" }]);
+});
+
+test("entries from period highs and lows, reference-only reads and bad prices are not drawn-line entries", () => {
+  assert.deepEqual(drawnLineEntryCredit([dxyEntries[0]]), { areas: [], numbers: [] });
+  assert.deepEqual(drawnLineEntryCredit([{ priceSource: `${EXACT}_reference_only`, authoritativeCenter: 1.2 }]), { areas: [], numbers: [] });
+  assert.deepEqual(drawnLineEntryCredit([{ priceSource: EXACT, authoritativeCenter: 0 }, { priceSource: EXACT }]), { areas: [], numbers: [] });
+  assert.deepEqual(drawnLineEntryCredit(null), { areas: [], numbers: [] });
+});
+
+test("two drawn lines that became entries are numbered; the same price twice counts once", () => {
+  const credit = drawnLineEntryCredit([
+    { priceSource: EXACT, authoritativeCenter: 1.1, areaType: "support" },
+    { priceSource: "deterministic_period_high_low_inventory", authoritativeCenter: 1.2, areaType: "demand" },
+    { priceSource: EXACT, authoritativeCenter: 1.3, areaType: "resistance" },
+    { priceSource: EXACT, authoritativeCenter: 1.3, areaType: "resistance" },
+  ]);
+  assert.deepEqual(credit.numbers, [1, 3]);
+});
+
+test("the credit text names the entry: one drawn entry says which, two list both", () => {
+  const credit = drawnLineEntryCredit(dxyEntries);
+  const opts = { label: () => "resistance-turned-support", format: (p) => p.toFixed(3), entryNumbers: credit.numbers };
+  assert.equal(
+    markedEntryStrength(credit.areas, credit.numbers, opts),
+    "You marked the resistance-turned-support area around 102.227, which is the framework's second entry area (Entry 2)."
+  );
+  const two = drawnLineEntryCredit([
+    { priceSource: EXACT, authoritativeCenter: 1.1, areaType: "support" },
+    { priceSource: EXACT, authoritativeCenter: 1.2, areaType: "support" },
+  ]);
+  assert.equal(
+    markedAreasStrength(two.areas, { label: () => "support", format: (p) => p.toFixed(1), entryNumbers: two.numbers }),
+    "You marked two framework levels: the support area around 1.1 and the support area around 1.2. Entry 1 and Entry 2 are among them."
+  );
+});
+
+test("the server credits a drawn-line entry only when no line was matched to a framework level, with an off switch", () => {
+  const serverSource = readFileSync(fileURLToPath(new URL("../server.js", import.meta.url)), "utf8");
+  assert.match(serverSource, /DRAWN_ENTRY_CREDIT/);
+  assert.match(serverSource, /drawnLineEntryCredit\(selectedEntryAreas\)/);
+  assert.match(serverSource, /!\(Array\.isArray\(userEvidence\.markedFrameworkAreas\) && userEvidence\.markedFrameworkAreas\.length\)/);
+  assert.match(serverSource, /priceSource: candidate\.priceSource \|\| null,\s+state: candidate\.state/);
 });

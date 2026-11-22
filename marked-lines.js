@@ -126,6 +126,26 @@ export function markedEntryNumbers(areas = [], entries = [], relativeTolerance =
 
 const ORDINAL_WORDS = ["first", "second", "third"];
 
+// The trader's own drawn lines that the engine used as entry areas, in entry order (the entries array is the entry
+// list: index 0 is Entry 1). A drawn line that reached no framework period is an entry in its own right (the
+// price map compares lines with framework levels, and the line reader's own areas are left out of that
+// comparison), so nothing else credits it: USDINDEX H4 2026-11-22, the trader's line at 102.227 became Buy 2 and
+// "What you did well" only said the pair and timeframe matched.
+// Returns { areas: [{ price, areaType }], numbers: [entry numbers] }.
+export const DRAWN_LINE_ENTRY_SOURCE = "independent_horizontal_line_reader_exact";
+export function drawnLineEntryCredit(entries = []) {
+  const areas = [];
+  const numbers = [];
+  (Array.isArray(entries) ? entries : []).forEach((entry, index) => {
+    if (String(entry?.priceSource || "") !== DRAWN_LINE_ENTRY_SOURCE) return;
+    const price = positive(entry?.authoritativeCenter);
+    if (price === null || areas.some((area) => sameLine(area.price, price))) return;
+    areas.push({ price, areaType: String(entry?.areaType || "") });
+    numbers.push(index + 1);
+  });
+  return { areas, numbers };
+}
+
 // One marked level that sits on one of the framework's entry areas: "You marked the ... area around 0.68538,
 // which is the framework's third entry area (Entry 3)." Several levels are credited by markedAreasStrength.
 export function markedEntryStrength(areas = [], entryNumbers = [], { label = (type) => type, format = String } = {}) {
