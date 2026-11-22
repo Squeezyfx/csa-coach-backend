@@ -1,7 +1,7 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { FORMING_FINER, formingCandleNeedsRebuild, rebuildFormingCandle } from "./forming-candle.js";
-import { fetchCandlesAfterCutoff, fetchLaterCandles, fetchOandaSeries, fetchRecentCandles, forexPipSize, oandaInstrument, isSyntheticInstrument } from "./oanda-data.js";
+import { fetchCandlesAfterCutoff, fetchLaterCandles, fetchOandaSeries, fetchRecentCandles, forexPipSize, oandaInstrument, isSyntheticInstrument, syntheticIndexTolerance } from "./oanda-data.js";
 import { chooseWatchReferences } from "./watch-references.js";
 import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage, shouldTagSignup } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
@@ -89,7 +89,7 @@ import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "
 import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate, correctChartDateYear } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
-import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, supersedingDrawnLine } from "./marked-lines.js";
+import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, supersedingDrawnLine } from "./marked-lines.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -7129,9 +7129,16 @@ function getExactLineMatchTolerances({ marketReference, timeframe }) {
       atr,
     });
 
+  // The dollar index is computed from OANDA's six currency pairs, so its levels sit up to about 0.25 from the trader's
+  // broker chart: a line drawn on the broker's period high is matched to ours. SYNTHETIC_LINE_TOLERANCE=off removes it.
+  const feedAllowance =
+    String(process.env.SYNTHETIC_LINE_TOLERANCE || "on").toLowerCase() !== "off"
+      ? syntheticIndexTolerance(marketReference?.symbol || "") ?? 0
+      : 0;
+
   return {
     standardTolerance,
-    exactLabelTolerance: Math.max(standardTolerance, Number(atr || 0) * 0.25),
+    exactLabelTolerance: lineMatchTolerance({ standardTolerance, atr, feedAllowance }),
   };
 }
 

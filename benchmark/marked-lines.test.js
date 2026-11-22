@@ -8,6 +8,7 @@ import {
   lineMarksArea,
   markChartFromFrameworkLines,
   drawnLineEntryCredit,
+  lineMatchTolerance,
   markLinesOnAreas,
   markedAreasStrength,
   markedEntryNumbers,
@@ -353,4 +354,43 @@ test("the server credits a drawn-line entry only when no line was matched to a f
   assert.match(serverSource, /drawnLineEntryCredit\(selectedEntryAreas\)/);
   assert.match(serverSource, /!\(Array\.isArray\(userEvidence\.markedFrameworkAreas\) && userEvidence\.markedFrameworkAreas\.length\)/);
   assert.match(serverSource, /priceSource: candidate\.priceSource \|\| null,\s+state: candidate\.state/);
+});
+
+// USDINDEX H4, 22 Nov 2026: the trader's line at 102.227 is the week-of-2-Nov high on their own chart (MT4 shows 102.22);
+// our index (built from six OANDA pairs) has that high at 102.301 (exchange weekly) or 102.3448 (candle-built).
+// ATR 0.1464 gives a 0.0366 tolerance, so the line matched nothing and stayed a second entry beside the high.
+const dxyLine = { extractionSource: EXACT, displayedPrice: 102.227 };
+const dxyAreas = [
+  { price: 102.3448, areaType: "converted support", period: "W1" },
+  { price: 101.2006, areaType: "support", period: "W1" },
+  { price: 103.4343, areaType: "converted support", period: "W2" },
+  { price: 101.4984, areaType: "demand", period: "W2" },
+];
+
+test("the index gets the feed allowance; every other instrument keeps the quarter-ATR tolerance", () => {
+  assert.equal(lineMatchTolerance({ standardTolerance: 0.0117, atr: 0.1464, feedAllowance: 0 }), 0.0366);
+  assert.equal(lineMatchTolerance({ standardTolerance: 0.0117, atr: 0.1464, feedAllowance: 0.25 }), 0.25);
+  assert.equal(lineMatchTolerance({ standardTolerance: 5, atr: 47.36, feedAllowance: 0 }), 11.84);
+  assert.equal(lineMatchTolerance({}), 0);
+});
+
+test("with the index allowance the line on our week-of-2-Nov high is matched, and it replaces that high as the entry", () => {
+  const before = matchLinesToAreas([dxyLine], dxyAreas, 0.0366);
+  assert.equal(before[0].matchedFrameworkPeriod, undefined);
+  const after = matchLinesToAreas([dxyLine], dxyAreas, 0.25);
+  assert.equal(after[0].matchedFrameworkPrice, 102.3448);
+  assert.equal(after[0].matchTolerance, 0.25);
+  const candidatePrices = dxyAreas.map((area) => area.price);
+  assert.equal(supersedingDrawnLine({ candidatePrice: 102.3448, candidatePrices, lines: [{ price: 102.227, tolerance: 0.25 }] }), 102.227);
+  assert.equal(supersedingDrawnLine({ candidatePrice: 102.3448, candidatePrices, lines: [{ price: 102.227, tolerance: 0.0366 }] }), undefined);
+  // the other period levels are not swallowed
+  assert.equal(supersedingDrawnLine({ candidatePrice: 103.4343, candidatePrices, lines: [{ price: 102.227, tolerance: 0.25 }] }), undefined);
+  assert.equal(supersedingDrawnLine({ candidatePrice: 101.4984, candidatePrices, lines: [{ price: 102.227, tolerance: 0.25 }] }), undefined);
+});
+
+test("the server adds the index feed allowance to the line match tolerance, with an off switch", () => {
+  const serverSource = readFileSync(fileURLToPath(new URL("../server.js", import.meta.url)), "utf8");
+  assert.match(serverSource, /SYNTHETIC_LINE_TOLERANCE/);
+  assert.match(serverSource, /syntheticIndexTolerance\(marketReference\?\.symbol \|\| ""\) \?\? 0/);
+  assert.match(serverSource, /exactLabelTolerance: lineMatchTolerance\(\{ standardTolerance, atr, feedAllowance \}\)/);
 });

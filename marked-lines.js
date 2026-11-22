@@ -11,6 +11,16 @@ const isExactLineRead = (item) =>
 
 const sameLine = (a, b) => Math.abs(a - b) <= Number.EPSILON * 100;
 
+// How far a drawn line's printed price may sit from a framework level and still count as that level: the larger of
+// the standard reconciliation tolerance, a quarter of the ATR, and the feed allowance. The dollar index is built from
+// six currency pairs (OANDA), not the trader's broker feed, and its levels drift 0.07 to 0.19 from the broker's chart;
+// USDINDEX H4 2026-11-22: the trader's line at 102.227 (the week of 2 Nov high on the ThinkMarkets chart, 102.22 on the
+// MT4 chart) was 0.074 from the exchange weekly high and 0.118 from the candle-built one, outside a 0.037 tolerance, so
+// it stayed a second entry next to that high. feedAllowance is that index tolerance (0 for every other instrument).
+export function lineMatchTolerance({ standardTolerance = 0, atr = 0, feedAllowance = 0 } = {}) {
+  return Math.max(Number(standardTolerance) || 0, (Number(atr) || 0) * 0.25, Number(feedAllowance) || 0);
+}
+
 // The same drawn line is read twice: once on its own (no framework period) and once
 // matched to a framework level. Only the first copy survives the de-duplication, so
 // the match is copied onto it as extra fields that nothing else reads.
