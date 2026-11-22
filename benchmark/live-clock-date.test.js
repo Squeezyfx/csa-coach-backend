@@ -130,7 +130,7 @@ test("with the date confirmed the gold H4 chart matches the provider's candle; w
 
 test("server wiring: the confirmation follows the replacing rule, is limited to the rescued date on intraday charts, and has an off switch", () => {
   const server = readFileSync(new URL("../server.js", import.meta.url), "utf8");
-  assert.match(server, /liveClockConfirmsDate \} from "\.\/chart-timezone\.js";/);
+  assert.match(server, /liveClockConfirmsDate(, correctChartDateYear)? \} from "\.\/chart-timezone\.js";/);
   assert.match(server, /LIVE_CLOCK_CONFIRMS_DATE/);
   const replace = server.indexOf("const clockDate = liveClockDate(");
   const confirm = server.indexOf("liveClockConfirmsDate({ chartDetection");

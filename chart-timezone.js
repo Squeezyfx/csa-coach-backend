@@ -143,6 +143,48 @@ export function liveClockConfirmsDate(args = {}) {
   return liveClockDate({ ...args, confirmed: true });
 }
 
+// True when the chart's printed clock (not the last candle's time) matches the server's own clock in the chart's
+// timezone: the screenshot was taken minutes ago, on today or a day either side of midnight.
+function printedClockMatchesNow({ chartDetection, chartTimezone, nowMs, freshMinutes = 45, futureMinutes = 10 } = {}) {
+  const chart = parseChartTimezoneLabel(chartTimezone);
+  const clock = chartClockTime(chartDetection);
+  if (!chart || !clock || !clock.fromClock || !Number.isFinite(nowMs)) return false;
+  const hour = Number(clock.time.slice(0, 2));
+  const minute = Number(clock.time.slice(3, 5));
+  const chartNow = new Date(nowMs + chart.offsetMinutes * 60000);
+  const base = Date.UTC(chartNow.getUTCFullYear(), chartNow.getUTCMonth(), chartNow.getUTCDate());
+  return [0, -1, 1].some((dayShift) => {
+    const day = new Date(base + dayShift * 86400000);
+    const instant = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), hour, minute, 59) - chart.offsetMinutes * 60000;
+    const age = (nowMs - instant) / 60000;
+    return age >= -futureMinutes && age < freshMinutes;
+  });
+}
+
+// YEAR SLIP. A TradingView axis prints "Nov" and day numbers but no year, so the chart reader fills the year in from
+// habit. A dollar-index chart taken at 22:43 UTC on Sunday 22 Nov 2026 was read as 22 Nov 2024 although 2026-11-22 was
+// typed: the review ran on 2024 data, the feed never matched (103.87 against 107.5) and a price search then settled on
+// 2023. When the reader's date was only inferred, its year differs from the typed date's year, its month and day sit
+// within maxDayGap days of the typed date moved into the reader's year, and the chart's printed clock matches the
+// server's clock (so the screenshot is from now, not from an old chart of the same time of year), the reader's month
+// and day are kept and the typed date's year is used. Returns { date, readDate, typedDate } or null.
+export function correctChartDateYear({ chartDetection, chartTimezone, nowMs, selectedDateText, maxDayGap = 3 } = {}) {
+  if (EXPLICIT_DATE_EVIDENCE.includes(String(chartDetection?.latestVisibleDateEvidence || ""))) return null;
+  const read = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(chartDetection?.latestVisibleDate || "").trim());
+  const typed = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(selectedDateText || "").trim());
+  if (!read || !typed || !Number.isFinite(nowMs)) return null;
+  const typedYear = Number(typed[1]);
+  if (Number(read[1]) === typedYear) return null;
+  const moved = Date.UTC(typedYear, Number(read[2]) - 1, Number(read[3]));
+  const date = new Date(moved).toISOString().slice(0, 10);
+  if (date.slice(5) !== `${read[2]}-${read[3]}`) return null; // 29 Feb in a year without one
+  const typedMs = Date.UTC(typedYear, Number(typed[2]) - 1, Number(typed[3]));
+  if (Math.abs(moved - typedMs) > maxDayGap * 86400000) return null;
+  if (moved > nowMs + 86400000) return null; // a date in the future is not a fix
+  if (!printedClockMatchesNow({ chartDetection, chartTimezone, nowMs })) return null;
+  return { date, readDate: String(chartDetection.latestVisibleDate).trim(), typedDate: String(selectedDateText).trim() };
+}
+
 // A screenshot cannot be from the future. True when the chart's date (and clock, when readable) lies
 // ahead of the server's now. Without a printed timezone the furthest-ahead timezone (UTC+14) is allowed.
 export function chartDateIsInFuture({ chartDetection, chartTimezone, nowMs, graceMinutes = 10, unprintedMaxOffsetMinutes = 14 * 60 } = {}) {

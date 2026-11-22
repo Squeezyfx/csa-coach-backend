@@ -86,7 +86,7 @@ import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
 import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "./entry-labels.js";
-import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate } from "./chart-timezone.js";
+import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate, correctChartDateYear } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, lineMarksArea, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, supersedingDrawnLine } from "./marked-lines.js";
@@ -32168,7 +32168,37 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       }
     }
 
-    // LIVE CLOCK DATE. A printed clock that matches the server's own clock means the screenshot is minutes
+    // YEAR SLIP. The axis prints no year, so the reader fills it in from habit (a dollar-index chart taken at 22:43
+    // UTC on Sunday 22 Nov 2026 was read as 22 Nov 2024 although 2026-11-22 was typed, and the review ran on 2024 data
+    // that never matched the chart). When the date was only inferred, its month and day sit within a few days of the
+    // typed date, and the chart's printed clock matches the server's clock, the typed date's year is used.
+    // DATE_YEAR_SLIP_FIX=off turns it off.
+    if (String(process.env.DATE_YEAR_SLIP_FIX || "on").toLowerCase() !== "off" && normalizedRequestedCutoffMode === "final_visible") {
+      const yearFix = correctChartDateYear({
+        chartDetection,
+        chartTimezone: chartDetection?.chartTimezone,
+        nowMs: Date.now(),
+        selectedDateText,
+      });
+      if (yearFix) {
+        console.log("[chart-date] the chart's year was a guess; the typed date's year is used:", {
+          readDate: yearFix.readDate,
+          typedDate: yearFix.typedDate,
+          usedInstead: yearFix.date,
+          chartClock: chartDetection?.chartClock || null,
+          chartTimezone: chartDetection?.chartTimezone || null,
+        });
+        chartDetection = {
+          ...chartDetection,
+          latestVisibleDate: yearFix.date,
+          dateConfidence: "medium",
+          latestVisibleDateEvidence: "typed_year_after_year_slip",
+          dateReadByChartReader: yearFix.readDate,
+        };
+      }
+    }
+
+    // LIVE CLOCK DATE. A printed clock that matches the server's clock means the screenshot is minutes
     // old, so its last candle is today's, however far out the reader's month-label guess was (a dollar-index
     // chart read as 16 Nov and USDCHF as 14 Nov at 02:47 UTC on 17 Nov: the review was cut off early, the
     // feed no longer matched the chart and no entries were selected). Only replaces a date that was inferred,
