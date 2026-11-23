@@ -21111,6 +21111,7 @@ function providerInventoryCertifiedForFocusedSkip({
     timeframe,
     latestVisibleDate: inventoryDate,
     periodInventory: marketPeriodInventory,
+    tradesOnWeekends,
   })?.currentPeriodFrameVerified === true;
 }
 
@@ -33781,16 +33782,19 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
         timeframe,
         latestVisibleDate: inventoryDate,
         periodInventory: focusedPeriodInventory,
+        tradesOnWeekends: periodLifecycleTradesOnWeekends,
       });
       const chartInventoryFrame = deriveVerifiedPeriodFrameFromInventory({
         timeframe,
         latestVisibleDate: inventoryDate,
         periodInventory: chartPeriodInventory,
+        tradesOnWeekends: periodLifecycleTradesOnWeekends,
       });
       const marketInventoryFrame = deriveVerifiedPeriodFrameFromInventory({
         timeframe,
         latestVisibleDate: inventoryDate,
         periodInventory: marketPeriodInventory,
+        tradesOnWeekends: periodLifecycleTradesOnWeekends,
       });
       const focusedInventoryDateSequenceVerified =
         focusedInventoryFrame?.currentPeriodFrameVerified === true;
@@ -33890,6 +33894,12 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
         sameInstrumentConfirmed,
         providerInventoryAuthoritative,
         marketInventoryVerified,
+        // Why the inventory is or is not verified (log only): the two checks it needs besides the data match.
+        integrityPassed: marketPeriodIntegrity.passed === true,
+        integrityIssues: marketPeriodIntegrity.passed ? undefined : (marketPeriodIntegrity.issues || []).slice(0, 3),
+        frameVerified: marketInventoryFrame?.currentPeriodFrameVerified === true,
+        expectedWeeks: marketInventoryFrame?.expectedDates,
+        returnedWeeks: marketInventoryFrame?.returnedDates,
       }));
       const marketInventoryProvisional =
         marketReference?.ok === true && marketReference?.dataProvider === "OANDA" &&
@@ -34148,6 +34158,7 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
               authoritativeMergedFallback?.periodInventory ||
               authoritativeMergedFallback?.periodDayInventory ||
               [],
+            tradesOnWeekends: periodLifecycleTradesOnWeekends,
           })
         : {
             currentPeriodFrameVerified: false,

@@ -41,7 +41,10 @@ export function calendarMapping(timeframe, cutoff, {tradesOnWeekends=false}={}) 
     const monday=new Date(start);
     monday.setUTCDate(monday.getUTCDate()-((monday.getUTCDay()+6)%7));
     for(let t=+monday;t<=+date;t+=7*DAY) {
-      if (t < +start && [0,6].includes(start.getUTCDay())) continue;
+      // A month that opens on a weekend has no FX/index trading day in that week, so W1 is the next Monday. Crypto
+      // trades that Sunday/Saturday, and its weekly inventory keeps the opening week (aggregateH4CandlesIntoWeeklyInventory),
+      // so the calendar must expect it too or a coin chart in such a month (Nov 2026: DOT/USD) can never verify its frame.
+      if (t < +start && !tradesOnWeekends && [0,6].includes(start.getUTCDay())) continue;
       dates.push(iso(new Date(t)));
     }
   } else {

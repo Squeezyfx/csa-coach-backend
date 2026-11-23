@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { aggregateH4CandlesIntoWeeklyInventory } from "../csa-entry-policy.js";
+import { readFileSync } from "node:fs";
 import { calendarMapping, calendarFrame } from "../framework-calendar.js";
 
 // H4 candles Monday-Friday only (six per day), from `from` up to and including the hour `lastHour` on `to`.
@@ -80,4 +81,28 @@ test("crypto (trades weekends) is left as it was: the opening Monday is still th
     tradesOnWeekends: true,
   });
   assert.equal(rows[0].date, "2026-10-26");
+});
+
+// DOT/USD H4, Monday 23 Nov 2026 04:34 UTC: the data matched the chart, yet the weekly frame was never verified and the review
+// found no entries. A coin trades that Sunday 1 Nov, so its inventory keeps the week of 26 Oct as W1 (five weeks by 23 Nov), but the
+// calendar still skipped that week for every instrument (four weeks expected).
+test("crypto: a month that opens on a Sunday expects the opening week too, so the weekly frame verifies", () => {
+  const candles = h4Candles("2026-10-26", "2026-11-23", 4, { weekends: true });
+  const rows = aggregateH4CandlesIntoWeeklyInventory({ candles, cutoffDate: "2026-11-23", tradesOnWeekends: true });
+  assert.deepEqual(dates(rows), ["2026-10-26", "2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23"]);
+  assert.deepEqual(calendarMapping("H4", "2026-11-23", { tradesOnWeekends: true }).dates, dates(rows));
+  const frame = calendarFrame({ timeframe: "H4", latestVisibleDate: "2026-11-23", periodInventory: rows, tradesOnWeekends: true });
+  assert.equal(frame.periodDateSequenceVerified, true);
+  assert.equal(frame.currentPeriodFrameVerified, true);
+  // without the instrument's flag the old (session-market) expectation is unchanged
+  const fx = calendarFrame({ timeframe: "H4", latestVisibleDate: "2026-11-23", periodInventory: rows });
+  assert.equal(fx.periodDateSequenceVerified, false);
+  assert.deepEqual(calendarMapping("H4", "2026-11-23").dates, ["2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23"]);
+});
+
+test("server wiring: the weekly frame is derived with the instrument's weekend flag", () => {
+  const server = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  const calls = server.split("deriveVerifiedPeriodFrameFromInventory({").slice(1);
+  assert.ok(calls.length >= 5);
+  for (const call of calls) assert.match(call.slice(0, 700), /tradesOnWeekends/);
 });
