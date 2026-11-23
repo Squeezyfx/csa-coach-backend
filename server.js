@@ -32248,7 +32248,14 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
         // differ from the data's day (gold-late-session), so those keep the unverified route.
         // LIVE_CLOCK_CONFIRMS_DATE=off disables.
         const clockConfirms = String(process.env.LIVE_CLOCK_CONFIRMS_DATE || "on").toLowerCase() !== "off" &&
-          chartDetection?.latestVisibleDateEvidence === "typed_date_after_future_rejection" &&
+          (chartDetection?.latestVisibleDateEvidence === "typed_date_after_future_rejection" ||
+            // A coin chart's date can only be read from the axis (its header prints no date), so the date is always
+            // "inferred" even when it is right. DOT/USD H4, 2026-11-23 04:34 UTC: read correctly as 23 Nov, the clock
+            // matched to the second, yet the match stayed "date_unverified", the provider's periods were not trusted
+            // for the Fibonacci frame and the review found no entries. COIN_AXIS_DATE_CONFIRMED=off disables.
+            (String(process.env.COIN_AXIS_DATE_CONFIRMED || "on").toLowerCase() !== "off" &&
+              chartDetection?.latestVisibleDateEvidence === "inferred_axis" &&
+              isCryptoSymbol(normalizedSymbol || ""))) &&
           ["M1", "M5", "M15", "M30", "H1", "H4"].includes(String(timeframe || "").toUpperCase())
           ? liveClockConfirmsDate({ chartDetection, chartTimezone: chartDetection?.chartTimezone, nowMs: Date.now() })
           : null;

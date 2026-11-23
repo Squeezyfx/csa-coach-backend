@@ -151,3 +151,26 @@ test("server wiring: runs in Final visible mode only, before the date decision, 
   const fallback = server.indexOf("// FINAL VISIBLE date fallback.");
   assert.ok(rescue > 0 && rescue < fallback && fallback < decision);
 });
+
+// DOT/USD H4 on TradingView/Poloniex, 2026-11-23 04:34 UTC: the reader got 23 Nov right from the axis, the printed clock
+// matched the server, yet the date stayed "inferred_axis" -> "date_unverified" -> the provider's periods were not trusted
+// for the Fibonacci frame and the review found no entries.
+test("a coin chart whose axis date is already today's is confirmed by the clock, and then matches the provider", () => {
+  const dot = { latestVisibleDate: "2026-11-23", latestVisibleDateEvidence: "inferred_axis", dateConfidence: "medium", chartClock: "04:33:44", latestVisibleTime: null };
+  const now = at("2026-11-23T04:34:05Z");
+  assert.deepEqual(liveClockConfirmsDate({ chartDetection: dot, chartTimezone: "UTC", nowMs: now }), { date: "2026-11-23", readDate: "2026-11-23", ageMinutes: 0 });
+  const candles = [{ datetime: "2026-11-23 04:00:00", open: 0.655, high: 0.665, low: 0.65, close: 0.662 }];
+  const detection = { latestVisiblePrice: 0.6614495, latestVisiblePriceConfidence: "high", latestVisibleClose: 0.6614495, latestVisibleDate: "2026-11-23", latestVisibleTime: null };
+  const run = (extra) => assessChartDataMatch({ candles, detection: { ...detection, ...extra }, cutoff: "2026-11-23 04:33:59", timeframe: "H4", symbol: "DOT/USD", source: "Twelve Data", tolerance: 0.0002 });
+  assert.equal(run({ latestVisibleDateEvidence: "inferred_axis", dateConfidence: "medium" }).status, "date_unverified");
+  assert.equal(run({ latestVisibleDateEvidence: "explicit_final_candle_timestamp", dateConfidence: "high" }).status, "matched_reference");
+});
+
+test("server wiring: the axis-date confirmation is for coins only, has an off switch, and leaves the rescued-date rule in place", () => {
+  const server = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  const replace = server.indexOf("const clockDate = liveClockDate(");
+  const block = server.slice(replace, server.indexOf("// FINAL VISIBLE date fallback."));
+  assert.match(block, /COIN_AXIS_DATE_CONFIRMED/);
+  assert.match(block, /latestVisibleDateEvidence === "inferred_axis"\s+&&\s+isCryptoSymbol\(normalizedSymbol/);
+  assert.match(block, /latestVisibleDateEvidence === "typed_date_after_future_rejection"/);
+});
