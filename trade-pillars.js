@@ -262,6 +262,25 @@ export function finalSwingTarget(facts = {}, origin, isSell) {
   return (isSell ? swing < start - gap : swing > start + gap) ? swing : null;
 }
 
+// Where the final take profit goes: slightly INSIDE the main swing, so a sell's last target sits a little above the
+// lowest price and a buy's a little below the highest (price often turns just short of the extreme, and a sell closes
+// on the ask). The distance is a quarter of an average candle (plus the typical spread for a sell), never more than a
+// tenth of the way from the entry to the swing; with no candle data, 0.05% of the price. The swing itself stays the
+// yardstick a trader's own take profit is judged against (finalSwingTarget). FINAL_TP_INSIDE=off puts it back on the swing.
+export function finalTpTarget(facts = {}, origin, isSell) {
+  const swing = finalSwingTarget(facts, origin, isSell);
+  if (swing === null) return null;
+  if (typeof process !== "undefined" && String(process.env?.FINAL_TP_INSIDE || "on").toLowerCase() === "off") return swing;
+  const start = num(origin);
+  const avgRange = num(facts?.volatility?.avgRange);
+  const spread = isSell ? typicalSpread(facts?.instrument) : 0;
+  const wanted = (avgRange !== null ? avgRange * 0.25 : start * 0.0005) + spread;
+  const buffer = Math.min(wanted, Math.abs(start - swing) * 0.1);
+  const target = isSell ? swing + buffer : swing - buffer;
+  const gap = start * 0.0003;
+  return (isSell ? target < start - gap : target > start + gap) ? target : swing;
+}
+
 // [{ price, final }] ordered nearest to farthest, at most `maxIntermediate`
 // key levels plus the final swing target.
 export function buildTargetLadder({ levels = [], origin, isSell, finalTarget = null, maxIntermediate = 2 }) {
@@ -293,13 +312,14 @@ export function buildTargetLadder({ levels = [], origin, isSell, finalTarget = n
 function describeLadder(ladder, isSell) {
   const swingWord = isSell ? "swing low" : "swing high";
   const keyWord = isSell ? "key low" : "key high";
+  const justInside = isSell ? "just above" : "just below";
   if (ladder.length === 1) {
     return ladder[0].final
-      ? `Take profit: the main ${swingWord} at ${fmtPrice(ladder[0].price)}.`
+      ? `Take profit: ${justInside} the main ${swingWord}, at ${fmtPrice(ladder[0].price)}.`
       : `Take profit: the next ${keyWord} at ${fmtPrice(ladder[0].price)}.`;
   }
   const parts = ladder.map((t, i) =>
-    t.final ? `final TP ${fmtPrice(t.price)} (the main ${swingWord})` : `TP${i + 1} ${fmtPrice(t.price)}`
+    t.final ? `final TP ${fmtPrice(t.price)} (${justInside} the main ${swingWord})` : `TP${i + 1} ${fmtPrice(t.price)}`
   );
   return `Take profits: ${parts.join(", ")}.`;
 }
@@ -751,7 +771,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
       levels: liveLevels,
       origin: reference,
       isSell,
-      finalTarget: finalSwingTarget(facts, reference, isSell),
+      finalTarget: finalTpTarget(facts, reference, isSell),
     });
     const addTpAdvice = () => {
       if (suggestionLadder.length > 1) {
@@ -759,7 +779,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         return `Add ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
       }
       if (suggestionLadder.length === 1 && suggestionLadder[0].final) {
-        return `Add a take profit at the main swing ${targetWord} (${fmtPrice(suggestionLadder[0].price)}).`;
+        return `Add a take profit just ${isSell ? "above" : "below"} the main swing ${targetWord} (${fmtPrice(suggestionLadder[0].price)}).`;
       }
       return `Add a take profit near the next key ${targetWord}${
         tpSuggestion !== null ? ` (${fmtPrice(tpSuggestion)})` : ""
@@ -1114,7 +1134,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         levels: liveLevels,
         origin: center,
         isSell,
-        finalTarget: finalSwingTarget(facts, center, isSell),
+        finalTarget: finalTpTarget(facts, center, isSell),
       });
     }
     const planTarget = planLadder.length ? planLadder[planLadder.length - 1].price : null;

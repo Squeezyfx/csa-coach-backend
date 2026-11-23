@@ -488,22 +488,22 @@ test("a sell plan ends its take profits at the main swing low", () => {
   const { next } = run(facts, eurusdArea);
   assert.equal(
     next.exit,
-    "Stop loss: just above the key high at 1.13714, with room for the spread. Take profits: TP1 1.13110, TP2 1.12400, final TP 1.12150 (the main swing low)."
+    "Stop loss: just above the key high at 1.13714, with room for the spread. Take profits: TP1 1.13110, TP2 1.12400, final TP 1.12217 (just above the main swing low)."
   );
-  assert.match(next.risk, /to make 137 pips at the final target \(6\.9 times your risk\)/);
+  assert.match(next.risk, /to make 131 pips at the final target \(6\.5 times your risk\)/);
 });
 
 test("a buy plan ends its take profits at the main swing high", () => {
   const facts = withSwing(planFacts([1.1, 1.1052, 1.1012, 1.1085], "bullish"), 1.09, 1.12);
   const { next } = run(facts, { direction: "buy", authoritativeCenter: 1.1052 });
   assert.match(next.exit, /^Stop loss: just below the key low at 1\.10120, with room for the spread\./);
-  assert.match(next.exit, /Take profits: TP1 1\.10850, final TP 1\.12000 \(the main swing high\)\./);
+  assert.match(next.exit, /Take profits: TP1 1\.10850, final TP 1\.11945 \(just below the main swing high\)\./);
 });
 
 test("with only the swing beyond the entry, the swing is the single take profit", () => {
   const facts = withSwing(planFacts([1.13907, 1.13524, 1.13714]), 1.1215, 1.145);
   const { next } = run(facts, eurusdArea);
-  assert.match(next.exit, /Take profit: the main swing low at 1\.12150\./);
+  assert.match(next.exit, /Take profit: just above the main swing low, at 1\.12217\./);
 });
 
 test("a swing on the wrong side of the entry is ignored", () => {
@@ -550,7 +550,7 @@ test("a missing take profit is suggested as a ladder ending at the main swing", 
   const facts = withSwing(eurusdSell(), 1.1215, 1.145);
   facts.selectorDiagnostics = { ...facts.selectorDiagnostics, ...levels([1.13907, 1.13524, 1.13714, 1.1311, 1.1286]), fibonacci: { swingLow: 1.1215 } };
   const { next } = run(facts, eurusdArea);
-  assert.match(next.exit, /Add take profits: TP1 1\.13110, TP2 1\.12860, final TP 1\.12150 \(the main swing low\)\./);
+  assert.match(next.exit, /Add take profits: TP1 1\.13110, TP2 1\.12860, final TP 1\.12217 \(just above the main swing low\)\./);
 });
 
 test("average candle range uses the latest candles and needs enough of them", () => {
@@ -639,7 +639,7 @@ test("a tiny five-minute range still gets a realistic stop with the spread added
   };
   const { next } = run(facts, { direction: "sell", authoritativeCenter: 109.886 });
   assert.match(next.exit, /^Stop loss: about 109\.966, past the entry zone, normal candle moves and the spread\./);
-  assert.match(next.risk, /risk 8 pips to make 119 pips at the final target/);
+  assert.match(next.risk, /risk 8 pips to make 117 pips at the final target/);
   assert.match(next.risk, /A ratio this high usually means a distant target/);
 });
 
@@ -672,7 +672,7 @@ test("the chart's last-price line is not treated as a key level", () => {
     direction: "buy",
     authoritativeCenter: 0.9266,
   });
-  assert.match(buy.next.exit, /Take profits: TP1 0\.93491, final TP 0\.94850/);
+  assert.match(buy.next.exit, /Take profits: TP1 0\.93491, final TP 0\.94804/);
   assert.ok(!buy.next.exit.includes("0.93173"));
 });
 
@@ -864,7 +864,7 @@ test("a planned buy against the bearish trend is flagged", () => {
 test("only the entry typed: the stop and take profits are suggested from that entry", () => {
   const result = assess(planned(1.131, null, null));
   assert.match(result.next.exit, /^Stop loss: about 1\.13210, past the entry zone/);
-  assert.match(result.next.exit, /Take profits: .*final TP 1\.12150 \(the main swing low\)\./);
+  assert.match(result.next.exit, /Take profits: .*final TP 1\.12185 \(just above the main swing low\)\./);
   assert.deepEqual(result.snapshot.slice(0, 3), [
     "Planned sell at 1.13100.",
     "No stop loss entered yet.",

@@ -30,7 +30,7 @@ test("with two entries each one gets its own stop, named in the exit text", () =
   const { next } = assess(gbpusd(), entry1);
   assert.match(next.exit, /^Entry 1 stop loss: about 1\.34345, past the entry zone, normal candle moves and the spread\./);
   assert.match(next.exit, /Entry 2 stop loss: just below the key low at 1\.34055, with room for the spread\./);
-  assert.match(next.exit, /Take profit: the main swing high at 1\.35023\./);
+  assert.match(next.exit, /Take profit: just below the main swing high, at 1\.34993\./);
 });
 
 test("the stops are drawn in the geometry: Entry 2's sits beyond Entry 2 and below Entry 1's", () => {
@@ -46,8 +46,8 @@ test("the stops are drawn in the geometry: Entry 2's sits beyond Entry 2 and bel
 
 test("the risk is given for each entry to the same final target", () => {
   const { next } = assess(gbpusd(), entry1);
-  assert.match(next.risk, /^For Entry 1, with the suggested stop and targets you risk 13 pips to make 55 pips at the final target \(4\.2 times your risk\)\./);
-  assert.match(next.risk, / Entry 2: you risk 27 pips to make 71 pips at the final target \(2\.6 times your risk\)\.$/);
+  assert.match(next.risk, /^For Entry 1, with the suggested stop and targets you risk 13 pips to make 52 pips at the final target \(4\.0 times your risk\)\./);
+  assert.match(next.risk, / Entry 2: you risk 27 pips to make 68 pips at the final target \(2\.5 times your risk\)\.$/);
 });
 
 test("each stop retires its own entry, and the last one retires the whole idea", () => {
