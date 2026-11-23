@@ -90,6 +90,7 @@ import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, sta
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, supersedingDrawnLine } from "./marked-lines.js";
+import { isOffScale, resolveOffScalePrice } from "./price-scale-check.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -32127,6 +32128,39 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       if (priceAxisCalibration) chartDetection = { ...chartDetection, priceAxisCalibration };
     } catch (error) {
       console.warn("[price-axis-calibration] skipped:", error?.message || error);
+    }
+
+    // PRICE SCALE CHECK. The reader's "last price" must lie on the chart's own price axis. SOLUSD H4 (2026-11-23) was read
+    // as 188.23 on an axis running 66 to 104 (the volume pane's "188.23K" label, most likely): the price could never match
+    // the data feed, the year was guessed from it, no entries were found and a 188 take profit was suggested. The header's
+    // own prices are then read separately and used when they sit on the axis; otherwise the price is dropped.
+    // PRICE_SCALE_CHECK=off turns this off.
+    if (String(process.env.PRICE_SCALE_CHECK || "on").toLowerCase() !== "off") {
+      const readPrice = chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice;
+      const axisTicks = chartDetection?.priceAxisTicks || [];
+      if (isOffScale(readPrice, axisTicks)) {
+        const header = await readChartHeaderOhlc({ imageBase64, mimeType });
+        const fix = resolveOffScalePrice({ price: readPrice, ticks: axisTicks, header });
+        console.warn("[price-scale-check] the reader's last price is outside the chart's own price axis:", {
+          readPrice,
+          axisMin: fix.range?.min ?? null,
+          axisMax: fix.range?.max ?? null,
+          ticks: fix.range?.count ?? 0,
+          header,
+          action: fix.action,
+        });
+        chartDetection = {
+          ...chartDetection,
+          latestVisiblePrice: fix.action === "use_header" ? fix.price : null,
+          latestVisibleClose: fix.action === "use_header" ? fix.price : null,
+          latestVisibleOpen: fix.action === "use_header" ? fix.open : null,
+          latestVisibleHigh: fix.action === "use_header" ? fix.high : null,
+          latestVisibleLow: fix.action === "use_header" ? fix.low : null,
+          latestVisiblePriceConfidence: fix.action === "use_header" ? "medium" : "low",
+          latestVisiblePriceSource: fix.action === "use_header" ? "header_read_after_off_scale_price" : "dropped_off_scale_price",
+          offScalePriceRead: readPrice,
+        };
+      }
     }
 
     // A screenshot cannot be from the future. The empty axis space to the right of the last candle can
