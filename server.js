@@ -32147,9 +32147,11 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
           axisMax: fix.range?.max ?? null,
           ticks: fix.range?.count ?? 0,
           header,
+          axisScale: fix.factor,
           action: fix.action,
         });
-        chartDetection = {
+        // "keep": the ticks were only on a different scale (read x1000) and the price was fine, so nothing changes.
+        if (fix.action !== "keep") chartDetection = {
           ...chartDetection,
           latestVisiblePrice: fix.action === "use_header" ? fix.price : null,
           latestVisibleClose: fix.action === "use_header" ? fix.price : null,

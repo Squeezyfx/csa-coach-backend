@@ -39,21 +39,47 @@ export function isOffScale(price, ticks, { pad = SCALE_CHECK_PAD } = {}) {
   return value < range.min - range.span * pad || value > range.max + range.span * pad;
 }
 
-// What to do with a read last price: keep it, or (when it is off the chart's scale) replace it with the header's own
-// four prices when those sit on the scale, or drop it. `header` is the result of the small header read, or null.
+// The reader sometimes writes a three-decimal label such as "104.000" as 104000 (SOLUSD H4, 2026-11-23: ticks 68000 to
+// 104000 on a chart that ran 66 to 104). The scale that makes the most of the readings land on the axis wins; ties keep 1.
+export const SCALE_FACTORS = [1, 0.001, 1000];
+
+export function scaleTicks(ticks, factor = 1) {
+  return (Array.isArray(ticks) ? ticks : []).map((value) => toNumber(value) * factor);
+}
+
+export function bestAxisScale(ticks, references = []) {
+  if (!priceAxisRange(ticks)) return 1;
+  const refs = references.map(toNumber).filter((value) => Number.isFinite(value) && value > 0);
+  let best = { factor: 1, hits: -1 };
+  for (const factor of SCALE_FACTORS) {
+    const scaled = scaleTicks(ticks, factor);
+    const hits = refs.filter((value) => !isOffScale(value, scaled)).length;
+    if (hits > best.hits) best = { factor, hits };
+  }
+  return best.factor;
+}
+
+// What to do with a read last price: keep it, or (when it is off the chart's scale) replace it with the header's close
+// when that sits on the axis, or drop it. `header` is the result of the small header read, or null. The header's open, high
+// and low come along only when all four are on the axis and consistent (a header read can get one of them wrong).
 export function resolveOffScalePrice({ price, ticks, header = null }) {
-  if (!isOffScale(price, ticks)) return { action: "keep" };
-  const range = priceAxisRange(ticks);
-  const onScale = (value) => Number.isFinite(toNumber(value)) && !isOffScale(value, ticks);
-  if (header && ["open", "high", "low", "close"].every((key) => onScale(header[key]))) {
+  const factor = bestAxisScale(ticks, [price, header?.close, header?.open, header?.high, header?.low]);
+  const scaled = scaleTicks(ticks, factor);
+  if (!isOffScale(price, scaled)) return { action: "keep", factor };
+  const range = priceAxisRange(scaled);
+  const onScale = (value) => Number.isFinite(toNumber(value)) && toNumber(value) > 0 && !isOffScale(value, scaled);
+  if (header && onScale(header.close)) {
+    const [open, high, low, close] = [header.open, header.high, header.low, header.close].map(toNumber);
+    const ohlcFits = [open, high, low].every(onScale) && low <= Math.min(open, close) && high >= Math.max(open, close);
     return {
       action: "use_header",
       range,
-      price: toNumber(header.close),
-      open: toNumber(header.open),
-      high: toNumber(header.high),
-      low: toNumber(header.low),
+      factor,
+      price: close,
+      open: ohlcFits ? open : null,
+      high: ohlcFits ? high : null,
+      low: ohlcFits ? low : null,
     };
   }
-  return { action: "drop", range };
+  return { action: "drop", range, factor };
 }
