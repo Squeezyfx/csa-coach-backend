@@ -16,6 +16,8 @@ import { priceDistance } from "./trade-pillars.js";
 export const CLEAN_CHART_VERSION = "1.0.0";
 export const CLEAN_CHART_MAX_CANDLES = 150;
 const MIN_CANDLES = 10;
+// Fewer candles than this in the analysis window is not enough context for a picture; the longer history is used instead.
+const CLEAN_CHART_MIN_CONTEXT = 60;
 
 const num = (value) => (value === null || value === undefined || value === "" ? NaN : Number(value));
 const finite = (value) => Number.isFinite(num(value));
@@ -57,7 +59,15 @@ export function buildCleanChart({
   entryWord = "Entry",
   showStopDistance = true,
 } = {}) {
-  const source = Array.isArray(marketReference?.timeframeCandles) ? marketReference.timeframeCandles : [];
+  const primary = Array.isArray(marketReference?.timeframeCandles) ? marketReference.timeframeCandles : [];
+  // The analysis window can hold only a few candles: an H1 chart on a Monday morning has just that morning's (GBPUSD H1,
+  // 04:52 UTC 23 Nov 2026: four candles, so no picture although there was no entry to draw anyway). The longer same-interval
+  // history up to the same cutoff then gives the picture its context. CLEAN_CHART_LONGER_CONTEXT=off turns it off.
+  const longer = Array.isArray(marketReference?.impulseCandles) ? marketReference.impulseCandles : [];
+  const source = primary.length < CLEAN_CHART_MIN_CONTEXT && longer.length > primary.length &&
+    String(process.env.CLEAN_CHART_LONGER_CONTEXT || "on").toLowerCase() !== "off"
+    ? longer
+    : primary;
   const rows = source
     .map((c) => ({
       t: timeText(c?.datetime),

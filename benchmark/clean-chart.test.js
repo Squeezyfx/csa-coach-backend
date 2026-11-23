@@ -124,3 +124,18 @@ test("the data-match status is carried so the page can warn about a lower-confid
   const none = buildCleanChart({ marketReference });
   assert.equal(none.dataMatch, "");
 });
+
+// GBPUSD H1, Monday 23 Nov 2026 04:52 UTC: the analysis window held four candles (this morning's), so there was no picture
+// even though the data was fine and there was no entry to draw anyway. The longer history up to the same cutoff is used then.
+test("a short analysis window falls back to the longer same-interval history, so there is still a picture without an entry", () => {
+  const chart = buildCleanChart({ marketReference: { timeframeCandles: candles(4), impulseCandles: candles(120) } });
+  assert.notEqual(chart.status, "unavailable");
+  assert.ok(chart.candles.length >= 100, `expected the longer history, got ${chart.candles.length}`);
+});
+
+test("a window with enough candles of its own is not replaced, and with no longer history it is still unavailable", () => {
+  const own = buildCleanChart({ marketReference: { timeframeCandles: candles(72), impulseCandles: candles(120) } });
+  assert.equal(own.candles.length, 72);
+  const none = buildCleanChart({ marketReference: { timeframeCandles: candles(4), impulseCandles: [] } });
+  assert.equal(none.status, "unavailable");
+});
