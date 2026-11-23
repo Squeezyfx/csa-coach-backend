@@ -1,6 +1,6 @@
 import { forexComparisonTolerance, syntheticIndexTolerance } from "./oanda-data.js";
 // Provider reference checks are not a claim of broker-feed equivalence.
-const CRYPTO_BASES = "BTC|ETH|DOGE|SOL|XRP|ADA|LTC|BCH|BNB|AVAX|LINK|DOT|MATIC|TRX|SHIB|PEPE";
+const CRYPTO_BASES = "BTC|ETH|DOGE|SOL|XRP|ADA|LTC|BCH|BNB|AVAX|LINK|DOT|MATIC|POL|TRX|UNI|ATOM|NEAR|APT|SUI|FIL|ETC|XLM|SHIB|PEPE";
 /**
  * Crypto trades every day of the week, unlike FX, indices and commodities,
  * which close on weekends. This matters beyond price matching: period

@@ -1,10 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData, shouldRetainProviderPeriods, WEAK_MATCH_STATUSES } from "../market-data-matching.js";
+import { providerSymbol, isCryptoSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData, shouldRetainProviderPeriods, WEAK_MATCH_STATUSES } from "../market-data-matching.js";
 
 test("variable length crypto and metals normalize without substituting quotes", () => {
   for (const [input, expected] of [["DOGEUSD","DOGE/USD"],["XPTUSD","XPT/USD"],["Platinum","XPT/USD"],["BTCUSDT","BTC/USDT"],["COCOA","COCOA"],["USDINDEX","USDINDEX"],["SPX","SPX"]]) assert.equal(providerSymbol(input), expected);
+});
+test("the extra coins map to provider symbols and count as weekend-trading crypto", () => {
+  for (const coin of ["BCH","DOT","POL","TRX","UNI","ATOM","NEAR","APT","SUI","FIL","ETC","XLM","SHIB","PEPE"]) {
+    assert.equal(providerSymbol(`${coin}USD`), `${coin}/USD`);
+    assert.equal(isCryptoSymbol(`${coin}USD`), true);
+  }
+  assert.equal(isCryptoSymbol("EURUSD"), false);
 });
 test("response metadata must match requested symbol and interval", () => {
   assert.equal(validateProviderMetadata({symbol:"DOGE/USD",interval:"1day"},"DOGEUSD","1day"), null);
