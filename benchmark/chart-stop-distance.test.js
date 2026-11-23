@@ -120,7 +120,7 @@ test("the dollar index counts in pips of 0.01 and gold in pips of 1.00, whatever
 
 test("silver, crypto and other indices stay in points, and GOLD_INDEX_PIPS=off puts gold and the dollar index back", () => {
   assert.equal(stopDistanceText(30, 29.2, "XAGUSD"), "0.8 pts");
-  assert.equal(stopDistanceText(60000, 59500, "BTCUSD"), "500 pts");
+  assert.equal(stopDistanceText(60000, 59500, "BTCUSD"), "$500");
   assert.equal(stopDistanceText(18000, 17950, "NAS100"), "50 pts");
   const before = process.env.GOLD_INDEX_PIPS;
   process.env.GOLD_INDEX_PIPS = "off";

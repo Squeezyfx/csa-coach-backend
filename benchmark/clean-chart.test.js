@@ -139,3 +139,28 @@ test("a window with enough candles of its own is not replaced, and with no longe
   const none = buildCleanChart({ marketReference: { timeframeCandles: candles(4), impulseCandles: [] } });
   assert.equal(none.status, "unavailable");
 });
+
+// XLMUSD H4, 2026-11-23: the tags read "(0.0028 pts)" on a 13-cent coin. A coin's stop size is a dollar amount, and two stops
+// that share a price and a size show the size once.
+test("a coin's stop tags show dollars, and two identical sizes are shown once", () => {
+  const chart = buildCleanChart({
+    marketReference: { timeframeCandles: candles(72, 1.305, 0.001) },
+    instrument: "XLMUSD",
+    finalFeedback: {
+      entry1: { authoritativeCenter: 1.3 },
+      chartGeometry: {
+        trade: {
+          kind: "plan",
+          entry: 1.3,
+          stop: 1.3028,
+          backups: [{ order: 2, entry: 1.3, stop: 1.3028 }, { order: 3, entry: 1.31, stop: 1.3151 }],
+          targets: [],
+        },
+      },
+    },
+  });
+  const labels = chart.levels.map((level) => level.label);
+  assert.ok(labels.includes("Stop 1 / Stop 2 ($0.0028)"), labels.join(" | "));
+  assert.ok(labels.includes("Stop 3 ($0.0051)"), labels.join(" | "));
+  assert.ok(!labels.some((label) => /pts|pips|points/.test(label)));
+});

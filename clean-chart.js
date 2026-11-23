@@ -46,7 +46,7 @@ export function stopDistanceText(entryPrice, stopPrice, instrument = "") {
   const a = num(entryPrice);
   const b = num(stopPrice);
   if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0 || a === b) return "";
-  return priceDistance(a - b, instrument).text.replace(/ points$/, " pts");
+  return priceDistance(a - b, instrument).text.replace(/ points$/, " pts").replace(/ per coin$/, "");
 }
 
 export function buildCleanChart({
@@ -123,6 +123,8 @@ export function buildCleanChart({
     const sizes = level.sizes || [];
     if (!sizes.length) return level.label;
     const unit = (text) => text.replace(/^[\d.,]+\s*/, "");
+    // A coin's size is "$0.0028" (no number-then-unit): joined as is, an identical one shown once.
+    if (sizes.some((text) => !/^[\d.,]/.test(text))) return `${level.label} (${[...new Set(sizes)].join(" / ")})`;
     const sameUnit = sizes.length > 1 && sizes.every((text) => unit(text) === unit(sizes[0]));
     const text = sameUnit ? `${sizes.map((s) => s.slice(0, s.length - unit(s).length).trim()).join(" / ")} ${unit(sizes[0])}` : sizes.join(" / ");
     return `${level.label} (${text})`;

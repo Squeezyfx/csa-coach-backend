@@ -1139,15 +1139,49 @@ test("a price far from unmatched market data is not quoted as the distance from 
 // "would risk $3,949 (26% of your account)". Coins are priced in dollars per coin, not in pips of a currency pair.
 test("six-letter coin codes are not forex pairs: no pips and no made-up dollar risk", () => {
   for (const code of ["ETCUSD", "DOTUSD", "SOLUSD", "ADAUSD", "BCHUSD", "BNBUSD", "TRXUSD", "UNIUSD", "APTUSD", "SUIUSD", "FILUSD", "XLMUSD", "POLUSD"]) {
-    assert.match(priceDistance(0.1316, code).text, /points$/, `${code} is in points`);
+    assert.match(priceDistance(0.1316, code).text, /^\$[\d.,]+ per coin$/, `${code} is dollars per coin`);
     assert.equal(estimateRiskUsd({ symbol: code, lots: 0.3, distance: 0.13, price: 6.3 }), null, `${code} has no FX risk figure`);
     assert.equal(typicalSpread(code), 0);
     assert.equal(minimumStopFloor(code), 0);
   }
-  assert.equal(priceDistance(0.017, "DOTUSD").text, "0.017 points", "a small coin keeps its small digits");
-  assert.equal(priceDistance(0.1316, "ETCUSD").text, "0.13 points");
+  assert.equal(priceDistance(0.017, "DOTUSD").text, "$0.017 per coin", "a small coin keeps its small digits");
+  assert.equal(priceDistance(0.0028, "XLMUSD").text, "$0.0028 per coin");
+  assert.equal(priceDistance(1234.56, "BTCUSD").text, "$1,234.6 per coin");
+  assert.equal(priceDistance(0.1316, "ETCUSD").text, "$0.13 per coin");
   // real currency pairs are unchanged
   assert.equal(priceDistance(0.0013, "EURUSD").text, "13 pips");
   assert.ok(estimateRiskUsd({ symbol: "EURUSD", lots: 0.3, distance: 0.0013, price: 1.1 }).amount > 0);
   assert.equal(priceDistance(0.0013, "UNKNOWN").text !== "", true);
+});
+
+// XLMUSD H4, 2026-11-23: "(0.0028 pts)" on a coin worth 13 cents read like a pip count, and the risk line asked for an account
+// balance and lot size that the trader had already entered. Coins show dollars per coin and say why no dollar risk is given.
+test("coin risk wording: dollars per coin, and no request for a balance and lot size that cannot help", () => {
+  const facts = {
+    instrument: "XLMUSD",
+    direction: "bearish",
+    analysisType: "pre-trade",
+    trade: { visible: false },
+    executedOrder: null,
+    risk: {},
+    riskInputs: { balance: 15000, lots: 0.3 },
+    volatility: { avgRange: 0.0028 },
+    activeEntryAreas: [{ direction: "sell", authoritativeCenter: 0.1428, rank: 1 }],
+    selectorDiagnostics: {
+      structuralCandidates: [{ price: 0.1428 }, { price: 0.1526 }, { price: 0.1198 }],
+      fibonacci: { swingHigh: 0.1752, swingLow: 0.1198 },
+    },
+  };
+  const { next } = assessTradePillars({ facts, area: { direction: "sell", authoritativeCenter: 0.1428 }, hasValidatedArea: true });
+  assert.match(next.risk, /you risk \$[\d.]+ per coin to make \$[\d.]+ per coin/);
+  assert.match(next.risk, /Dollar risk is not worked out for coins/);
+  assert.doesNotMatch(next.risk, /Add your account balance and lot size/);
+  assert.doesNotMatch(next.risk, /pips|points/);
+  // a currency pair keeps its request
+  const fx = assessTradePillars({
+    facts: { ...facts, instrument: "EURUSD", riskInputs: {}, volatility: { avgRange: 0.001 }, activeEntryAreas: [{ direction: "sell", authoritativeCenter: 1.13097, rank: 1 }], selectorDiagnostics: levels([1.13097, 1.1337, 1.12861]) },
+    area: { direction: "sell", authoritativeCenter: 1.13097 },
+    hasValidatedArea: true,
+  });
+  assert.match(fx.next.risk, /Add your account balance and lot size/);
 });

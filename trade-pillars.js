@@ -78,6 +78,9 @@ const NON_FX_OLD = /XAU|XAG|XPT|XPD|BTC|ETH|LTC|XRP/;
 const NON_FX_NEW = new RegExp(`XAU|XAG|XPT|XPD|BTC|ETH|LTC|XRP|^(?:${COIN_BASES})`);
 const nonFx = (code) =>
   (String(process.env.COIN_RISK_UNITS || "").trim().toLowerCase() === "off" ? NON_FX_OLD : NON_FX_NEW).test(code);
+// A coin the page offers (BTCUSD, ETCUSD, XLMUSD ...), as opposed to a metal or index.
+const COIN_CODE = new RegExp(`^(?:${COIN_BASES})`);
+const isCoinCode = (code) => COIN_CODE.test(code);
 
 export function priceDistance(diff, symbol = "") {
   const abs = Math.abs(Number(diff));
@@ -93,6 +96,12 @@ export function priceDistance(diff, symbol = "") {
   }
   // A coin under one dollar needs its small digits (0.017, not 0.02; 0.000012, not 0).
   const rounded = abs >= 100 ? Math.round(abs * 10) / 10 : abs >= 1 || abs === 0 ? Math.round(abs * 100) / 100 : Number(abs.toPrecision(2));
+  // A coin's move is a dollar amount per coin ("$0.0028 per coin"): "0.0028 points" read like a currency pip count on a cheap
+  // coin (XLMUSD H4, 2026-11-23). COIN_DOLLAR_UNITS=off goes back to "points".
+  if (isCoinCode(code) && String(process.env.COIN_DOLLAR_UNITS || "").trim().toLowerCase() !== "off") {
+    // maximumFractionDigits: toLocaleString keeps only three decimals by default, which would turn 0.0028 into 0.003.
+    return { value: abs, text: `$${rounded.toLocaleString("en-US", { maximumFractionDigits: 10 })} per coin` };
+  }
   return { value: abs, text: `${rounded} points` };
 }
 
@@ -589,6 +598,14 @@ const PLAN_NOTE =
 const RISK_RULE_SHORT = "Aim for at least 1.5 to 2 times more reward than risk.";
 
 const RISK_UNKNOWN_HINT = "Add your account balance and lot size to see how much you risk per trade.";
+// Coins: the dollar risk is never worked out (what one lot holds differs between brokers), so asking for a balance and lot
+// size would be wrong even when the trader entered them.
+const COIN_RISK_HINT =
+  "Dollar risk is not worked out for coins, because one lot holds a different amount of the coin at each broker. Multiply the stop size per coin by the number of coins you trade to check your risk.";
+const riskUnknownHint = (symbol) =>
+  isCoinCode(compactSymbol(symbol)) && String(process.env.COIN_DOLLAR_UNITS || "").trim().toLowerCase() !== "off"
+    ? COIN_RISK_HINT
+    : RISK_UNKNOWN_HINT;
 
 // watchLevel: the price of the level worth watching when there is no validated entry (Pre-trade
 // only). The suggested stop and take profits are then laid out from that level, as "if you buy
@@ -965,11 +982,14 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
         );
         next.risk = `${verdict.advice} ${RISK_RULE_SHORT}`;
       } else {
-        add(weaknesses, "risk", "Risk per trade is unknown.", "Risk per trade unknown", {
-          priority: 2,
-          why: "Add your account balance and lot size to check it.",
-        });
-        next.risk = `${RISK_RULE_SHORT} ${RISK_UNKNOWN_HINT}`;
+        // For a coin no balance or lot size could fix this, so it is not flagged as a weakness.
+        if (riskUnknownHint(symbol) === RISK_UNKNOWN_HINT) {
+          add(weaknesses, "risk", "Risk per trade is unknown.", "Risk per trade unknown", {
+            priority: 2,
+            why: "Add your account balance and lot size to check it.",
+          });
+        }
+        next.risk = `${RISK_RULE_SHORT} ${riskUnknownHint(symbol)}`;
       }
     }
 
@@ -1566,7 +1586,7 @@ export function assessTradePillars({ facts = {}, area = null, hasValidatedArea =
           backupRiskText +
           backupAccountText;
       } else {
-        next.risk = `${rrText} Risk only a small share of your account (many use 1%). ${RISK_UNKNOWN_HINT}${backupRiskText}`;
+        next.risk = `${rrText} Risk only a small share of your account (many use 1%). ${riskUnknownHint(symbol)}${backupRiskText}`;
       }
     }
     if (stopShown && targetShown) {
