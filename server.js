@@ -91,6 +91,7 @@ import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLive
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, supersedingDrawnLine } from "./marked-lines.js";
 import { isOffScale, resolveOffScalePrice } from "./price-scale-check.js";
+import { typedDateAccepted, typedDateCandidate } from "./typed-date-rescue.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -32746,10 +32747,24 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       // A wrong year also shows up as time_unverified / date_unverified (the exact-time rule is checked
       // before the price rule), so a price gap over 1% triggers the search for those statuses too.
       if (["mismatch", "time_unverified", "date_unverified", "partial_or_unknown_candle"].includes(chartDataMatch.status) && chartDataMatchCloseGapRatio(chartDataMatch) > 0.01) {
-        yearCorrectionSearch:
+        // The typed date is tried first (SOLUSD H4, 2026-11-23: the axis was read as 21 Jan 2025, wrong in month as well as
+        // year, so shifting that date by whole years could never reach 23 Nov 2026). It is only accepted when the chart's
+        // price matches the provider's candles on that date. TYPED_DATE_PRICE_RESCUE=off turns that candidate off.
+        const searchCandidates = [];
+        const typedCandidate = String(process.env.TYPED_DATE_PRICE_RESCUE || "on").toLowerCase() !== "off"
+          ? typedDateCandidate(chartDetection, selectedDateText)
+          : null;
+        if (typedCandidate) searchCandidates.push({ delta: 0, typed: true, detection: typedCandidate });
         for (let magnitude = 1; magnitude <= 3; magnitude++) {
-          for (const delta of [-magnitude, magnitude]) {
-            const shiftedDetection = shiftChartDetectionYear(chartDetection, delta);
+          for (const shift of [-magnitude, magnitude]) {
+            searchCandidates.push({ delta: shift, typed: false, detection: shiftChartDetectionYear(chartDetection, shift) });
+          }
+        }
+        yearCorrectionSearch:
+        for (const candidate of searchCandidates) {
+          {
+            const delta = candidate.delta;
+            const shiftedDetection = candidate.detection;
             const shiftedDateDecision = chooseFinalChartDate({
               selectedDate,
               detection: shiftedDetection,
@@ -32814,14 +32829,25 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
             const shiftedYear = String(shiftedCutoff.resolvedDate || "").slice(0, 4);
             const currentRealYear = String(new Date().getUTCFullYear());
             const cleanlyVerified = !["mismatch", "date_unverified", "time_unverified", "partial_or_unknown_candle"].includes(shiftedMatch.status);
-            const yearConfirmed = cleanlyVerified ||
-              (shiftedYear === currentRealYear && shiftedGapRatio !== null && shiftedGapRatio < 0.02);
+            const yearConfirmed = candidate.typed
+              ? typedDateAccepted({ cleanlyVerified, closeGapRatio: shiftedGapRatio })
+              : cleanlyVerified ||
+                (shiftedYear === currentRealYear && shiftedGapRatio !== null && shiftedGapRatio < 0.02);
+            if (candidate.typed) {
+              console.log("[chart-date] the typed date was tried against the chart's price:", {
+                readDate: chartDetection?.latestVisibleDate || null,
+                typedDate: shiftedDetection?.latestVisibleDate || null,
+                matchStatus: shiftedMatch.status,
+                closeGapRatio: shiftedGapRatio,
+                accepted: yearConfirmed,
+              });
+            }
             if (!yearConfirmed) continue;
             chartDetection = shiftedDetection;
             dateDecision = shiftedDateDecision;
             chartCutoff = shiftedCutoff;
             marketReference = shiftedReference;
-            chartDataMatch = { ...shiftedMatch, yearCorrected: true, yearCorrectionDelta: delta };
+            chartDataMatch = { ...shiftedMatch, yearCorrected: true, yearCorrectionDelta: delta, ...(candidate.typed ? { typedDateRescued: true } : {}) };
             completedPeriodReferences = buildCompletedPeriodReferences({
               periods: ["D1", "H4"].includes(timeframe)
                 ? marketReferencePeriodInventory({ marketReference, timeframe, cutoffDate: chartCutoff.resolvedDate })
