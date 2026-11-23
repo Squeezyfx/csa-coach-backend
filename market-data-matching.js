@@ -136,7 +136,13 @@ export function assessChartDataMatch({ candles = [], detection = {}, cutoff = ""
     });
   }
   const forexLimit = forexComparisonTolerance(symbol) ?? syntheticIndexTolerance(symbol);
-  const limit = forexLimit ?? Math.max(Number(tolerance) || 0, price * 0.0005);
+  // Crypto trades on many venues whose prices differ from the data provider's blended price by a few tenths of
+  // a percent (DOT/USD on Poloniex vs Twelve Data: 0.40%, 2026-11-23), far more than the 0.05% used for FX and
+  // gold. With that tight limit a correct chart was called "partial_or_unknown_candle", the provider's periods
+  // were not trusted and the review found no entries. The instrument and date are confirmed separately, so this
+  // close check only needs to catch a wrong chart. COIN_FEED_TOLERANCE=off restores the old limit.
+  const cryptoFeedRatio = process.env.COIN_FEED_TOLERANCE !== "off" && isCryptoSymbol(symbol) ? 0.01 : 0.0005;
+  const limit = forexLimit ?? Math.max(Number(tolerance) || 0, price * cryptoFeedRatio);
   const comparisons = [{ field: "close", chart: price, provider: Number(last.close) }];
   // D1 header extrema describe the last daily candle, not the whole month.
   if (timeframe === "D1" || source === "OANDA") for (const field of ["open", "high", "low"]) {

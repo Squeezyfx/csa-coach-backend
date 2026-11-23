@@ -13,6 +13,16 @@ test("the extra coins map to provider symbols and count as weekend-trading crypt
   }
   assert.equal(isCryptoSymbol("EURUSD"), false);
 });
+test("a coin chart whose venue price differs by a few tenths of a percent still matches the provider", () => {
+  // DOT/USD H4, 2026-11-23: chart (Poloniex) 0.65337, provider 0.656 = 0.40% apart.
+  const dot = { candles:[{datetime:"2026-11-23 00:00:00",open:0.66,high:0.663,low:0.655,close:0.656}], detection:{latestVisibleDate:"2026-11-23",latestVisibleDateEvidence:"explicit_final_candle_timestamp",dateConfidence:"high",providerSessionAligned:true,latestVisibleCandleComplete:false,latestVisiblePrice:0.6533702,latestVisiblePriceConfidence:"high"}, cutoff:"2026-11-23 01:24:59", timeframe:"H4", symbol:"DOT/USD", tolerance:0.0002 };
+  assert.equal(assessChartDataMatch(dot).status, "matched_reference");
+  // a wrong chart is still caught: 3% off is far outside any venue difference
+  assert.notEqual(assessChartDataMatch({...dot, detection:{...dot.detection, latestVisiblePrice:0.676}}).status, "matched_reference");
+  // FX keeps the tight limit: the same 0.4% gap on a currency pair is not a match
+  const fx = { ...dot, symbol:"EUR/USD", candles:[{datetime:"2026-11-23 00:00:00",open:1.1,high:1.101,low:1.098,close:1.1}], detection:{...dot.detection, latestVisiblePrice:1.1044} };
+  assert.notEqual(assessChartDataMatch(fx).status, "matched_reference");
+});
 test("response metadata must match requested symbol and interval", () => {
   assert.equal(validateProviderMetadata({symbol:"DOGE/USD",interval:"1day"},"DOGEUSD","1day"), null);
   assert.ok(validateProviderMetadata({symbol:"BTC/USDT",interval:"1day"},"BTC/USD","1day"));
