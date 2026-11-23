@@ -1134,3 +1134,20 @@ test("a price far from unmatched market data is not quoted as the distance from 
   const distrusted = assessTradePillars({ facts: { ...facts, priceUnreliable: true }, area, hasValidatedArea: true });
   assert.ok(!distrusted.snapshot.some((line) => line.startsWith("Price is now")));
 });
+
+// ETCUSD H4, 2026-11-23: a six-letter coin code was read as a currency pair, so a 0.13 stop was "1316 pips" and 0.3 lots
+// "would risk $3,949 (26% of your account)". Coins are priced in dollars per coin, not in pips of a currency pair.
+test("six-letter coin codes are not forex pairs: no pips and no made-up dollar risk", () => {
+  for (const code of ["ETCUSD", "DOTUSD", "SOLUSD", "ADAUSD", "BCHUSD", "BNBUSD", "TRXUSD", "UNIUSD", "APTUSD", "SUIUSD", "FILUSD", "XLMUSD", "POLUSD"]) {
+    assert.match(priceDistance(0.1316, code).text, /points$/, `${code} is in points`);
+    assert.equal(estimateRiskUsd({ symbol: code, lots: 0.3, distance: 0.13, price: 6.3 }), null, `${code} has no FX risk figure`);
+    assert.equal(typicalSpread(code), 0);
+    assert.equal(minimumStopFloor(code), 0);
+  }
+  assert.equal(priceDistance(0.017, "DOTUSD").text, "0.017 points", "a small coin keeps its small digits");
+  assert.equal(priceDistance(0.1316, "ETCUSD").text, "0.13 points");
+  // real currency pairs are unchanged
+  assert.equal(priceDistance(0.0013, "EURUSD").text, "13 pips");
+  assert.ok(estimateRiskUsd({ symbol: "EURUSD", lots: 0.3, distance: 0.0013, price: 1.1 }).amount > 0);
+  assert.equal(priceDistance(0.0013, "UNKNOWN").text !== "", true);
+});

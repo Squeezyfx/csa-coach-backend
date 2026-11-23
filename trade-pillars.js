@@ -70,12 +70,20 @@ const goldIndexPip = (code) => {
   return null;
 };
 
+// Instruments that are NOT a forex pair although their code may be six letters: metals and every coin the page offers.
+// A six-letter coin code (ETCUSD, DOTUSD, SOLUSD, ADAUSD ...) used to be read as a currency pair, so a 0.13 move was "1316
+// pips" and a 0.3 lot "risked $3,949" (ETCUSD H4, 2026-11-23). COIN_RISK_UNITS=off restores that.
+const COIN_BASES = "BTC|ETH|LTC|XRP|SOL|ADA|DOGE|BCH|BNB|AVAX|LINK|DOT|MATIC|POL|TRX|UNI|ATOM|NEAR|APT|SUI|FIL|ETC|XLM|SHIB|PEPE";
+const NON_FX_OLD = /XAU|XAG|XPT|XPD|BTC|ETH|LTC|XRP/;
+const NON_FX_NEW = new RegExp(`XAU|XAG|XPT|XPD|BTC|ETH|LTC|XRP|^(?:${COIN_BASES})`);
+const nonFx = (code) =>
+  (String(process.env.COIN_RISK_UNITS || "").trim().toLowerCase() === "off" ? NON_FX_OLD : NON_FX_NEW).test(code);
+
 export function priceDistance(diff, symbol = "") {
   const abs = Math.abs(Number(diff));
   if (!Number.isFinite(abs)) return { value: null, text: "" };
   const code = compactSymbol(symbol);
-  const isFxPair =
-    /^[A-Z]{6}$/.test(code) && !/XAU|XAG|XPT|XPD|BTC|ETH|LTC|XRP/.test(code);
+  const isFxPair = /^[A-Z]{6}$/.test(code) && !nonFx(code);
   const fixed = goldIndexPip(code);
   if (isFxPair || fixed) {
     const pipSize = fixed ? fixed.size : code.includes("JPY") ? 0.01 : 0.0001;
@@ -83,7 +91,8 @@ export function priceDistance(diff, symbol = "") {
     const rounded = pips >= 10 && !fixed?.oneDecimal ? Math.round(pips) : Math.round(pips * 10) / 10;
     return { value: abs, text: `${rounded} ${rounded === 1 ? "pip" : "pips"}` };
   }
-  const rounded = abs >= 100 ? Math.round(abs * 10) / 10 : Math.round(abs * 100) / 100;
+  // A coin under one dollar needs its small digits (0.017, not 0.02; 0.000012, not 0).
+  const rounded = abs >= 100 ? Math.round(abs * 10) / 10 : abs >= 1 || abs === 0 ? Math.round(abs * 100) / 100 : Number(abs.toPrecision(2));
   return { value: abs, text: `${rounded} points` };
 }
 
@@ -341,7 +350,7 @@ export function averageCandleRange(candles = [], lookback = 14) {
 }
 
 const MAJOR_FX = new Set(["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD"]);
-const NON_FX = /XAU|XAG|XPT|XPD|BTC|ETH|LTC|XRP/;
+const NON_FX = { test: nonFx };
 
 // Typical broker spread, in price units. A planned stop has to survive it
 // (a sell's stop is hit on the ask), and the chart does not show it. Unknown
@@ -456,7 +465,7 @@ export function estimateRiskUsd({ symbol = "", lots, distance, price }) {
 
   if (code === "XAUUSD") return { amount: move * 100 * size, approx: false };
   if (code === "XAGUSD") return { amount: move * 5000 * size, approx: false };
-  if (!/^[A-Z]{6}$/.test(code) || /XAU|XAG|XPT|XPD|BTC|ETH|LTC|XRP/.test(code)) return null;
+  if (!/^[A-Z]{6}$/.test(code) || nonFx(code)) return null;
 
   const base = code.slice(0, 3);
   const quote = code.slice(3);
