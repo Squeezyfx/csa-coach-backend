@@ -226,7 +226,11 @@ export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,ti
   // history ended 6 days early at a 4,999-candle page), so ask again; an empty page or no progress still ends the loop.
   // PAGE_GAP_LIMIT=off restores the 8-day limit for every candle size.
   const gapLimit=(['W','M'].includes(granularity)||String(process.env.PAGE_GAP_LIMIT||'').trim().toLowerCase()==='off')?8*86400000:4*86400000;
-  if(last>=end||(data.candles.length<5000&&(!pageUntilEnd||end-last<gapLimit))){finished=true;break;}
+  // OANDA hands back 4,999 candles on every page after the first (the cursor candle is left out of a 5,000 count), so a
+  // page of 4,999 is a FULL page. Counting it as short ended the 1-minute Dollar Index history about 3 hours before the
+  // cutoff (the 4-day gap limit alone did not catch that). With pageUntilEnd only a page well under that is short.
+  const fullPage=pageUntilEnd&&String(process.env.PAGE_GAP_LIMIT||'').trim().toLowerCase()!=='off'?4900:5000;
+  if(last>=end||(data.candles.length<fullPage&&(!pageUntilEnd||end-last<gapLimit))){finished=true;break;}
   if(last<=cursor){if(pageUntilEnd){finished=true;break;}throw fail('OANDA pagination did not advance');}cursor=last;includeFirst=false;pages++;
  }
  if(!finished)throw fail('OANDA history exceeded the page limit; partial history rejected','history_unavailable');
