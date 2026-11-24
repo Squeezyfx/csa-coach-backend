@@ -92,6 +92,7 @@ import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEnt
 import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, supersedingDrawnLine } from "./marked-lines.js";
 import { isOffScale, resolveOffScalePrice } from "./price-scale-check.js";
 import { typedDateAccepted, typedDateCandidate } from "./typed-date-rescue.js";
+import { phaseContexts } from "./phase-context.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -28928,12 +28929,13 @@ function buildControlledFeedback({
   const historicalPhaseName = String(
     facts?.historicalPhase?.phase || facts?.historicalPhase?.state || ""
   ).toLowerCase();
-  const bullishRecoveryContext =
-    facts.transitionState?.bullishRecoveryAfterBreakdown === true ||
-    historicalPhaseName === "bullish_recovery_after_bearish_breakdown";
-  const bearishPullbackContext =
-    facts.transitionState?.bearishPullbackAfterBreakout === true ||
-    historicalPhaseName === "bearish_pullback_after_bullish_breakout";
+  // Each context belongs to the review whose direction does not oppose it (a sell review is not "an uptrend that has not
+  // reversed"); see phase-context.js.
+  const { bullishRecoveryContext, bearishPullbackContext } = phaseContexts({
+    historicalPhaseName,
+    transitionState: facts.transitionState,
+    direction: facts.direction,
+  });
   const chartScope = [facts?.instrument, facts?.timeframe]
     .map((value) => String(value || "").trim())
     .filter(Boolean)
