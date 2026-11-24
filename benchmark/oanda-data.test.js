@@ -56,6 +56,20 @@ test('pagination rejects capped history and advances without duplicated candles'
  const data=await fetchOandaSeries(request);assert.equal(calls,2);assert.equal(data.values.length,5001);
  calls=0;await assert.rejects(fetchOandaSeries({...request,maxPages:1}),/partial history rejected/);
 });
+test('with pageUntilEnd a 4,999-candle page 5.6 days before the cutoff is not the end of the history',async()=>{
+ const start=Date.parse('2026-11-10T00:00:00Z');
+ const mk=(from,n)=>Array.from({length:n},(_,i)=>candle(new Date(from+i*60000).toISOString()));
+ const pages=[mk(start,5000),mk(start+5000*60000,4999),mk(Date.parse('2026-11-23T00:00:00Z'),300)];
+ let calls=0;
+ const fetchImpl=async()=>{calls++;return {ok:true,json:async()=>({instrument:'EUR_USD',granularity:'M1',candles:pages[calls-1]||[]})};};
+ const data=await fetchOandaSeries({...args,interval:'1min',startDate:'2026-11-10',endDateTime:'2026-11-24 13:18:00',fetchImpl,pageUntilEnd:true});
+ assert.equal(calls,3);assert.ok(data.values[data.values.length-1].datetime.startsWith('2026-11-23'));
+ // week candles legitimately end days before the cutoff: one short page still finishes
+ calls=0;
+ const weekFetch=async()=>{calls++;return {ok:true,json:async()=>({instrument:'EUR_USD',granularity:'W',candles:[candle('2026-11-17T00:00:00Z')]})};};
+ await fetchOandaSeries({...args,interval:'1week',startDate:'2026-11-01',endDateTime:'2026-11-24 13:18:00',fetchImpl:weekFetch,pageUntilEnd:true});
+ assert.equal(calls,1);
+});
 test('future parts of historical daily candles are excluded despite API complete=true',async()=>{
  const result=await fetchOandaSeries({...args,interval:'1day',endDateTime:'2026-08-25 12:00:00',fetchImpl:async()=>({ok:true,json:async()=>({instrument:'EUR_USD',granularity:'D',candles:[candle('2026-08-24T00:00:00Z'),candle('2026-08-25T00:00:00Z')]})})});
  assert.equal(result.values.length,1);assert.equal(result.values[0].datetime,'2026-08-24 00:00:00');

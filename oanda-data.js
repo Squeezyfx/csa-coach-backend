@@ -221,7 +221,12 @@ export async function fetchOandaSeries({symbol,interval,startDate,endDateTime,ti
   // after two pages, about 10,000 hourly candles, and gave daily candles only up to June 2023). With pageUntilEnd the
   // loop treats a short page as the end only when it already reaches within 8 days of the cutoff (weekends and holidays
   // leave gaps of a few days), and otherwise asks again; it also stops at the cutoff, an empty page, or a page that adds nothing new.
-  if(last>=end||(data.candles.length<5000&&(!pageUntilEnd||end-last<8*86400000))){finished=true;break;}
+  // A week or month candle starts days before its own end, so 8 days is a normal gap for those. For minute, hourly and
+  // daily candles a page that stops 5+ days before the cutoff is a page that was cut short (1-minute Dollar Index
+  // history ended 6 days early at a 4,999-candle page), so ask again; an empty page or no progress still ends the loop.
+  // PAGE_GAP_LIMIT=off restores the 8-day limit for every candle size.
+  const gapLimit=(['W','M'].includes(granularity)||String(process.env.PAGE_GAP_LIMIT||'').trim().toLowerCase()==='off')?8*86400000:4*86400000;
+  if(last>=end||(data.candles.length<5000&&(!pageUntilEnd||end-last<gapLimit))){finished=true;break;}
   if(last<=cursor){if(pageUntilEnd){finished=true;break;}throw fail('OANDA pagination did not advance');}cursor=last;includeFirst=false;pages++;
  }
  if(!finished)throw fail('OANDA history exceeded the page limit; partial history rejected','history_unavailable');
