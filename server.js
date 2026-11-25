@@ -89,7 +89,7 @@ import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "
 import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate, correctChartDateYear } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
-import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, requireLineEvidenceForMarked, supersedingDrawnLine } from "./marked-lines.js";
+import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, requireLineEvidenceForMarked, supersedingDrawnLine, withoutAxisTickReads } from "./marked-lines.js";
 import { isOffScale, resolveOffScalePrice } from "./price-scale-check.js";
 import { typedDateAccepted, typedDateCandidate } from "./typed-date-rescue.js";
 import { phaseContexts } from "./phase-context.js";
@@ -34410,6 +34410,16 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
 
     // Expected benchmark answers belong to the validator, never to runtime
     // price selection. All charts now follow the same live evidence path.
+
+    // A "line" read exactly at a printed axis number is the axis number. The dollar index's wide 0.25 line
+    // tolerance matched one (104.000) to the week-3 high and the chart was marked again (USDINDEX H4, 25 Nov
+    // 2026), so these reads are removed before any step that marks or matches lines. MARKED_NEEDS_LINES=off skips it.
+    if (String(process.env.MARKED_NEEDS_LINES || "on").trim().toLowerCase() !== "off") {
+      visualReview = withoutAxisTickReads(visualReview, chartDetection?.priceAxisTicks);
+      if (visualReview?.axisTickReadsRemoved) {
+        console.log("[axis-tick] removed line reads at printed axis numbers before marking: " + visualReview.axisTickReadsRemoved);
+      }
+    }
 
     visualReview = resolveIntradayCsaChartMarking({
       visualReview,

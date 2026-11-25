@@ -294,3 +294,26 @@ export function requireLineEvidenceForMarked(visualReview = {}, options = {}) {
     markedClaimDropped: true,
   };
 }
+
+// A line read exactly at a printed axis number is the axis number, not a drawn line (USDINDEX H4, 25 Nov 2026: the
+// reader "saw" a dashed line at 104.000; the index's wide 0.25 line tolerance matched it to the week-3 high 103.975,
+// so a later step marked the chart again and credited levels the trader never drew). These reads are removed from the
+// review before any marking or matching step looks at them. Fewer than three printed ticks: nothing is judged.
+export function withoutAxisTickReads(visualReview = {}, axisTicks = []) {
+  let removed = 0;
+  const keep = (items) => {
+    if (!Array.isArray(items)) return items;
+    return items.filter((item) => {
+      const price = readLinePrice(item);
+      if (price !== null && isPrintedAxisTick(price, axisTicks)) {
+        removed += 1;
+        return false;
+      }
+      return true;
+    });
+  };
+  const visibleMarkedLevels = keep(visualReview?.visibleMarkedLevels);
+  const visibleHorizontalLines = keep(visualReview?.visibleHorizontalLines);
+  if (!removed) return visualReview;
+  return { ...visualReview, visibleMarkedLevels, visibleHorizontalLines, axisTickReadsRemoved: removed };
+}

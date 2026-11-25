@@ -16,6 +16,7 @@ import {
   matchedFrameworkAreas,
   matchLinesToAreas,
   hasDrawnLineEvidence,
+  withoutAxisTickReads,
   requireLineEvidenceForMarked,
   supersedingDrawnLine,
 } from "../marked-lines.js";
@@ -424,4 +425,34 @@ test("unmarked and unclear reviews are left alone; derived 'marked' is also chec
   assert.equal(requireLineEvidenceForMarked(unmarked), unmarked);
   const derived = { csaLevelVisibility: "clear", visibleMarkedLevels: [] };
   assert.equal(requireLineEvidenceForMarked(derived).chartMarkingStatus, "unclear");
+});
+
+// The live USDINDEX H4 shape (25 Nov 2026): the reader says "marked", the only line read is the axis number 104.000
+// (matched to a framework price through the index's 0.25 tolerance), so a later step re-marked the chart.
+test("a line read at a printed axis number is removed before any marking step", () => {
+  const ticks = [104.5, 104, 103.5, 103, 102.5];
+  const axisLine = { extractionSource: EXACT, displayedPrice: 104, platformLabel: "104.000", frameworkPeriodHint: "Week 4", matchTolerance: 0.25 };
+  const review = { chartMarkingStatus: "marked", visibleMarkedLevels: [axisLine], visibleHorizontalLines: [{ approximatePrice: "104.000" }] };
+  const cleaned = withoutAxisTickReads(review, ticks);
+  assert.deepEqual(cleaned.visibleMarkedLevels, []);
+  assert.deepEqual(cleaned.visibleHorizontalLines, []);
+  assert.equal(cleaned.axisTickReadsRemoved, 2);
+  // with the tick reads gone the framework-match step can no longer re-mark the chart
+  assert.equal(markChartFromFrameworkLines({ ...cleaned, chartMarkingStatus: "unclear" }).chartMarkingStatus, "unclear");
+  assert.equal(requireLineEvidenceForMarked(cleaned, { axisTicks: ticks, lastPrice: 103.882 }).chartMarkingStatus, "unclear");
+});
+test("a line that is not at an axis number, or no tick list, leaves the review untouched", () => {
+  const ticks = [104.5, 104, 103.5, 103, 102.5];
+  const real = { extractionSource: EXACT, displayedPrice: 103.3662, frameworkPeriodHint: "Week 3" };
+  const review = { chartMarkingStatus: "marked", visibleMarkedLevels: [real] };
+  assert.equal(withoutAxisTickReads(review, ticks), review);
+  const atTick = { chartMarkingStatus: "marked", visibleMarkedLevels: [{ extractionSource: EXACT, displayedPrice: 104 }] };
+  assert.equal(withoutAxisTickReads(atTick, []), atTick); // fewer than three ticks: nothing is judged
+});
+test("the server removes axis-number reads before the first marking step, with the off switch", () => {
+  const serverSource = readFileSync(fileURLToPath(new URL("../server.js", import.meta.url)), "utf8");
+  const strip = serverSource.indexOf("withoutAxisTickReads(visualReview, chartDetection?.priceAxisTicks)");
+  const resolve = serverSource.indexOf("visualReview = resolveIntradayCsaChartMarking({");
+  assert.ok(strip > 0 && resolve > strip);
+  assert.match(serverSource, /MARKED_NEEDS_LINES/);
 });
