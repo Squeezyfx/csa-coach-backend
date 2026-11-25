@@ -728,13 +728,17 @@ export function sequenceFibQualifiedAreas(candidates = [], direction = "range") 
 // larger of the broker pip buffer and 5% of the framing range, but never more
 // than 0.1% of the level's own price, so a huge range (an index, a weekly
 // chart) cannot stretch "a few pips" into hundreds of points.
-export function fibBandBoundaryAllowance({ pipBuffer = null, impulseRange = null, price = null } = {}) {
+// The dollar index is built from six currency pairs, so its levels sit 0.05 to 0.19 from the trader's broker chart
+// (USDINDEX H4 2026-11-25: our 103.3662 and 102.3448 were the broker's 103.32 and 102.22, each just outside a 0.1%
+// cap); the caller passes a wider capFraction (0.15% of price) for that one instrument. Every other instrument keeps 0.1%.
+export function fibBandBoundaryAllowance({ pipBuffer = null, impulseRange = null, price = null, capFraction = 0.001 } = {}) {
   const buffer = Number.isFinite(Number(pipBuffer)) && Number(pipBuffer) > 0 ? Number(pipBuffer) : 0;
   const range = Number(impulseRange);
   const level = Math.abs(Number(price));
   if (!(range > 0)) return pipBuffer === null || pipBuffer === undefined ? null : buffer;
+  const cap = Number.isFinite(Number(capFraction)) && Number(capFraction) > 0 ? Number(capFraction) : 0.001;
   const proportional = range * 0.05;
-  const capped = Number.isFinite(level) && level > 0 ? Math.min(proportional, level * 0.001) : proportional;
+  const capped = Number.isFinite(level) && level > 0 ? Math.min(proportional, level * cap) : proportional;
   return Math.max(buffer, capped);
 }
 

@@ -21910,10 +21910,18 @@ function rankChartNativeFallbackAreas({
     // so it scales with the chart: a level 4 pips outside the band on a 117-pip
     // week is a near miss, not a rejection, while a level a long way outside is
     // still out, even on a huge index range.
+    // The dollar index (built from six OANDA pairs, drifting 0.05-0.19 from the broker's chart) gets a 0.15% cap
+    // instead of 0.1%. INDEX_FIB_ALLOWANCE=off puts it back to 0.1%.
+    const indexFibCap =
+      String(process.env.INDEX_FIB_ALLOWANCE || "on").trim().toLowerCase() !== "off" &&
+      isSyntheticInstrument(symbol || "")
+        ? 0.0015
+        : undefined;
     const fibBoundaryTolerance = fibBandBoundaryAllowance({
       pipBuffer: brokerPipBuffer,
       impulseRange,
       price,
+      capFraction: indexFibCap,
     });
     const rawLow = asPositiveNumber(candidate?.zoneLow) || price;
     const rawHigh = asPositiveNumber(candidate?.zoneHigh) || price;
