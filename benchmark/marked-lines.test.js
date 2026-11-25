@@ -15,6 +15,8 @@ import {
   markedEntryStrength,
   matchedFrameworkAreas,
   matchLinesToAreas,
+  hasDrawnLineEvidence,
+  requireLineEvidenceForMarked,
   supersedingDrawnLine,
 } from "../marked-lines.js";
 
@@ -393,4 +395,33 @@ test("the server adds the index feed allowance to the line match tolerance, with
   assert.match(serverSource, /SYNTHETIC_LINE_TOLERANCE/);
   assert.match(serverSource, /syntheticIndexTolerance\(marketReference\?\.symbol \|\| ""\) \?\? 0/);
   assert.match(serverSource, /exactLabelTolerance: lineMatchTolerance\(\{ standardTolerance, atr, feedAllowance \}\)/);
+});
+
+// USDINDEX H4, 25 Nov 2026: a clean chart, nothing drawn. The image reader said "marked", the price reader
+// invented a dashed line at the printed axis number 104.000, and the page said "Levels marked on chart".
+const axisTicks = [104.6, 104.15, 103.7, 103.25, 102.8];
+test("a 'marked' call with no real drawn-line read is not trusted", () => {
+  const review = { chartMarkingStatus: "marked", csaLevelVisibility: "partial", visualChartStyle: "marked chart", csaSimilarities: ["x"], visibleMarkedLevels: [], visibleHorizontalLines: [] };
+  const out = requireLineEvidenceForMarked(review, { axisTicks, lastPrice: 103.882 });
+  assert.equal(out.chartMarkingStatus, "unclear");
+  assert.equal(out.csaLevelVisibility, "unclear");
+  assert.deepEqual(out.csaSimilarities, []);
+  assert.equal(out.markedClaimDropped, true);
+});
+test("a line read at a printed axis number or at the last price does not count", () => {
+  const review = { chartMarkingStatus: "marked", visibleHorizontalLines: [{ approximatePrice: "103.700", description: "dashed line" }, { approximatePrice: "103.88" }] };
+  assert.equal(hasDrawnLineEvidence(review, { axisTicks, lastPrice: 103.882 }), false);
+  assert.equal(requireLineEvidenceForMarked(review, { axisTicks, lastPrice: 103.882 }).chartMarkingStatus, "unclear");
+});
+test("a real drawn line keeps the chart marked, whichever field carries its price", () => {
+  for (const line of [{ displayedPrice: 103.32 }, { approximatePrice: "approx 103.32" }, { platformLabel: "103.32" }]) {
+    const review = { chartMarkingStatus: "marked", visibleMarkedLevels: [line] };
+    assert.equal(requireLineEvidenceForMarked(review, { axisTicks, lastPrice: 103.882 }), review);
+  }
+});
+test("unmarked and unclear reviews are left alone; derived 'marked' is also checked", () => {
+  const unmarked = { chartMarkingStatus: "unmarked" };
+  assert.equal(requireLineEvidenceForMarked(unmarked), unmarked);
+  const derived = { csaLevelVisibility: "clear", visibleMarkedLevels: [] };
+  assert.equal(requireLineEvidenceForMarked(derived).chartMarkingStatus, "unclear");
 });

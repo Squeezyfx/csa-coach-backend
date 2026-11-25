@@ -1,3 +1,4 @@
+import { isPrintedAxisTick } from "./axis-ticks.js";
 // Lines the trader drew on the chart, as read by the independent line reader.
 const EXACT_LINE_SOURCE = "independent_horizontal_line_reader_exact";
 
@@ -235,4 +236,61 @@ export function supersedingDrawnLine({ candidatePrice, candidatePrices = [], lin
     }
   }
   return undefined;
+}
+
+// The price a line read points at: the exact reader's displayed price, else the first number in the
+// approximate price or the platform label.
+const readLinePrice = (item) => {
+  const direct = positive(item?.displayedPrice);
+  if (direct !== null) return direct;
+  for (const field of [item?.approximatePrice, item?.platformLabel]) {
+    if (field === null || field === undefined) continue;
+    const match = String(field).replace(/,/g, "").match(/\d+(?:\.\d+)?/);
+    const value = match ? positive(match[0]) : null;
+    if (value !== null) return value;
+  }
+  return null;
+};
+
+const reviewMarkingStatus = (review) => {
+  const explicit = String(review?.chartMarkingStatus || "").toLowerCase();
+  if (["marked", "unmarked", "unclear"].includes(explicit)) return explicit;
+  const visibility = String(review?.csaLevelVisibility || "").toLowerCase();
+  const style = String(review?.visualChartStyle || "").toLowerCase();
+  if (visibility === "not marked" || style.includes("unmarked")) return "unmarked";
+  if (["clear", "partial"].includes(visibility) || style.includes("marked chart") || style.includes("clear support")) return "marked";
+  return "unclear";
+};
+
+// A chart is only "marked" when a line the trader could have drawn was actually read. The image reader's
+// "marked" call alone is not evidence: USDINDEX H4, 25 Nov 2026, a clean chart, was told "Levels marked on chart".
+// Reads that do not count: no price at all, a printed axis number, and the chart's own last-price line.
+export function hasDrawnLineEvidence(visualReview = {}, { axisTicks = [], lastPrice = null } = {}) {
+  const reads = [
+    ...(Array.isArray(visualReview?.visibleMarkedLevels) ? visualReview.visibleMarkedLevels : []),
+    ...(Array.isArray(visualReview?.visibleHorizontalLines) ? visualReview.visibleHorizontalLines : []),
+  ];
+  const last = positive(lastPrice);
+  return reads.some((item) => {
+    const price = readLinePrice(item);
+    if (price === null) return false;
+    if (isPrintedAxisTick(price, axisTicks)) return false;
+    if (last !== null && Math.abs(price - last) <= last * 0.0002) return false;
+    return true;
+  });
+}
+
+// "marked" with no drawn line behind it becomes "unclear": neither "you marked levels" nor "you marked nothing".
+export function requireLineEvidenceForMarked(visualReview = {}, options = {}) {
+  if (reviewMarkingStatus(visualReview) !== "marked") return visualReview;
+  if (hasDrawnLineEvidence(visualReview, options)) return visualReview;
+  return {
+    ...visualReview,
+    chartMarkingStatus: "unclear",
+    csaLevelVisibility: "unclear",
+    visualChartStyle: "unclear",
+    csaSimilarities: [],
+    csaDifferences: [],
+    markedClaimDropped: true,
+  };
 }

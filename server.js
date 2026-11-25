@@ -89,7 +89,7 @@ import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "
 import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate, correctChartDateYear } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
-import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, supersedingDrawnLine } from "./marked-lines.js";
+import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, requireLineEvidenceForMarked, supersedingDrawnLine } from "./marked-lines.js";
 import { isOffScale, resolveOffScalePrice } from "./price-scale-check.js";
 import { typedDateAccepted, typedDateCandidate } from "./typed-date-rescue.js";
 import { phaseContexts } from "./phase-context.js";
@@ -34413,6 +34413,25 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
     // A line the trader drew on a previous high or low marks the chart, even
     // when the visual review called it unmarked.
     visualReview = markChartFromFrameworkLines(visualReview);
+
+    // The image reader's "marked" call is not evidence on its own: a clean USDINDEX H4 chart (25 Nov 2026) was
+    // told "Levels marked on chart". Without a real drawn-line read (not an axis number, not the last-price
+    // line) the chart is left "unclear". MARKED_NEEDS_LINES=off restores the old behavior.
+    if (String(process.env.MARKED_NEEDS_LINES || "on").trim().toLowerCase() !== "off") {
+      const markedBefore = getChartMarkingStatus(visualReview);
+      visualReview = requireLineEvidenceForMarked(visualReview, {
+        axisTicks: chartDetection?.priceAxisTicks,
+        lastPrice: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice,
+      });
+      console.log("[chart-marking]", {
+        readerStatus: markedBefore,
+        usedStatus: getChartMarkingStatus(visualReview),
+        lineReads:
+          (Array.isArray(visualReview?.visibleMarkedLevels) ? visualReview.visibleMarkedLevels.length : 0) +
+          (Array.isArray(visualReview?.visibleHorizontalLines) ? visualReview.visibleHorizontalLines.length : 0),
+        claimDropped: visualReview?.markedClaimDropped === true,
+      });
+    }
 
     visualReview = sanitizeVisualReviewMarketPrices({
       visualReview,
