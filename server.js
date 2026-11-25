@@ -89,7 +89,7 @@ import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "
 import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate, correctChartDateYear } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
-import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, requireLineEvidenceForMarked, supersedingDrawnLine, withoutAxisTickReads } from "./marked-lines.js";
+import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, creditedLinePrices, requireLineEvidenceForMarked, supersedingDrawnLine, withoutAxisTickReads, withoutCreditedLineReferences } from "./marked-lines.js";
 import { isOffScale, resolveOffScalePrice } from "./price-scale-check.js";
 import { typedDateAccepted, typedDateCandidate } from "./typed-date-rescue.js";
 import { phaseContexts } from "./phase-context.js";
@@ -27434,6 +27434,7 @@ function buildValidatedAnalysisFacts({
       chartMarked: chartMarkingStatus === "marked",
       preferredAreaMarked,
       markedFrameworkAreas: matchedFrameworkAreas(visibleUserMarkedLevels, currentPrice),
+      markedLinePrices: creditedLinePrices(visibleUserMarkedLevels),
       visibleMarkedLevelCount: visibleUserMarkedLevels.length,
       planNotesProvided,
       entryPlanDescribed,
@@ -28844,10 +28845,16 @@ function buildControlledFeedback({
     const beyond = ratio > 0.618 ? ratio - 0.618 : ratio < 0.382 ? 0.382 - ratio : 0;
     return beyond <= 0.12;
   };
+  // A drawn line that was credited to an entry ("You marked ... Buy 1 is among them") is not also a "Level to
+  // watch". WATCH_SKIPS_CREDITED_LINES=off puts it back.
+  const referencesWithoutCreditedLines =
+    String(process.env.WATCH_SKIPS_CREDITED_LINES || "on").trim().toLowerCase() !== "off"
+      ? withoutCreditedLineReferences(referenceAreas, facts?.userEvidence?.markedLinePrices)
+      : referenceAreas;
   const coachingReferenceAreas = newWeekStart
     ? []
     : hasValidatedArea
-    ? referenceAreas.filter(
+    ? referencesWithoutCreditedLines.filter(
         (reference) =>
           Number(reference?.structuralScore || 0) >= 35 &&
           isCloseToZone(reference) &&

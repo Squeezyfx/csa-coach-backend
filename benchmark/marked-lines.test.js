@@ -16,6 +16,8 @@ import {
   matchedFrameworkAreas,
   matchLinesToAreas,
   hasDrawnLineEvidence,
+  creditedLinePrices,
+  withoutCreditedLineReferences,
   withoutAxisTickReads,
   requireLineEvidenceForMarked,
   supersedingDrawnLine,
@@ -455,4 +457,36 @@ test("the server removes axis-number reads before the first marking step, with t
   const resolve = serverSource.indexOf("visualReview = resolveIntradayCsaChartMarking({");
   assert.ok(strip > 0 && resolve > strip);
   assert.match(serverSource, /MARKED_NEEDS_LINES/);
+});
+
+// USDINDEX H4, 25 Nov 2026: the trader drew lines at 103.237 and 102.403, credited to Buy 1 (103.366) and Buy 2
+// (102.345). The same lines also came back as reference-only levels and the chart listed 103.237 as "Level to watch".
+const credited103 = { extractionSource: EXACT, displayedPrice: 103.237, matchedFrameworkPeriod: "framework", matchedFrameworkPrice: 103.3662, matchTolerance: 0.25 };
+const credited102 = { extractionSource: EXACT, displayedPrice: 102.403, frameworkPeriodHint: "Week 1", matchedFrameworkPrice: 102.3448 };
+const uncredited = { extractionSource: EXACT, displayedPrice: 101.9 };
+test("only lines credited to a framework level give prices to leave out of the levels to watch", () => {
+  assert.deepEqual(creditedLinePrices([credited103, credited102, uncredited, { approximatePrice: "103.9" }]), [103.237, 102.403]);
+  assert.deepEqual(creditedLinePrices([]), []);
+  assert.deepEqual(creditedLinePrices(undefined), []);
+});
+test("a reference that is a credited drawn line is dropped; other references stay", () => {
+  const refs = [
+    { authoritativeCenter: 103.237, areaType: "support" },
+    { authoritativeCenter: 102.403, areaType: "converted support" },
+    { authoritativeCenter: 103.4343, areaType: "converted support" },
+    { authoritativeCenter: 103.2371, areaType: "support" },
+  ];
+  const kept = withoutCreditedLineReferences(refs, [103.237, 102.403]);
+  assert.deepEqual(kept.map((r) => r.authoritativeCenter), [103.4343]);
+  // nothing credited: the list is returned as it is
+  assert.equal(withoutCreditedLineReferences(refs, []), refs);
+  assert.equal(withoutCreditedLineReferences(refs, undefined), refs);
+  // a level 0.05 away from a credited line is a different level (tolerance is 0.01% of price)
+  assert.equal(withoutCreditedLineReferences([{ authoritativeCenter: 103.29 }], [103.237]).length, 1);
+});
+test("the server filters the watch levels only when an entry exists, and records the credited prices", () => {
+  const serverSource = readFileSync(fileURLToPath(new URL("../server.js", import.meta.url)), "utf8");
+  assert.match(serverSource, /WATCH_SKIPS_CREDITED_LINES/);
+  assert.match(serverSource, /markedLinePrices: creditedLinePrices\(visibleUserMarkedLevels\)/);
+  assert.match(serverSource, /: hasValidatedArea\s*\n\s*\? referencesWithoutCreditedLines\.filter\(/);
 });

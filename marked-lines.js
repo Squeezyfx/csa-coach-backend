@@ -317,3 +317,26 @@ export function withoutAxisTickReads(visualReview = {}, axisTicks = []) {
   if (!removed) return visualReview;
   return { ...visualReview, visibleMarkedLevels, visibleHorizontalLines, axisTickReadsRemoved: removed };
 }
+
+// The printed prices of the drawn lines that were credited to a framework level (the lines the review says the
+// trader "marked"). The same lines also come back as reference-only levels, which the chart would draw a second
+// time as "Level to watch" (USDINDEX H4, 25 Nov 2026: the line at 103.237, credited to Buy 1 at 103.366, was also
+// listed as "Level to watch 103.2370").
+export function creditedLinePrices(levels = []) {
+  return frameworkMatchedLineReads(levels)
+    .map((item) => positive(item?.displayedPrice))
+    .filter((price) => price !== null);
+}
+
+// References that are one of those credited lines are left out of the levels to watch. A reference only counts as
+// the line when it sits on the line's printed price (within 0.01% of price), so an unrelated nearby level stays.
+export function withoutCreditedLineReferences(references = [], linePrices = [], relativeTolerance = 0.0001) {
+  const prices = (Array.isArray(linePrices) ? linePrices : []).map(positive).filter((price) => price !== null);
+  const list = Array.isArray(references) ? references : [];
+  if (!prices.length) return list;
+  return list.filter((reference) => {
+    const center = positive(reference?.authoritativeCenter);
+    if (center === null) return true;
+    return !prices.some((price) => Math.abs(price - center) <= price * relativeTolerance);
+  });
+}
