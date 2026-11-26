@@ -32,3 +32,11 @@ test("the review wording takes both contexts from the helper", () => {
   assert.match(server, /import \{ phaseContexts \} from "\.\/phase-context\.js";/);
   assert.match(server, /const \{ bullishRecoveryContext, bearishPullbackContext \} = phaseContexts\(\{/);
 });
+
+// A pullback that has not broken the trend is nothing the trader did wrong (EURUSD H1 buy, 26 Nov 2026), so it is not
+// listed as a weakness; a review with no entry still says so during a pullback or recovery.
+test("an intact trend is not listed as a weakness, and a no-entry review still says there is no entry", () => {
+  const server = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  assert.doesNotMatch(server, /not reversed yet|trend isn't reversed|bullish recovery hasn't broken|bearish pullback hasn't broken/);
+  assert.match(server, /\} else if \(!hasValidatedArea\) \{\s*addWeakness\(/);
+});

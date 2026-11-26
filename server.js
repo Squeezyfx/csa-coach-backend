@@ -29178,11 +29178,7 @@ function buildControlledFeedback({
 
   if (weeklyDataIncomplete) {
     // Covered by the single weekly-data weakness above.
-  } else if (
-    !hasValidatedArea &&
-    !bullishRecoveryContext &&
-    !bearishPullbackContext
-  ) {
+  } else if (!hasValidatedArea) {
     addWeakness(
       "entry",
       noMarketData
@@ -29258,28 +29254,6 @@ function buildControlledFeedback({
         { short: "No trigger candle yet" }
       );
     }
-  }
-
-  if (bullishRecoveryContext) {
-    addWeakness(
-      "entry",
-      areaText
-        ? `The bullish recovery hasn't broken above the ${areaText} yet, so the downtrend isn't reversed.`
-        : referenceAreaTexts[0]
-        ? `The bullish recovery is still below ${referenceAreaTexts[0]}.`
-        : "The bullish recovery hasn't broken above the main resistance yet.",
-      { short: "Downtrend not reversed yet" }
-    );
-  } else if (bearishPullbackContext) {
-    addWeakness(
-      "entry",
-      areaText
-        ? `The bearish pullback hasn't broken below the ${areaText} yet, so the uptrend isn't reversed.`
-        : referenceAreaTexts[0]
-        ? `The bearish pullback is still above ${referenceAreaTexts[0]}.`
-        : "The bearish pullback hasn't broken below the main support yet.",
-      { short: "Uptrend not reversed yet" }
-    );
   }
 
   if (
