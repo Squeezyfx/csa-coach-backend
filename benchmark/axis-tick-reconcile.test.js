@@ -34,3 +34,18 @@ test("a price from the per-target framework reader is not judged here", () => {
 test("the tick list reaches the reference builder", () => {
   assert.match(server, /axisTickPrices: chartDetection\?\.priceAxisTicks,/);
 });
+
+// Chart 2914 (USA30 H1): the chart step read the line label 53524.2 as an axis number where the axis prints 53519.4,
+// and the trader's line at 53524.2 was removed as "an axis number".
+const US30_AXIS = [54245.1, 54100.55, 53953.05, 53808.5, 53663.95, 53524.2, 53371.9, 53227.35, 53079.8, 52935.3, 52790.75];
+
+test("a line label read among the axis numbers is not treated as one", () => {
+  assert.equal(isPrintedAxisTick(53524.2, US30_AXIS), false);
+  // the real numbers around it still are
+  assert.equal(isPrintedAxisTick(53663.95, US30_AXIS), true);
+  assert.equal(isPrintedAxisTick(53371.9, US30_AXIS), true);
+  assert.equal(isPrintedAxisTick(54100.55, US30_AXIS), true);
+  // the correctly read axis keeps all its numbers
+  const read = US30_AXIS.map((tick) => (tick === 53524.2 ? 53519.4 : tick));
+  for (const tick of read) assert.equal(isPrintedAxisTick(tick, read), true);
+});

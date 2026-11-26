@@ -26,5 +26,29 @@ export function isPrintedAxisTick(price, ticks = []) {
   if (!(spacing > 0)) return false;
   // Within one hundredth of the tick spacing: for 0.005 apart, half a pip.
   const tolerance = Math.max(spacing * 0.01, 1e-9);
-  return list.some((tick) => Math.abs(tick - p) <= tolerance);
+  return onGridTicks(list, spacing).some((tick) => Math.abs(tick - p) <= tolerance);
+}
+
+// A "tick" that does not fit the spacing of the ticks around it is not an axis number: it is usually a line's own price
+// label read as one (chart 2914, 26 Nov 2026: 53524.2 between 53663.95 and 53371.9, where the axis prints 53519.4),
+// and treating it as a tick deleted the trader's line. A tick whose neighbours are two spacings apart must sit halfway
+// between them, within 2.5% of the spacing. The worst misfit is removed first, so its neighbours are not blamed for it.
+function onGridTicks(ticks, spacing) {
+  const list = [...ticks];
+  for (;;) {
+    let worst = -1;
+    let worstOffset = spacing * 0.025;
+    for (let index = 1; index < list.length - 1; index += 1) {
+      const above = list[index - 1];
+      const below = list[index + 1];
+      if (Math.abs(above - below - 2 * spacing) > spacing * 0.1) continue;
+      const offset = Math.abs(list[index] - (above + below) / 2);
+      if (offset > worstOffset) {
+        worst = index;
+        worstOffset = offset;
+      }
+    }
+    if (worst === -1) return list;
+    list.splice(worst, 1);
+  }
 }
