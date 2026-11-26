@@ -18,6 +18,10 @@ import {
   hasDrawnLineEvidence,
   drawnLineCandidatesFromReads,
   matchLinesToCompletedExtremes,
+  drawnLevelLines,
+  sortDrawnLines,
+  drawnLinesStrength,
+  drawnLinesNotEntry,
   lineSitsOnPeriodExtreme,
   lineReadsFromCandidateList,
   withoutReplacedPeriodCandidates,
@@ -666,4 +670,93 @@ test("both backstops are wired in with off switches", () => {
   assert.match(server, /DRAWN_LINE_EVIDENCE/);
   assert.ok(server.indexOf("lineReadsFromCandidateList(") < server.indexOf("matchLinesToCompletedExtremes(visualReview?.visibleMarkedLevels"));
   assert.match(server, /lineSitsOnPeriodExtreme\(Number\(candidate\.price\), periods\)/);
+});
+
+// USDCAD H1, 26 Nov 2026: two lines drawn, one on Sell 1 and one far above the zone, plus the price line.
+const usdcadReads = [1.42483, 1.42633, 1.43684].map((price) => ({
+  extractionSource: "independent_horizontal_line_reader_exact",
+  displayedPrice: price,
+  platformLabel: String(price),
+  description: "horizontal line",
+}));
+const usdcadEntries = [
+  { authoritativeCenter: 1.42633, areaType: "converted resistance" },
+  { authoritativeCenter: 1.42934, areaType: "supply" },
+  { authoritativeCenter: 1.43108, areaType: "converted resistance" },
+];
+const words = { label: (type) => (type === "converted resistance" ? "support-turned-resistance" : type), format: (price) => price.toFixed(5) };
+const usdcadSort = (targets = []) => sortDrawnLines(drawnLevelLines(usdcadReads, { lastPrices: [1.42483] }), usdcadEntries, targets);
+const usdcadMissed = (other, extra = {}) =>
+  drawnLinesNotEntry(other, {
+    side: "sell",
+    currentPrice: 1.42483,
+    stops: [1.42729, 1.4303, 1.43204],
+    zone: { low: 1.42635, high: 1.43095 },
+    format: words.format,
+    ...extra,
+  });
+
+test("the price line is not one of the trader's lines", () => {
+  assert.deepEqual(drawnLevelLines(usdcadReads, { lastPrices: [1.42483] }).map((line) => line.price), [1.42633, 1.43684]);
+});
+
+test("only the line that is an entry is called a match", () => {
+  const strength = drawnLinesStrength(usdcadSort(), words);
+  assert.equal(strength.text, "1 of your 2 lines matches an entry area: 1.42633 (support-turned-resistance) is Entry 1.");
+  assert.equal(strength.short, "1 of 2 lines matches");
+});
+
+test("the other line is named as not an entry, with the reason", () => {
+  const missed = usdcadMissed(usdcadSort().other);
+  assert.equal(
+    missed.text,
+    "Your line at 1.43684 is not an entry area. It is above 1.43204, where the sell idea is already cancelled."
+  );
+  assert.equal(missed.short, "1 line is not an entry");
+});
+
+test("the reason follows where the line is", () => {
+  assert.match(usdcadMissed([1.421]).text, /It is below the current price, so not a place to sell from\./);
+  assert.match(usdcadMissed([1.4318], { stops: [] }).text, /outside the area where this setup looks for entries/);
+  assert.match(usdcadMissed([1.428]).text, /did not qualify as an entry for this setup/);
+  const buy = drawnLinesNotEntry([1.1, 1.101], { side: "buy", currentPrice: 1.2, stops: [1.15], format: words.format });
+  assert.match(buy.text, /^Your lines at 1\.10000 and 1\.10100 are not entry areas\. They are below 1\.15000, where the buy idea/);
+  assert.equal(buy.short, "2 lines are not entries");
+});
+
+test("the wording never says how the areas are found", () => {
+  const all = [drawnLinesStrength(usdcadSort(), words).text, usdcadMissed([1.43684, 1.421, 1.428]).text].join(" ");
+  assert.doesNotMatch(all, /monday|tuesday|wednesday|thursday|friday|\bday\b|\bweek\b|framework|\bhigh\b|\blow\b/i);
+  assert.match("a day low", /\bday\b/);
+});
+
+test("one line on an entry reads as before, and all lines on entries still match", () => {
+  const one = drawnLinesStrength(sortDrawnLines([{ price: 1.42934, tolerance: 0 }], usdcadEntries), words);
+  assert.equal(one.text, "You marked the supply area around 1.42934, which is the framework's second entry area (Entry 2).");
+  const both = drawnLinesStrength(sortDrawnLines([{ price: 1.42934, tolerance: 0 }, { price: 1.42633, tolerance: 0 }], usdcadEntries), words);
+  assert.match(both.text, /^Both of your lines match entry areas: 1\.42633 .* is Entry 1 and 1\.42934 \(supply\) is Entry 2\.$/);
+  assert.equal(both.short, "Your marked areas match");
+});
+
+test("a line on a take profit is not called a missed entry, and no line on an entry claims no match", () => {
+  const onTarget = sortDrawnLines([{ price: 1.42508, tolerance: 0 }], usdcadEntries, [1.42508]);
+  assert.deepEqual(onTarget, { onEntry: [], other: [] });
+  assert.equal(drawnLinesStrength(onTarget, words), null);
+  assert.equal(usdcadMissed([]), null);
+});
+
+test("order lines and a second read of the same line are left out", () => {
+  const exact = (displayedPrice, extra = {}) => ({ extractionSource: "independent_horizontal_line_reader_exact", displayedPrice, ...extra });
+  const lines = drawnLevelLines(
+    [exact(1.42633), exact(1.42633, { matchTolerance: 0.0006 }), exact(1.43, { platformLabel: "SL 1.43000" })],
+    { lastPrices: [] }
+  );
+  assert.deepEqual(lines, [{ price: 1.42633, tolerance: 0.0006 }]);
+});
+
+test("the new wording is wired in with an off switch", () => {
+  const server = readFileSync(fileURLToPath(new URL("../server.js", import.meta.url)), "utf8");
+  assert.match(server, /MARKED_LINE_NOTES/);
+  assert.match(server, /drawnLines: drawnLevelLines\(visibleUserMarkedLevels/);
+  assert.ok(server.indexOf("const judgeDrawnLines") < server.indexOf("const pillars = assessTradePillars("));
 });

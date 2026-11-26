@@ -89,7 +89,7 @@ import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "
 import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate, correctChartDateYear } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
-import { annotateMatchedLines, matchLinesToCompletedExtremes, lineSitsOnPeriodExtreme, lineReadsFromCandidateList, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, creditedLinePrices, drawnLineCandidatesFromReads, withoutReplacedPeriodCandidates, requireLineEvidenceForMarked, supersedingDrawnLine, withoutAxisTickReads, withoutCreditedLineReferences } from "./marked-lines.js";
+import { annotateMatchedLines, matchLinesToCompletedExtremes, lineSitsOnPeriodExtreme, lineReadsFromCandidateList, drawnLineEntryCredit, drawnLevelLines, sortDrawnLines, drawnLinesStrength, drawnLinesNotEntry, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, creditedLinePrices, drawnLineCandidatesFromReads, withoutReplacedPeriodCandidates, requireLineEvidenceForMarked, supersedingDrawnLine, withoutAxisTickReads, withoutCreditedLineReferences } from "./marked-lines.js";
 import { chooseLegFrame } from "./leg-frame.js";
 import { isOffScale, resolveOffScalePrice } from "./price-scale-check.js";
 import { typedDateAccepted, typedDateCandidate } from "./typed-date-rescue.js";
@@ -27493,6 +27493,10 @@ function buildValidatedAnalysisFacts({
       chartMarked: chartMarkingStatus === "marked",
       preferredAreaMarked,
       markedFrameworkAreas: matchedFrameworkAreas(visibleUserMarkedLevels, currentPrice),
+      // The lines the trader drew, so the review can say which of them are entry areas and which are not.
+      drawnLines: drawnLevelLines(visibleUserMarkedLevels, {
+        lastPrices: [currentPrice, chartDetection?.latestVisiblePrice, visualReview?.chartLastPrice],
+      }),
       markedLinePrices: creditedLinePrices(visibleUserMarkedLevels),
       visibleMarkedLevelCount: visibleUserMarkedLevels.length,
       planNotesProvided,
@@ -29081,7 +29085,24 @@ function buildControlledFeedback({
       })
     : "";
 
-  if (markedFrameworkAreasText) {
+  // With entries to compare against and no trade on the chart, only a line that is an entry is called a match, and
+  // each other line is named as not an entry. Written after the plan below, which knows the stops and take profits.
+  // MARKED_LINE_NOTES=off restores the old wording.
+  const judgeDrawnLines =
+    String(process.env.MARKED_LINE_NOTES || "on").toLowerCase() !== "off" &&
+    hasValidatedArea &&
+    !weeklyDataIncomplete &&
+    userEvidence.chartMarked &&
+    Array.isArray(userEvidence.drawnLines) &&
+    userEvidence.drawnLines.length > 0 &&
+    !facts.trade.visible &&
+    !hasExecutedOrder &&
+    userEvidence.tradeVisibility !== "visible" &&
+    ["bullish", "bearish"].includes(facts.direction);
+
+  if (judgeDrawnLines) {
+    // Covered after the plan below.
+  } else if (markedFrameworkAreasText) {
     addStrength("entry", markedFrameworkAreasText, { short: "Your marked areas match" });
   } else if (
     userEvidence.preferredAreaMarked &&
@@ -29312,6 +29333,29 @@ function buildControlledFeedback({
   });
   strengthItems.push(...pillars.strengths);
   weaknessItems.push(...pillars.weaknesses);
+
+  if (judgeDrawnLines) {
+    const plan = pillars.geometry && !pillars.geometry.entryTyped ? pillars.geometry : null;
+    const sorted = sortDrawnLines(userEvidence.drawnLines, selectedEntryAreas, plan?.targets);
+    // With stop or target lines on the chart the other lines may be those, so nothing is said about them.
+    if (userEvidence.stopShown || userEvidence.targetShown) sorted.other = [];
+    const matched = drawnLinesStrength(sorted, { label: plainAreaTypeLabel, format: formatPrice });
+    addStrength("entry", matched ? matched.text : "You marked levels on the chart, which makes review easier.", {
+      short: matched ? matched.short : "Levels marked on chart",
+      priority: 0,
+    });
+    const sell = facts.direction === "bearish";
+    const anchor = Number(sell ? zoneFrame.swingLow : zoneFrame.swingHigh);
+    const zoneEdges = [0.382, 0.618].map((ratio) => anchor + (sell ? 1 : -1) * ratio * zoneRange).sort((a, b) => a - b);
+    const missed = drawnLinesNotEntry(sorted.other, {
+      side: sell ? "sell" : "buy",
+      currentPrice: facts.currentPrice,
+      stops: plan ? [plan.stop, ...(plan.backups || []).map((backup) => backup.stop)] : [],
+      zone: zoneRange > 0 && anchor > 0 ? { low: zoneEdges[0], high: zoneEdges[1] } : null,
+      format: formatPrice,
+    });
+    if (missed) addWeakness("entry", missed.text, { short: missed.short, priority: 0 });
+  }
 
   // Summary boxes get the short headlines; the coaching sections get the
   // full bullets (weaknesses with their one-line "why"), so the two never

@@ -254,6 +254,121 @@ export function markedEntryNumbers(areas = [], entries = [], relativeTolerance =
 
 const ORDINAL_WORDS = ["first", "second", "third"];
 
+// Which drawn lines are entry areas (USDCAD H1, 26 Nov 2026: two lines drawn, only 1.42633 was an entry, and the
+// review said "Your marked areas match"). None of the wording below may say how the areas are found.
+
+// The lines the trader drew: the chart's own price line, order and Fibonacci lines and a second read of the same line
+// are left out. Each keeps the tolerance it was matched with.
+export function drawnLevelLines(levels = [], { lastPrices = [] } = {}) {
+  const last = (Array.isArray(lastPrices) ? lastPrices : []).map(positive).filter((price) => price !== null);
+  const lines = [];
+  for (const item of Array.isArray(levels) ? levels : []) {
+    if (!isExactLineRead(item)) continue;
+    const label = String(item.platformLabel || "");
+    if (NOT_A_LEVEL_LINE.test(`${label} ${item.description || ""}`) || ORDER_SIDE_LABEL.test(label)) continue;
+    const price = Number(item.displayedPrice);
+    if (isPriceLine(price, last)) continue;
+    const tolerance = positive(item.matchTolerance) || 0;
+    const same = lines.find((line) => Math.abs(line.price - price) <= price * SAME_PRICE);
+    if (same) same.tolerance = Math.max(same.tolerance, tolerance);
+    else lines.push({ price, tolerance });
+  }
+  return lines;
+}
+
+// A line is an entry when it sits within `fraction` of the entry's price, or within the tolerance it was matched with.
+// A line on a take-profit level was not meant as an entry, so it is left out of both lists.
+export function sortDrawnLines(lines = [], entries = [], targets = [], fraction = 0.0005) {
+  const takeProfits = (Array.isArray(targets) ? targets : []).map(positive).filter((price) => price !== null);
+  const onEntry = [];
+  const other = [];
+  for (const line of Array.isArray(lines) ? lines : []) {
+    const price = positive(line?.price);
+    if (price === null) continue;
+    const allowed = Math.max(positive(line.tolerance) || 0, price * fraction);
+    let best = null;
+    (Array.isArray(entries) ? entries : []).forEach((entry, index) => {
+      const center = positive(entry?.authoritativeCenter);
+      if (center === null) return;
+      const gap = Math.abs(center - price);
+      if (gap <= allowed && (!best || gap < best.gap)) best = { gap, number: index + 1, areaType: String(entry.areaType || "") };
+    });
+    if (best) onEntry.push({ price, number: best.number, areaType: best.areaType });
+    else if (!takeProfits.some((target) => Math.abs(target - price) <= price * fraction)) other.push(price);
+  }
+  onEntry.sort((a, b) => a.number - b.number);
+  return { onEntry, other };
+}
+
+const joinList = (parts) => (parts.length < 3 ? parts.join(" and ") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`);
+
+// "1 of your 2 lines matches an entry area: 1.42633 (support-turned-resistance) is Entry 1." Null when none matches.
+export function drawnLinesStrength({ onEntry = [], other = [] } = {}, { label = (type) => type, format = String } = {}) {
+  if (!onEntry.length) return null;
+  const total = onEntry.length + other.length;
+  if (total === 1) {
+    const [only] = onEntry;
+    const areas = [{ price: only.price, areaType: only.areaType }];
+    return { text: markedEntryStrength(areas, [only.number], { label, format }), short: "Your marked area matches" };
+  }
+  const named = onEntry.map((item) => {
+    const name = String(label(item.areaType) || "").trim();
+    return `${format(item.price)}${name ? ` (${name})` : ""} is Entry ${item.number}`;
+  });
+  const head = !other.length
+    ? total === 2
+      ? "Both of your lines match entry areas"
+      : `All ${total} of your lines match entry areas`
+    : `${onEntry.length} of your ${total} lines ${onEntry.length === 1 ? "matches an entry area" : "match entry areas"}`;
+  const short = !other.length
+    ? "Your marked areas match"
+    : `${onEntry.length} of ${total} lines ${onEntry.length === 1 ? "matches" : "match"}`;
+  return { text: `${head}: ${joinList(named)}.`, short };
+}
+
+// Why each other line is not an entry, with lines that share a reason in one sentence. `side` is "sell" or "buy",
+// `stops` are the review's own stops (past the furthest one the idea is cancelled), `zone` is the price area the
+// entries are looked for in. Null when there is nothing to say.
+export function drawnLinesNotEntry(other = [], { side, currentPrice = null, stops = [], zone = null, format = String } = {}) {
+  const prices = (Array.isArray(other) ? other : []).map(positive).filter((price) => price !== null);
+  if (!prices.length || !["sell", "buy"].includes(side)) return null;
+  const sell = side === "sell";
+  const stopPrices = (Array.isArray(stops) ? stops : []).map(positive).filter((price) => price !== null);
+  const cancel = stopPrices.length ? (sell ? Math.max(...stopPrices) : Math.min(...stopPrices)) : null;
+  const current = positive(currentPrice);
+  const low = positive(zone?.low);
+  const high = positive(zone?.high);
+  const reasonFor = (price) => {
+    if (cancel !== null && (sell ? price > cancel : price < cancel)) return "cancelled";
+    if (current !== null && (sell ? price < current : price > current)) return "wrongSide";
+    if (low !== null && high !== null && (price < low * 0.9995 || price > high * 1.0005)) return "outside";
+    return "notChosen";
+  };
+  const groups = new Map();
+  for (const price of prices.slice(0, 3)) {
+    const reason = reasonFor(price);
+    groups.set(reason, [...(groups.get(reason) || []), price]);
+  }
+  const sentences = [...groups].map(([reason, list]) => {
+    const many = list.length > 1;
+    const subject = many ? "They are" : "It is";
+    const why = {
+      cancelled: () => `${subject} ${sell ? "above" : "below"} ${format(cancel)}, where the ${side} idea is already cancelled.`,
+      wrongSide: () => `${subject} ${sell ? "below" : "above"} the current price, so not a place to ${side} from.`,
+      outside: () => `${subject} outside the area where this setup looks for entries.`,
+      notChosen: () => `${many ? "They" : "It"} did not qualify as an entry for this setup.`,
+    }[reason]();
+    const lead = many
+      ? `Your lines at ${joinList(list.map(format))} are not entry areas.`
+      : `Your line at ${format(list[0])} is not an entry area.`;
+    return `${lead} ${why}`;
+  });
+  return {
+    text: sentences.join(" "),
+    short: prices.length === 1 ? "1 line is not an entry" : `${prices.length} lines are not entries`,
+  };
+}
+
 // The trader's own drawn lines that the engine used as entry areas, in entry order (the entries array is the entry
 // list: index 0 is Entry 1). A drawn line that reached no framework period is an entry in its own right (the
 // price map compares lines with framework levels, and the line reader's own areas are left out of that
