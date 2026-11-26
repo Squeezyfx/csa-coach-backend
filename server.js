@@ -31654,24 +31654,6 @@ app.get("/journal-reviews", async (req, res) => {
   }
 });
 
-app.get("/test-twelve", async (req, res) => {
-  try {
-    const symbol = normalizeSymbol(req.query.symbol || "GBP/USD");
-    const timeframe = req.query.timeframe || "H1";
-    const date = req.query.date || "2026-07-15";
-    const timezone = req.query.timezone || "UTC";
-    const analysisType = normalizeAnalysisType(req.query.analysisType || "post-trade");
-    const chartDate = parseISODateOnly(date);
-    if (!chartDate) return res.status(400).json({ ok: false, error: "Invalid date. Use YYYY-MM-DD format." });
-    const result = await fetchTwelveDataStructureLevels({ symbol, chartDate, timeframe, timezone, analysisType });
-    return res.json(result);
-  } catch (error) {
-    console.error("test-twelve error:", error);
-    return res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-
 app.get("/sample-analysis", (req, res) => {
   return res.json({
     success: true,
