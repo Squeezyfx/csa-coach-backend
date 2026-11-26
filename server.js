@@ -89,7 +89,7 @@ import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "
 import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate, correctChartDateYear } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
-import { annotateMatchedLines, matchLinesToCompletedExtremes, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, creditedLinePrices, drawnLineCandidatesFromReads, withoutReplacedPeriodCandidates, requireLineEvidenceForMarked, supersedingDrawnLine, withoutAxisTickReads, withoutCreditedLineReferences } from "./marked-lines.js";
+import { annotateMatchedLines, matchLinesToCompletedExtremes, lineSitsOnPeriodExtreme, lineReadsFromCandidateList, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, creditedLinePrices, drawnLineCandidatesFromReads, withoutReplacedPeriodCandidates, requireLineEvidenceForMarked, supersedingDrawnLine, withoutAxisTickReads, withoutCreditedLineReferences } from "./marked-lines.js";
 import { chooseLegFrame } from "./leg-frame.js";
 import { isOffScale, resolveOffScalePrice } from "./price-scale-check.js";
 import { typedDateAccepted, typedDateCandidate } from "./typed-date-rescue.js";
@@ -21629,6 +21629,13 @@ function buildPeriodInventoryStructuralCandidates({
     return {
       ...candidate,
       ...drawnRole,
+      // A line drawn on a completed high or low can be a second or third entry, whatever the AI's own flag says.
+      // DRAWN_LINE_EVIDENCE=off leaves it to the AI.
+      ...(isDrawnLine &&
+        String(process.env.DRAWN_LINE_EVIDENCE || "on").trim().toLowerCase() !== "off" &&
+        lineSitsOnPeriodExtreme(Number(candidate.price), periods)
+        ? { independentEntryEvidence: true }
+        : {}),
       provenanceVerified: true,
       authoritativeFrameworkLevel: true,
       priceSource: isDrawnLine
@@ -34470,6 +34477,24 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       String(visualReview?.tradeVisibility || "").toLowerCase() !== "visible" &&
       !detectTicketOrderMarkup(visualReview?.visibleMarkedLevels)
     ) {
+      // A line the line reader missed but the candidate list reports as printed is read from that list.
+      // SECOND_LINE_READING=off skips it.
+      if (String(process.env.SECOND_LINE_READING || "on").trim().toLowerCase() !== "off") {
+        const readCount = Array.isArray(visualReview?.visibleMarkedLevels) ? visualReview.visibleMarkedLevels.length : 0;
+        const withSecondReading = lineReadsFromCandidateList(
+          visualReview?.visibleMarkedLevels,
+          (visualReview?.chartNativeEntryFallback?.candidates || []).filter(
+            (candidate) => !isPrintedAxisTick(Number(candidate?.price), chartDetection?.priceAxisTicks)
+          ),
+          marketReference?.dailyLevels,
+          { lastPrices: [chartDetection?.latestVisibleClose, chartDetection?.latestVisiblePrice] }
+        );
+        if (withSecondReading.length > readCount) {
+          console.log("[drawn-line] lines the line reader missed, taken from the candidate list: " +
+            JSON.stringify(withSecondReading.slice(readCount).map((item) => item.displayedPrice)));
+          visualReview = { ...visualReview, visibleMarkedLevels: withSecondReading };
+        }
+      }
       const nearLevelReads = matchLinesToCompletedExtremes(visualReview?.visibleMarkedLevels, marketReference?.dailyLevels, {
         areas: marketReference?.csaAreas,
         lastPrices: [chartDetection?.latestVisibleClose, chartDetection?.latestVisiblePrice],

@@ -78,6 +78,61 @@ export function matchLinesToAreas(levels = [], areas = [], tolerance = 0) {
 // tool lines.
 const NOT_A_LEVEL_LINE = /#\d+|\b(sl|tp|stop|take[\s-]?profit|limit|order|ticket|fib\w*)\b|0\.(236|382|618|786)/i;
 const ORDER_SIDE_LABEL = /\b(buy|sell)\b/i;
+const isPriceLine = (price, lastPrices) => lastPrices.some((other) => Math.abs(price - other) <= other * 0.0002);
+// Two prices this close are the same line read twice.
+const SAME_PRICE = 0.00002;
+
+// Every completed period's high and low.
+const completedExtremes = (periods) =>
+  (Array.isArray(periods) ? periods : [])
+    .filter((period) => period?.partialPeriod !== true && period?.periodLifecycle !== "in_progress")
+    .flatMap((period) => {
+      const label = String(period?.label || period?.day || period?.periodLabel || period?.key || "").trim();
+      return ["high", "low"].map((side) => ({ label, side, price: positive(period?.[side]) }));
+    })
+    .filter((extreme) => extreme.price !== null);
+
+// A drawn line on a completed period's high or low is evidence for an entry in its own right. The AI's own flag for
+// that varies on the same picture (chart 2902, 26 Nov 2026: set at 17:00 UTC, not set from 19:29, so Entry 2 at
+// 53421.2, 0.011% from Monday's low, was dropped).
+export function lineSitsOnPeriodExtreme(price, periods = [], fraction = 0.0005) {
+  const target = positive(price);
+  return target !== null && completedExtremes(periods).some((extreme) => Math.abs(extreme.price - target) <= target * fraction);
+}
+
+// The line reader sometimes misses a line that the AI's candidate list reports as printed on the chart (chart 2914:
+// 53524.2, 0.042% from Monday's high; the reader returned the price tag beside it instead). Such a line is added to
+// the reads when the reader found lines at all, the list calls it an exact printed line, it sits within `fraction` of
+// a completed high or low that no read line already holds, and it is not the price line, an order or a Fibonacci line.
+export function lineReadsFromCandidateList(levels = [], candidates = [], periods = [], { lastPrices = [], fraction = 0.0005 } = {}) {
+  const list = Array.isArray(levels) ? levels : [];
+  const reads = list.filter(isExactLineRead);
+  const extremes = completedExtremes(periods);
+  if (!reads.length || !extremes.length) return list;
+  const last = (Array.isArray(lastPrices) ? lastPrices : []).map(positive).filter((price) => price !== null);
+  const near = (a, b) => Math.abs(a - b) <= b * fraction;
+  const held = reads.map((item) => Number(item.displayedPrice)).filter((price) => !isPriceLine(price, last));
+  const added = [];
+  for (const candidate of Array.isArray(candidates) ? candidates : []) {
+    const price = positive(candidate?.price);
+    const evidence = String(candidate?.structuralEvidence || "");
+    if (price === null || candidate?.exactVisiblePrice !== true || !/\bline\b/i.test(evidence)) continue;
+    if (NOT_A_LEVEL_LINE.test(evidence) || isPriceLine(price, last)) continue;
+    const extreme = extremes.filter((item) => near(item.price, price)).sort((a, b) => Math.abs(a.price - price) - Math.abs(b.price - price))[0];
+    if (!extreme || held.some((other) => near(other, extreme.price) || Math.abs(other - price) <= price * SAME_PRICE)) continue;
+    held.push(price);
+    added.push({
+      type: "label",
+      description: evidence,
+      displayedPrice: price,
+      approximatePrice: null,
+      platformLabel: String(price),
+      extractionSource: EXACT_LINE_SOURCE,
+      extractionConfidence: "medium",
+    });
+  }
+  return added.length ? [...list, ...added] : list;
+}
 
 // The trader's rule: a line drawn within 0.05% of price of a completed period's high or low is that level. The price
 // map only matches within a quarter of the ATR (GBPUSD H1, 26 Nov 2026: the line at 1.30496, 4.4 pips above
@@ -98,15 +153,20 @@ export function matchLinesToCompletedExtremes(levels = [], periods = [], { areas
     extremes
       .map((extreme) => ({ extreme, gap: Math.abs(extreme.price - price) }))
       .sort((a, b) => a.gap - b.gap)[0];
-  const taken = new Set(frameworkMatchedLineReads(list).map((item) => nearestExtreme(Number(item.displayedPrice)).extreme));
   const last = (Array.isArray(lastPrices) ? lastPrices : []).map(positive).filter((price) => price !== null);
+  // The price line, even when the price map matched it, does not occupy a high or low (chart 2914).
+  const taken = new Set(
+    frameworkMatchedLineReads(list)
+      .filter((item) => !isPriceLine(Number(item.displayedPrice), last))
+      .map((item) => nearestExtreme(Number(item.displayedPrice)).extreme)
+  );
   const best = new Map();
   for (const item of list) {
     if (!isExactLineRead(item) || item.frameworkPeriodHint || item.matchedFrameworkPeriod) continue;
     const label = String(item.platformLabel || "");
     if (NOT_A_LEVEL_LINE.test(`${label} ${item.description || ""}`) || ORDER_SIDE_LABEL.test(label)) continue;
     const price = Number(item.displayedPrice);
-    if (last.some((other) => Math.abs(price - other) <= other * 0.0002)) continue;
+    if (isPriceLine(price, last)) continue;
     const { extreme, gap } = nearestExtreme(price);
     if (gap > price * fraction || taken.has(extreme)) continue;
     const current = best.get(extreme);
@@ -412,7 +472,6 @@ export function withoutCreditedLineReferences(references = [], linePrices = [], 
 //
 // A read sitting on the last price (within 0.02%, the same allowance hasDrawnLineEvidence uses) is the platform's
 // price line, not a line the trader drew (chart 2914: 53496.2, exactly the last price), so it builds nothing.
-const SAME_PRICE = 0.00002;
 
 export function drawnLineCandidatesFromReads({ levels = [], periodCandidates = [], existingPrices = [], lastPrices = [], fraction = 0.0005 } = {}) {
   const last = (Array.isArray(lastPrices) ? lastPrices : []).map(positive).filter((price) => price !== null);

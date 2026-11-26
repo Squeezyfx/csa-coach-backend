@@ -18,6 +18,8 @@ import {
   hasDrawnLineEvidence,
   drawnLineCandidatesFromReads,
   matchLinesToCompletedExtremes,
+  lineSitsOnPeriodExtreme,
+  lineReadsFromCandidateList,
   withoutReplacedPeriodCandidates,
   creditedLinePrices,
   withoutCreditedLineReferences,
@@ -612,4 +614,56 @@ test("the server matches near-level lines before marking, not on a chart with a 
   assert.match(server, /DRAWN_LINE_NEAR_LEVEL/);
   assert.match(server, /tradeVisibility \|\| ""\)\.toLowerCase\(\) !== "visible" &&\s*!detectTicketOrderMarkup/);
   assert.match(server, /<= entryCenter \* sameLevel/);
+});
+
+// Chart 2902 (USA30 H1): the line at 53421.2 is 0.011% from Monday's low. Entry 2 needs independent evidence, which
+// the AI set at 17:00 and not from 19:29 on the same picture.
+const us30Days = [
+  { label: "Monday", high: 53764.1, low: 53415.4 },
+  { label: "Tuesday", high: 53535.1, low: 53261.4 },
+  { label: "Wednesday", high: 53726.6, low: 53281.3 },
+  { label: "Thursday", high: 53533.6, low: 52762.3, partialPeriod: true },
+];
+test("a line on a completed high or low is entry evidence; a loose line or today's level is not", () => {
+  assert.equal(lineSitsOnPeriodExtreme(53421.2, us30Days), true);
+  assert.equal(lineSitsOnPeriodExtreme(53600, us30Days), false);
+  assert.equal(lineSitsOnPeriodExtreme(52762.3, us30Days), false);
+  assert.equal(lineSitsOnPeriodExtreme(null, us30Days), false);
+});
+
+// Chart 2914 (USA30 H1): the reader returned the price tag (53496.2, the last price) and missed the line at 53524.2,
+// which the candidate list reports as printed, 0.042% from Monday's high 53501.8.
+const monTue = [
+  { label: "Monday", high: 53501.8, low: 53140.4 },
+  { label: "Tuesday", high: 53730.5, low: 53361.8 },
+];
+const reads = [plain(53750, { matchedFrameworkPeriod: "Tuesday", matchTolerance: 21 }), plain(53496.2, { matchedFrameworkPeriod: "Monday", matchTolerance: 21 }), plain(53166)];
+const listed = (extra = {}) => ({ price: 53524.2, areaType: "converted resistance", exactVisiblePrice: true, structuralEvidence: "Printed blue dashed line at 53524.20", ...extra });
+const second = (candidates, levels = reads) => lineReadsFromCandidateList(levels, candidates, monTue, { lastPrices: [53496.2] });
+
+test("a line the reader missed is taken from the candidate list", () => {
+  const result = second([listed()]);
+  assert.equal(result.length, 4);
+  assert.equal(result[3].displayedPrice, 53524.2);
+  assert.equal(result[3].extractionSource, EXACT);
+});
+test("the candidate list cannot invent a line", () => {
+  const untouched = (candidates, levels = reads) => assert.equal(second(candidates, levels), levels);
+  untouched([listed({ exactVisiblePrice: false })]);
+  untouched([listed({ structuralEvidence: "reaction high on Monday" })]); // no line mentioned
+  untouched([listed({ structuralEvidence: "red stop loss line" })]);
+  untouched([listed({ price: 53600 })]); // not on a high or low
+  untouched([listed({ price: 53496.2 })]); // the price line
+  untouched([listed({ price: 53750 })]); // already read
+  const noLines = [];
+  untouched([listed()], noLines); // the reader found no lines at all
+  const held = [...reads, plain(53510)]; // Monday's high already has a read line
+  untouched([listed()], held);
+});
+test("both backstops are wired in with off switches", () => {
+  const server = readFileSync(fileURLToPath(new URL("../server.js", import.meta.url)), "utf8");
+  assert.match(server, /SECOND_LINE_READING/);
+  assert.match(server, /DRAWN_LINE_EVIDENCE/);
+  assert.ok(server.indexOf("lineReadsFromCandidateList(") < server.indexOf("matchLinesToCompletedExtremes(visualReview?.visibleMarkedLevels"));
+  assert.match(server, /lineSitsOnPeriodExtreme\(Number\(candidate\.price\), periods\)/);
 });
