@@ -277,11 +277,13 @@ export function drawnLevelLines(levels = [], { lastPrices = [] } = {}) {
 }
 
 // A line is an entry when it sits within `fraction` of the entry's price, or within the tolerance it was matched with.
-// A line on a take-profit level was not meant as an entry, so it is left out of both lists.
+// Of the other lines, those on a take-profit level are listed apart so the review can say that is what they are
+// (benchmark 2912: leaving them out made three drawn lines read as "your 2 lines").
 export function sortDrawnLines(lines = [], entries = [], targets = [], fraction = 0.0005) {
   const takeProfits = (Array.isArray(targets) ? targets : []).map(positive).filter((price) => price !== null);
   const onEntry = [];
   const other = [];
+  const onTarget = [];
   for (const line of Array.isArray(lines) ? lines : []) {
     const price = positive(line?.price);
     if (price === null) continue;
@@ -294,18 +296,20 @@ export function sortDrawnLines(lines = [], entries = [], targets = [], fraction 
       if (gap <= allowed && (!best || gap < best.gap)) best = { gap, number: index + 1, areaType: String(entry.areaType || "") };
     });
     if (best) onEntry.push({ price, number: best.number, areaType: best.areaType });
-    else if (!takeProfits.some((target) => Math.abs(target - price) <= price * fraction)) other.push(price);
+    else if (takeProfits.some((target) => Math.abs(target - price) <= price * fraction)) onTarget.push(price);
+    else other.push(price);
   }
   onEntry.sort((a, b) => a.number - b.number);
-  return { onEntry, other };
+  return { onEntry, other, onTarget };
 }
 
 const joinList = (parts) => (parts.length < 3 ? parts.join(" and ") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`);
 
 // "1 of your 2 lines matches an entry area: 1.42633 (support-turned-resistance) is Entry 1." Null when none matches.
-export function drawnLinesStrength({ onEntry = [], other = [] } = {}, { label = (type) => type, format = String } = {}) {
+export function drawnLinesStrength({ onEntry = [], other = [], onTarget = [] } = {}, { label = (type) => type, format = String } = {}) {
   if (!onEntry.length) return null;
-  const total = onEntry.length + other.length;
+  const missed = other.length + onTarget.length;
+  const total = onEntry.length + missed;
   if (total === 1) {
     const [only] = onEntry;
     const areas = [{ price: only.price, areaType: only.areaType }];
@@ -315,12 +319,12 @@ export function drawnLinesStrength({ onEntry = [], other = [] } = {}, { label = 
     const name = String(label(item.areaType) || "").trim();
     return `${format(item.price)}${name ? ` (${name})` : ""} is Entry ${item.number}`;
   });
-  const head = !other.length
+  const head = !missed
     ? total === 2
       ? "Both of your lines match entry areas"
       : `All ${total} of your lines match entry areas`
     : `${onEntry.length} of your ${total} lines ${onEntry.length === 1 ? "matches an entry area" : "match entry areas"}`;
-  const short = !other.length
+  const short = !missed
     ? "Your marked areas match"
     : `${onEntry.length} of ${total} lines ${onEntry.length === 1 ? "matches" : "match"}`;
   return { text: `${head}: ${joinList(named)}.`, short };
@@ -328,8 +332,8 @@ export function drawnLinesStrength({ onEntry = [], other = [] } = {}, { label = 
 
 // Why each other line is not an entry, with lines that share a reason in one sentence. `side` is "sell" or "buy",
 // `stops` are the review's own stops (past the furthest one the idea is cancelled), `zone` is the price area the
-// entries are looked for in. Null when there is nothing to say.
-export function drawnLinesNotEntry(other = [], { side, currentPrice = null, stops = [], zone = null, format = String } = {}) {
+// entries are looked for in, `onTarget` the lines that sit on a take profit. Null when there is nothing to say.
+export function drawnLinesNotEntry(other = [], { side, currentPrice = null, stops = [], zone = null, onTarget = [], format = String } = {}) {
   const prices = (Array.isArray(other) ? other : []).map(positive).filter((price) => price !== null);
   if (!prices.length || !["sell", "buy"].includes(side)) return null;
   const sell = side === "sell";
@@ -338,7 +342,9 @@ export function drawnLinesNotEntry(other = [], { side, currentPrice = null, stop
   const current = positive(currentPrice);
   const low = positive(zone?.low);
   const high = positive(zone?.high);
+  const takeProfitLines = new Set((Array.isArray(onTarget) ? onTarget : []).map(positive));
   const reasonFor = (price) => {
+    if (takeProfitLines.has(price)) return "takeProfit";
     if (cancel !== null && (sell ? price > cancel : price < cancel)) return "cancelled";
     if (current !== null && (sell ? price < current : price > current)) return "wrongSide";
     if (low !== null && high !== null && (price < low * 0.9995 || price > high * 1.0005)) return "outside";
@@ -353,6 +359,7 @@ export function drawnLinesNotEntry(other = [], { side, currentPrice = null, stop
     const many = list.length > 1;
     const subject = many ? "They are" : "It is";
     const why = {
+      takeProfit: () => (many ? "They are at take profit levels for this setup." : "It is at a take profit level for this setup."),
       cancelled: () => `${subject} ${sell ? "above" : "below"} ${format(cancel)}, where the ${side} idea is already cancelled.`,
       wrongSide: () => `${subject} ${sell ? "below" : "above"} the current price, so not a place to ${side} from.`,
       outside: () => `${subject} outside the area where this setup looks for entries.`,

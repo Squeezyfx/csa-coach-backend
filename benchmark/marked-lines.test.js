@@ -738,11 +738,20 @@ test("one line on an entry reads as before, and all lines on entries still match
   assert.equal(both.short, "Your marked areas match");
 });
 
-test("a line on a take profit is not called a missed entry, and no line on an entry claims no match", () => {
+test("a line on a take profit is counted and named as one, and no line on an entry claims no match", () => {
   const onTarget = sortDrawnLines([{ price: 1.42508, tolerance: 0 }], usdcadEntries, [1.42508]);
-  assert.deepEqual(onTarget, { onEntry: [], other: [] });
+  assert.deepEqual(onTarget, { onEntry: [], other: [], onTarget: [1.42508] });
   assert.equal(drawnLinesStrength(onTarget, words), null);
   assert.equal(usdcadMissed([]), null);
+  const three = sortDrawnLines(
+    [1.42633, 1.42508, 1.43684].map((price) => ({ price, tolerance: 0 })),
+    usdcadEntries,
+    [1.42508]
+  );
+  assert.match(drawnLinesStrength(three, words).text, /^1 of your 3 lines matches an entry area/);
+  const note = usdcadMissed([...three.other, ...three.onTarget], { onTarget: three.onTarget });
+  assert.match(note.text, /Your line at 1.42508 is not an entry area. It is at a take profit level for this setup./);
+  assert.equal(note.short, "2 lines are not entries");
 });
 
 test("order lines and a second read of the same line are left out", () => {

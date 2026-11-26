@@ -29338,7 +29338,10 @@ function buildControlledFeedback({
     const plan = pillars.geometry && !pillars.geometry.entryTyped ? pillars.geometry : null;
     const sorted = sortDrawnLines(userEvidence.drawnLines, selectedEntryAreas, plan?.targets);
     // With stop or target lines on the chart the other lines may be those, so nothing is said about them.
-    if (userEvidence.stopShown || userEvidence.targetShown) sorted.other = [];
+    if (userEvidence.stopShown || userEvidence.targetShown) {
+      sorted.other = [];
+      sorted.onTarget = [];
+    }
     const matched = drawnLinesStrength(sorted, { label: plainAreaTypeLabel, format: formatPrice });
     addStrength("entry", matched ? matched.text : "You marked levels on the chart, which makes review easier.", {
       short: matched ? matched.short : "Levels marked on chart",
@@ -29347,7 +29350,8 @@ function buildControlledFeedback({
     const sell = facts.direction === "bearish";
     const anchor = Number(sell ? zoneFrame.swingLow : zoneFrame.swingHigh);
     const zoneEdges = [0.382, 0.618].map((ratio) => anchor + (sell ? 1 : -1) * ratio * zoneRange).sort((a, b) => a - b);
-    const missed = drawnLinesNotEntry(sorted.other, {
+    const missed = drawnLinesNotEntry([...sorted.other, ...sorted.onTarget], {
+      onTarget: sorted.onTarget,
       side: sell ? "sell" : "buy",
       currentPrice: facts.currentPrice,
       stops: plan ? [plan.stop, ...(plan.backups || []).map((backup) => backup.stop)] : [],
