@@ -3077,7 +3077,7 @@ function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupp
       biasCode: "insufficient",
       confidence: "low",
       traderBias: "Not enough market data to form a reliable direction.",
-      higherTimeframeView: "Not enough market data to compare the key highs, lows, and closes.",
+      higherTimeframeView: "Not enough market data for a direction yet.",
       timeframeView: "Not enough chart data.",
       reason: `At least two ${profile.sourceUnitPlural} are needed.`,
       periodStartPrice: null,
@@ -3111,18 +3111,18 @@ function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupp
     ? ((presentPrice - anchorLow) / anchorRange) * 100
     : null;
   const anchorLabel = first.periodLabel || first.day || first.key || "the first key range";
-  let rangePositionNote = "Price position inside the first key range is not clear.";
+  let rangePositionNote = "Price position inside the range is not clear.";
   if (Number.isFinite(anchorPositionPercent)) {
     if (presentPrice > anchorHigh + getCleanBreakTolerance(symbol)) {
-      rangePositionNote = `Price is above ${anchorLabel} resistance around ${formatPrice(anchorHigh)}, which shows bullish breakout pressure.`;
+      rangePositionNote = `Price is above resistance around ${formatPrice(anchorHigh)}, which shows bullish breakout pressure.`;
     } else if (presentPrice < anchorLow - getCleanBreakTolerance(symbol)) {
-      rangePositionNote = `Price is below ${anchorLabel} support around ${formatPrice(anchorLow)}, which shows bearish breakout pressure.`;
+      rangePositionNote = `Price is below support around ${formatPrice(anchorLow)}, which shows bearish breakout pressure.`;
     } else if (anchorPositionPercent >= 61.8) {
-      rangePositionNote = `Price is in the upper part of ${anchorLabel}'s range, closer to resistance around ${formatPrice(anchorHigh)}.`;
+      rangePositionNote = `Price is in the upper part of the range, closer to resistance around ${formatPrice(anchorHigh)}.`;
     } else if (anchorPositionPercent <= 38.2) {
-      rangePositionNote = `Price is in the lower part of ${anchorLabel}'s range, closer to support around ${formatPrice(anchorLow)}.`;
+      rangePositionNote = `Price is in the lower part of the range, closer to support around ${formatPrice(anchorLow)}.`;
     } else {
-      rangePositionNote = `Price is around the middle of ${anchorLabel}'s range, between support around ${formatPrice(anchorLow)} and resistance around ${formatPrice(anchorHigh)}.`;
+      rangePositionNote = `Price is around the middle of the range, between support around ${formatPrice(anchorLow)} and resistance around ${formatPrice(anchorHigh)}.`;
     }
   }
 
@@ -3217,23 +3217,10 @@ function calculateCsaDirectionalBias(levels = [], symbol = "", profile = getSupp
     }
   }
 
-  const structureLabelForUsers =
-    profile.structureMode === "daily-in-week"
-      ? "this week's daily highs, lows, and closes"
-      : profile.structureMode === "weekly-in-month"
-      ? "this month's weekly highs, lows, and closes"
-      : profile.structureMode === "monthly-in-year"
-      ? "this year's monthly highs, lows, and closes"
-      : profile.structureMode === "quarterly-in-year"
-      ? "this year's quarterly highs, lows, and closes"
-      : "the higher-timeframe highs, lows, and closes";
-
+  // Sent to the page and saved with the journal entry, so it says nothing about which highs, lows or closes the
+  // direction comes from (the user's method is not to be shown).
   const higherTimeframeView =
-    `${traderBias} This is based on ${structureLabelForUsers}. ` +
-    `Price opened around ${formatPrice(periodStartPrice)} and is now around ${formatPrice(presentPrice)}. ` +
-    `The high of the reviewed period is ${formatPrice(periodHigh)} and the low is ${formatPrice(periodLow)}. ` +
-    `${rangePositionNote} ` +
-    `Daily/period closes were mixed: ${risingCloses} higher close(s), ${fallingCloses} lower close(s).`;
+    `${traderBias} Price is now around ${formatPrice(presentPrice)}. ${rangePositionNote}`;
 
   const timeframeView =
     `The uploaded ${profile.selectedTimeframe || ""} chart should be read as the execution view. ` +
