@@ -17,6 +17,7 @@ import {
   matchLinesToAreas,
   hasDrawnLineEvidence,
   drawnLineCandidatesFromReads,
+  matchLinesToCompletedExtremes,
   withoutReplacedPeriodCandidates,
   creditedLinePrices,
   withoutCreditedLineReferences,
@@ -24,6 +25,8 @@ import {
   requireLineEvidenceForMarked,
   supersedingDrawnLine,
 } from "../marked-lines.js";
+import { evaluateFrameworkCandidate } from "../shared-analysis-engine.js";
+import { fibBandBoundaryAllowance } from "../csa-entry-policy.js";
 
 const EXACT = "independent_horizontal_line_reader_exact";
 
@@ -544,4 +547,69 @@ test("the platform's price line is not turned into a candidate", () => {
   const serverSource = readFileSync(fileURLToPath(new URL("../server.js", import.meta.url)), "utf8");
   assert.match(serverSource, /lastPrices: \[currentPrice, visualReview\?\.chartLastPrice\],/);
   assert.match(serverSource, /chartLastPrice: chartDetection\?\.latestVisibleClose/);
+});
+
+// GBPUSD H1, 26 Nov 2026: the trader's line at 1.30496 sits 4.4 pips above Wednesday's low 1.30452. The price map's
+// 3-pip tolerance left it unmatched: no entry, no credit.
+const gbpWeek = [
+  { label: "Monday", high: 1.31429, low: 1.30096 },
+  { label: "Tuesday", high: 1.31232, low: 1.30274 },
+  { label: "Wednesday", high: 1.31285, low: 1.30452 },
+  { label: "Thursday", high: 1.31226, low: 1.30949, partialPeriod: true },
+];
+const plain = (price, extra = {}) => ({ extractionSource: EXACT, displayedPrice: price, platformLabel: String(price), description: "Horizontal blue line with a blue price label on the right axis", ...extra });
+const match = (levels, options = {}) => matchLinesToCompletedExtremes(levels, gbpWeek, options);
+
+test("a line within 0.05% of a completed low is that level, and the chart is marked", () => {
+  const levels = match([plain(1.30496)], { areas: [{ price: 1.30452, type: "demand" }], lastPrices: [1.31072] });
+  assert.equal(levels[0].matchedFrameworkPeriod, "Wednesday");
+  assert.equal(levels[0].matchedFrameworkSide, "low");
+  assert.equal(levels[0].matchedAreaType, "demand");
+  assert.equal(levels[0].matchedFrameworkPrice, 1.30496);
+  assert.equal(markChartFromFrameworkLines({ chartMarkingStatus: "unclear", visibleMarkedLevels: levels }).chartMarkingStatus, "marked");
+  const built = drawnLineCandidatesFromReads({
+    levels,
+    periodCandidates: [{ price: 1.30452, areaType: "demand", originalType: "demand", sourcePeriod: "Wednesday", sourceExtreme: "low" }],
+    lastPrices: [1.31072],
+  });
+  assert.deepEqual(built.map((item) => [item.price, item.replacesPrice]), [[1.30496, 1.30452]]);
+});
+
+test("that line passes the Fibonacci gate that Wednesday's low misses", () => {
+  const gate = (price) => evaluateFrameworkCandidate({
+    candidate: { price, zoneLow: price, zoneHigh: price, areaType: "demand" },
+    direction: "bullish", currentPrice: 1.31072, swingHigh: 1.31285, swingLow: 1.30096,
+    boundaryTolerance: fibBandBoundaryAllowance({ pipBuffer: 0.0003, impulseRange: 1.31285 - 1.30096, price }),
+    frameUsable: true, structuralEvidenceValid: true,
+  });
+  assert.equal(gate(1.30496).qualified, true);
+  assert.equal(gate(1.30452).qualified, false);
+});
+
+test("loose lines, the price line, order and Fibonacci lines, and the current day stay unmatched", () => {
+  const untouched = (levels, options) => assert.equal(match(levels, options), levels);
+  untouched([plain(1.3055)]); // 9.8 pips from Wednesday's low
+  untouched([plain(1.30949)]); // only the unfinished day's low is there
+  untouched([plain(1.30496)], { lastPrices: [1.30497] });
+  untouched([plain(1.30496, { platformLabel: "#44111581 sl" })]);
+  untouched([plain(1.30496, { description: "red dashed stop loss line" })]);
+  untouched([plain(1.30496, { platformLabel: "buy 0.10" })]);
+  untouched([plain(1.30496, { platformLabel: "0.618(1.30496)" })]);
+  untouched([{ extractionSource: "per_target_framework_price_reader", displayedPrice: 1.30496 }]);
+});
+
+test("one line per high or low: the closest, and none where one is already matched", () => {
+  const two = match([plain(1.30506), plain(1.30486)]);
+  assert.deepEqual(two.map((item) => item.matchedFrameworkPeriod || null), [null, "Wednesday"]);
+  const already = [plain(1.3046, { matchedFrameworkPeriod: "Wednesday", matchTolerance: 0.0003 }), plain(1.30496)];
+  assert.equal(match(already), already);
+});
+
+test("the server matches near-level lines before marking, not on a chart with a trade, with an off switch", () => {
+  const server = readFileSync(fileURLToPath(new URL("../server.js", import.meta.url)), "utf8");
+  const step = server.indexOf("matchLinesToCompletedExtremes(visualReview?.visibleMarkedLevels");
+  assert.ok(step > 0 && step < server.indexOf("visualReview = markChartFromFrameworkLines(visualReview);\n"));
+  assert.match(server, /DRAWN_LINE_NEAR_LEVEL/);
+  assert.match(server, /tradeVisibility \|\| ""\)\.toLowerCase\(\) !== "visible" &&\s*!detectTicketOrderMarkup/);
+  assert.match(server, /<= entryCenter \* sameLevel/);
 });

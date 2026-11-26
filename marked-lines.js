@@ -74,6 +74,63 @@ export function matchLinesToAreas(levels = [], areas = [], tolerance = 0) {
   return changed ? result : list;
 }
 
+// Reads that are not a line the trader drew as a level: platform order lines (stop, target, ticket) and Fibonacci
+// tool lines.
+const NOT_A_LEVEL_LINE = /#\d+|\b(sl|tp|stop|take[\s-]?profit|limit|order|ticket|fib\w*)\b|0\.(236|382|618|786)/i;
+const ORDER_SIDE_LABEL = /\b(buy|sell)\b/i;
+
+// The trader's rule: a line drawn within 0.05% of price of a completed period's high or low is that level. The price
+// map only matches within a quarter of the ATR (GBPUSD H1, 26 Nov 2026: the line at 1.30496, 4.4 pips above
+// Wednesday's low 1.30452, was ignored: no entry, no credit). Run once, before marking, so the entry, the marked
+// status and the credit all read the same match. One line per high or low (the closest), none where a line is already
+// matched to it, and never the price line (within 0.02% of the last price) or an order or Fibonacci line.
+export function matchLinesToCompletedExtremes(levels = [], periods = [], { areas = [], lastPrices = [], fraction = 0.0005 } = {}) {
+  const list = Array.isArray(levels) ? levels : [];
+  const extremes = (Array.isArray(periods) ? periods : [])
+    .filter((period) => period?.partialPeriod !== true && period?.periodLifecycle !== "in_progress")
+    .flatMap((period) => {
+      const label = String(period?.label || period?.day || period?.periodLabel || period?.key || "").trim();
+      return ["high", "low"].map((side) => ({ label, side, price: positive(period?.[side]) }));
+    })
+    .filter((extreme) => extreme.label && extreme.price !== null);
+  if (!extremes.length) return list;
+  const nearestExtreme = (price) =>
+    extremes
+      .map((extreme) => ({ extreme, gap: Math.abs(extreme.price - price) }))
+      .sort((a, b) => a.gap - b.gap)[0];
+  const taken = new Set(frameworkMatchedLineReads(list).map((item) => nearestExtreme(Number(item.displayedPrice)).extreme));
+  const last = (Array.isArray(lastPrices) ? lastPrices : []).map(positive).filter((price) => price !== null);
+  const best = new Map();
+  for (const item of list) {
+    if (!isExactLineRead(item) || item.frameworkPeriodHint || item.matchedFrameworkPeriod) continue;
+    const label = String(item.platformLabel || "");
+    if (NOT_A_LEVEL_LINE.test(`${label} ${item.description || ""}`) || ORDER_SIDE_LABEL.test(label)) continue;
+    const price = Number(item.displayedPrice);
+    if (last.some((other) => Math.abs(price - other) <= other * 0.0002)) continue;
+    const { extreme, gap } = nearestExtreme(price);
+    if (gap > price * fraction || taken.has(extreme)) continue;
+    const current = best.get(extreme);
+    if (!current || gap < current.gap) best.set(extreme, { item, gap });
+  }
+  if (!best.size) return list;
+  const matches = new Map([...best].map(([extreme, { item }]) => [item, extreme]));
+  return list.map((item) => {
+    const extreme = matches.get(item);
+    if (!extreme) return item;
+    const price = Number(item.displayedPrice);
+    const area = (Array.isArray(areas) ? areas : []).find((candidate) => sameLine(Number(candidate?.price), extreme.price));
+    return {
+      ...item,
+      matchedFrameworkPeriod: extreme.label,
+      matchedFrameworkSide: extreme.side,
+      // The trader's own price, so the review names the level they drew.
+      matchedFrameworkPrice: price,
+      matchedAreaType: String(area?.type || (extreme.side === "low" ? "support" : "resistance")),
+      matchTolerance: price * fraction,
+    };
+  });
+}
+
 // The visual review with its drawn lines compared with the final framework areas, and the chart
 // marked when one of them sits on a framework level.
 export function markLinesOnAreas(visualReview = {}, areas = [], tolerance = 0) {

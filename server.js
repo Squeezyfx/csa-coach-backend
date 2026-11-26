@@ -89,7 +89,7 @@ import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "
 import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate, correctChartDateYear } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
-import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, creditedLinePrices, drawnLineCandidatesFromReads, withoutReplacedPeriodCandidates, requireLineEvidenceForMarked, supersedingDrawnLine, withoutAxisTickReads, withoutCreditedLineReferences } from "./marked-lines.js";
+import { annotateMatchedLines, matchLinesToCompletedExtremes, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, creditedLinePrices, drawnLineCandidatesFromReads, withoutReplacedPeriodCandidates, requireLineEvidenceForMarked, supersedingDrawnLine, withoutAxisTickReads, withoutCreditedLineReferences } from "./marked-lines.js";
 import { chooseLegFrame } from "./leg-frame.js";
 import { isOffScale, resolveOffScalePrice } from "./price-scale-check.js";
 import { typedDateAccepted, typedDateCandidate } from "./typed-date-rescue.js";
@@ -28910,15 +28910,17 @@ function buildControlledFeedback({
         (reference) =>
           Number(reference?.structuralScore || 0) >= 35 &&
           isCloseToZone(reference) &&
-          // A level within about 0.02% of price of an entry is that same level, not a second one to watch.
+          // A level within about 0.02% of price of an entry is that same level, not a second one to watch. An entry
+          // on a drawn line stands for the high or low it was drawn on, up to 0.05% away.
           ![area, selectedSecondaryArea, selectedTertiaryArea].some((entry) => {
+            const sameLevel = entry?.priceSource === "independent_horizontal_line_reader_exact" ? 0.0005 : 0.0002;
             const entryCenter = Number(entry?.authoritativeCenter);
             const referenceCenter = Number(reference?.authoritativeCenter);
             return (
               Number.isFinite(entryCenter) &&
               Number.isFinite(referenceCenter) &&
               entryCenter > 0 &&
-              Math.abs(referenceCenter - entryCenter) <= entryCenter * 0.0002
+              Math.abs(referenceCenter - entryCenter) <= entryCenter * sameLevel
             );
           })
       )
@@ -34457,6 +34459,28 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       visualReview = withoutAxisTickReads(visualReview, chartDetection?.priceAxisTicks);
       if (visualReview?.axisTickReadsRemoved) {
         console.log("[axis-tick] removed line reads at printed axis numbers before marking: " + visualReview.axisTickReadsRemoved);
+      }
+    }
+
+    // A line drawn within 0.05% of a completed period's high or low is that level (the trader's rule), so it is
+    // matched here, once, and the marking, the entry candidates and the credit all follow from it. Not on a chart
+    // with a trade on it, where a line may be the stop or the target. DRAWN_LINE_NEAR_LEVEL=off skips it.
+    if (
+      String(process.env.DRAWN_LINE_NEAR_LEVEL || "on").trim().toLowerCase() !== "off" &&
+      String(visualReview?.tradeVisibility || "").toLowerCase() !== "visible" &&
+      !detectTicketOrderMarkup(visualReview?.visibleMarkedLevels)
+    ) {
+      const nearLevelReads = matchLinesToCompletedExtremes(visualReview?.visibleMarkedLevels, marketReference?.dailyLevels, {
+        areas: marketReference?.csaAreas,
+        lastPrices: [chartDetection?.latestVisibleClose, chartDetection?.latestVisiblePrice],
+      });
+      if (nearLevelReads !== visualReview?.visibleMarkedLevels && Array.isArray(visualReview?.visibleMarkedLevels)) {
+        console.log("[drawn-line] lines matched to a completed period's high or low: " + JSON.stringify(
+          nearLevelReads
+            .filter((item, index) => item !== visualReview.visibleMarkedLevels[index])
+            .map((item) => ({ price: item.displayedPrice, period: item.matchedFrameworkPeriod, side: item.matchedFrameworkSide }))
+        ));
+        visualReview = { ...visualReview, visibleMarkedLevels: nearLevelReads };
       }
     }
 
