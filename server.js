@@ -90,6 +90,7 @@ import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, sta
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, creditedLinePrices, requireLineEvidenceForMarked, supersedingDrawnLine, withoutAxisTickReads, withoutCreditedLineReferences } from "./marked-lines.js";
+import { chooseLegFrame } from "./leg-frame.js";
 import { isOffScale, resolveOffScalePrice } from "./price-scale-check.js";
 import { typedDateAccepted, typedDateCandidate } from "./typed-date-rescue.js";
 import { phaseContexts } from "./phase-context.js";
@@ -21811,16 +21812,46 @@ function rankChartNativeFallbackAreas({
     : frameTimeframe === "MN"
     ? "five_years"
     : null;
+  // The frame follows the latest leg: a bullish bias whose period high came BEFORE its low (or a bearish one whose
+  // low came before its high) measures the retracement on the leg that follows the first extreme (GBPUSD H1,
+  // 26 Nov 2026: Monday's high preceded Monday's low, the Fib is the Monday-low to Wednesday-high leg).
+  // LEG_FRAME=off keeps the plain period high/low.
+  const legFrame =
+    framePeriod &&
+    visibleWeekHigh !== null && visibleWeekLow !== null && visibleWeekHigh > visibleWeekLow &&
+    String(process.env.LEG_FRAME || "on").trim().toLowerCase() !== "off"
+      ? chooseLegFrame({
+          direction,
+          swingHigh: visibleWeekHigh,
+          swingLow: visibleWeekLow,
+          candles: marketReference?.timeframeCandles,
+        })
+      : null;
+  if (legFrame?.reordered) {
+    console.log("[leg-frame] the period's extremes are in the wrong order for the bias, Fibonacci measured on the latest leg:", {
+      direction,
+      timeframe: frameTimeframe,
+      periodHigh: visibleWeekHigh,
+      periodLow: visibleWeekLow,
+      legHigh: legFrame.swingHigh,
+      legLow: legFrame.swingLow,
+      legStart: legFrame.legStart,
+      legEnd: legFrame.legEnd,
+    });
+  }
   const visibleWeekFrame = framePeriod &&
     visibleWeekHigh !== null && visibleWeekLow !== null && visibleWeekHigh > visibleWeekLow
     ? {
-        swingHigh: visibleWeekHigh,
-        swingLow: visibleWeekLow,
+        swingHigh: legFrame?.reordered ? legFrame.swingHigh : visibleWeekHigh,
+        swingLow: legFrame?.reordered ? legFrame.swingLow : visibleWeekLow,
         source: `uploaded_chart_visible_current_${framePeriod}_high_low`,
         currentPeriodFrameVerified,
         currentPeriodFrameChartUsable,
         fixtureApplied: fallback?.fixtureApplied === true,
         structureLedOverrideApplied: false,
+        legFrameApplied: legFrame?.reordered === true,
+        periodSwingHigh: visibleWeekHigh,
+        periodSwingLow: visibleWeekLow,
       }
     : null;
   // A fixed period must never fall back to an older/local impulse. Missing
@@ -33089,7 +33120,13 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
         if ([snapshot.open,snapshot.high,snapshot.low,snapshot.close].every(n=>Number.isFinite(n)&&n>0) && snapshot.high>=Math.max(snapshot.open,snapshot.close) && snapshot.low<=Math.min(snapshot.open,snapshot.close)) {
           marketReference.timeframeCandles = [...marketReference.timeframeCandles.filter(c=>c.datetime!==snapshot.datetime),snapshot];
           const lastPeriod = marketReference.dailyLevels?.at(-1);
-          if(lastPeriod){lastPeriod.high=Math.max(Number(lastPeriod.high),snapshot.high);lastPeriod.low=Math.min(Number(lastPeriod.low),snapshot.low);lastPeriod.partialPeriod=true;lastPeriod.source="OANDA_completed_candles+printed_chart_header_snapshot";}
+          // In the first hour of a day the review is rolled back to the end of yesterday (chart-first-hour-previous-day), so the
+          // last period is yesterday's, already complete: flagging it partial hid Wednesday's high and low from the entries and
+          // the levels to watch (GBPUSD H1, 26 Nov 2026). FIRST_HOUR_LAST_PERIOD_COMPLETE=off restores the old flag.
+          const rolledBackLastPeriodComplete = chartCutoff?.source === "chart-first-hour-previous-day" &&
+            marketReference.currentFrameworkPeriodComplete === true &&
+            String(process.env.FIRST_HOUR_LAST_PERIOD_COMPLETE || "on").trim().toLowerCase() !== "off";
+          if(lastPeriod){lastPeriod.high=Math.max(Number(lastPeriod.high),snapshot.high);lastPeriod.low=Math.min(Number(lastPeriod.low),snapshot.low);lastPeriod.partialPeriod=rolledBackLastPeriodComplete?lastPeriod.partialPeriod===true:true;lastPeriod.source="OANDA_completed_candles+printed_chart_header_snapshot";}
         }
       }
 
