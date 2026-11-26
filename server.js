@@ -89,7 +89,7 @@ import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "
 import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate, correctChartDateYear } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
-import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, creditedLinePrices, requireLineEvidenceForMarked, supersedingDrawnLine, withoutAxisTickReads, withoutCreditedLineReferences } from "./marked-lines.js";
+import { annotateMatchedLines, drawnLineEntryCredit, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, creditedLinePrices, drawnLineCandidatesFromReads, withoutReplacedPeriodCandidates, requireLineEvidenceForMarked, supersedingDrawnLine, withoutAxisTickReads, withoutCreditedLineReferences } from "./marked-lines.js";
 import { chooseLegFrame } from "./leg-frame.js";
 import { isOffScale, resolveOffScalePrice } from "./price-scale-check.js";
 import { typedDateAccepted, typedDateCandidate } from "./typed-date-rescue.js";
@@ -21525,11 +21525,31 @@ function buildPeriodInventoryStructuralCandidates({
     )
     .map((level) => asPositiveNumber(level?.displayedPrice))
     .filter((price) => price !== null);
-  const visualCandidates = Array.isArray(
+  const listedVisualCandidates = Array.isArray(
     visualReview?.chartNativeEntryFallback?.candidates
   )
     ? visualReview.chartNativeEntryFallback.candidates
     : [];
+  // The AI's candidate list varies from run to run, so a drawn line that sits on a completed period's high or low
+  // becomes a candidate from the line read itself (chart 2902 flipped between the line and the candle low).
+  // DRAWN_LINE_CANDIDATES=off goes back to the AI's list alone.
+  const lineBuiltCandidates =
+    String(process.env.DRAWN_LINE_CANDIDATES || "on").trim().toLowerCase() !== "off"
+      ? drawnLineCandidatesFromReads({
+          levels: visualReview?.visibleMarkedLevels,
+          periodCandidates: filteredPeriodCandidates,
+          existingPrices: listedVisualCandidates.map((candidate) => candidate?.price),
+        })
+      : [];
+  if (lineBuiltCandidates.length) {
+    console.log("[drawn-line] candidates built from line reads the AI list did not name: " + JSON.stringify(
+      lineBuiltCandidates.map((candidate) => ({ price: candidate.price, period: candidate.sourcePeriod, extreme: candidate.sourceExtreme }))
+    ));
+  }
+  const visualCandidates = [
+    ...withoutReplacedPeriodCandidates(listedVisualCandidates, lineBuiltCandidates),
+    ...lineBuiltCandidates,
+  ];
   const rejectedVisualCandidates = [];
   const admittedVisualCandidates = visualCandidates.filter((candidate) => {
     const price = asPositiveNumber(candidate?.price);

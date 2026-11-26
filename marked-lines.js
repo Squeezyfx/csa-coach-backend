@@ -340,3 +340,61 @@ export function withoutCreditedLineReferences(references = [], linePrices = [], 
     return !prices.some((price) => Math.abs(price - center) <= price * relativeTolerance);
   });
 }
+
+// A drawn line that sits on a completed period's high or low is an entry candidate in its own right, whether or not
+// the AI's own candidate list happens to name it. The list is the vision model's, and it varies from run to run:
+// benchmark chart 2902 (USA30 H1, four runs on 26 Nov 2026) had the trader's line at 53275.6 in two runs and not in the
+// other two, so Entry 1 flipped between the line and the candle low 53261.4. Here the candidate is built from the line
+// read itself.
+//
+// Only lines that the price map or the final matching put on a framework level count (a loose line stays reference
+// only), and only when the nearest period candidate is within that match tolerance (or 0.05% of price), so the
+// existing replacement rule swaps the period level for the line instead of keeping both. One line per period level,
+// the closest one. Nothing is built when the AI list already has the line's price. `replacesPrice` is the period
+// level the line stands in for, so an AI candidate that is just that level can be dropped by the caller.
+const SAME_PRICE = 0.00002;
+
+export function drawnLineCandidatesFromReads({ levels = [], periodCandidates = [], existingPrices = [], fraction = 0.0005 } = {}) {
+  const periods = (Array.isArray(periodCandidates) ? periodCandidates : []).filter((candidate) => positive(candidate?.price) !== null);
+  if (!periods.length) return [];
+  const taken = (Array.isArray(existingPrices) ? existingPrices : []).map(positive).filter((price) => price !== null);
+  const bestByPeriod = new Map();
+  for (const line of frameworkMatchedLineReads(levels)) {
+    const price = positive(line?.displayedPrice);
+    if (price === null) continue;
+    const nearest = periods
+      .map((candidate) => ({ candidate, gap: Math.abs(Number(candidate.price) - price) }))
+      .sort((a, b) => a.gap - b.gap)[0];
+    const allowed = Math.max(positive(line?.matchTolerance) || 0, price * fraction);
+    if (!nearest || nearest.gap > allowed) continue;
+    const current = bestByPeriod.get(nearest.candidate);
+    if (!current || nearest.gap < current.gap) bestByPeriod.set(nearest.candidate, { price, gap: nearest.gap });
+  }
+  const built = [];
+  for (const [candidate, { price }] of bestByPeriod) {
+    if (taken.some((other) => Math.abs(other - price) <= price * SAME_PRICE)) continue;
+    built.push({
+      ...candidate,
+      price,
+      zoneLow: price,
+      zoneHigh: price,
+      exactVisiblePrice: true,
+      independentEntryEvidence: true,
+      structuralEvidence: `exact line drawn at ${price} on the ${candidate.sourcePeriod || candidate.sourceDay || "framework"} ${candidate.sourceExtreme || "level"}`,
+      builtFromDrawnLine: true,
+      replacesPrice: Number(candidate.price),
+    });
+  }
+  return built;
+}
+
+// The AI-listed candidates that are only the period level a line has replaced.
+export function withoutReplacedPeriodCandidates(listed = [], lineBuilt = []) {
+  const list = Array.isArray(listed) ? listed : [];
+  const replaced = (Array.isArray(lineBuilt) ? lineBuilt : []).map((item) => positive(item?.replacesPrice)).filter((price) => price !== null);
+  if (!replaced.length) return list;
+  return list.filter((candidate) => {
+    const price = positive(candidate?.price);
+    return price === null || !replaced.some((other) => Math.abs(other - price) <= other * SAME_PRICE);
+  });
+}

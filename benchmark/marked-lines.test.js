@@ -16,6 +16,8 @@ import {
   matchedFrameworkAreas,
   matchLinesToAreas,
   hasDrawnLineEvidence,
+  drawnLineCandidatesFromReads,
+  withoutReplacedPeriodCandidates,
   creditedLinePrices,
   withoutCreditedLineReferences,
   withoutAxisTickReads,
@@ -489,4 +491,47 @@ test("the server filters the watch levels only when an entry exists, and records
   assert.match(serverSource, /WATCH_SKIPS_CREDITED_LINES/);
   assert.match(serverSource, /markedLinePrices: creditedLinePrices\(visibleUserMarkedLevels\)/);
   assert.match(serverSource, /: hasValidatedArea\s*\n\s*\? referencesWithoutCreditedLines\.filter\(/);
+});
+
+// Benchmark 2902 (USA30 H1): the trader's line at 53275.6 sits on Tuesday's low 53261.4. The AI's candidate list named
+// the line in two of four runs, so Entry 1 flipped between the line and the candle low.
+const tuesdayLow = { price: 53261.4, zoneLow: 53261.4, zoneHigh: 53261.4, areaType: "converted resistance", originalType: "support", sourcePeriod: "Tuesday", sourceExtreme: "low", independentEntryEvidence: true };
+const tuesdayHigh = { price: 53535.1, areaType: "supply", sourcePeriod: "Tuesday", sourceExtreme: "high" };
+const drawn = (price, extra = {}) => ({ extractionSource: EXACT, displayedPrice: price, matchedFrameworkPeriod: "Tuesday", matchedFrameworkSide: "low", matchedFrameworkPrice: 53261.4, matchTolerance: 31.95, ...extra });
+
+test("a drawn line on a period level becomes a candidate even when the AI list does not name it", () => {
+  const built = drawnLineCandidatesFromReads({ levels: [drawn(53275.6)], periodCandidates: [tuesdayHigh, tuesdayLow], existingPrices: [53421.2] });
+  assert.equal(built.length, 1);
+  assert.equal(built[0].price, 53275.6);
+  assert.equal(built[0].areaType, "converted resistance"); // takes the period level's role
+  assert.equal(built[0].sourcePeriod, "Tuesday");
+  assert.equal(built[0].exactVisiblePrice, true);
+  assert.equal(built[0].replacesPrice, 53261.4);
+  // the line the existing replacement rule would swap in
+  assert.equal(supersedingDrawnLine({ candidatePrice: 53261.4, candidatePrices: [53535.1, 53261.4], lines: [{ price: 53275.6, tolerance: 31.95 }] }), 53275.6);
+});
+test("nothing is built when the AI list already has the line, the line is loose, or no level is near enough", () => {
+  assert.equal(drawnLineCandidatesFromReads({ levels: [drawn(53275.6)], periodCandidates: [tuesdayLow], existingPrices: [53275.6] }).length, 0);
+  const loose = { extractionSource: EXACT, displayedPrice: 53275.6 }; // never matched to a framework level
+  assert.equal(drawnLineCandidatesFromReads({ levels: [loose], periodCandidates: [tuesdayLow] }).length, 0);
+  assert.equal(drawnLineCandidatesFromReads({ levels: [drawn(53400, { matchTolerance: 10 })], periodCandidates: [tuesdayLow] }).length, 0);
+  assert.equal(drawnLineCandidatesFromReads({ levels: [drawn(53275.6)], periodCandidates: [] }).length, 0);
+});
+test("one candidate per period level, from the closest line", () => {
+  const built = drawnLineCandidatesFromReads({ levels: [drawn(53285), drawn(53265)], periodCandidates: [tuesdayLow] });
+  assert.deepEqual(built.map((item) => item.price), [53265]);
+});
+test("an AI candidate that is only the replaced period level is dropped; the others stay", () => {
+  const built = drawnLineCandidatesFromReads({ levels: [drawn(53275.6)], periodCandidates: [tuesdayLow] });
+  const listed = [{ price: 53261.4 }, { price: 53421.2 }, { price: null }];
+  assert.deepEqual(withoutReplacedPeriodCandidates(listed, built).map((item) => item.price), [53421.2, null]);
+  assert.equal(withoutReplacedPeriodCandidates(listed, []), listed);
+});
+test("the server builds the candidates from the line reads before admitting them, with an off switch", () => {
+  const serverSource = readFileSync(fileURLToPath(new URL("../server.js", import.meta.url)), "utf8");
+  assert.match(serverSource, /DRAWN_LINE_CANDIDATES/);
+  const build = serverSource.indexOf("drawnLineCandidatesFromReads({");
+  const admit = serverSource.indexOf("const admittedVisualCandidates = visualCandidates.filter(");
+  assert.ok(build > 0 && admit > build);
+  assert.match(serverSource, /\.\.\.withoutReplacedPeriodCandidates\(listedVisualCandidates, lineBuiltCandidates\),/);
 });
