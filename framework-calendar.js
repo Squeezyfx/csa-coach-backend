@@ -100,8 +100,14 @@ export function resolveFrameworkBias({periodInventory=[],periodOpen=null,periodC
     if(direction) basis="calendar_range_position";
   }
   if(!direction&&completed.length>=2) {
-    const first=completed[0],last=completed.at(-1);
-    direction=last.high>first.high&&last.low>first.low?"bullish":last.high<first.high&&last.low<first.low?"bearish":null;
+    const structure=(from,to)=>to.high>from.high&&to.low>from.low?"bullish":to.high<from.high&&to.low<from.low?"bearish":null;
+    direction=structure(completed[0],completed.at(-1));
+    // When the latest completed period against the first is unclear (it sits inside the first one's range, or
+    // around it), the latest is read against the one before it: EURUSD H1, 26 Nov 2026, Wednesday was inside
+    // Monday but had a higher high and higher low than Tuesday, and the week, 1.6 pips under its open, was
+    // called bearish. FLAT_WEEK_LAST_TWO=off restores the old behaviour.
+    const lastTwoOn=String(globalThis.process?.env?.FLAT_WEEK_LAST_TWO||"on").trim().toLowerCase()!=="off";
+    if(!direction&&completed.length>=3&&lastTwoOn) direction=structure(completed.at(-2),completed.at(-1));
     if(direction) basis="completed_period_structure";
   }
   if(!direction&&hasMove) {

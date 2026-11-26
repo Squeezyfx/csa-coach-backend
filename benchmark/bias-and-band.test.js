@@ -313,3 +313,44 @@ test("a merged entry's displayed level is refreshed to its midpoint in the live 
   assert.deepEqual(merged.mergedEntryLevels, [53261.4, 53281.3]);
   assert.ok(Math.abs(merged.authoritativeCenter - 53271.35) < 1e-9);
 });
+
+// EURUSD H1, week of 23 Nov 2026, read on Thursday: the week is 1.6 pips under its open. Wednesday sits inside Monday,
+// but has a higher high and a higher low than Tuesday.
+const insideMonday = [
+  { date: "2026-11-23", open: 1.09706, high: 1.1005, low: 1.08804 },
+  { date: "2026-11-24", high: 1.09795, low: 1.08954 },
+  { date: "2026-11-25", high: 1.09921, low: 1.09305 },
+  { date: "2026-11-26", high: 1.09885, low: 1.09565, partialPeriod: true },
+];
+
+test("when the latest completed day is unclear against the first, it is read against the day before", () => {
+  const bias = resolveFrameworkBias({ periodInventory: insideMonday, periodOpen: 1.09706, periodClose: 1.0969 });
+  assert.equal(bias.direction, "bullish");
+  assert.equal(bias.source, "completed_period_structure");
+});
+
+test("a clear comparison with the first day is not changed by the last two days", () => {
+  // Wednesday is above Monday on both sides, but below Tuesday on both sides: the first-day comparison still decides.
+  const rows = [
+    { date: "2026-11-23", high: 1.10, low: 1.09 },
+    { date: "2026-11-24", high: 1.12, low: 1.11 },
+    { date: "2026-11-25", high: 1.11, low: 1.095 },
+  ];
+  assert.equal(resolveFrameworkBias({ periodInventory: rows, periodOpen: 1.1121, periodClose: 1.112 }).direction, "bullish");
+});
+
+test("the last two days also unclear keeps the open and close", () => {
+  const rows = [
+    { date: "2026-11-23", high: 1.12, low: 1.08 },
+    { date: "2026-11-24", high: 1.11, low: 1.09 },
+    { date: "2026-11-25", high: 1.105, low: 1.095 },
+  ];
+  const bias = resolveFrameworkBias({ periodInventory: rows, periodOpen: 1.1, periodClose: 1.0999 });
+  assert.equal(bias.direction, "bearish");
+  assert.equal(bias.source, "calendar_open_close");
+});
+
+test("the last-two-days step has an off switch", () => {
+  const source = fs.readFileSync(new URL("../framework-calendar.js", import.meta.url), "utf8");
+  assert.match(source, /FLAT_WEEK_LAST_TWO/);
+});
