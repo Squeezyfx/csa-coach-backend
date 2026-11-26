@@ -535,3 +535,13 @@ test("the server builds the candidates from the line reads before admitting them
   assert.ok(build > 0 && admit > build);
   assert.match(serverSource, /\.\.\.withoutReplacedPeriodCandidates\(listedVisualCandidates, lineBuiltCandidates\),/);
 });
+
+test("the platform's price line is not turned into a candidate", () => {
+  const args = { levels: [drawn(53275.6)], periodCandidates: [tuesdayLow] };
+  assert.equal(drawnLineCandidatesFromReads({ ...args, lastPrices: [null, 53275.6] }).length, 0);
+  assert.equal(drawnLineCandidatesFromReads({ ...args, lastPrices: [53280, null] }).length, 0); // within 0.02%
+  assert.equal(drawnLineCandidatesFromReads({ ...args, lastPrices: [52823.2] }).length, 1);
+  const serverSource = readFileSync(fileURLToPath(new URL("../server.js", import.meta.url)), "utf8");
+  assert.match(serverSource, /lastPrices: \[currentPrice, visualReview\?\.chartLastPrice\],/);
+  assert.match(serverSource, /chartLastPrice: chartDetection\?\.latestVisibleClose/);
+});

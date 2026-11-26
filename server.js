@@ -21539,6 +21539,7 @@ function buildPeriodInventoryStructuralCandidates({
           levels: visualReview?.visibleMarkedLevels,
           periodCandidates: filteredPeriodCandidates,
           existingPrices: listedVisualCandidates.map((candidate) => candidate?.price),
+          lastPrices: [currentPrice, visualReview?.chartLastPrice],
         })
       : [];
   if (lineBuiltCandidates.length) {
@@ -34572,6 +34573,9 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       strengths: visualReview?.chartSpecificStrengths || [],
       weaknesses: visualReview?.chartSpecificWeaknesses || [],
     });
+
+    // The price shown on the screenshot, so its own price line is never taken for a line the trader drew.
+    visualReview = { ...visualReview, chartLastPrice: chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice ?? null };
 
     const baseAnalysis = buildDeterministicCsaAnalysis({
       marketReference,

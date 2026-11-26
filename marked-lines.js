@@ -352,16 +352,20 @@ export function withoutCreditedLineReferences(references = [], linePrices = [], 
 // existing replacement rule swaps the period level for the line instead of keeping both. One line per period level,
 // the closest one. Nothing is built when the AI list already has the line's price. `replacesPrice` is the period
 // level the line stands in for, so an AI candidate that is just that level can be dropped by the caller.
+//
+// A read sitting on the last price (within 0.02%, the same allowance hasDrawnLineEvidence uses) is the platform's
+// price line, not a line the trader drew (chart 2914: 53496.2, exactly the last price), so it builds nothing.
 const SAME_PRICE = 0.00002;
 
-export function drawnLineCandidatesFromReads({ levels = [], periodCandidates = [], existingPrices = [], fraction = 0.0005 } = {}) {
+export function drawnLineCandidatesFromReads({ levels = [], periodCandidates = [], existingPrices = [], lastPrices = [], fraction = 0.0005 } = {}) {
+  const last = (Array.isArray(lastPrices) ? lastPrices : []).map(positive).filter((price) => price !== null);
   const periods = (Array.isArray(periodCandidates) ? periodCandidates : []).filter((candidate) => positive(candidate?.price) !== null);
   if (!periods.length) return [];
   const taken = (Array.isArray(existingPrices) ? existingPrices : []).map(positive).filter((price) => price !== null);
   const bestByPeriod = new Map();
   for (const line of frameworkMatchedLineReads(levels)) {
     const price = positive(line?.displayedPrice);
-    if (price === null) continue;
+    if (price === null || last.some((other) => Math.abs(price - other) <= other * 0.0002)) continue;
     const nearest = periods
       .map((candidate) => ({ candidate, gap: Math.abs(Number(candidate.price) - price) }))
       .sort((a, b) => a.gap - b.gap)[0];
