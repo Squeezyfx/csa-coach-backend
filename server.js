@@ -94,6 +94,7 @@ import { chooseLegFrame } from "./leg-frame.js";
 import { isOffScale, resolveOffScalePrice } from "./price-scale-check.js";
 import { typedDateAccepted, typedDateCandidate } from "./typed-date-rescue.js";
 import { phaseContexts } from "./phase-context.js";
+import { slimResponseEnabled, toClientResponse, toJournalRecord } from "./client-response.js";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -1423,7 +1424,7 @@ async function saveCompletedReview({
       ? marketReference.csaAreas.slice(0, 30)
       : [];
 
-    const rawAiResponse = compactRawAiResponse({
+    const fullAiResponse = compactRawAiResponse({
       analysis,
       chartDetection,
       visualReview,
@@ -1435,6 +1436,9 @@ async function saveCompletedReview({
       personalStrategySnapshot,
       cleanChart,
     });
+    // Traders can read their own journal rows, so nothing about how the levels are found is stored in them.
+    const slim = slimResponseEnabled();
+    const rawAiResponse = slim ? toJournalRecord(fullAiResponse) : fullAiResponse;
 
     const reviewInsert = await supabaseAdmin
       .from("chart_reviews")
@@ -1450,7 +1454,7 @@ async function saveCompletedReview({
           visualReview?.visualSummary ||
           marketReference?.directionalBias?.higherTimeframeView ||
           null,
-        key_areas_of_interest: keyAreas,
+        key_areas_of_interest: slim ? [] : keyAreas,
         overall_score: overallScore,
         strategy_score: setupScore,
         risk_management_score: riskScore,
@@ -31941,7 +31945,9 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       cachedCompletedAnalysis.savedToJournal = false;
       cachedCompletedAnalysis.saveReason =
         "Identical chart and analysis inputs reused the previous completed result.";
-      return res.json(cachedCompletedAnalysis);
+      return res.json(
+        slimResponseEnabled() && !benchmarkDryRun ? toClientResponse(cachedCompletedAnalysis) : cachedCompletedAnalysis
+      );
     }
 
     if (!benchmarkDryRun) {
@@ -35020,7 +35026,7 @@ ${(visualReview?.strategyMissingInformation || []).length
           analysisFacts?.historicalPhase?.diagnostics || null,
       },
       dashboard: dashboardFeedback,
-      contextStatus: marketReference.ok ? `Market-data-backed CSA setup review completed using ${structureLabel} and visual chart comparison.` : marketReference.failureCategory === "symbol_unavailable" ? "Setup review completed without market data: prices for this instrument are not available." : `Setup review completed without market data: ${marketReference.error}`,
+      contextStatus: marketReference.ok ? "Review completed using market data and a visual chart comparison." : marketReference.failureCategory === "symbol_unavailable" ? "Setup review completed without market data: prices for this instrument are not available." : `Setup review completed without market data: ${marketReference.error}`,
       grade: dashboardFeedback.setupQualityScore >= 85 ? "A" : dashboardFeedback.setupQualityScore >= 75 ? "B" : dashboardFeedback.setupQualityScore >= 60 ? "C" : dashboardFeedback.setupQualityScore >= 40 ? "D" : "F",
       confidence: dashboardFeedback.setupQualityScore,
       structureScore: dashboardFeedback.scores.setupQuality,
@@ -35193,8 +35199,9 @@ ${(visualReview?.strategyMissingInformation || []).length
       );
     }
 
+    // The browser gets only what the page reads; the benchmark runner (secret key) gets everything.
     return res.json(
-      finalClientResponse
+      slimResponseEnabled() && !benchmarkDryRun ? toClientResponse(finalClientResponse) : finalClientResponse
     );
   } catch (error) {
     console.error(
