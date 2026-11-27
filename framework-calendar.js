@@ -139,17 +139,25 @@ export function resolveFrameworkBias({periodInventory=[],periodOpen=null,periodC
 // resolveFrameworkBias above and by server.js's own direction resolution and
 // entry selector, so every consumer of period-inventory-derived direction
 // agrees once a deep retracement fires, instead of only some of them.
-export function resolveDeepRetracementDirectionOverride({periods=[],threshold=0.618,currentPrice=null,nearShare=0.12}={}) {
-  // Re-sorted defensively by key/date rather than trusting array order:
-  // some callers (server.js's marketReference.dailyLevels) sort before
-  // passing periods in, but that is not a guaranteed contract here.
-  const all=(Array.isArray(periods)?periods:[])
+export function resolveDeepRetracementDirectionOverride(options={}) {
+  return retracedSwingOverride(options)??takenOutMoveOverride(options);
+}
+
+// Re-sorted defensively by key/date rather than trusting array order:
+// some callers (server.js's marketReference.dailyLevels) sort before
+// passing periods in, but that is not a guaranteed contract here.
+function overridePeriods(periods) {
+  return (Array.isArray(periods)?periods:[])
     .map(p=>({high:Number(p?.high),low:Number(p?.low),key:String(p?.key||p?.date||""),
       done:p?.periodLifecycle!=="in_progress"&&p?.partialPeriod!==true,
       intraday:p?.intradayOrderChecked===true,order:p?.extremeOrder||null,
       highAfterLow:p?.highAfterLow??null,lowAfterHigh:p?.lowAfterHigh??null}))
     .filter(p=>Number.isFinite(p.high)&&Number.isFinite(p.low)&&p.high>p.low&&p.key)
     .sort((a,b)=>a.key.localeCompare(b.key));
+}
+
+function retracedSwingOverride({periods=[],threshold=0.618,currentPrice=null,nearShare=0.12}={}) {
+  const all=overridePeriods(periods);
   const valid=all.filter(p=>p.done);
   if(valid.length<2) return null;
 
@@ -212,6 +220,52 @@ export function resolveDeepRetracementDirectionOverride({periods=[],threshold=0.
   const holdLine=near.length?furthest(near):fibLine;
   if(live!==null&&sign*(live-holdLine)<0) return null;
   return found(direction,retracementRatio,anchor,holdLine);
+}
+
+/** A move that the next move has taken out completely (price went back past where it started) is neglected, and the
+ * later move gives the bias until price recovers more than 61.8% of it. USDINDEX H1, 27 Nov 2026: Monday rose from
+ * 103.64 to 104.50, Wednesday traded at 103.62, so the week is bearish. In terms of the period's own extremes: the
+ * later move runs from the first of the two to the second, and there was a move the other way before it. That is
+ * only known when the first extreme is not in the opening period, or the candles show the order inside that period.
+ * WIPED_MOVE=off restores the old behaviour. */
+function takenOutMoveOverride({periods=[],threshold=0.618,currentPrice=null,nearShare=0.12}={}) {
+  if(String(globalThis.process?.env?.WIPED_MOVE||"on").trim().toLowerCase()==="off") return null;
+  const rows=overridePeriods(periods);
+  if(!rows.length) return null;
+  let lowIndex=0,highIndex=0;
+  rows.forEach((p,i)=>{
+    if(p.low<rows[lowIndex].low) lowIndex=i;
+    if(p.high>rows[highIndex].high) highIndex=i;
+  });
+  const sameDay=lowIndex===highIndex;
+  if(sameDay&&!(rows[lowIndex].intraday&&rows[lowIndex].order)) return null;
+  const down=sameDay?rows[lowIndex].order==="high_first":highIndex<lowIndex;
+  const startIndex=down?highIndex:lowIndex, endIndex=down?lowIndex:highIndex;
+  const first=rows[startIndex], turn=rows[endIndex];
+  if(!(startIndex>0||(first.intraday&&first.order===(down?"low_first":"high_first")))) return null;
+
+  // Recovery runs upward after a down move (sign 1) and downward after an up move (sign -1).
+  const sign=down?1:-1;
+  const swingHigh=rows[highIndex].high,swingLow=rows[lowIndex].low,range=swingHigh-swingLow;
+  const end=down?swingLow:swingHigh;
+  const outer=p=>down?p.high:p.low;
+  const live=Number.isFinite(Number(currentPrice))&&Number(currentPrice)>0?Number(currentPrice):null;
+  const after=[turn.intraday?(down?turn.highAfterLow:turn.lowAfterHigh):null,
+    ...rows.slice(endIndex+1).filter(p=>p.done).map(outer)].filter(v=>v!==null&&Number.isFinite(v));
+  const anchor=after.length?(down?Math.max(...after):Math.min(...after)):end;
+  const retracementRatio=sign*(anchor-end)/range;
+  // The same few pips past 61.8% that still count as inside the entry band (see retracedSwingOverride).
+  const slack=live===null?0.05:Math.min(0.05,0.001*live/range);
+  if(retracementRatio>=threshold+slack) return null;
+  // A day's high or low sitting just past the 61.8% line has to break as well (the nearest one).
+  const fibLine=end+sign*threshold*range;
+  const near=rows.slice(startIndex+1).filter(p=>p.done).flatMap(p=>[p.high,p.low])
+    .filter(v=>sign*(v-fibLine)>0&&sign*(v-fibLine)<=nearShare*range);
+  const holdLine=near.length?(down?Math.min(...near):Math.max(...near)):fibLine;
+  if(live!==null&&sign*(live-holdLine)>0) return null;
+  return {direction:down?"bearish":"bullish",swingHigh,swingLow,retracementRatio,retracementAnchor:anchor,holdLine,
+    swingHighKey:rows[highIndex].key,swingLowKey:rows[lowIndex].key,
+    source:"earlier_move_taken_out_later_move_stands"};
 }
 
 /** Notes on each day of an M1-H1 week what its chart candles show: which of the day's two extremes came first, the
