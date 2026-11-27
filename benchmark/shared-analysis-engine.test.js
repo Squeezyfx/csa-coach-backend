@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
-import {calendarMapping,calendarFrame,frameworkProfile} from '../framework-calendar.js';
+import {calendarMapping,calendarFrame,frameworkProfile,markIntradayOrder} from '../framework-calendar.js';
 import {analyzeFramework,evaluateFrameworkCandidate} from '../shared-analysis-engine.js';
 const profiles={M1:['week','day',4],M5:['week','day',4],M15:['week','day',4],M30:['week','day',4],H1:['week','day',4],H4:['month','week',4],D1:['year','month',8],W1:['year','quarter',3],MN:['five_years','year',5]};
 for (const [timeframe,[range,unit,count]] of Object.entries(profiles)) {
@@ -47,7 +47,7 @@ test('actual server guard cannot fall through for any timeframe in customer or b
  const start=server.indexOf('function rankRawEntryAreas(');
  const fn=server.slice(start,server.indexOf('\n}\n',start)+2);
  for(const benchmark of [false,true]) {
-  const ctx=vm.createContext({CSA_SELECTOR_VERSION:'test',BENCHMARK_DRY_RUN_ENABLED:benchmark,rankChartNativeFallbackAreas:()=>null,buildNoEntryTransparencyAudit:()=>({}),resolveDeepRetracementDirectionOverride:()=>null});
+  const ctx=vm.createContext({CSA_SELECTOR_VERSION:'test',BENCHMARK_DRY_RUN_ENABLED:benchmark,rankChartNativeFallbackAreas:()=>null,buildNoEntryTransparencyAudit:()=>({}),resolveDeepRetracementDirectionOverride:()=>null,markIntradayOrder});
   vm.runInContext(fn,ctx);
   for(const timeframe of [...Object.keys(profiles),'H2']) {
    const result=ctx.rankRawEntryAreas({timeframe,direction:'bullish'});

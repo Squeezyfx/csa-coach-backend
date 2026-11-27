@@ -40,22 +40,42 @@ test('unfinished close is deferred when OHL identifies the candle within toleran
  assert.deepEqual(result.failedFields,[]);
  assert.equal(result.requiresReview,true);
 });
-test('runtime inventory selection retains OANDA provisional data and does not set verified',()=>{
+// Runs the server's own lines that choose the period inventory. providerInventoryAuthoritative is decided just
+// above them (the data feed answered and is confirmed to be the chart's instrument).
+function chooseInventory({status,integrity,providerInventoryAuthoritative}) {
  const server=readFileSync(new URL('../server.js',import.meta.url),'utf8');
  const a=server.indexOf('      const marketInventoryVerified =');
  const b=server.indexOf('      const rawInventoryPriceConflicts',a);
  const c=server.indexOf('      const inventoryUsable =',b);
  const d=server.indexOf('      const inventoryPriceConflicts',c);
+ const context={marketReference:{ok:true,dataProvider:'OANDA',chartDataMatch:{status}},marketPeriodIntegrity:{passed:integrity},marketInventoryFrame:{currentPeriodFrameVerified:true},marketPeriodInventory:[{high:1.4,low:1.38}],chartOnlyInventoryUsable:false,chartOnlyInventoryVerified:false,chartPeriodInventory:[],
+  providerInventoryAuthoritative,
+  // read only by the diagnostics and the log line in the same stretch of code
+  chartDetection:{},integrityPeriods:[],console:{log(){}},normalizedSymbol:'USDCAD',timeframe:'H4',mergedChartNativeFallback:{},
+  feedComparisons:[],feedDeviations:[],sameInstrumentCheck:{},sameInstrumentConfirmed:providerInventoryAuthoritative};
+ vm.runInNewContext(server.slice(a,b)+server.slice(c,d)+'; output={marketInventoryVerified,marketInventoryProvisional,selectedPeriodInventory,inventoryAuthority};',context);
+ return context.output;
+}
+test('runtime inventory selection retains OANDA provisional data and does not set verified',()=>{
  for(const status of ['partial_reference','matched_reference','partial_or_unknown_candle']){
   for(const integrity of [true,false]){
-   const context={marketReference:{ok:true,dataProvider:'OANDA',chartDataMatch:{status}},marketPeriodIntegrity:{passed:integrity},marketInventoryFrame:{currentPeriodFrameVerified:true},marketPeriodInventory:[{high:1.4,low:1.38}],chartOnlyInventoryUsable:false,chartOnlyInventoryVerified:false,chartPeriodInventory:[]};
-   vm.runInNewContext(server.slice(a,b)+server.slice(c,d)+'; output={marketInventoryVerified,marketInventoryProvisional,selectedPeriodInventory,inventoryAuthority};',context);
-   assert.equal(context.output.marketInventoryProvisional,status==='partial_reference'&&integrity);
-   assert.equal(context.output.marketInventoryVerified,status==='matched_reference'&&integrity);
-   assert.equal(context.output.selectedPeriodInventory.length,integrity&&status!=='partial_or_unknown_candle'?1:0);
+   const output=chooseInventory({status,integrity,providerInventoryAuthoritative:false});
+   assert.equal(output.marketInventoryProvisional,status==='partial_reference'&&integrity);
+   assert.equal(output.marketInventoryVerified,status==='matched_reference'&&integrity);
+   assert.equal(output.selectedPeriodInventory.length,integrity&&status!=='partial_or_unknown_candle'?1:0);
   }
  }
 });
+test('a data feed confirmed as the same instrument is verified whatever the last candle did, if its days pass the audit',()=>{
+ for(const status of ['partial_reference','matched_reference','partial_or_unknown_candle']){
+  for(const integrity of [true,false]){
+   const output=chooseInventory({status,integrity,providerInventoryAuthoritative:true});
+   assert.equal(output.marketInventoryVerified,integrity);
+   assert.equal(output.selectedPeriodInventory.length,integrity?1:0);
+  }
+ }
+});
+
 test('provisional OANDA inventory does not create a false zero-versus-four visual conflict',()=>{
  const server=readFileSync(new URL('../server.js',import.meta.url),'utf8');
  assert.match(server,/!marketInventoryVerified && !marketInventoryProvisional/);
