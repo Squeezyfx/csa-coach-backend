@@ -95,6 +95,37 @@ test("a high printed before the low of the same day is not a retracement of it",
   assert.equal(resolveDeepRetracementDirectionOverride({ periods: marked(rows, candles), currentPrice: 1.1020 }), null);
 });
 
+// US30 H1, 26 Aug 2026 (benchmark chart 2914): up from Monday's low to Tuesday's high, then back 62.5%, which is
+// 4 points past the 61.8% line. Those points still count as inside the entry band, so the up move is not finished.
+const usWeek = (tuesdayLow) => [
+  day('2026-08-24', 53501.8, 53140.4),
+  day('2026-08-25', 53730.5, tuesdayLow),
+  day('2026-08-26', 53711.3, 53381.8, { partialPeriod: true }),
+];
+const usBars = (tuesdayLow) => bars([
+  ['2026-08-24 02:00:00', 53250.0, 53140.4], ['2026-08-24 20:00:00', 53501.8, 53305.8],
+  ['2026-08-25 04:00:00', 53730.5, 53600.0], ['2026-08-25 20:00:00', 53500.0, tuesdayLow],
+  ['2026-08-26 04:00:00', 53711.3, 53500.0], ['2026-08-26 18:00:00', 53520.0, 53381.8],
+]);
+const usOverride = (tuesdayLow) => resolveDeepRetracementDirectionOverride({
+  periods: markIntradayOrder({ timeframe: 'H1', periodInventory: usWeek(tuesdayLow), candles: usBars(tuesdayLow) }),
+  currentPrice: 53496.2,
+});
+
+test('US30: a few points past 61.8% does not finish the first move', () => {
+  assert.equal(usOverride(53361.8), null);
+  assert.equal(usOverride(53345), null);
+  const bias = resolveFrameworkBias({
+    periodInventory: markIntradayOrder({ timeframe: 'H1', periodInventory: usWeek(53361.8), candles: usBars(53361.8) }),
+    periodOpen: 53300, periodClose: 53496.2,
+  });
+  assert.equal(bias.direction, 'bullish');
+});
+
+test('US30: clearly past the allowance it does', () => {
+  assert.equal(usOverride(53330).direction, 'bearish');
+});
+
 test('only M1-H1 charts, only days the candles cover, and the switch turns it off', () => {
   assert.equal(markIntradayOrder({ timeframe: 'H4', periodInventory: eurWeek, candles: eurBars }), eurWeek);
   assert.deepEqual(marked(eurWeek, eurBars, { enabled: false }), eurWeek);

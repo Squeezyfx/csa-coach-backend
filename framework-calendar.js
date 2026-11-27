@@ -192,14 +192,18 @@ export function resolveDeepRetracementDirectionOverride({periods=[],threshold=0.
   if(retracementRatio<threshold) return null;
   const direction=downFirst?"bullish":"bearish";
 
-  // Without candle evidence price must still be past 61.8% of the old move.
-  if(!turn.intraday) {
-    if(live!==null&&sign*(live-start)/range<threshold) return null;
-    return found(direction,retracementRatio,anchor,null);
-  }
-  // With it, the new move holds until price gives back more than 61.8% of it (a pullback into its own retracement
-  // is the entry, not the end of it). A day's high or low sitting just past that line (within 12% of the move) has
-  // to break as well: GBPUSD H1, 27 Nov 2026, Wednesday's low just under the 61.8% line.
+  // The week's extremes on different days, with price still past 61.8% of the old move.
+  const stillPast=live===null||sign*(live-start)/range>=threshold;
+  if(!sameDay&&stillPast) return found(direction,retracementRatio,anchor,null);
+  if(!turn.intraday) return null;
+  // Price has pulled back since, or both extremes share a day: the first move is finished only when the retracement
+  // went past 61.8% by more than the few pips that still count as inside the entry band (5% of the range, capped at
+  // 0.1% of price). US30 H1, 26 Aug 2026: 62.5%, 4 points past the line, is the buy level, not the end of the move.
+  const slack=live===null?0.05:Math.min(0.05,0.001*live/range);
+  if(retracementRatio<threshold+slack) return null;
+  // Then the new move holds until price gives back more than 61.8% of it (a pullback into its own retracement is
+  // the entry, not the end of it). A day's high or low sitting just past that line (within 12% of the move) has to
+  // break as well: GBPUSD H1, 27 Nov 2026, Wednesday's low just under the 61.8% line.
   const tip=furthest([anchor,...all.filter(p=>!p.done&&p.key>turn.key).map(outer)]);
   const move=sign*(tip-start);
   const fibLine=tip-sign*threshold*move;
