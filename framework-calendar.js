@@ -128,7 +128,8 @@ export function resolveFrameworkBias({periodInventory=[],periodOpen=null,periodC
   const last=rows.at(-1),lastOpen=number(last.open),lastClose=number(last.close)??close;
   const opposite=lastOpen!==null&&(direction==="bullish"?lastClose<lastOpen:lastClose>lastOpen);
   const phase=opposite?(direction==="bullish"?"bearish_pullback_after_bullish_structure":"bullish_recovery_after_bearish_structure"):direction+"_structure";
-  return {direction,phase,high,low,close,open,rangePosition:position,source:basis};
+  const holdLine=retracementOverride?.holdLine??null;
+  return {direction,phase,high,low,close,open,rangePosition:position,source:basis,...(holdLine===null?{}:{holdLine})};
 }
 
 // A retracement past `threshold` of the completed period inventory's own
@@ -138,15 +139,18 @@ export function resolveFrameworkBias({periodInventory=[],periodOpen=null,periodC
 // resolveFrameworkBias above and by server.js's own direction resolution and
 // entry selector, so every consumer of period-inventory-derived direction
 // agrees once a deep retracement fires, instead of only some of them.
-export function resolveDeepRetracementDirectionOverride({periods=[],threshold=0.618,currentPrice=null}={}) {
+export function resolveDeepRetracementDirectionOverride({periods=[],threshold=0.618,currentPrice=null,nearShare=0.12}={}) {
   // Re-sorted defensively by key/date rather than trusting array order:
   // some callers (server.js's marketReference.dailyLevels) sort before
   // passing periods in, but that is not a guaranteed contract here.
-  const valid=(Array.isArray(periods)?periods:[])
-    .filter(p=>p?.periodLifecycle!=="in_progress"&&p?.partialPeriod!==true)
-    .map(p=>({high:Number(p?.high),low:Number(p?.low),key:String(p?.key||p?.date||"")}))
+  const all=(Array.isArray(periods)?periods:[])
+    .map(p=>({high:Number(p?.high),low:Number(p?.low),key:String(p?.key||p?.date||""),
+      done:p?.periodLifecycle!=="in_progress"&&p?.partialPeriod!==true,
+      intraday:p?.intradayOrderChecked===true,order:p?.extremeOrder||null,
+      highAfterLow:p?.highAfterLow??null,lowAfterHigh:p?.lowAfterHigh??null}))
     .filter(p=>Number.isFinite(p.high)&&Number.isFinite(p.low)&&p.high>p.low&&p.key)
     .sort((a,b)=>a.key.localeCompare(b.key));
+  const valid=all.filter(p=>p.done);
   if(valid.length<2) return null;
 
   let lowIndex=0,highIndex=0;
@@ -154,7 +158,11 @@ export function resolveDeepRetracementDirectionOverride({periods=[],threshold=0.
     if(p.low<valid[lowIndex].low) lowIndex=i;
     if(p.high>valid[highIndex].high) highIndex=i;
   });
-  if(lowIndex===highIndex) return null;
+  // When the chart's candles show what happened inside the days (markIntradayOrder, M1-H1 charts), the week's high
+  // and low can share a day, and only what came after the second extreme counts as a retracement.
+  const sameDay=lowIndex===highIndex;
+  if(sameDay&&!(valid[lowIndex].intraday&&valid[lowIndex].order)) return null;
+  const downFirst=sameDay?valid[lowIndex].order==="high_first":highIndex<lowIndex;
 
   const swingHigh=valid[highIndex].high,swingLow=valid[lowIndex].low,range=swingHigh-swingLow;
   if(!(range>0)) return null;
@@ -162,26 +170,74 @@ export function resolveDeepRetracementDirectionOverride({periods=[],threshold=0.
   // The retracement anchor (recentPeak/recentTrough) only ever looks at
   // completed periods, so it can be stale: a retracement that existed on a
   // now-past candle but has since been given back as of the live price no
-  // longer describes the current structure. Require the live price to
-  // still clear the same threshold before the override is allowed to fire.
+  // longer describes the current structure, so the live price is checked too.
   const live=Number.isFinite(Number(currentPrice))&&Number(currentPrice)>0?Number(currentPrice):null;
-
-  if(highIndex<lowIndex) {
-    const recentPeak=Math.max(...valid.slice(lowIndex).map(p=>p.high));
-    const retracementRatio=(recentPeak-swingLow)/range;
-    if(retracementRatio<threshold) return null;
-    if(live!==null&&(live-swingLow)/range<threshold) return null;
-    return {direction:"bullish",swingHigh,swingLow,retracementRatio,retracementAnchor:recentPeak,
-      swingHighKey:valid[highIndex].key,swingLowKey:valid[lowIndex].key,
-      source:"deep_retracement_past_threshold_of_framing_swing"};
-  }
-  const recentTrough=Math.min(...valid.slice(highIndex).map(p=>p.low));
-  const retracementRatio=(swingHigh-recentTrough)/range;
-  if(retracementRatio<threshold) return null;
-  if(live!==null&&(swingHigh-live)/range<threshold) return null;
-  return {direction:"bearish",swingHigh,swingLow,retracementRatio,retracementAnchor:recentTrough,
+  const found=(direction,retracementRatio,retracementAnchor,holdLine)=>({direction,swingHigh,swingLow,
+    retracementRatio,retracementAnchor,holdLine,
     swingHighKey:valid[highIndex].key,swingLowKey:valid[lowIndex].key,
-    source:"deep_retracement_past_threshold_of_framing_swing"};
+    source:"deep_retracement_past_threshold_of_framing_swing"});
+
+  // One rule for both directions, written for the bullish case; `sign` mirrors it for the bearish one.
+  const sign=downFirst?1:-1;
+  const turnIndex=downFirst?lowIndex:highIndex, turn=valid[turnIndex];
+  const start=downFirst?swingLow:swingHigh;
+  const outer=p=>downFirst?p.high:p.low;
+  const furthest=values=>downFirst?Math.max(...values):Math.min(...values);
+  const reached=turn.intraday
+    ?[downFirst?turn.highAfterLow:turn.lowAfterHigh,...valid.slice(turnIndex+1).map(outer)].filter(v=>Number.isFinite(v))
+    :valid.slice(turnIndex).map(outer);
+  if(!reached.length) return null;
+  const anchor=furthest(reached);
+  const retracementRatio=sign*(anchor-start)/range;
+  if(retracementRatio<threshold) return null;
+  const direction=downFirst?"bullish":"bearish";
+
+  // Without candle evidence price must still be past 61.8% of the old move.
+  if(!turn.intraday) {
+    if(live!==null&&sign*(live-start)/range<threshold) return null;
+    return found(direction,retracementRatio,anchor,null);
+  }
+  // With it, the new move holds until price gives back more than 61.8% of it (a pullback into its own retracement
+  // is the entry, not the end of it). A day's high or low sitting just past that line (within 12% of the move) has
+  // to break as well: GBPUSD H1, 27 Nov 2026, Wednesday's low just under the 61.8% line.
+  const tip=furthest([anchor,...all.filter(p=>!p.done&&p.key>turn.key).map(outer)]);
+  const move=sign*(tip-start);
+  const fibLine=tip-sign*threshold*move;
+  const near=valid.slice(turnIndex).flatMap(p=>[p.high,p.low])
+    .filter(v=>sign*(fibLine-v)>0&&sign*(fibLine-v)<=nearShare*move);
+  const holdLine=near.length?furthest(near):fibLine;
+  if(live!==null&&sign*(live-holdLine)<0) return null;
+  return found(direction,retracementRatio,anchor,holdLine);
+}
+
+/** Notes on each day of an M1-H1 week what its chart candles show: which of the day's two extremes came first, the
+ * highest high after its low and the lowest low after its high. A day whose candles do not reach its high and low
+ * (short history, another feed) is left as it is. NEGLECTED_MOVE=off adds nothing, which restores the old rule. */
+export function markIntradayOrder({timeframe,periodInventory=[],candles=[],coverage=.04,
+  enabled=String(globalThis.process?.env?.NEGLECTED_MOVE||"on").trim().toLowerCase()!=="off"}={}) {
+  const rows=Array.isArray(periodInventory)?periodInventory:[];
+  if(!enabled||frameworkProfile(timeframe)?.range!=="week"||!rows.length) return rows;
+  const highs=rows.map(r=>Number(r?.high)).filter(Number.isFinite),lows=rows.map(r=>Number(r?.low)).filter(Number.isFinite);
+  const allowance=(Math.max(...highs)-Math.min(...lows))*coverage;
+  if(!(allowance>0)) return rows;
+  const bars=(Array.isArray(candles)?candles:[])
+    .map(c=>({time:String(c?.datetime||""),high:Number(c?.high),low:Number(c?.low)}))
+    .filter(c=>c.time&&c.high>0&&c.low>0&&c.high>=c.low)
+    .sort((a,b)=>a.time.localeCompare(b.time));
+  return rows.map(row=>{
+    const date=String(row?.date||row?.key||"").slice(0,10),high=Number(row?.high),low=Number(row?.low);
+    const day=bars.filter(c=>date&&c.time.slice(0,10)===date);
+    if(day.length<2) return row;
+    let highAt=0,lowAt=0;
+    day.forEach((c,i)=>{ if(c.high>day[highAt].high) highAt=i; if(c.low<day[lowAt].low) lowAt=i; });
+    if(!(Math.abs(day[highAt].high-high)<=allowance&&Math.abs(day[lowAt].low-low)<=allowance)) return row;
+    const afterLow=day.slice(lowAt+1),afterHigh=day.slice(highAt+1);
+    // The gap between the candle feed and the day's own figures is carried over.
+    return {...row,intradayOrderChecked:true,
+      extremeOrder:highAt<lowAt?"high_first":lowAt<highAt?"low_first":null,
+      highAfterLow:afterLow.length?Math.max(...afterLow.map(c=>c.high))+(high-day[highAt].high):null,
+      lowAfterHigh:afterHigh.length?Math.min(...afterHigh.map(c=>c.low))+(low-day[lowAt].low):null};
+  });
 }
 
 /** The start of a trading week, before any day of it has finished.

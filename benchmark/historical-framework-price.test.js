@@ -28,7 +28,7 @@ test("the screenshot's later or misread price can flip the same week to bearish"
 test("a review of a past moment takes its price from the market data, not the screenshot", () => {
   const start = server.indexOf("const reviewsPastMoment =");
   assert.ok(start > 0);
-  const block = server.slice(start, start + 1800);
+  const block = server.slice(start, start + 2800);
   // Only the two modes that choose a past moment; final-visible reviews keep reading the screenshot.
   assert.match(block, /normalizeCutoffMode\(marketReference\?\.chartCutoff\?\.mode \|\| "final_visible"\) !== "final_visible"/);
   assert.match(block, /marketReference\?\.ok === true/);

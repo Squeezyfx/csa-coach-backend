@@ -33,7 +33,7 @@ import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlign
 import { periodCompleteAtCutoff } from "./period-completion.js";
 import { buildDateCheck, describeDateCheck } from "./date-check.js";
 import { isPrintedAxisTick } from "./axis-ticks.js";
-import { resolveFrameworkBias, calendarMapping, newWeekWithoutCompletedDay } from "./framework-calendar.js";
+import { resolveFrameworkBias, calendarMapping, newWeekWithoutCompletedDay, markIntradayOrder } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
 import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData, shouldRetainProviderPeriods, isCryptoSymbol } from "./market-data-matching.js";
@@ -22497,7 +22497,7 @@ function rankRawEntryAreas({
   // keep offering supply/resistance candidates instead of the demand/support
   // ones the corrected structure actually calls for (confirmed on USDJPY H4).
   const entrySelectorRetracementOverride = resolveDeepRetracementDirectionOverride({
-    periods: Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [],
+    periods: markIntradayOrder({ timeframe, periodInventory: marketReference?.dailyLevels, candles: marketReference?.timeframeCandles }),
     currentPrice,
   });
   if (entrySelectorRetracementOverride) {
@@ -26981,7 +26981,7 @@ function buildValidatedAnalysisFacts({
   // while leaving breakoutState/transitionState on the old value.
   const deepRetracementOverride = finalVisibleMode
     ? resolveDeepRetracementDirectionOverride({
-        periods: Array.isArray(marketReference?.dailyLevels) ? marketReference.dailyLevels : [],
+        periods: markIntradayOrder({ timeframe, periodInventory: marketReference?.dailyLevels, candles: marketReference?.timeframeCandles }),
         currentPrice: nullablePositiveNumber(chartDetection?.latestVisibleClose)
           ?? nullablePositiveNumber(chartDetection?.latestVisiblePrice),
       })
@@ -34191,7 +34191,9 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
         : null;
       const frameworkCurrentPrice = cutoffMarketPrice ?? (chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice);
       const sharedFramework = analyzeFramework({
-        timeframe, cutoff: inventoryDate, periodInventory: selectedPeriodInventory,
+        timeframe, cutoff: inventoryDate,
+        // What happened inside each day, for the neglected-first-move rule (framework-calendar.js).
+        periodInventory: markIntradayOrder({ timeframe, periodInventory: selectedPeriodInventory, candles: marketReference?.timeframeCandles }),
         currentPrice: frameworkCurrentPrice,
         periodOpen: selectedPeriodInventory[0]?.open ?? mergedChartNativeFallback?.currentPeriodOpen,
         authority: marketInventoryVerified ? "provider_aligned" : chartOnlyInventoryVerified ? "chart_verified" : "estimate",
@@ -34199,6 +34201,13 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
         tradesOnWeekends: isCryptoSymbol(normalizedSymbol || submittedInstrument || ""),
       });
       const fixedPeriodBias = sharedFramework.bias;
+      if (fixedPeriodBias?.holdLine != null) {
+        console.log("[first-move] the first move has been retraced past 61.8%, the bias follows the later move:", {
+          direction: fixedPeriodBias.direction,
+          trendChangesBeyond: fixedPeriodBias.holdLine,
+          currentPrice: frameworkCurrentPrice,
+        });
+      }
       const fallbackDirection = fixedPeriodBias?.direction || null;
       const authoritativeMergedFallback = {
         ...mergedChartNativeFallback,
