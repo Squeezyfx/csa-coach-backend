@@ -35083,8 +35083,9 @@ ${(visualReview?.strategyMissingInformation || []).length
         analysis:
           normalizeUserFacingTypographyDeep(relabelEntriesDeep(analysis, entryWord)),
         chartDetection,
+        // Its verdict is saved with the journal entry, so it takes the same Buy/Sell labels as the rest.
         visualReview:
-          normalizeUserFacingTypographyDeep(visualReview),
+          normalizeUserFacingTypographyDeep(relabelEntriesDeep(visualReview, entryWord)),
         marketReference,
         dashboardFeedback:
           normalizeUserFacingTypographyDeep(relabelEntriesDeep(dashboardFeedback, entryWord)),

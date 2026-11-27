@@ -94,3 +94,11 @@ test('the server applies it at the end of the review, skips benchmark runs and h
   // the engine itself still talks about entry1 / entry2: the selector code does not mention Buy/Sell labels
   assert.ok(serverSource.indexOf('const entryWord =') > serverSource.indexOf('const finalFeedback = buildControlledFeedback('));
 });
+
+// The journal's "CSA coach verdict" is saved from the visual review (USDCAD H1, 26 Nov 2026: it said "Entry 1" while
+// the rest of the review said "Sell 1").
+test('the saved verdict takes the Buy/Sell labels too', () => {
+  const call = serverSource.slice(serverSource.indexOf(': await saveCompletedReview({'));
+  assert.ok(call.slice(0, 1500).includes('normalizeUserFacingTypographyDeep(relabelEntriesDeep(visualReview, entryWord))'));
+  assert.equal(relabelEntries('Entry 1: wait there. Backup (Entry 2): supply.', 'Sell'), 'Sell 1: wait there. Backup (Sell 2): supply.');
+});
