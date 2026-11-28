@@ -33,7 +33,7 @@ import { visibleOhlcFromDetection, ohlcAligned, findOhlcAlignedCandle, pickAlign
 import { periodCompleteAtCutoff } from "./period-completion.js";
 import { buildDateCheck, describeDateCheck } from "./date-check.js";
 import { isPrintedAxisTick } from "./axis-ticks.js";
-import { resolveFrameworkBias, calendarMapping, newWeekWithoutCompletedDay, markIntradayOrder } from "./framework-calendar.js";
+import { resolveFrameworkBias, calendarMapping, newWeekWithoutCompletedDay, marketClosedForWeek, markIntradayOrder } from "./framework-calendar.js";
 import { analyzeFramework, evaluateFrameworkCandidate, selectFrameworkEntries } from "./shared-analysis-engine.js";
 import express from "express";
 import { providerSymbol, validateProviderMetadata, classifyProviderError, assessChartDataMatch, clearRejectedProviderData, shouldRetainProviderPeriods, isCryptoSymbol } from "./market-data-matching.js";
@@ -27448,10 +27448,11 @@ function buildValidatedAnalysisFacts({
       : "trend";
 
   // The start of a trading week (Sunday-evening open or Monday): no day of the week has
-  // finished, so the bias and entry areas are not clear yet.
-  const newWeekStart =
+  // finished, so the bias and entry areas are not clear yet. A chart that ends at the weekly
+  // close is still reviewed, with a note to check it again after the market reopens.
+  const weekPosition =
     finalVisibleMode && !historicalCutoff?.active
-      ? newWeekWithoutCompletedDay({
+      ? {
           timeframe,
           resolvedDate:
             marketReference?.chartCutoff?.resolvedDate ||
@@ -27464,12 +27465,15 @@ function buildValidatedAnalysisFacts({
               ? String(marketReference?.chartCutoff?.endDateTime || "").slice(11, 16)
               : "",
           tradesOnWeekends: isCryptoSymbol(submittedInstrument),
-        })
+        }
       : null;
+  const newWeekStart = weekPosition ? newWeekWithoutCompletedDay(weekPosition) : null;
+  const closedWeek = weekPosition && !newWeekStart ? marketClosedForWeek(weekPosition) : null;
 
   return {
     engineVersion: CSA_FEEDBACK_ENGINE_VERSION,
     newWeekStart,
+    closedWeek,
     instrument: submittedInstrument,
     timeframe,
     analysisType,
@@ -28991,6 +28995,8 @@ function buildControlledFeedback({
 
   const directionText = newWeekStart
     ? "No directional bias yet. More price action is needed as the week develops."
+    : facts?.closedWeek?.active === true
+    ? `${String(directionDisplay(facts)).replace(/\.?\s*$/, ".")} The market is closed for the week and can reopen at a different price, so check a fresh chart before using any area.`
     : directionDisplay(facts);
   const action = area.direction === "sell" ? "sell" : area.direction === "buy" ? "buy" : "trade";
   const opposingLevel = facts.direction === "bearish" ? "support" : "resistance";

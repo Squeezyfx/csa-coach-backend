@@ -239,9 +239,13 @@ to what the chart shows. Press the button to change the box, or upload the right
 again. A mismatch isn't saved to your journal and doesn't use a review."
 
 **Why does it say "No directional bias yet"?**
-"At the start of a trading week (Sunday evening, Monday) and over the weekend, there isn't enough price
-action in the current week to read a direction. The review says so instead of guessing and gives no entry
-area. Review the chart again once the first day of the week has closed."
+"At the start of a trading week (Sunday evening and Monday), there isn't enough price action in the new
+week to read a direction. The review says so instead of guessing and gives no entry area. Review the chart
+again once the first day of the week has closed."
+
+**Can I review a chart at the weekend?**
+"Yes. You still get the directional bias and any areas for the week that just closed. The market can reopen
+at a different price, so check a fresh chart after it reopens before using any area."
 
 **What does "Risk can't be checked yet" mean?**
 "The review needs a stop loss and take profit to measure how much you risk, and your account balance and
