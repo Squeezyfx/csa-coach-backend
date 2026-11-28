@@ -160,7 +160,7 @@ export function buildActivityProfile({ candles = [], timeframe = "", timezone = 
 const sign = (value) => (value >= 0 ? `${pct(value)}% above` : `${pct(-value)}% below`);
 
 // The Elite lines: plain words, with the limits said out loud.
-export function describeActivityProfile(profile, { symbol = "this pair" } = {}) {
+export function describeActivityProfile(profile, { symbol = "this pair", marketClosed = false } = {}) {
   if (!profile || profile.status !== "ok") {
     const reason = profile?.reason ? ` ${profile.reason}` : "";
     return [`- Not available for this chart.${reason}`];
@@ -181,8 +181,11 @@ export function describeActivityProfile(profile, { symbol = "this pair" } = {}) 
     `- Share of a day's movement by session: ${profile.sessions.map((session) => `${session.label} ${pct(session.share)}%`).join(", ")} (times are approximate and based on UTC).`
   );
   const moment = profile.reviewMoment;
+  // On a closed market there is no countdown: the busiest hours do not start until it reopens.
   lines.push(
-    moment.hoursToBestWindow === 0
+    marketClosed
+      ? `- This review is set at ${moment.weekday} ${moment.time} (${moment.session}, ${moment.intensity.toFixed(1)} times the average hour).`
+      : moment.hoursToBestWindow === 0
       ? `- This review is set at ${moment.weekday} ${moment.time}, inside the busiest hours.`
       : `- This review is set at ${moment.weekday} ${moment.time} (${moment.session}, ${moment.intensity.toFixed(1)} times the average hour). The busiest hours start in about ${moment.hoursToBestWindow} hour${moment.hoursToBestWindow === 1 ? "" : "s"}.`
   );

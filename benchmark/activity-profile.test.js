@@ -113,6 +113,12 @@ test("the Elite lines are plain words, name the user's time and say it is not a 
   assert.match(describeActivityProfile(null).join(" "), /Not available for this chart\./);
 });
 
+test("a closed market gets no countdown to the busiest hours", () => {
+  const text = describeActivityProfile(profile(), { symbol: "GBPUSD", marketClosed: true }).join(" ");
+  assert.match(text, /This review is set at Thursday 06:00 \(Asia, [\d.]+ times the average hour\)\./);
+  assert.doesNotMatch(text, /busiest hours start/);
+});
+
 test("only Elite sees it: the section sits after the Elite heading and never in the Pro or Starter text", () => {
   const elite = server.indexOf("const eliteSections = [");
   const section = server.indexOf('"BEST TIME TO WATCH:"');

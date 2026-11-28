@@ -29761,7 +29761,7 @@ function buildControlledFeedback({
       : "- Personal strategy comparison was not selected for this review.",
     "",
     "BEST TIME TO WATCH:",
-    ...describeActivityProfile(facts?.activityProfile, { symbol: facts?.instrument || "this pair" }),
+    ...describeActivityProfile(facts?.activityProfile, { symbol: facts?.instrument || "this pair", marketClosed: facts?.closedWeek?.active === true }),
   ];
 
   const analysis =
