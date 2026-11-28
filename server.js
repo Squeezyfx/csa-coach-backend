@@ -1,11 +1,12 @@
 import { readMt4ForexTimestamp, readMt4CandleGeometry, resolveVisibleTimestampFromAxisCount } from "./chart-time-reader.js";
 import { buildChartPeriodMap } from "./chart-period-map.js";
 import { FORMING_FINER, formingCandleNeedsRebuild, rebuildFormingCandle } from "./forming-candle.js";
-import { fetchCandlesAfterCutoff, fetchLaterCandles, fetchOandaSeries, fetchRecentCandles, forexPipSize, oandaInstrument, isSyntheticInstrument, syntheticIndexTolerance } from "./oanda-data.js";
+import { checkOandaConnection, fetchCandlesAfterCutoff, fetchLaterCandles, fetchOandaSeries, fetchRecentCandles, forexPipSize, oandaInstrument, isSyntheticInstrument, syntheticIndexTolerance } from "./oanda-data.js";
 import { chooseWatchReferences } from "./watch-references.js";
 import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage, shouldTagSignup } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
-import { fetchMarketReferenceReliably, usedBackupData, isDataFault, BACKUP_DATA_NOTE } from "./market-data-retry.js";
+import { fetchMarketReferenceReliably, usedBackupData, isDataFault, BACKUP_DATA_NOTE, shouldStopForMissingData, NO_DATA_MESSAGE } from "./market-data-retry.js";
+import { createPriceDataStatus } from "./price-data-status.js";
 import { createAnalysisSlots, normalizeQueueTicket } from "./analysis-slots.js";
 import { attemptLimitsFromEnv, createAttemptLimiter, exemptEmailsFromEnv } from "./attempt-limiter.js";
 import { isMissingStripeCustomer } from "./stripe-customer.js";
@@ -30667,6 +30668,21 @@ app.get("/health", (req, res) =>
   })
 );
 
+// For an uptime monitor: 200 while the main price source answers, 503 while it does not, so the monitor emails
+// when it goes down and when it is back. Public, so it says up or down and nothing else.
+const priceDataStatus = createPriceDataStatus({
+  check: () => checkOandaConnection({
+    token: process.env.OANDA_API_TOKEN,
+    environment: process.env.OANDA_ENVIRONMENT || "practice",
+    price: process.env.OANDA_PRICE_COMPONENT || "B",
+  }),
+});
+app.get("/price-data-status", async (req, res) => {
+  const status = await priceDataStatus();
+  res.set("Cache-Control", "no-store");
+  res.status(status.up ? 200 : 503).json({ priceData: status.up ? "up" : "down", checkedAt: status.checkedAt });
+});
+
 
 // Public, unauthenticated: the GoHighLevel-hosted front-end calls this
 // instead of the browser's own supabase-js client because a direct
@@ -32726,6 +32742,14 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       "market_reference_fetch",
       marketReferenceStartedAt
     );
+
+    // Nothing is saved or counted. 503 so the attempt limiter does not count it as the trader's failure.
+    if (String(process.env.NO_DATA_STOP || "on").toLowerCase() !== "off" && shouldStopForMissingData(marketReference)) {
+      console.log("[market-data] review stopped, nothing counted or saved:", {
+        symbol: normalizedSymbol, timeframe, category: marketReference.failureCategory, reason: marketReference.error,
+      });
+      return res.status(503).json({ success: false, errorType: "market_data_unavailable", error: NO_DATA_MESSAGE });
+    }
 
     // A screenshot taken with the mouse over the chart prints the HOVERED candle in
     // the header. If all four header values match an OLDER candle of the provider's

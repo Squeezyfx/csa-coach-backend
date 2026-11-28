@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { weekendReviewDate, closedWeekendFriday, weekendClockRule, matchesWeekClose, staleClockCutoff } from "../chart-timezone.js";
 import { marketClosedForWeek, newWeekWithoutCompletedDay } from "../framework-calendar.js";
-import { fetchMarketReferenceReliably, usedBackupData, isDataFault, BACKUP_DATA_NOTE } from "../market-data-retry.js";
+import { fetchMarketReferenceReliably, usedBackupData, isDataFault, BACKUP_DATA_NOTE, shouldStopForMissingData, NO_DATA_MESSAGE } from "../market-data-retry.js";
+import { createPriceDataStatus } from "../price-data-status.js";
 
 const serverSource = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8");
 
@@ -113,6 +114,44 @@ test("the server never uses the backup in benchmarks, says when it was used and 
   assert.ok(serverSource.includes("backupData: usedBackupData(marketReference)"));
   assert.ok(serverSource.includes("facts?.backupData === true"));
   assert.ok(serverSource.includes("!benchmarkDryRun && !isDataFault(marketReference)"));
+});
+
+test("with no data from either source the review stops; an instrument with no feed is reviewed as before", () => {
+  for (const category of ["provider_error", "rate_limit", "authentication"]) assert.equal(shouldStopForMissingData(failed(category)), true, category);
+  for (const category of ["symbol_unavailable", "history_unavailable", "subscription_access", null]) assert.equal(shouldStopForMissingData(failed(category)), false, String(category));
+  assert.equal(shouldStopForMissingData(good("main")), false);
+  assert.equal(shouldStopForMissingData({ ok: false, failureCategory: "provider_error", error: "OANDA candle request failed (400)." }), false);
+  assert.equal(shouldStopForMissingData({ ok: false, failureCategory: "provider_error", error: "OANDA candle request failed (520)." }), true);
+});
+
+test("the no-data message is not mistaken by the page for a login, limit or upload problem", () => {
+  assert.doesNotMatch(NO_DATA_MESSAGE.toLowerCase(), /session|log in|unauthorized|monthly|analysis limit|used all|upload|screenshot|chart image|chart date|trade date|strategy|timeout|timed out|could not read/);
+  assert.match(NO_DATA_MESSAGE, /did not count/);
+});
+
+test("the server stops before any review is built, with a 503", () => {
+  const stop = serverSource.indexOf('errorType: "market_data_unavailable"');
+  assert.ok(stop > serverSource.indexOf("let marketReference = await requestMarketReference();"));
+  assert.ok(stop < serverSource.indexOf("const initialFinalVisibleSync ="));
+  assert.match(serverSource, /res\.status\(503\)\.json\(\{ success: false, errorType: "market_data_unavailable"/);
+});
+
+test("the price data status is checked once a minute and shared", async () => {
+  let time = 0;
+  let calls = 0;
+  let broken = false;
+  const status = createPriceDataStatus({ check: async () => { calls += 1; if (broken) throw new Error("520"); }, now: () => time, log: () => {} });
+  const [first, second] = await Promise.all([status(), status()]);
+  assert.equal(first.up, true);
+  assert.equal(second.up, true);
+  assert.equal(calls, 1);
+  broken = true;
+  time = 30000;
+  assert.equal((await status()).up, true);
+  time = 61000;
+  assert.equal((await status()).up, false);
+  assert.equal(calls, 2);
+  assert.ok(serverSource.includes('app.get("/price-data-status"'));
 });
 
 test("if the backup fails too, the first provider's failure is returned", async () => {

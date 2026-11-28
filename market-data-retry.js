@@ -42,4 +42,16 @@ export const usedBackupData = (reference) => reference?.ok === true && reference
 // A review made during a data fault is not kept for re-use: running the same chart again must try the data again.
 export const isDataFault = (reference) => usedBackupData(reference) || isPassingFailure(reference);
 
-export const BACKUP_DATA_NOTE = "Our main price source was unavailable for this review, so a backup source was used. Levels may differ a little, so check them on your own chart.";
+// No data from either source: the review stops rather than guess a direction from the screenshot. An
+// instrument that has no data feed at all (or none for that far back, or on this data plan) is not a fault and
+// is reviewed from the chart as before. NO_DATA_STOP=off turns the stop off.
+const FAULTS = new Set(["provider_error", "rate_limit", "authentication"]);
+
+// A 400 means the provider refused the request itself (an instrument it does not carry), so "try again" would
+// never work.
+export const shouldStopForMissingData = (reference) =>
+  reference?.ok === false && FAULTS.has(reference.failureCategory) && !/\(400\)/.test(String(reference.error || ""));
+
+export const NO_DATA_MESSAGE = "Market data is unavailable right now, so no review was made. This did not count against your reviews and nothing was saved. Please try again a little later.";
+
+export const BACKUP_DATA_NOTE ="Our main price source was unavailable for this review, so a backup source was used. Levels may differ a little, so check them on your own chart.";
