@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { weekendReviewDate, closedWeekendFriday, weekendClockRule, matchesWeekClose, staleClockCutoff } from "../chart-timezone.js";
 import { marketClosedForWeek, newWeekWithoutCompletedDay } from "../framework-calendar.js";
-import { fetchMarketReferenceReliably } from "../market-data-retry.js";
+import { fetchMarketReferenceReliably, usedBackupData, isDataFault, BACKUP_DATA_NOTE } from "../market-data-retry.js";
 
 const serverSource = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8");
 
@@ -94,6 +94,25 @@ test("after three failures the backup provider is asked", async () => {
   const { result, calls } = await run([failed()], { fetchBackup: async () => good("backup") });
   assert.equal(result.name, "backup");
   assert.equal(calls, 3);
+});
+
+test("backup data is marked, and a review made during a data fault is not kept for re-use", async () => {
+  const { result } = await run([failed()], { fetchBackup: async () => good("backup") });
+  assert.equal(usedBackupData(result), true);
+  assert.equal(isDataFault(result), true);
+  assert.equal(usedBackupData(good("main")), false);
+  assert.equal(isDataFault(good("main")), false);
+  assert.equal(isDataFault(failed()), true);
+  // an instrument with no data at all behaves as before
+  assert.equal(isDataFault(failed("symbol_unavailable")), false);
+  assert.ok(!/high|low|monday|tuesday|wednesday|thursday|friday/i.test(BACKUP_DATA_NOTE.replace(/follow|below/gi, "")));
+});
+
+test("the server never uses the backup in benchmarks, says when it was used and does not cache a fault", () => {
+  assert.match(serverSource, /const backupAllowed =\s+!benchmarkDryRun &&/);
+  assert.ok(serverSource.includes("backupData: usedBackupData(marketReference)"));
+  assert.ok(serverSource.includes("facts?.backupData === true"));
+  assert.ok(serverSource.includes("!benchmarkDryRun && !isDataFault(marketReference)"));
 });
 
 test("if the backup fails too, the first provider's failure is returned", async () => {

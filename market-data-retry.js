@@ -33,5 +33,13 @@ export async function fetchMarketReferenceReliably({
     backup = { ok: false, error: error?.message || String(error) };
   }
   log("[market-data] backup provider " + (backup?.ok ? "supplied the data" : "also failed: " + (backup?.error || "no data")));
-  return backup?.ok ? backup : reference;
+  // Marked, so the review can tell the trader: the backup's levels can differ a little.
+  return backup?.ok ? { ...backup, providerDiagnostics: { ...(backup.providerDiagnostics || {}), backupUsed: true } } : reference;
 }
+
+export const usedBackupData = (reference) => reference?.ok === true && reference.providerDiagnostics?.backupUsed === true;
+
+// A review made during a data fault is not kept for re-use: running the same chart again must try the data again.
+export const isDataFault = (reference) => usedBackupData(reference) || isPassingFailure(reference);
+
+export const BACKUP_DATA_NOTE = "Our main price source was unavailable for this review, so a backup source was used. Levels may differ a little, so check them on your own chart.";

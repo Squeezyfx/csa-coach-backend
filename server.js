@@ -5,7 +5,7 @@ import { fetchCandlesAfterCutoff, fetchLaterCandles, fetchOandaSeries, fetchRece
 import { chooseWatchReferences } from "./watch-references.js";
 import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage, shouldTagSignup } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
-import { fetchMarketReferenceReliably } from "./market-data-retry.js";
+import { fetchMarketReferenceReliably, usedBackupData, isDataFault, BACKUP_DATA_NOTE } from "./market-data-retry.js";
 import { createAnalysisSlots, normalizeQueueTicket } from "./analysis-slots.js";
 import { attemptLimitsFromEnv, createAttemptLimiter, exemptEmailsFromEnv } from "./attempt-limiter.js";
 import { isMissingStripeCustomer } from "./stripe-customer.js";
@@ -3658,7 +3658,7 @@ async function fetchTwelveDataStructureLevels({
       const maxRateLimitAttempts = 3;
       let response, data;
       for (let attempt = 1; attempt <= maxRateLimitAttempts; attempt += 1) {
-        response = await fetch(`${TWELVE_DATA_BASE_URL}?${params.toString()}`);
+        response = await fetch(`${TWELVE_DATA_BASE_URL}?${params.toString()}`, { signal: AbortSignal.timeout(30000) });
         data = await response.json();
         const rateLimited = classifyProviderError(data.message || data.error || "", response.status) === "rate_limit";
         if (!rateLimited || attempt === maxRateLimitAttempts) break;
@@ -27485,6 +27485,7 @@ function buildValidatedAnalysisFacts({
     engineVersion: CSA_FEEDBACK_ENGINE_VERSION,
     newWeekStart,
     closedWeek,
+    backupData: usedBackupData(marketReference),
     instrument: submittedInstrument,
     timeframe,
     analysisType,
@@ -29004,11 +29005,14 @@ function buildControlledFeedback({
   const closestReferenceAreaText =
     referenceAreaTexts[0] || "";
 
-  const directionText = newWeekStart
+  const directionBase = newWeekStart
     ? "No directional bias yet. More price action is needed as the week develops."
     : facts?.closedWeek?.active === true
     ? `${String(directionDisplay(facts)).replace(/\.?\s*$/, ".")} The market is closed for the week and can reopen at a different price, so check a fresh chart before using any area.`
     : directionDisplay(facts);
+  const directionText = facts?.backupData === true
+    ? `${String(directionBase).replace(/\.?\s*$/, ".")} ${BACKUP_DATA_NOTE}`
+    : directionBase;
   const action = area.direction === "sell" ? "sell" : area.direction === "buy" ? "buy" : "trade";
   const opposingLevel = facts.direction === "bearish" ? "support" : "resistance";
   const triggerSide = facts.direction === "bearish" ? "bearish" : facts.direction === "bullish" ? "bullish" : "valid";
@@ -32677,7 +32681,9 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
         analysisType: mode,
         chartCutoff,
       };
+      // Never in benchmarks: they check results against the main source, so a fault there must show.
       const backupAllowed =
+        !benchmarkDryRun &&
         String(process.env.FOREX_DATA_PROVIDER_FALLBACK || "auto").toLowerCase() !== "off" &&
         Boolean(process.env.TWELVE_DATA_API_KEY) &&
         Boolean(oandaInstrument(normalizedSymbol)) &&
@@ -35261,7 +35267,7 @@ ${(visualReview?.strategyMissingInformation || []).length
       }
     );
 
-    if (!forceFresh && !benchmarkDryRun) {
+    if (!forceFresh && !benchmarkDryRun && !isDataFault(marketReference)) {
       cacheCompletedAnalysis(
         analysisFingerprint,
         finalClientResponse
