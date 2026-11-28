@@ -96,6 +96,61 @@ export function staleClockCutoff({ chartCutoff, chartDetection, chartTimezone, n
   return { endDateTime: `${chartDetection.latestVisibleDate} ${chartClockTime(chartDetection).time}:59`, ageMinutes: Math.round(age) };
 }
 
+// WEEKENDS. Currency, index and metal markets are shut from Friday evening to Sunday evening (about 21:00 to
+// 22:00 UTC), so a weekend date means the week that has just closed and the review runs to the end of its Friday.
+// Crypto trades all week and is left alone.
+const DAY_MS = 86400000;
+const isoDate = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+// The Friday to review instead of a Saturday, or of a Sunday before the market has reopened; otherwise null.
+export function weekendReviewDate({ date, nowMs, tradesOnWeekends = false } = {}) {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || "").trim());
+  if (tradesOnWeekends || !parts || !Number.isFinite(nowMs)) return null;
+  const midnight = Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+  const day = new Date(midnight).getUTCDay();
+  if (day === 6) return isoDate(midnight - DAY_MS);
+  if (day === 0 && nowMs < midnight + 21 * 3600000) return isoDate(midnight - 2 * DAY_MS);
+  return null;
+}
+
+// While the market is shut for the weekend, the Friday that has just closed; otherwise null.
+export function closedWeekendFriday(nowMs) {
+  if (!Number.isFinite(nowMs)) return null;
+  const now = new Date(nowMs);
+  const midnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const day = now.getUTCDay();
+  if (day === 6) return isoDate(midnight - DAY_MS);
+  if (day === 0 && now.getUTCHours() < 21) return isoDate(midnight - 2 * DAY_MS);
+  if (day === 5 && now.getUTCHours() >= 22) return isoDate(midnight);
+  return null;
+}
+
+// The chart prints the time it was captured, not a date, so over the weekend that time must not be put on
+// Friday (USDCAD H1, Saturday 28 Nov 2026 14:08: the review was cut off at Friday 14:08). "ignore": the clock
+// matches the time now, so the screenshot was just taken. "check_price": an earlier time, which may be Friday's
+// or earlier the same weekend, so the chart's price decides. null: the clock can be used as usual.
+export function weekendClockRule({ chartDetection, chartTimezone, nowMs, resolvedDate, tradesOnWeekends = false } = {}) {
+  const friday = closedWeekendFriday(nowMs);
+  if (tradesOnWeekends || !friday || resolvedDate !== friday) return null;
+  const chart = parseChartTimezoneLabel(chartTimezone);
+  const clock = chartClockTime(chartDetection);
+  if (!chart || !clock || !clock.fromClock) return null;
+  // Friday evening itself: the clock is today's and already belongs to the reviewed day.
+  if (isoDate(nowMs + chart.offsetMinutes * 60000) === friday) return null;
+  const clockUtc = Number(clock.time.slice(0, 2)) * 60 + Number(clock.time.slice(3, 5)) - chart.offsetMinutes;
+  const nowUtc = Math.floor(nowMs / 60000) % 1440;
+  const since = (((nowUtc - clockUtc) % 1440) + 1440) % 1440;
+  return since <= 45 || since >= 1430 ? "ignore" : "check_price";
+}
+
+// Does the chart's price sit on the week's closing price?
+export function matchesWeekClose({ price, close, tolerance = 0 } = {}) {
+  const p = Number(price);
+  const c = Number(close);
+  if (!(p > 0) || !(c > 0)) return false;
+  return Math.abs(p - c) <= Math.max(Number(tolerance) * 3 || 0, c * 0.0005);
+}
+
 // True when the chart's clock is recent: the feed's candle that is still
 // forming right now is then the screenshot's own final candle.
 export function isFreshChartClock({ chartDetection, chartTimezone, nowMs, resolvedDate, freshMinutes = 45, futureMinutes = 10 } = {}) {

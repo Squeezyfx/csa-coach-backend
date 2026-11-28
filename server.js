@@ -5,6 +5,7 @@ import { fetchCandlesAfterCutoff, fetchLaterCandles, fetchOandaSeries, fetchRece
 import { chooseWatchReferences } from "./watch-references.js";
 import { courseTagUpdates, setCourseAccess, notifyIndicatorRequest, funnelStages, tagFunnelStage, shouldTagSignup } from "./ghl-access.js";
 import { findHoveredCandleMatch, providerFinalClose } from "./chart-endpoint-guard.js";
+import { fetchMarketReferenceReliably } from "./market-data-retry.js";
 import { createAnalysisSlots, normalizeQueueTicket } from "./analysis-slots.js";
 import { attemptLimitsFromEnv, createAttemptLimiter, exemptEmailsFromEnv } from "./attempt-limiter.js";
 import { isMissingStripeCustomer } from "./stripe-customer.js";
@@ -86,7 +87,7 @@ import { buildChartOverlay } from "./chart-overlay.js";
 import { buildCleanChart } from "./clean-chart.js";
 import { buildActivityProfile, describeActivityProfile } from "./activity-profile.js";
 import { entryWordForDirection, relabelEntriesDeep, relabelCustomerText } from "./entry-labels.js";
-import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate, correctChartDateYear } from "./chart-timezone.js";
+import { liveClockDate, parseChartTimezoneLabel, alignCutoffToChartTimezone, staleClockCutoff, isFreshChartClock, rescueFutureChartDate, weekendReviewDate, closedWeekendFriday, weekendClockRule, matchesWeekClose, inferChartTimezoneFromLiveClock, liveCandleOpenTime, firstCandleOfDayGap, timezoneOffsetMinutesAt, liveClockConfirmsDate, correctChartDateYear } from "./chart-timezone.js";
 import { chartPriceFarFromFeed, pageDataMatchStatus, correctPriceSlipAgainstLiveCandle, sameInstrumentFromFeed } from "./feed-price-guard.js";
 import { assessTradePillars, compilePillarItems, buildPillarNextSteps, detectEntryTrigger, scoreFromSignals, scoreFromPlan, averageCandleRange } from "./trade-pillars.js";
 import { annotateMatchedLines, matchLinesToCompletedExtremes, lineSitsOnPeriodExtreme, lineReadsFromCandidateList, drawnLineEntryCredit, drawnLevelLines, sortDrawnLines, drawnLinesStrength, drawnLinesNotEntry, lineMarksArea, lineMatchTolerance, markChartFromFrameworkLines, markLinesOnAreas, markedAreasStrength, markedEntryNumbers, markedEntryStrength, matchedFrameworkAreas, creditedLinePrices, drawnLineCandidatesFromReads, withoutReplacedPeriodCandidates, requireLineEvidenceForMarked, supersedingDrawnLine, withoutAxisTickReads, withoutCreditedLineReferences } from "./marked-lines.js";
@@ -3801,6 +3802,15 @@ async function fetchTwelveDataStructureLevels({
       console.log("[provider-inventory] failed: " + inventoryError.message);
     }
   } catch (error) {
+    console.log("[market-data] request failed:", {
+      provider: dataProvider,
+      symbol,
+      timeframe,
+      endDateTime,
+      category: error.category || "provider_error",
+      reason: String(error.message || error).replace(/apikey=[^&\s]+/gi, "apikey=hidden"),
+      cause: error.cause?.code || error.name || null,
+    });
     return {
       ...empty(error.message, structureRange, {
         providerCoverage: {
@@ -27465,6 +27475,7 @@ function buildValidatedAnalysisFacts({
               ? String(marketReference?.chartCutoff?.endDateTime || "").slice(11, 16)
               : "",
           tradesOnWeekends: isCryptoSymbol(submittedInstrument),
+          closedNow: marketReference?.chartCutoff?.weekendClosed === true,
         }
       : null;
   const newWeekStart = weekPosition ? newWeekWithoutCompletedDay(weekPosition) : null;
@@ -31878,8 +31889,8 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
         });
     const imageBase64 = req.file.buffer.toString("base64");
     const mimeType = req.file.mimetype || "image/png";
-    const selectedDateText = chartDate || tradeDate || "";
-    const selectedDate = parseISODateOnly(selectedDateText);
+    let selectedDateText = chartDate || tradeDate || "";
+    let selectedDate = parseISODateOnly(selectedDateText);
     const normalizedRequestedCutoffMode = normalizeCutoffMode(cutoffMode);
     const forceFresh =
       String(forceFreshAnalysis || "").trim().toLowerCase() === "true";
@@ -32466,6 +32477,31 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       }
     }
 
+    // A weekend date, typed or read from the chart, means the week that has just closed: both are moved to its
+    // Friday, so choosing Saturday gives the same review as choosing Friday. WEEKEND_TO_FRIDAY=off turns it off.
+    const weekendRules = String(process.env.WEEKEND_TO_FRIDAY || "on").toLowerCase() !== "off";
+    const tradesAllWeek = isCryptoSymbol(normalizedSymbol || submittedInstrument || "");
+    let movedFromWeekend = false;
+    if (weekendRules && normalizedRequestedCutoffMode !== "exact") {
+      const chartFriday = weekendReviewDate({ date: chartDetection?.latestVisibleDate, nowMs: Date.now(), tradesOnWeekends: tradesAllWeek });
+      const typedFriday = weekendReviewDate({ date: selectedDateText, nowMs: Date.now(), tradesOnWeekends: tradesAllWeek });
+      if (chartFriday || typedFriday) {
+        movedFromWeekend = true;
+        console.log("[weekend] a weekend date means the week that has just closed:", {
+          chartDate: chartDetection?.latestVisibleDate || null,
+          typedDate: selectedDateText || null,
+          usedInstead: chartFriday || typedFriday,
+        });
+        if (chartFriday) {
+          chartDetection = { ...chartDetection, latestVisibleDate: chartFriday, latestVisibleTime: null, latestVisibleTimeConfidence: "low" };
+        }
+        if (typedFriday) {
+          selectedDateText = typedFriday;
+          selectedDate = parseISODateOnly(typedFriday);
+        }
+      }
+    }
+
     let dateDecision = chooseFinalChartDate({
       selectedDate,
       detection: chartDetection,
@@ -32520,9 +32556,36 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
     // made today's period "complete", so today's in-progress high became Entry 2 (GBPUSD 2026-11-11 20:21).
     // Entries come from completed periods only; today stays partial. STALE_SCREENSHOT_CLOCK_CUTOFF=off turns
     // this off.
-    const staleClock = String(process.env.STALE_SCREENSHOT_CLOCK_CUTOFF || "on").toLowerCase() === "off"
+    let staleClock = String(process.env.STALE_SCREENSHOT_CLOCK_CUTOFF || "on").toLowerCase() === "off"
       ? null
       : staleClockCutoff({ chartCutoff, chartDetection, chartTimezone: chartDetection?.chartTimezone, nowMs: Date.now(), staleMinutes: -10 });
+    // Over the weekend the printed time is usually the weekend's, not Friday's (see weekendClockRule).
+    const weekendClock = !staleClock || !weekendRules ? null : movedFromWeekend ? "ignore" : weekendClockRule({
+      chartDetection, chartTimezone: chartDetection?.chartTimezone, nowMs: Date.now(),
+      resolvedDate: chartCutoff.resolvedDate, tradesOnWeekends: tradesAllWeek,
+    });
+    if (weekendClock === "ignore") {
+      console.log("[weekend] the chart clock is from the weekend, so the review runs to the end of Friday:", {
+        clockWouldHaveCutAt: staleClock.endDateTime, reviewedTo: chartCutoff.endDateTime,
+      });
+      staleClock = null;
+    } else if (weekendClock === "check_price") {
+      // Compare the chart's price with the week's close: a match means the screenshot shows the closed week.
+      const aligned = alignCutoffToChartTimezone({ chartCutoff, chartTimezone: chartDetection?.chartTimezone, deviceTimezone: resolvedTimezone });
+      const wholeDay = await fetchTwelveDataStructureLevels({
+        symbol: normalizedSymbol,
+        chartDate: parseISODateOnly(chartCutoff.resolvedDate),
+        timeframe,
+        timezone: aligned.applied ? aligned.timezone : resolvedTimezone,
+        analysisType: mode,
+        chartCutoff: { ...chartCutoff, endDateTime: aligned.applied ? aligned.endDateTime : chartCutoff.endDateTime },
+      });
+      const price = Number(chartDetection?.latestVisibleClose ?? chartDetection?.latestVisiblePrice);
+      const close = wholeDay?.ok ? providerFinalClose(wholeDay.timeframeCandles || []) : null;
+      const showsClose = matchesWeekClose({ price, close, tolerance: getApprovedPriceTolerance(normalizedSymbol) });
+      console.log("[weekend] chart price against the week's close:", { price, close, showsClose, clockWouldCutAt: staleClock.endDateTime });
+      if (showsClose) staleClock = null;
+    }
     if (staleClock) {
       console.log("[chart-timezone] cut off at the chart clock instead of the end of the day (today stays a partial period):", {
         endDateTime: staleClock.endDateTime,
@@ -32533,6 +32596,8 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       chartCutoff.precision = "exact-visible";
       chartCutoff.exactVisibleCutoff = true;
     }
+    // Reviewed over the weekend up to the end of the week just closed: the review says the market is closed.
+    chartCutoff.weekendClosed = weekendRules && !tradesAllWeek && !staleClock && closedWeekendFriday(Date.now()) === chartCutoff.resolvedDate;
     // When the chart's printed clock is recent (or was just used as the cutoff), the feed's candle that is
     // still forming IS the screenshot's final candle, so the feed check may compare against it even when the
     // chart reader was only "medium" sure of the clock. Otherwise a fast final candle (GBPUSD 2026-11-11,
@@ -32602,14 +32667,27 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
     const marketReferenceStartedAt =
       csaNowMs();
 
-    let marketReference = await fetchTwelveDataStructureLevels({
-      symbol: normalizedSymbol,
-      chartDate: resolvedAnalysisDate,
-      timeframe,
-      timezone: resolvedTimezone,
-      analysisType: mode,
-      chartCutoff,
-    });
+    // One failed request must not cost the trader the chart: try again, then the backup provider.
+    const requestMarketReference = () => {
+      const request = {
+        symbol: normalizedSymbol,
+        chartDate: resolvedAnalysisDate,
+        timeframe,
+        timezone: resolvedTimezone,
+        analysisType: mode,
+        chartCutoff,
+      };
+      const backupAllowed =
+        String(process.env.FOREX_DATA_PROVIDER_FALLBACK || "auto").toLowerCase() !== "off" &&
+        Boolean(process.env.TWELVE_DATA_API_KEY) &&
+        Boolean(oandaInstrument(normalizedSymbol)) &&
+        !isSyntheticInstrument(normalizedSymbol);
+      return fetchMarketReferenceReliably({
+        fetchPrimary: () => fetchTwelveDataStructureLevels(request),
+        fetchBackup: backupAllowed ? () => fetchTwelveDataStructureLevels({ ...request, providerOverride: "twelve_data" }) : null,
+      });
+    };
+    let marketReference = await requestMarketReference();
 
     // First hour of a trading day: today's first candle is still forming, so the feed has no finished candle
     // for today and the week's frame cannot be verified (DXY 2026-11-12 00:49 UTC: no entry). Earlier days
@@ -32635,14 +32713,7 @@ app.post("/analyze-chart", analysisSlotMiddleware, (req, res, next) => {
       chartCutoff.precision = "day";
       chartCutoff.exactVisibleCutoff = false;
       resolvedAnalysisDate = parseISODateOnly(chartCutoff.resolvedDate);
-      marketReference = await fetchTwelveDataStructureLevels({
-        symbol: normalizedSymbol,
-        chartDate: resolvedAnalysisDate,
-        timeframe,
-        timezone: resolvedTimezone,
-        analysisType: mode,
-        chartCutoff,
-      });
+      marketReference = await requestMarketReference();
     }
 
     csaTimingLog(

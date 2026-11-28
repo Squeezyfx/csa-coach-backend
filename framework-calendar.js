@@ -324,10 +324,10 @@ export function newWeekWithoutCompletedDay({timeframe,resolvedDate,selectedDate=
 }
 
 /** An intraday chart that ends when the market has closed for the week: a Saturday, or a Friday whose
- * final candle time is readable and from 20:00 UTC (the last hours before the close). The review still
- * gives the bias and areas, and says to check them again once the market reopens.
- * Returns { active, reason } or null. */
-export function marketClosedForWeek({timeframe,resolvedDate,lastVisibleTime="",tradesOnWeekends=false}={}) {
+ * final candle time is readable and from 20:00 UTC (the last hours before the close), or a Friday reviewed
+ * over the weekend (closedNow). The review still gives the bias and areas, and says to check them again once
+ * the market reopens. Returns { active, reason } or null. */
+export function marketClosedForWeek({timeframe,resolvedDate,lastVisibleTime="",tradesOnWeekends=false,closedNow=false}={}) {
   if(tradesOnWeekends) return null;
   const profile=frameworkProfile(timeframe);
   if(!profile||profile.range!=="week") return null;
@@ -335,6 +335,7 @@ export function marketClosedForWeek({timeframe,resolvedDate,lastVisibleTime="",t
   if(!resolved) return null;
   const day=resolved.getUTCDay();
   if(day===6) return {active:true,reason:"weekend_market_closed"};
+  if(day===5&&closedNow) return {active:true,reason:"friday_close_market_closed"};
   const match=/^(\d{2}):(\d{2})/.exec(String(lastVisibleTime||"").trim());
   if(day===5&&match&&Number(match[1])>=20) return {active:true,reason:"friday_close_market_closed"};
   return null;
